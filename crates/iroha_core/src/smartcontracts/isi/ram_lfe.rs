@@ -320,6 +320,24 @@ pub fn validate_execution_receipt_at(
             program_policy.program_id
         ));
     }
+    if public_parameters.parameter_digest != payload.parameter_digest {
+        return Err(format!(
+            "RAM-LFE receipt parameter digest does not match program policy {}",
+            program_policy.program_id
+        ));
+    }
+    if public_parameters.evaluation_key_digest != payload.evaluation_key_digest {
+        return Err(format!(
+            "RAM-LFE receipt evaluation-key digest does not match program policy {}",
+            program_policy.program_id
+        ));
+    }
+    if payload.output_hash != payload.output_ciphertext_hash {
+        return Err(format!(
+            "RAM-LFE receipt output_hash does not match output_ciphertext_hash for program {}",
+            program_policy.program_id
+        ));
+    }
     if public_parameters.verification_mode != program_policy.verification_mode {
         return Err(format!(
             "RAM-LFE program policy {} verification metadata is inconsistent",
@@ -491,6 +509,10 @@ mod tests {
                 program_digest: Hash::new(b"program"),
                 backend: policy.backend,
                 verification_mode: policy.verification_mode,
+                input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+                output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+                parameter_digest: Hash::new(b"parameters"),
+                evaluation_key_digest: Hash::new(b"evaluation-keys"),
                 output_hash: Hash::new(b"output"),
                 associated_data_hash: Hash::new(b"associated-data"),
                 executed_at_ms,

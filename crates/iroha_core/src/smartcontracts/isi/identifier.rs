@@ -8,7 +8,10 @@ use iroha_data_model::{
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierResolutionReceipt},
     prelude::*,
     proof::VerifyingKeyBox,
-    ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramPolicy, RamLfeReceiptAttestation},
+    ram_lfe::{
+        RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeProgramPolicy,
+        RamLfeReceiptAttestation,
+    },
     zk::OpenVerifyEnvelope,
 };
 use iroha_telemetry::metrics;
@@ -193,6 +196,15 @@ pub mod isi {
                     .into(),
                 ));
             }
+            if receipt_payload.opening.payload.opened_at_ms > now_ms {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "Identifier output opening for policy {} was issued in the future ({}) relative to block time ({now_ms})",
+                        policy.id, receipt_payload.opening.payload.opened_at_ms
+                    )
+                    .into(),
+                ));
+            }
             if receipt
                 .expires_at_ms()
                 .is_some_and(|expires_at_ms| expires_at_ms <= now_ms)
@@ -200,6 +212,20 @@ pub mod isi {
                 return Err(Error::InvariantViolation(
                     format!(
                         "Identifier receipt for policy {} expired at or before block time {now_ms}",
+                        policy.id
+                    )
+                    .into(),
+                ));
+            }
+            if receipt_payload
+                .opening
+                .payload
+                .expires_at_ms
+                .is_some_and(|expires_at_ms| expires_at_ms <= now_ms)
+            {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "Identifier output opening for policy {} expired at or before block time {now_ms}",
                         policy.id
                     )
                     .into(),
@@ -479,6 +505,33 @@ pub mod isi {
                 .into(),
             ));
         }
+        if public_parameters.parameter_digest != execution.parameter_digest {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "Identifier receipt parameter digest does not match program policy {}",
+                    program_policy.program_id
+                )
+                .into(),
+            ));
+        }
+        if public_parameters.evaluation_key_digest != execution.evaluation_key_digest {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "Identifier receipt evaluation-key digest does not match program policy {}",
+                    program_policy.program_id
+                )
+                .into(),
+            ));
+        }
+        if execution.output_hash != execution.output_ciphertext_hash {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "Identifier receipt output hash does not match output ciphertext hash for policy {}",
+                    policy.id
+                )
+                .into(),
+            ));
+        }
         if public_parameters.verification_mode != program_policy.verification_mode {
             return Err(Error::InvariantViolation(
                 format!(
@@ -489,7 +542,9 @@ pub mod isi {
             ));
         }
 
-        let expected_hashes = expected_identifier_hashes(policy, execution)?;
+        validate_output_opening(&receipt.payload.opening, execution, program_policy)?;
+
+        let expected_hashes = expected_identifier_hashes(policy, &receipt.payload.opening)?;
         if receipt.payload.opaque_id != OpaqueAccountId::from(expected_hashes.0) {
             return Err(Error::InvariantViolation(
                 format!(
@@ -563,7 +618,7 @@ pub mod isi {
 
     fn expected_identifier_hashes(
         policy: &IdentifierPolicy,
-        execution: &RamLfeExecutionReceiptPayload,
+        opening: &RamLfeOutputOpening,
     ) -> Result<(Hash, Hash), Error> {
         let program_id_bytes = norito::to_bytes(&policy.program_id).map_err(|err| {
             Error::InvariantViolation(
@@ -576,8 +631,81 @@ pub mod isi {
         })?;
         Ok(identifier_hashes_from_output_hash(
             &program_id_bytes,
-            &execution.output_hash,
+            &opening.payload.opened_output_hash,
         ))
+    }
+
+    fn validate_output_opening(
+        opening: &RamLfeOutputOpening,
+        execution: &RamLfeExecutionReceiptPayload,
+        program_policy: &RamLfeProgramPolicy,
+    ) -> Result<(), Error> {
+        let payload = &opening.payload;
+        if payload.program_id != execution.program_id {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "RAM-LFE output opening program {} does not match execution program {}",
+                    payload.program_id, execution.program_id
+                )
+                .into(),
+            ));
+        }
+        if payload.input_ciphertext_hash != execution.input_ciphertext_hash {
+            return Err(Error::InvariantViolation(
+                "RAM-LFE output opening input ciphertext hash does not match execution receipt"
+                    .to_owned()
+                    .into(),
+            ));
+        }
+        if payload.output_ciphertext_hash != execution.output_ciphertext_hash {
+            return Err(Error::InvariantViolation(
+                "RAM-LFE output opening output ciphertext hash does not match execution receipt"
+                    .to_owned()
+                    .into(),
+            ));
+        }
+        if payload.parameter_digest != execution.parameter_digest {
+            return Err(Error::InvariantViolation(
+                "RAM-LFE output opening parameter digest does not match execution receipt"
+                    .to_owned()
+                    .into(),
+            ));
+        }
+        if payload.evaluation_key_digest != execution.evaluation_key_digest {
+            return Err(Error::InvariantViolation(
+                "RAM-LFE output opening evaluation-key digest does not match execution receipt"
+                    .to_owned()
+                    .into(),
+            ));
+        }
+        if payload.opened_output_hash == Hash::prehashed([0; Hash::LENGTH]) {
+            return Err(Error::InvariantViolation(
+                "RAM-LFE output opening hash must not be zero"
+                    .to_owned()
+                    .into(),
+            ));
+        }
+        if payload
+            .expires_at_ms
+            .is_some_and(|expires_at_ms| expires_at_ms <= payload.opened_at_ms)
+        {
+            return Err(Error::InvariantViolation(
+                "RAM-LFE output opening expiry must be greater than opened_at_ms"
+                    .to_owned()
+                    .into(),
+            ));
+        }
+        opening
+            .verify_signature(&program_policy.output_opening_public_key)
+            .map_err(|err| {
+                Error::InvariantViolation(
+                    format!(
+                        "RAM-LFE output opening signature is invalid for program {}: {err}",
+                        program_policy.program_id
+                    )
+                    .into(),
+                )
+            })
     }
 
     fn verify_execution_proof(
@@ -679,11 +807,11 @@ pub mod isi {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{
-        BfvParameters, Hash, KeyPair, RamLfeBackend, RamLfeVerificationMode, Signature,
+        BfvEvaluationKeyBundle, Hash, KeyPair, RamLfeBackend, RamLfeVerificationMode, Signature,
         SignatureOf, bfv_programmed_policy_commitment_with_program,
         bfv_programmed_public_parameters_with_program, decode_bfv_programmed_public_parameters,
         default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
-        identifier_hashes_from_output_hash, ram_lfe_output_hash,
+        identifier_hashes_from_output_hash, ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
     };
     use iroha_data_model::{
         IntoKeyValue,
@@ -702,8 +830,8 @@ mod tests {
         nexus::UniversalAccountId,
         prelude::Domain,
         ram_lfe::{
-            RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeProgramPolicy,
-            RamLfeReceiptAttestation,
+            RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
+            RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
         },
     };
     use mv::storage::StorageReadOnly;
@@ -766,23 +894,43 @@ mod tests {
             decode_bfv_programmed_public_parameters(&program_policy.commitment.public_parameters)
                 .expect("decode programmed parameters");
         let output_hash = ram_lfe_output_hash(output_seed);
+        let opened_output_hash = output_hash;
         let program_id_bytes =
             norito::to_bytes(&program_policy.program_id).expect("encode program id");
         let (opaque_id, receipt_hash) =
-            identifier_hashes_from_output_hash(&program_id_bytes, &output_hash);
+            identifier_hashes_from_output_hash(&program_id_bytes, &opened_output_hash);
         let execution = RamLfeExecutionReceiptPayload {
             program_id: program_policy.program_id.clone(),
             program_digest: programmed_parameters.hidden_program_digest,
             backend: program_policy.backend,
             verification_mode: program_policy.verification_mode,
+            input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+            output_ciphertext_hash: output_hash,
+            parameter_digest: programmed_parameters.parameter_digest,
+            evaluation_key_digest: programmed_parameters.evaluation_key_digest,
             output_hash,
             associated_data_hash: Hash::new([]),
             executed_at_ms: resolved_at_ms,
             expires_at_ms,
         };
+        let opening_payload = RamLfeOutputOpeningPayload {
+            program_id: program_policy.program_id.clone(),
+            input_ciphertext_hash: execution.input_ciphertext_hash,
+            output_ciphertext_hash: execution.output_ciphertext_hash,
+            parameter_digest: execution.parameter_digest,
+            evaluation_key_digest: execution.evaluation_key_digest,
+            opened_output_hash,
+            opened_at_ms: resolved_at_ms.saturating_add(1),
+            expires_at_ms,
+        };
+        let opening = RamLfeOutputOpening {
+            signature: SignatureOf::new(resolver.private_key(), &opening_payload).into(),
+            payload: opening_payload,
+        };
         let payload = IdentifierResolutionReceiptPayload {
             policy_id: policy_id.clone(),
             execution,
+            opening,
             opaque_id: OpaqueAccountId::from(opaque_id),
             receipt_hash,
             uaid,
@@ -801,22 +949,23 @@ mod tests {
         program_id: &RamLfeProgramId,
     ) -> RamLfeProgramPolicy {
         let secret = b"resolver-secret";
-        let params = BfvParameters {
-            polynomial_degree: 64,
-            ciphertext_modulus: 1_u64 << 52,
-            plaintext_modulus: 256,
-            decomposition_base_log: 12,
-        };
+        let params = ram_lfe_bfv_parameters_v1();
         let hidden_program = default_bfv_programmed_hidden_program();
-        let (encryption, _, _) = derive_identifier_key_material_from_seed(
+        let (encryption, _, relinearization_key) = derive_identifier_key_material_from_seed(
             &params,
             63,
             secret,
             program_id.to_string().as_bytes(),
         )
         .expect("derive programmed public parameters");
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            bootstrap_key: None,
+        };
         let public_parameters = bfv_programmed_public_parameters_with_program(
             encryption,
+            evaluation_keys,
             &hidden_program,
             RamLfeVerificationMode::Signed,
             None,
@@ -1088,6 +1237,73 @@ mod tests {
 
         assert!(
             err.to_string().contains("signature is invalid"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn claim_identifier_rejects_invalid_output_opening_signature() {
+        let mut state = test_state();
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-invalid-opening-signature"));
+        seed_domain(&mut state, &domain_id, &owner);
+        seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
+
+        let resolver = KeyPair::random();
+        let wrong_resolver = KeyPair::random();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
+        let program_policy = sample_program_policy(&owner, &resolver, &program_id);
+        let policy = IdentifierPolicy::new(
+            policy_id.clone(),
+            owner.clone(),
+            IdentifierNormalization::PhoneE164,
+            program_id.clone(),
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
+        RegisterIdentifierPolicy { policy }
+            .execute(&owner, &mut tx)
+            .expect("register policy");
+        ActivateIdentifierPolicy {
+            policy_id: policy_id.clone(),
+        }
+        .execute(&owner, &mut tx)
+        .expect("activate policy");
+
+        let mut receipt = claim_receipt(
+            &policy_id,
+            &program_policy,
+            &resolver,
+            uaid,
+            &owner,
+            0,
+            Some(60_000),
+            b"+15551234567",
+        );
+        receipt.payload.opening.signature = SignatureOf::new(
+            wrong_resolver.private_key(),
+            &receipt.payload.opening.payload,
+        )
+        .into();
+        receipt.attestation = RamLfeReceiptAttestation::Signed(
+            SignatureOf::new(resolver.private_key(), &receipt.payload).into(),
+        );
+
+        let err = ClaimIdentifier {
+            account: owner.clone(),
+            receipt,
+        }
+        .execute(&owner, &mut tx)
+        .expect_err("claim must reject an opening signed by a different verifier");
+
+        assert!(
+            err.to_string()
+                .contains("RAM-LFE output opening signature is invalid"),
             "unexpected error: {err}"
         );
     }

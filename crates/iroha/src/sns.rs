@@ -1,5 +1,10 @@
 //! Rust client helpers for the Sora Name Service registrar routes.
 
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
+
 use eyre::Result;
 
 use crate::{
@@ -14,6 +19,8 @@ use crate::{
 };
 
 const APPLICATION_JSON: &str = "application/json";
+const COMMITTED_NAME_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const COMMITTED_NAME_READ_INTERVAL: Duration = Duration::from_millis(250);
 
 fn ensure_status(
     response: &Response<Vec<u8>>,
@@ -71,10 +78,24 @@ impl SnsNamespacePath {
             other => Err(eyre::eyre!("unsupported SNS namespace suffix id `{other}`")),
         }
     }
+
+    /// Fixed on-chain suffix id for this namespace.
+    #[must_use]
+    pub const fn suffix_id(self) -> SuffixId {
+        match self {
+            Self::AccountAlias => ACCOUNT_ALIAS_SUFFIX_ID,
+            Self::Domain => DOMAIN_NAME_SUFFIX_ID,
+            Self::Dataspace => DATASPACE_ALIAS_SUFFIX_ID,
+        }
+    }
 }
 
 fn name_path(namespace: SnsNamespacePath, literal: &str) -> String {
     format!("v1/sns/names/{}/{literal}", namespace.as_path())
+}
+
+fn retryable_name_lookup_status(status: StatusCode) -> bool {
+    status == StatusCode::NOT_FOUND
 }
 
 impl<'a> SnsApi<'a> {
@@ -82,28 +103,20 @@ impl<'a> SnsApi<'a> {
         Self { client }
     }
 
-    /// POST `/v1/sns/names` to register a name.
+    /// Submit a consensus transaction to register a name.
     ///
     /// # Errors
     ///
-    /// Returns an error if the request cannot be built, sent, or decoded.
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
     pub fn register(&self, payload: &RegisterNameRequestV1) -> Result<RegisterNameResponseV1> {
-        let url = join_torii_url(&self.client.torii_url, "v1/sns/names");
-        let body = norito::json::to_vec(payload)?;
-        let response = self
-            .client
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        ensure_status(
-            &response,
-            StatusCode::CREATED,
-            "unexpected SNS register response",
-        )?;
-        Ok(norito::json::from_slice(response.body())?)
+        let namespace = SnsNamespacePath::from_suffix_id(payload.selector.suffix_id)?;
+        let literal = payload.selector.normalized_label().to_owned();
+        self.client
+            .submit_blocking(crate::data_model::isi::sns::RegisterSnsName::new(
+                payload.clone(),
+            ))?;
+        let name_record = self.get_committed_name(namespace, &literal)?;
+        Ok(RegisterNameResponseV1 { name_record })
     }
 
     /// GET `/v1/sns/policies/{suffix_id}`.
@@ -132,162 +145,147 @@ impl<'a> SnsApi<'a> {
     ///
     /// Returns an error if the registration lookup or decoding fails.
     pub fn get_name(&self, namespace: SnsNamespacePath, literal: &str) -> Result<NameRecordV1> {
+        let response = self.get_name_response(namespace, literal)?;
+        Self::decode_name_response(&response)
+    }
+
+    fn get_name_response(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+    ) -> Result<Response<Vec<u8>>> {
         let path = name_path(namespace, literal);
         let url = join_torii_url(&self.client.torii_url, &path);
-        let response = self
-            .client
+        self.client
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
             .build()?
-            .send()?;
+            .send()
+    }
+
+    fn decode_name_response(response: &Response<Vec<u8>>) -> Result<NameRecordV1> {
         ensure_status(
-            &response,
+            response,
             StatusCode::OK,
             "unexpected SNS registration lookup response",
         )?;
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// POST `/v1/sns/names/{namespace}/{literal}/renew`.
+    fn get_committed_name(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+    ) -> Result<NameRecordV1> {
+        let deadline = Instant::now() + COMMITTED_NAME_READ_TIMEOUT;
+        let mut last_response = self.get_name_response(namespace, literal)?;
+
+        while retryable_name_lookup_status(last_response.status()) && Instant::now() < deadline {
+            thread::sleep(COMMITTED_NAME_READ_INTERVAL);
+            last_response = self.get_name_response(namespace, literal)?;
+        }
+
+        Self::decode_name_response(&last_response)
+    }
+
+    /// Submit a consensus transaction to renew a name.
     ///
     /// # Errors
     ///
-    /// Returns an error if the renewal request or response decoding fails.
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
     pub fn renew(
         &self,
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &RenewNameRequestV1,
     ) -> Result<NameRecordV1> {
-        let path = format!("{}/renew", name_path(namespace, literal));
-        let url = join_torii_url(&self.client.torii_url, &path);
-        let body = norito::json::to_vec(payload)?;
-        let response = self
-            .client
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        ensure_status(&response, StatusCode::OK, "unexpected SNS renew response")?;
-        Ok(norito::json::from_slice(response.body())?)
+        self.client
+            .submit_blocking(crate::data_model::isi::sns::RenewSnsName::new(
+                namespace.suffix_id(),
+                literal,
+                payload.clone(),
+            ))?;
+        self.get_committed_name(namespace, literal)
     }
 
-    /// POST `/v1/sns/names/{namespace}/{literal}/transfer`.
+    /// Submit a consensus transaction to transfer a name.
     ///
     /// # Errors
     ///
-    /// Returns an error if the transfer request or response decoding fails.
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
     pub fn transfer(
         &self,
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &TransferNameRequestV1,
     ) -> Result<NameRecordV1> {
-        let path = format!("{}/transfer", name_path(namespace, literal));
-        let url = join_torii_url(&self.client.torii_url, &path);
-        let body = norito::json::to_vec(payload)?;
-        let response = self
-            .client
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        ensure_status(
-            &response,
-            StatusCode::OK,
-            "unexpected SNS transfer response",
-        )?;
-        Ok(norito::json::from_slice(response.body())?)
+        self.client
+            .submit_blocking(crate::data_model::isi::sns::TransferSnsName::new(
+                namespace.suffix_id(),
+                literal,
+                payload.clone(),
+            ))?;
+        self.get_committed_name(namespace, literal)
     }
 
-    /// POST `/v1/sns/names/{namespace}/{literal}/controllers`.
+    /// Submit a consensus transaction to replace name controllers.
     ///
     /// # Errors
     ///
-    /// Returns an error if the update request or response decoding fails.
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
     pub fn update_controllers(
         &self,
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &UpdateControllersRequestV1,
     ) -> Result<NameRecordV1> {
-        let path = format!("{}/controllers", name_path(namespace, literal));
-        let url = join_torii_url(&self.client.torii_url, &path);
-        let body = norito::json::to_vec(payload)?;
-        let response = self
-            .client
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        ensure_status(
-            &response,
-            StatusCode::OK,
-            "unexpected SNS controller update response",
-        )?;
-        Ok(norito::json::from_slice(response.body())?)
+        self.client
+            .submit_blocking(crate::data_model::isi::sns::UpdateSnsNameControllers::new(
+                namespace.suffix_id(),
+                literal,
+                payload.clone(),
+            ))?;
+        self.get_committed_name(namespace, literal)
     }
 
-    /// POST `/v1/sns/names/{namespace}/{literal}/freeze`.
+    /// Submit a consensus transaction to freeze a name.
     ///
     /// # Errors
     ///
-    /// Returns an error if the freeze request or response decoding fails.
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
     pub fn freeze(
         &self,
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &FreezeNameRequestV1,
     ) -> Result<NameRecordV1> {
-        let path = format!("{}/freeze", name_path(namespace, literal));
-        let url = join_torii_url(&self.client.torii_url, &path);
-        let body = norito::json::to_vec(payload)?;
-        let response = self
-            .client
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        ensure_status(&response, StatusCode::OK, "unexpected SNS freeze response")?;
-        Ok(norito::json::from_slice(response.body())?)
+        self.client
+            .submit_blocking(crate::data_model::isi::sns::FreezeSnsName::new(
+                namespace.suffix_id(),
+                literal,
+                payload.clone(),
+            ))?;
+        self.get_committed_name(namespace, literal)
     }
 
-    /// DELETE `/v1/sns/names/{namespace}/{literal}/freeze`.
+    /// Submit a consensus transaction to unfreeze a name.
     ///
     /// # Errors
     ///
-    /// Returns an error if the unfreeze request or response decoding fails.
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
     pub fn unfreeze(
         &self,
         namespace: SnsNamespacePath,
         literal: &str,
         payload: &GovernanceHookV1,
     ) -> Result<NameRecordV1> {
-        let path = format!("{}/freeze", name_path(namespace, literal));
-        let url = join_torii_url(&self.client.torii_url, &path);
-        let body = norito::json::to_vec(payload)?;
-        let response = self
-            .client
-            .default_request(HttpMethod::DELETE, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        ensure_status(
-            &response,
-            StatusCode::OK,
-            "unexpected SNS unfreeze response",
-        )?;
-        Ok(norito::json::from_slice(response.body())?)
+        self.client
+            .submit_blocking(crate::data_model::isi::sns::UnfreezeSnsName::new(
+                namespace.suffix_id(),
+                literal,
+                payload.clone(),
+            ))?;
+        self.get_committed_name(namespace, literal)
     }
 }
 
@@ -330,6 +328,28 @@ mod tests {
         assert!(
             message.contains("invalid JSON body"),
             "expected response body in error message, got: {message}"
+        );
+    }
+
+    #[test]
+    fn name_lookup_retry_is_limited_to_not_found() {
+        assert!(retryable_name_lookup_status(StatusCode::NOT_FOUND));
+        assert!(!retryable_name_lookup_status(StatusCode::BAD_REQUEST));
+        assert!(!retryable_name_lookup_status(
+            StatusCode::INTERNAL_SERVER_ERROR
+        ));
+    }
+
+    #[test]
+    fn namespace_path_maps_to_fixed_suffix_id() {
+        assert_eq!(
+            SnsNamespacePath::AccountAlias.suffix_id(),
+            ACCOUNT_ALIAS_SUFFIX_ID
+        );
+        assert_eq!(SnsNamespacePath::Domain.suffix_id(), DOMAIN_NAME_SUFFIX_ID);
+        assert_eq!(
+            SnsNamespacePath::Dataspace.suffix_id(),
+            DATASPACE_ALIAS_SUFFIX_ID
         );
     }
 }

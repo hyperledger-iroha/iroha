@@ -164,9 +164,62 @@
       }
     },
     {
+      "type": "stat",
+      "title": "GPU Disable Events (5m)",
+      "id": 4,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (accelerator, reason, device_class, chip_family, gpu_kind) (increase(fastpq_gpu_disable_total{device_class=~\"$device_class\", chip_family=~\"$chip_family\", gpu_kind=~\"$gpu_kind\"}[5m]))",
+          "legendFormat": "{{accelerator}}/{{reason}} on {{device_class}} ({{chip_family}}/{{gpu_kind}})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Sampled GPU Parity Failures",
+      "id": 5,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (accelerator, reason, device_class, chip_family, gpu_kind) (increase(fastpq_gpu_parity_failure_total{device_class=~\"$device_class\", chip_family=~\"$chip_family\", gpu_kind=~\"$gpu_kind\"}[5m]))",
+          "legendFormat": "{{accelerator}}/{{reason}} on {{device_class}} ({{chip_family}}/{{gpu_kind}})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
       "type": "text",
       "title": "Latest Benchmark",
-      "id": 4,
+      "id": 6,
       "options": {
         "mode": "markdown",
         "content": "### Operator Benchmark (2025-11-07)\\n\\n- Artefact: `artifacts/fastpq_benchmarks/fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json`\\n- Device class: `apple-m4` (chip `Apple M4 Max`; GPU `Apple GPU 40-core` (integrated), 76 cores)\\n- Rows: **20,000** (padded **32,768**), iterations **5**, backend `metal`\\n- Mean timings (ms): FFT 63.58 / 45.90 (x1.39), IFFT 52.87 / 54.45 (x0.97), LDE 790.34 / 692.06 (x1.14), Poseidon columns 2021.15 / 2750.09 (x0.73)\\n- Queue depth snapshot: limit=4, max in flight=0, dispatch count=0, busy ms=0, overlap ms=0, overlap ratio=0\\n- Zero-fill telemetry: sampler disabled on this capture; Stage 7 SLO allows <=0.40 ms mean when enabled.\\n- Regenerate with `FASTPQ_METAL_LIB=$(fd -g 'fastpq.metallib' target/release/build | head -n1)` and `scripts/fastpq/wrap_benchmark.py` after each macOS nightly run."

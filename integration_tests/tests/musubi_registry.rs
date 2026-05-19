@@ -28,6 +28,7 @@ use iroha::{
     },
 };
 use iroha_executor_data_model::permission::musubi::CanSetMusubiShortAlias;
+use iroha_primitives::numeric::Numeric;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry, compute_chunk_plan_digest_sha3};
@@ -57,8 +58,7 @@ async fn musubi_registry_flows_propagate_on_four_peers() -> Result<()> {
     let legacy_release = build_release(&legacy_ref, 0x41, b"fn quote(x) { x }", [], ["quote"])?;
 
     let short_alias_permission: Permission = CanSetMusubiShortAlias.into();
-    let builder = NetworkBuilder::new()
-        .with_min_peers(4)
+    let builder = with_sorafs_pin_fee_bootstrap(NetworkBuilder::new().with_min_peers(4))
         .with_genesis_instruction(Grant::account_permission(
             short_alias_permission,
             SAMPLE_GENESIS_ACCOUNT_ID.clone(),
@@ -183,8 +183,7 @@ async fn musubi_registry_post_genesis_transactions_commit_on_four_peers() -> Res
     )?;
     let legacy_release = build_release(&legacy_ref, 0x71, b"fn quote(x) { x }", [], ["quote"])?;
 
-    let builder = NetworkBuilder::new()
-        .with_min_peers(4)
+    let builder = with_sorafs_pin_fee_bootstrap(NetworkBuilder::new().with_min_peers(4))
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanSetMusubiShortAlias),
             ALICE_ID.clone(),
@@ -252,6 +251,43 @@ async fn musubi_registry_post_genesis_transactions_commit_on_four_peers() -> Res
 fn submit_instructions(client: &Client, instructions: Vec<InstructionBox>) -> Result<()> {
     client.submit_all(instructions)?;
     Ok(())
+}
+
+fn with_sorafs_pin_fee_bootstrap(mut builder: NetworkBuilder) -> NetworkBuilder {
+    for instruction in sorafs_pin_fee_bootstrap_instructions() {
+        builder = builder.with_genesis_instruction(instruction);
+    }
+    builder
+}
+
+fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
+    let fee_asset_id: AssetDefinitionId =
+        iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
+            .parse()
+            .expect("default SoraFS pin fee asset id");
+    let treasury =
+        iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id();
+    let fee_name = fee_asset_id
+        .try_name()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "xor".to_owned());
+    let fee_definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(fee_name);
+    let seed_amount = Numeric::new(10_000_000_000_000_u128, 0);
+
+    vec![
+        Register::account(Account::new(treasury)).into(),
+        Register::asset_definition(fee_definition).into(),
+        Mint::asset_numeric(
+            seed_amount.clone(),
+            AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
+        )
+        .into(),
+        Mint::asset_numeric(
+            seed_amount,
+            AssetId::new(fee_asset_id, SAMPLE_GENESIS_ACCOUNT_ID.clone()),
+        )
+        .into(),
+    ]
 }
 
 fn register_manifest_instruction(release: &MusubiRelease) -> Result<RegisterPinManifest> {

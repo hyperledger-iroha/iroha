@@ -26,7 +26,6 @@ Walks through an NFT lifecycle end to end: minting to the owner, transferring, t
 ```text
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
-  #[access(read="*", write="*")]
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
     let owner = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
     let nft = nft_id!("n0$wonderland.universal");

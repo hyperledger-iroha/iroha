@@ -57,6 +57,11 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
 - `FheJobSpecV1` captures deterministic ciphertext job admission/execution
   requests: operation class, ordered input commitments, output key, and bounded
   depth/rotation/bootstrap demand linked to a policy + parameter set.
+  Runtime execution loads the referenced ciphertext envelopes from
+  authoritative service state, verifies their commitments and parameter/key
+  identifiers, performs the requested FHE operation, then persists the encoded
+  output ciphertext envelope and its commitment. Output byte counts are derived
+  from the encoded ciphertext bytes, not from deterministic estimates.
 - `DecryptionAuthorityPolicyV1` captures governance-managed disclosure policy:
   authority mode (client-held vs threshold service), approver quorum/members,
   break-glass allowance, jurisdiction tagging, consent-evidence requirement,
@@ -170,6 +175,10 @@ Validation rejects unsupported versions with
     - policy/param identifiers and versions match.
     - input count/bytes, depth, rotation, and bootstrap limits are within policy caps.
     - deterministic projected output bytes fit policy ciphertext limits.
+  - runtime execution enforces input commitment equality against stored
+    ciphertext payload bytes before Add, Multiply, RotateLeft, or Bootstrap.
+    `RotateLeft` is slot rotation by `rotation_steps`; `Bootstrap` requires the
+    registered bootstrap key for the job's evaluation-key bundle.
 - Decryption authority policy:
   - `approver_ids` must be non-empty, unique, and strictly lexicographically sorted.
   - `ClientHeld` mode requires exactly one approver, `approver_quorum=1`,

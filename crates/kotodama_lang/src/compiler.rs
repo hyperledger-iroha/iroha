@@ -10,7 +10,7 @@
 //! module emit the canonical wide encoding introduced for the first release; no
 //! alternate instruction layouts are generated.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -22,16 +22,16 @@ use iroha_data_model::{
     asset::id::{AssetDefinitionId, AssetId},
     domain::DomainId,
     isi::{
-        BuiltInInstruction as _, BurnBox, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox,
-        RegisterBox, RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
+        BurnBox, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox, RegisterBox,
+        RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
     },
     name::Name,
     nft::NftId,
     query::{QueryRequest, SingularQueryBox},
     role::RoleId,
     smart_contract::manifest::{
-        AccessSetHints, EntryPointKind, EntrypointParamDescriptor, TriggerCallback,
-        TriggerDescriptor,
+        AccessSetHints, DynamicAccessHint, EntryPointKind, EntrypointParamDescriptor,
+        TriggerCallback, TriggerDescriptor,
     },
     trigger::{Trigger, TriggerId},
 };
@@ -68,10 +68,12 @@ const LITERAL_SHIFT_REG: u8 = 26;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const GLOBAL_WILDCARD_KEY: &str = "*";
 const STATE_WILDCARD_KEY: &str = "state:*";
+const AUTHORITY_ACCOUNT_KEY: &str = "account:$authority";
+const AUTHORITY_PLACEHOLDER: &str = "$authority";
 const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
 const COMPILER_FINGERPRINT: &str = concat!("kotodama_lang/", env!("CARGO_PKG_VERSION"));
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 struct AccessSets {
     reads: IndexSet<String>,
     writes: IndexSet<String>,
@@ -86,10 +88,23 @@ impl Default for AccessSets {
     }
 }
 
-#[derive(Clone)]
+impl AccessSets {
+    fn union_with(&mut self, other: &Self) {
+        self.reads.extend(other.reads.iter().cloned());
+        self.writes.extend(other.writes.iter().cloned());
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 enum StatePathHint {
     Literal(String),
     Map { base: String },
+}
+
+#[derive(Clone)]
+enum AccountAccessHint {
+    Literal(AccountId),
+    Authority,
 }
 
 impl StatePathHint {
@@ -615,7 +630,7 @@ pub struct CompilerOptions {
     pub vector_length: u8,
     /// Optional maximum cycles to encode; 0 means "use compiler default".
     pub max_cycles: u64,
-    /// Max unrolled iterations for dynamic bounds lowering (feature-gated).
+    /// Fixed first-release dynamic iteration limit; non-default values are rejected.
     pub dynamic_iter_cap: u8,
     /// Enforce the deterministic on-chain safety profile during compilation.
     pub enforce_on_chain_profile: bool,
@@ -635,7 +650,7 @@ impl Default for CompilerOptions {
             force_vector: false,
             vector_length: 0,
             max_cycles: DEFAULT_MAX_CYCLES,
-            dynamic_iter_cap: 2,
+            dynamic_iter_cap: semantic::DYNAMIC_ITERATION_LIMIT as u8,
             enforce_on_chain_profile: true,
             emit_debug: true,
             debug_source_name: None,
@@ -651,13 +666,20 @@ mod tests {
     use iroha_data_model::DomainId;
 
     use super::{
-        Compiler, CompilerOptions, ContractFeature, DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY,
-        STATE_WILDCARD_KEY, WIDE_IMM_MAX, emit_addi, emit_load64, emit_store64,
-        patch_pointer_literal_stub, pointer_type_for_kind, reserve_pointer_literal_stub,
-        stack_slot_offset_bytes,
+        AUTHORITY_ACCOUNT_KEY, Compiler, CompilerMode, CompilerOptions, ContractFeature,
+        DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY, STATE_WILDCARD_KEY, WIDE_IMM_MAX, emit_addi,
+        emit_load64, emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
+        reserve_pointer_literal_stub, stack_slot_offset_bytes,
     };
     use crate::{ast::ContractMeta, ir, parser::parse, semantic::analyze};
     use crate::{encoding, instruction, metadata::ProgramMetadata, pointer_abi::PointerType};
+
+    fn test_mode_compiler() -> Compiler {
+        Compiler::new_with_options(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        })
+    }
 
     fn sample_account_id() -> iroha_data_model::account::AccountId {
         iroha_data_model::account::AccountId::new(
@@ -935,7 +957,7 @@ seiyaku NegTest {
   }
 }
 "#;
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler.compile_source(src).expect("compile neg");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let mut found = false;
@@ -960,7 +982,7 @@ seiyaku JsonNumericTest {
   }
 }
 "#;
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler.compile_source(src).expect("compile get_numeric");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
@@ -987,7 +1009,7 @@ seiyaku JsonAssetDefinitionTest {
   }
 }
 "#;
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(src)
             .expect("compile get_asset_definition_id");
@@ -1019,7 +1041,7 @@ fn main() {
   escrow_resolve_dispute(name("aitai_offer"), 6, 4, evidence);
 }
 "#;
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(src)
             .expect("compile native escrow builtins");
@@ -1061,7 +1083,7 @@ fn main() {
 
     #[test]
     fn account_id_alias_literal_emits_resolve_account_alias_syscall() {
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(r#"fn main() { let _acct = account_id("merchant@paynet"); }"#)
             .expect("compile alias shorthand");
@@ -1081,7 +1103,7 @@ fn main() {
 
     #[test]
     fn account_id_domain_qualified_alias_literal_emits_resolve_account_alias_syscall() {
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(r#"fn main() { let _acct = account_id("merchant@bank.paynet"); }"#)
             .expect("compile domain-qualified alias shorthand");
@@ -1101,7 +1123,7 @@ fn main() {
 
     #[test]
     fn resolve_account_alias_builtin_emits_syscall() {
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(
                 r#"fn main() { let _acct = resolve_account_alias("merchant@paynet"); }"#,
@@ -1123,7 +1145,7 @@ fn main() {
 
     #[test]
     fn resolve_account_alias_invalid_literal_emits_syscall() {
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(r#"fn main() { let _acct = resolve_account_alias("merchant@"); }"#)
             .expect("compile malformed builtin alias resolution");
@@ -1143,7 +1165,7 @@ fn main() {
 
     #[test]
     fn resolve_account_alias_domain_qualified_builtin_emits_syscall() {
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(
                 r#"fn main() { let _acct = resolve_account_alias("merchant@bank.paynet"); }"#,
@@ -1165,7 +1187,7 @@ fn main() {
 
     #[test]
     fn resolve_account_alias_invalid_domain_qualified_literal_emits_syscall() {
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(r#"fn main() { let _acct = resolve_account_alias("merchant@bank."); }"#)
             .expect("compile malformed domain-qualified builtin alias resolution");
@@ -1191,7 +1213,7 @@ fn main() {
                 .expect("public key"),
         )
         .to_string();
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(&format!(
                 r#"fn main() {{ let _acct = account_id("{canonical}"); }}"#
@@ -1223,7 +1245,7 @@ fn main() {
 
     #[test]
     fn account_id_invalid_alias_shaped_literal_compiles_for_runtime_resolution() {
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(r#"fn main() { let _acct = account_id("merchant@"); }"#)
             .expect("compile invalid alias-shaped literal");
@@ -1243,7 +1265,7 @@ fn main() {
 
     #[test]
     fn account_id_invalid_domain_qualified_alias_shaped_literal_compiles_for_runtime_resolution() {
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(r#"fn main() { let _acct = account_id("merchant@bank."); }"#)
             .expect("compile invalid domain-qualified alias-shaped literal");
@@ -1263,7 +1285,7 @@ fn main() {
 
     #[test]
     fn account_id_invalid_non_alias_literal_fails_compile_time_encoding() {
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let err = compiler
             .compile_source(r#"fn main() { let _acct = account_id("merchant"); }"#)
             .expect_err("invalid non-alias account literal should fail compile-time encoding");
@@ -1625,11 +1647,17 @@ seiyaku Test {
     }
 
     #[test]
-    fn manifest_access_set_hints_include_state_wildcard_for_dynamic_state_path() {
+    fn manifest_includes_dynamic_state_iteration_hints() {
         let src = r#"
 seiyaku Test {
-  kotoage fn read(path: Name) {
-    let _x = state_get(path);
+  state Foo: Map<int, int>;
+
+  kotoage fn sum(n: int) -> int {
+    let acc = 0;
+    for (k, v) in Foo.take(n) {
+      acc = acc + v;
+    }
+    return acc;
   }
 }
 "#;
@@ -1640,15 +1668,43 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec![STATE_WILDCARD_KEY.to_string()]);
-        assert_eq!(hints.write_keys, vec![STATE_WILDCARD_KEY.to_string()]);
+        assert!(hints.read_keys.contains(&"state:Foo".to_string()));
+        assert_eq!(hints.dynamic_reads.len(), 1);
+        let dynamic = &hints.dynamic_reads[0];
+        assert_eq!(dynamic.base_key, "state:Foo");
+        assert_eq!(dynamic.key_type, "int");
+        assert_eq!(dynamic.bound_kind, "take");
+        assert_eq!(
+            dynamic.max_keys,
+            crate::semantic::DYNAMIC_ITERATION_LIMIT as u32
+        );
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_state_wildcard_for_dynamic_state_path() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn read(path: Name) {
+    let _x = state_get(path);
+  }
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert!(hints.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let read = entrypoints
             .iter()
             .find(|entry| entry.name == "read")
             .expect("read entrypoint");
-        assert_eq!(read.read_keys, vec![STATE_WILDCARD_KEY.to_string()]);
-        assert_eq!(read.write_keys, vec![STATE_WILDCARD_KEY.to_string()]);
+        assert!(read.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert!(read.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
         assert_eq!(read.access_hints_complete, Some(false));
         assert!(!read.access_hints_skipped.is_empty());
     }
@@ -1662,7 +1718,7 @@ seiyaku Test {
   }
 }
 "#;
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
             .expect("compile manifest");
@@ -1892,6 +1948,127 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_include_nft_set_metadata_literal() {
+        let src = r#"
+fn main() {
+  nft_set_metadata(nft_id("n0$wonderland.universal"), json("{\"meta\":1}"));
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        let nft_key = "nft:n0$wonderland.universal".to_string();
+        assert!(hints.read_keys.contains(&nft_key));
+        assert!(hints.write_keys.contains(&nft_key));
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_asset_registration_literals() {
+        use iroha_data_model::asset::id::{AssetDefinitionId, AssetId};
+
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let asset_def = AssetDefinitionId::parse_address_literal(asset_literal).unwrap();
+        let account = sample_account_id();
+        let account_literal = account.to_string();
+        let asset_id = AssetId::of(asset_def.clone(), account.clone());
+        let src = format!(
+            r#"
+fn main() {{
+  register_asset(asset_definition("{asset_literal}"), "ROSE", 0, 1);
+  create_new_asset(asset_definition("{asset_literal}"), "ROSE", 1, account_id("{account_literal}"), 1);
+}}
+"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
+        assert!(hints.write_keys.contains(&format!("asset_def:{asset_def}")));
+        assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
+        assert!(hints.write_keys.contains(&format!("asset:{asset_id}")));
+        assert!(hints.read_keys.contains(&format!("account:{account}")));
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_authority_placeholders() {
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"
+fn main() {{
+  register_asset(asset_definition("{asset_literal}"), "ROSE", 0, 1);
+  create_role(name("minter"), json("{{\"perms\":[\"mint_asset:{asset_literal}\"]}}"));
+  grant_role(authority(), name("minter"));
+  mint_asset(authority(), asset_definition("{asset_literal}"), 1);
+}}
+"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
+        assert!(hints.write_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
+        assert!(
+            hints
+                .write_keys
+                .contains(&"role.binding:$authority:minter".to_owned())
+        );
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("asset:{asset_literal}:$authority"))
+        );
+        assert!(
+            hints
+                .write_keys
+                .contains(&format!("asset:{asset_literal}:$authority"))
+        );
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
     fn manifest_access_set_hints_include_execute_query_literal() {
         use iroha_data_model::{
             account::AccountId,
@@ -1961,6 +2138,57 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_include_inline_zk_vendor_payloads() {
+        use iroha_data_model::{
+            account::{AccountId, ParsedAccountId},
+            asset::id::{AssetDefinitionId, AssetId},
+        };
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(include_str!("samples/zk_vote_and_unshield.ko"))
+            .expect("compile sample manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        let asset_def = AssetDefinitionId::parse_address_literal("6pEP9RjNoZ7beWkT3pLfKoM1dyfi")
+            .expect("sample asset definition");
+        let account =
+            AccountId::parse_encoded("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+                .map(ParsedAccountId::into_account_id)
+                .expect("sample account");
+        let asset = AssetId::of(asset_def.clone(), account.clone());
+
+        assert!(
+            hints
+                .write_keys
+                .contains(&"zk:election:election-1:ciphertexts".to_string())
+        );
+        assert!(
+            hints
+                .write_keys
+                .contains(&"zk:election:election-1:nullifiers".to_string())
+        );
+        assert!(hints.write_keys.contains(&format!("zk_asset:{asset_def}")));
+        assert!(hints.write_keys.contains(&format!("asset:{asset}")));
+        assert!(
+            hints
+                .write_keys
+                .contains(&format!("asset_def.detail:{asset_def}:zk.unshield.last"))
+        );
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let demo = entrypoints
+            .iter()
+            .find(|entry| entry.name == "demo")
+            .expect("demo entrypoint");
+        assert_eq!(demo.access_hints_complete, Some(true));
+        assert!(demo.access_hints_skipped.is_empty());
+    }
+
+    #[test]
     fn manifest_access_set_hints_include_transfer_domain_literal() {
         use iroha_data_model::domain::DomainId;
 
@@ -2000,23 +2228,23 @@ seiyaku Test {
             r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@paynet"), asset_definition("{asset_literal}"), 1); }}"#
         );
 
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
             .expect("compile manifest");
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert!(hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert!(main.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(main.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert_eq!(main.access_hints_complete, Some(false));
         assert!(!main.access_hints_skipped.is_empty());
     }
@@ -2029,23 +2257,23 @@ seiyaku Test {
             r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@"), asset_definition("{asset_literal}"), 1); }}"#
         );
 
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
             .expect("compile manifest");
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert!(hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert!(main.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(main.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert_eq!(main.access_hints_complete, Some(false));
         assert!(!main.access_hints_skipped.is_empty());
     }
@@ -2058,7 +2286,7 @@ seiyaku Test {
             r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@bank.paynet"), asset_definition("{asset_literal}"), 1); }}"#
         );
 
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
             .expect("compile manifest");
@@ -2088,7 +2316,7 @@ seiyaku Test {
             r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@bank."), asset_definition("{asset_literal}"), 1); }}"#
         );
 
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
             .expect("compile manifest");
@@ -2117,7 +2345,7 @@ seiyaku Test {
             r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@paynet"), asset_definition("{asset_literal}"), 1); }}"#
         );
 
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
             .expect("compile manifest");
@@ -2146,7 +2374,7 @@ seiyaku Test {
             r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@"), asset_definition("{asset_literal}"), 1); }}"#
         );
 
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
             .expect("compile manifest");
@@ -2176,7 +2404,7 @@ seiyaku Test {
             r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@bank.paynet"), asset_definition("{asset_literal}"), 1); }}"#
         );
 
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
             .expect("compile manifest");
@@ -2206,7 +2434,7 @@ seiyaku Test {
             r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@bank."), asset_definition("{asset_literal}"), 1); }}"#
         );
 
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
             .expect("compile manifest");
@@ -2236,22 +2464,22 @@ seiyaku Test {
   }
 }
 "#;
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
             .expect("compile manifest");
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert!(hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "move")
             .expect("move entrypoint");
-        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert!(main.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(main.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert_eq!(main.access_hints_complete, Some(false));
         assert!(!main.access_hints_skipped.is_empty());
     }
@@ -2265,7 +2493,7 @@ seiyaku Test {
   }
 }
 "#;
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
             .expect("compile manifest");
@@ -2371,8 +2599,10 @@ seiyaku Test {
     fn main_entrypoint_is_compiled_first_before_hajimari() {
         let src = r#"
 seiyaku Hello {
+  state int Counter;
+
   hajimari() {
-    info("Hello from hajimari");
+    Counter = 1;
   }
 
   kotoage fn main() permission(Admin) {
@@ -2380,11 +2610,7 @@ seiyaku Hello {
   }
 
   kotoage fn write_detail() permission(Admin) {
-    set_account_detail(
-      authority(),
-      name("example"),
-      json("{\"hello\":\"world\"}")
-    );
+    Counter = Counter + 1;
   }
 }
 "#;
@@ -3104,7 +3330,7 @@ seiyaku Test {
   }
 }
 "#;
-        let compiler = Compiler::new();
+        let compiler = test_mode_compiler();
         let (_bytes, _manifest, diag) = compiler
             .compile_source_with_manifest_and_diagnostics(src)
             .expect("compile manifest");
@@ -3113,7 +3339,23 @@ seiyaku Test {
     }
 
     #[test]
-    fn explicit_global_wildcards_suppress_access_hint_diagnostics() {
+    fn production_rejects_incomplete_access_hints() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
+    transfer_asset(from, to, asset, amount);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let err = compiler
+            .compile_source_with_manifest(src)
+            .expect_err("production should reject incomplete access metadata");
+        assert!(err.contains("E_ACCESS_INCOMPLETE"));
+    }
+
+    #[test]
+    fn explicit_global_wildcards_are_rejected() {
         let src = r#"
 seiyaku Test {
   #[access(read="*", write="*")]
@@ -3123,14 +3365,14 @@ seiyaku Test {
 }
 "#;
         let compiler = Compiler::new();
-        let (_bytes, _manifest, diag) = compiler
-            .compile_source_with_manifest_and_diagnostics(src)
-            .expect("compile manifest");
-        assert!(diag.is_empty());
+        let err = compiler
+            .compile_source_with_manifest(src)
+            .expect_err("manual access hints should be rejected");
+        assert!(err.contains("access metadata is generated by the compiler"));
     }
 
     #[test]
-    fn manifest_access_set_hints_include_explicit_access() {
+    fn manifest_access_set_hints_rejects_explicit_access() {
         let account_literal = sample_account_literal();
         let account_key = format!("account:{account_literal}");
         let src = format!(
@@ -3144,21 +3386,10 @@ seiyaku Test {{
 "#
         );
         let compiler = Compiler::new();
-        let (_bytes, manifest) = compiler
+        let err = compiler
             .compile_source_with_manifest(&src)
-            .expect("compile manifest");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected access_set_hints");
-        assert!(hints.read_keys.contains(&account_key));
-        assert!(hints.write_keys.contains(&account_key));
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|e| e.name == "move")
-            .expect("entrypoint present");
-        assert!(main.read_keys.contains(&account_key));
-        assert!(main.write_keys.contains(&account_key));
+            .expect_err("manual access hints should be rejected");
+        assert!(err.contains("access metadata is generated by the compiler"));
     }
 
     #[test]
@@ -3187,7 +3418,7 @@ seiyaku Test {
     }
 
     #[test]
-    fn manifest_access_set_hints_include_literal_numeric_map_keys() {
+    fn manifest_access_set_hints_reject_numeric_map_keys() {
         let src = r#"
 seiyaku Test {
   state Foo: Map<Amount, int>;
@@ -3199,21 +3430,10 @@ seiyaku Test {
 }
 "#;
         let compiler = Compiler::new();
-        let (_bytes, manifest) = compiler
+        let err = compiler
             .compile_source_with_manifest(src)
-            .expect("compile manifest");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected access_set_hints");
-        let numeric = iroha_primitives::numeric::Numeric::new(7_u128, 0);
-        let payload = norito::to_bytes(&numeric).expect("encode numeric");
-        let raw = format!("0x{}", hex::encode(payload));
-        let path = super::state_path_for_norito_key("Foo", &raw).expect("path");
-        let expected = format!("state:{path}");
-        assert!(hints.read_keys.contains(&expected));
-        assert!(hints.read_keys.contains(&"state:Foo".to_string()));
-        assert!(hints.write_keys.contains(&expected));
-        assert!(hints.write_keys.contains(&"state:Foo".to_string()));
+            .expect_err("numeric map keys are not supported for durable state");
+        assert!(err.contains("state Map key type `Amount` is not supported"));
     }
 
     #[test]
@@ -3525,7 +3745,6 @@ mod test_mode_tests {
     fn test_mode_helpers_emit_private_scallx_syscalls() {
         let src = r#"
         seiyaku Demo {
-            #[access(read="*", write="*")]
             kotoage fn run() {}
 
             #[test]
@@ -3646,6 +3865,13 @@ impl Compiler {
         if abi_version != 1 {
             return Err(format!("unsupported abi_version {abi_version}; expected 1"));
         }
+        if self.opts.dynamic_iter_cap != semantic::DYNAMIC_ITERATION_LIMIT as u8 {
+            return Err(format!(
+                "unsupported dynamic_iter_cap {}; first-release Kotodama uses fixed dynamic iteration limit {}",
+                self.opts.dynamic_iter_cap,
+                semantic::DYNAMIC_ITERATION_LIMIT
+            ));
+        }
         let ir_prog = ir::lower_with_cap_and_test_mode(
             &typed,
             self.opts.dynamic_iter_cap as usize,
@@ -3703,8 +3929,11 @@ impl Compiler {
         let mut dataref_kind_map: HashMap<(usize, ir::Temp), ir::DataRefKind> = HashMap::new();
         let mut state_path_hints: HashMap<(usize, ir::Temp), StatePathHint> = HashMap::new();
         let mut norito_literal_map: HashMap<(usize, ir::Temp), String> = HashMap::new();
+        let mut instruction_literal_access_map: HashMap<(usize, ir::Temp), AccessSets> =
+            HashMap::new();
         let mut seen_copy_dests: HashSet<(usize, ir::Temp)> = HashSet::new();
         let mut multi_copy_dests: HashSet<(usize, ir::Temp)> = HashSet::new();
+        let mut authority_account_temps: HashSet<(usize, ir::Temp)> = HashSet::new();
         for (func_idx, func) in ir_prog.functions.iter().enumerate() {
             for bb in &func.blocks {
                 for instr in &bb.instrs {
@@ -3733,6 +3962,8 @@ impl Compiler {
                         // Temps are mutable in loop lowerings (e.g., `i = i + 1`), so
                         // stale const facts must be dropped before codegen-time folding.
                         int_const_map.remove(&(func_idx, *dest));
+                        authority_account_temps.remove(&(func_idx, *dest));
+                        instruction_literal_access_map.remove(&(func_idx, *dest));
                     }
                     if let ir::Instr::Copy { dest, src } = instr {
                         if dest != src {
@@ -3742,7 +3973,9 @@ impl Compiler {
                             state_path_hints.remove(&dest_key);
                             int_const_map.remove(&dest_key);
                             norito_literal_map.remove(&dest_key);
+                            instruction_literal_access_map.remove(&dest_key);
                             string_literal_temps.remove(&dest_key);
+                            authority_account_temps.remove(&dest_key);
                             if !multi_copy_dests.contains(&dest_key) {
                                 if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
                                     string_map.insert(dest_key, val);
@@ -3763,8 +3996,17 @@ impl Compiler {
                                 {
                                     norito_literal_map.insert(dest_key, val);
                                 }
+                                if let Some(access) = instruction_literal_access_map
+                                    .get(&(func_idx, *src))
+                                    .cloned()
+                                {
+                                    instruction_literal_access_map.insert(dest_key, access);
+                                }
                                 if string_literal_temps.contains(&(func_idx, *src)) {
                                     string_literal_temps.insert(dest_key);
+                                }
+                                if authority_account_temps.contains(&(func_idx, *src)) {
+                                    authority_account_temps.insert(dest_key);
                                 }
                             }
                         }
@@ -3826,8 +4068,67 @@ impl Compiler {
                             string_map.insert((func_idx, *dest), format!("0x{hex}"));
                         }
                     }
+                    if let ir::Instr::BuildSubmitBallotInline {
+                        dest,
+                        election_id,
+                        ciphertext,
+                        nullifier,
+                        backend,
+                        proof,
+                        vk,
+                    } = instr
+                        && let Some(raw) = submit_ballot_inline_instruction_literal(
+                            &string_map,
+                            func_idx,
+                            *election_id,
+                            *ciphertext,
+                            *nullifier,
+                            *backend,
+                            *proof,
+                            *vk,
+                        )
+                    {
+                        if let Some(access) = access_for_instruction_literal(&raw) {
+                            instruction_literal_access_map.insert((func_idx, *dest), access);
+                        }
+                        string_map.insert((func_idx, *dest), raw);
+                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
+                    }
+                    if let ir::Instr::BuildUnshieldInline {
+                        dest,
+                        asset,
+                        to,
+                        amount,
+                        inputs,
+                        backend,
+                        proof,
+                        vk,
+                    } = instr
+                        && let Some(raw) = unshield_inline_instruction_literal(
+                            &string_map,
+                            &int_const_map,
+                            func_idx,
+                            *asset,
+                            *to,
+                            *amount,
+                            *inputs,
+                            *backend,
+                            *proof,
+                            *vk,
+                        )
+                    {
+                        if let Some(access) = access_for_instruction_literal(&raw) {
+                            instruction_literal_access_map.insert((func_idx, *dest), access);
+                        }
+                        string_map.insert((func_idx, *dest), raw);
+                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
+                    }
                     if let ir::Instr::ActorAccount { dest, .. } = instr {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Account);
+                    }
+                    if let ir::Instr::GetAuthority { dest } = instr {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::Account);
+                        authority_account_temps.insert((func_idx, *dest));
                     }
                     if let ir::Instr::ActorPublicKey { dest, .. }
                     | ir::Instr::ActorSign { dest, .. } = instr
@@ -3881,63 +4182,6 @@ impl Compiler {
                                 .insert((func_idx, *dest), StatePathHint::Map { base: map_base });
                         }
                     }
-                    match instr {
-                        ir::Instr::StateGet { path, .. } => {
-                            if let Some(key) =
-                                render_state_hint(state_path_hints.get(&(func_idx, *path)))
-                            {
-                                insert_state_hint(&mut access_sets[func_idx].reads, key);
-                            } else {
-                                hint_diagnostics.state_wildcards =
-                                    hint_diagnostics.state_wildcards.saturating_add(1);
-                                record_hint_skip(
-                                    &mut hint_skips[func_idx],
-                                    "dynamic state path requires state wildcard",
-                                );
-                                access_sets[func_idx]
-                                    .reads
-                                    .insert(STATE_WILDCARD_KEY.to_string());
-                                access_sets[func_idx]
-                                    .writes
-                                    .insert(STATE_WILDCARD_KEY.to_string());
-                            }
-                        }
-                        ir::Instr::StateSet { path, .. } | ir::Instr::StateDel { path } => {
-                            if let Some(key) =
-                                render_state_hint(state_path_hints.get(&(func_idx, *path)))
-                            {
-                                insert_state_hint(&mut access_sets[func_idx].writes, key);
-                            } else {
-                                hint_diagnostics.state_wildcards =
-                                    hint_diagnostics.state_wildcards.saturating_add(1);
-                                record_hint_skip(
-                                    &mut hint_skips[func_idx],
-                                    "dynamic state path requires state wildcard",
-                                );
-                                access_sets[func_idx]
-                                    .reads
-                                    .insert(STATE_WILDCARD_KEY.to_string());
-                                access_sets[func_idx]
-                                    .writes
-                                    .insert(STATE_WILDCARD_KEY.to_string());
-                            }
-                        }
-                        ir::Instr::CallContract { .. } => {
-                            hint_diagnostics.state_wildcards =
-                                hint_diagnostics.state_wildcards.saturating_add(1);
-                            record_hint_skip(
-                                &mut hint_skips[func_idx],
-                                "contract call target requires state wildcard",
-                            );
-                            access_sets[func_idx]
-                                .reads
-                                .insert(STATE_WILDCARD_KEY.to_string());
-                            access_sets[func_idx]
-                                .writes
-                                .insert(STATE_WILDCARD_KEY.to_string());
-                        }
-                        _ => {}
-                    }
                 }
             }
         }
@@ -3948,14 +4192,10 @@ impl Compiler {
         for (idx, func) in ir_prog.functions.iter().enumerate() {
             fn_index_by_name.insert(&func.name, idx);
         }
-        let mut explicit_hints_by_fn = vec![false; func_count];
-        let explicit_hints_present = apply_explicit_access_hints(
-            &typed,
-            &fn_index_by_name,
-            &mut access_sets,
-            &mut explicit_hints_by_fn,
-        );
         let mut literal_param_conflicts: HashSet<(usize, ir::Temp)> = HashSet::new();
+        let mut authority_param_conflicts: HashSet<(usize, ir::Temp)> = HashSet::new();
+        let mut instruction_param_unknowns: HashSet<(usize, ir::Temp)> = HashSet::new();
+        let mut state_path_param_unknowns: HashSet<(usize, ir::Temp)> = HashSet::new();
         for (caller_idx, func) in ir_prog.functions.iter().enumerate() {
             for bb in &func.blocks {
                 for instr in &bb.instrs {
@@ -3974,6 +4214,58 @@ impl Compiler {
                                 continue;
                             };
                             let param_key = (callee_idx, param_temp);
+                            if !state_path_param_unknowns.contains(&param_key) {
+                                if let Some(hint) =
+                                    state_path_hints.get(&(caller_idx, arg_temp)).cloned()
+                                {
+                                    match state_path_hints.get(&param_key) {
+                                        Some(existing) if existing != &hint => {
+                                            state_path_hints.remove(&param_key);
+                                            state_path_param_unknowns.insert(param_key);
+                                        }
+                                        Some(_) => {}
+                                        None => {
+                                            state_path_hints.insert(param_key, hint);
+                                        }
+                                    }
+                                } else if state_path_hints.remove(&param_key).is_some() {
+                                    state_path_param_unknowns.insert(param_key);
+                                }
+                            }
+                            if !instruction_param_unknowns.contains(&param_key) {
+                                if let Some(access) = instruction_literal_access_map
+                                    .get(&(caller_idx, arg_temp))
+                                    .cloned()
+                                {
+                                    instruction_literal_access_map
+                                        .entry(param_key)
+                                        .or_default()
+                                        .union_with(&access);
+                                } else if instruction_literal_access_map
+                                    .remove(&param_key)
+                                    .is_some()
+                                {
+                                    instruction_param_unknowns.insert(param_key);
+                                }
+                            }
+                            let arg_has_authority =
+                                authority_account_temps.contains(&(caller_idx, arg_temp));
+                            if !authority_param_conflicts.contains(&param_key) {
+                                if arg_has_authority {
+                                    if string_map.contains_key(&param_key) {
+                                        string_map.remove(&param_key);
+                                        string_literal_temps.remove(&param_key);
+                                        dataref_kind_map.remove(&param_key);
+                                        authority_account_temps.remove(&param_key);
+                                        authority_param_conflicts.insert(param_key);
+                                    } else {
+                                        authority_account_temps.insert(param_key);
+                                        dataref_kind_map.insert(param_key, DRK::Account);
+                                    }
+                                } else if authority_account_temps.remove(&param_key) {
+                                    authority_param_conflicts.insert(param_key);
+                                }
+                            }
                             if literal_param_conflicts.contains(&param_key) {
                                 continue;
                             }
@@ -4027,6 +4319,74 @@ impl Compiler {
         for (func_idx, func) in ir_prog.functions.iter().enumerate() {
             for bb in &func.blocks {
                 for instr in &bb.instrs {
+                    if let ir::Instr::PointerToNorito { dest, value } = instr {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
+                        let literal_kind = dataref_kind_map.get(&(func_idx, *value)).copied();
+                        let literal_raw = string_map.get(&(func_idx, *value)).cloned();
+                        if let (Some(kind), Some(raw)) = (literal_kind, literal_raw)
+                            && let Some(tlv_bytes) = encode_pointer_tlv_bytes(kind, &raw)
+                        {
+                            let hex = hex::encode(tlv_bytes);
+                            string_map.insert((func_idx, *dest), format!("0x{hex}"));
+                        }
+                    }
+                    if let ir::Instr::PathMapKey { dest, base, key } = instr
+                        && let Some(base_hint) = state_path_hints.get(&(func_idx, *base)).cloned()
+                    {
+                        let map_base = base_hint.base_name();
+                        if let Some(key_val) = int_const_map.get(&(func_idx, *key)).copied() {
+                            let path = format!("{map_base}/{key_val}");
+                            state_path_hints
+                                .insert((func_idx, *dest), StatePathHint::Literal(path));
+                        } else {
+                            state_path_hints
+                                .insert((func_idx, *dest), StatePathHint::Map { base: map_base });
+                        }
+                    }
+                    if let ir::Instr::PathMapKeyNorito {
+                        dest,
+                        base,
+                        key_blob,
+                    } = instr
+                        && let Some(base_hint) = state_path_hints.get(&(func_idx, *base)).cloned()
+                    {
+                        let map_base = base_hint.base_name();
+                        let literal_path = string_map
+                            .get(&(func_idx, *key_blob))
+                            .and_then(|raw| {
+                                dataref_kind_map
+                                    .get(&(func_idx, *key_blob))
+                                    .filter(|kind| matches!(**kind, DRK::NoritoBytes))
+                                    .and_then(|_| state_path_for_norito_key(&map_base, raw))
+                            })
+                            .or_else(|| {
+                                norito_literal_map
+                                    .get(&(func_idx, *key_blob))
+                                    .and_then(|raw| state_path_for_norito_key(&map_base, raw))
+                            });
+                        if let Some(path) = literal_path {
+                            state_path_hints
+                                .insert((func_idx, *dest), StatePathHint::Literal(path));
+                        } else {
+                            state_path_hints
+                                .insert((func_idx, *dest), StatePathHint::Map { base: map_base });
+                        }
+                    }
+                }
+            }
+        }
+
+        derive_state_access_hints(
+            &ir_prog,
+            &state_path_hints,
+            &mut access_sets,
+            &mut hint_diagnostics,
+            &mut hint_skips,
+        );
+
+        for (func_idx, func) in ir_prog.functions.iter().enumerate() {
+            for bb in &func.blocks {
+                for instr in &bb.instrs {
                     if let ir::Instr::PointerFromString { kind, src, .. } = instr
                         && !string_map.contains_key(&(func_idx, *src))
                     {
@@ -4058,22 +4418,18 @@ impl Compiler {
             derive_isi_access_hints(
                 &ir_prog,
                 &string_map,
+                &authority_account_temps,
                 &dataref_kind_map,
+                &instruction_literal_access_map,
                 &mut access_sets,
                 &mut hint_diagnostics,
                 &mut hint_skips,
             );
         }
-        if entrypoints_explicitly_wildcard_everything(&typed) {
-            hint_diagnostics = AccessHintDiagnostics::default();
-            for skips in &mut hint_skips {
-                skips.clear();
-            }
-        }
         let has_any_hints = access_sets
             .iter()
             .any(|set| !set.reads.is_empty() || !set.writes.is_empty());
-        let include_hints = explicit_hints_present || has_any_hints;
+        let include_hints = has_any_hints;
         let mut hint_reports = Vec::with_capacity(func_count);
         for skips in hint_skips.iter().take(func_count) {
             let skipped_reasons = skips.iter().cloned().collect::<Vec<_>>();
@@ -5323,7 +5679,13 @@ impl Compiler {
                                 ballot_proof: pa,
                                 nullifier: null32,
                             };
-                            let bytes = sb.encode_as_instruction_box();
+                            let bytes =
+                                norito::to_bytes(&InstructionBox::from(sb)).map_err(|e| {
+                                    let err = format!(
+                                        "build_submit_ballot_inline encode InstructionBox: {e}"
+                                    );
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?;
                             // Store as NoritoBytes in data and emit load into dest
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
@@ -5429,7 +5791,12 @@ impl Compiler {
                                 proof: pa,
                                 root_hint: None,
                             };
-                            let bytes = uz.encode_as_instruction_box();
+                            let bytes =
+                                norito::to_bytes(&InstructionBox::from(uz)).map_err(|e| {
+                                    let err =
+                                        format!("build_unshield_inline encode InstructionBox: {e}");
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?;
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -6744,7 +7111,7 @@ impl Compiler {
                         }
                         Instr::Info { msg } => {
                             let r_msg = src_reg(msg, scratch1, &mut code)?;
-                            // Move message to x10 and issue debug log syscall (RV-compat ADDI)
+                            // Move message to r10 and issue debug log syscall.
                             push_word(&mut code, encode_addi(10, r_msg, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -8871,7 +9238,12 @@ impl Compiler {
             &entrypoint_start_offsets,
         )?;
         let state_descriptors = build_state_descriptors(&typed)?;
-        let access_set_hints = build_access_set_hints(&access_sets, include_hints);
+        let access_set_hints = build_access_set_hints(
+            &typed,
+            &access_sets,
+            include_hints,
+            self.opts.dynamic_iter_cap,
+        );
         let kotoba_entries = build_kotoba_entries(&typed.kotoba_entries);
         let mut feature_bits = 0u64;
         if meta.mode & metadata::mode::ZK != 0 {
@@ -8926,6 +9298,12 @@ impl Compiler {
             let data_off = get_or_insert_data(k)?;
             let ptr = data_base_rel + data_off;
             lit_bytes.extend_from_slice(&ptr.to_le_bytes());
+        }
+        if self.opts.mode == CompilerMode::Production && !hint_diagnostics.is_empty() {
+            return Err(format!(
+                "E_ACCESS_INCOMPLETE: production Kotodama requires complete compiler-generated access metadata; state fallbacks: {}, opaque host fallbacks: {}",
+                hint_diagnostics.state_wildcards, hint_diagnostics.isi_wildcards
+            ));
         }
         // Patch literal pointer stubs with absolute data addresses
         let literal_start = contract_section.len() as u64 + debug_section.len() as u64;
@@ -9230,8 +9608,10 @@ fn state_path_for_norito_key(base: &str, raw: &str) -> Option<String> {
 }
 
 fn build_access_set_hints(
+    typed: &TypedProgram,
     access_sets: &[AccessSets],
     include_hints: bool,
+    dynamic_iter_cap: u8,
 ) -> Option<AccessSetHints> {
     if !include_hints {
         return None;
@@ -9248,10 +9628,96 @@ fn build_access_set_hints(
     for key in writes.iter().cloned() {
         reads.insert(key);
     }
+    let (dynamic_reads, dynamic_writes) =
+        collect_dynamic_access_hints(typed, u32::from(dynamic_iter_cap));
     Some(AccessSetHints {
         read_keys: reads.into_iter().collect(),
         write_keys: writes.into_iter().collect(),
+        dynamic_reads,
+        dynamic_writes,
     })
+}
+
+fn collect_dynamic_access_hints(
+    typed: &TypedProgram,
+    dynamic_iter_cap: u32,
+) -> (Vec<DynamicAccessHint>, Vec<DynamicAccessHint>) {
+    let mut reads = BTreeSet::new();
+    for item in &typed.items {
+        let TypedItem::Function(func) = item;
+        collect_dynamic_access_hints_from_block(&func.body, dynamic_iter_cap, &mut reads);
+    }
+    (
+        reads
+            .into_iter()
+            .map(|(base_key, key_type, bound_kind)| DynamicAccessHint {
+                base_key,
+                key_type,
+                bound_kind,
+                max_keys: dynamic_iter_cap,
+            })
+            .collect(),
+        Vec::new(),
+    )
+}
+
+fn collect_dynamic_access_hints_from_block(
+    block: &semantic::TypedBlock,
+    dynamic_iter_cap: u32,
+    reads: &mut BTreeSet<(String, String, String)>,
+) {
+    for stmt in &block.statements {
+        collect_dynamic_access_hints_from_statement(stmt, dynamic_iter_cap, reads);
+    }
+}
+
+fn collect_dynamic_access_hints_from_statement(
+    stmt: &semantic::TypedStatement,
+    dynamic_iter_cap: u32,
+    reads: &mut BTreeSet<(String, String, String)>,
+) {
+    match stmt {
+        semantic::TypedStatement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_dynamic_access_hints_from_block(then_branch, dynamic_iter_cap, reads);
+            if let Some(block) = else_branch {
+                collect_dynamic_access_hints_from_block(block, dynamic_iter_cap, reads);
+            }
+        }
+        semantic::TypedStatement::While { body, .. }
+        | semantic::TypedStatement::For { body, .. } => {
+            collect_dynamic_access_hints_from_block(body, dynamic_iter_cap, reads);
+        }
+        semantic::TypedStatement::ForEachMap { map, body, .. } => {
+            #[cfg(feature = "kotodama_dynamic_bounds")]
+            if let semantic::TypedStatement::ForEachMap {
+                dyn_count,
+                dyn_start,
+                ..
+            } = stmt
+                && dyn_count.is_some()
+                && let Some(base) = semantic::typed_state_handle_name(map)
+                && let semantic::Type::Map(key_ty, _) = semantic::resolve_struct_type(&map.ty)
+            {
+                let bound_kind = if dyn_start.is_some() { "range" } else { "take" };
+                reads.insert((
+                    format!("state:{base}"),
+                    semantic::render_type_name(key_ty.as_ref()),
+                    bound_kind.to_string(),
+                ));
+            }
+            collect_dynamic_access_hints_from_block(body, dynamic_iter_cap, reads);
+        }
+        semantic::TypedStatement::Let { .. }
+        | semantic::TypedStatement::Expr(_)
+        | semantic::TypedStatement::Return(_)
+        | semantic::TypedStatement::Break
+        | semantic::TypedStatement::Continue
+        | semantic::TypedStatement::MapSet { .. } => {}
+    }
 }
 
 fn build_kotoba_entries(
@@ -9354,64 +9820,13 @@ fn entrypoint_ir_symbol_name(func: &semantic::TypedFunction) -> String {
     }
 }
 
-fn apply_explicit_access_hints(
-    typed: &TypedProgram,
-    fn_index_by_name: &HashMap<&str, usize>,
-    access_sets: &mut [AccessSets],
-    explicit_by_fn: &mut [bool],
-) -> bool {
-    let mut saw_hint = false;
-    for item in &typed.items {
-        let TypedItem::Function(func) = item;
-        if func.modifiers.access_reads.is_empty() && func.modifiers.access_writes.is_empty() {
-            continue;
-        }
-        saw_hint = true;
-        let symbol_name = entrypoint_ir_symbol_name(func);
-        if let Some(&idx) = fn_index_by_name.get(symbol_name.as_str()) {
-            if let Some(slot) = explicit_by_fn.get_mut(idx) {
-                *slot = true;
-            }
-            for read in &func.modifiers.access_reads {
-                access_sets[idx].reads.insert(read.clone());
-            }
-            for write in &func.modifiers.access_writes {
-                access_sets[idx].writes.insert(write.clone());
-            }
-        }
-    }
-    saw_hint
-}
-
-fn entrypoints_explicitly_wildcard_everything(typed: &TypedProgram) -> bool {
-    let mut saw_entrypoint = false;
-    for item in &typed.items {
-        let TypedItem::Function(func) = item;
-        if entrypoint_kind_from_modifiers(&func.modifiers).is_none() {
-            continue;
-        }
-        saw_entrypoint = true;
-        let reads_global = func
-            .modifiers
-            .access_reads
-            .iter()
-            .any(|key| key == GLOBAL_WILDCARD_KEY);
-        let writes_global = func
-            .modifiers
-            .access_writes
-            .iter()
-            .any(|key| key == GLOBAL_WILDCARD_KEY);
-        if !(reads_global && writes_global) {
-            return false;
-        }
-    }
-    saw_entrypoint
-}
-
+#[allow(clippy::too_many_arguments)]
 fn derive_isi_access_hints(
     ir_prog: &ir::Program,
     string_map: &HashMap<(usize, ir::Temp), String>,
+    authority_account_temps: &HashSet<(usize, ir::Temp)>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
+    instruction_literal_access_map: &HashMap<(usize, ir::Temp), AccessSets>,
     access_sets: &mut [AccessSets],
     hint_diagnostics: &mut AccessHintDiagnostics,
     hint_skips: &mut [IndexSet<String>],
@@ -9426,7 +9841,9 @@ fn derive_isi_access_hints(
                     instr,
                     func_idx,
                     string_map,
+                    authority_account_temps,
                     dataref_kind_map,
+                    instruction_literal_access_map,
                     &mut access_sets[func_idx],
                     hint_diagnostics,
                     &mut hint_skips[func_idx],
@@ -9440,18 +9857,93 @@ fn record_hint_skip(skips: &mut IndexSet<String>, reason: &str) {
     skips.insert(reason.to_owned());
 }
 
+fn derive_state_access_hints(
+    ir_prog: &ir::Program,
+    state_path_hints: &HashMap<(usize, ir::Temp), StatePathHint>,
+    access_sets: &mut [AccessSets],
+    hint_diagnostics: &mut AccessHintDiagnostics,
+    hint_skips: &mut [IndexSet<String>],
+) {
+    for (func_idx, func) in ir_prog.functions.iter().enumerate() {
+        for bb in &func.blocks {
+            for instr in &bb.instrs {
+                match instr {
+                    ir::Instr::StateGet { path, .. } => {
+                        if let Some(key) =
+                            render_state_hint(state_path_hints.get(&(func_idx, *path)))
+                        {
+                            insert_state_hint(&mut access_sets[func_idx].reads, key);
+                        } else {
+                            hint_diagnostics.state_wildcards =
+                                hint_diagnostics.state_wildcards.saturating_add(1);
+                            record_hint_skip(
+                                &mut hint_skips[func_idx],
+                                "dynamic state path is not compiler-resolved",
+                            );
+                            access_sets[func_idx]
+                                .reads
+                                .insert(STATE_WILDCARD_KEY.to_string());
+                            access_sets[func_idx]
+                                .writes
+                                .insert(STATE_WILDCARD_KEY.to_string());
+                        }
+                    }
+                    ir::Instr::StateSet { path, .. } | ir::Instr::StateDel { path } => {
+                        if let Some(key) =
+                            render_state_hint(state_path_hints.get(&(func_idx, *path)))
+                        {
+                            insert_state_hint(&mut access_sets[func_idx].writes, key);
+                        } else {
+                            hint_diagnostics.state_wildcards =
+                                hint_diagnostics.state_wildcards.saturating_add(1);
+                            record_hint_skip(
+                                &mut hint_skips[func_idx],
+                                "dynamic state path is not compiler-resolved",
+                            );
+                            access_sets[func_idx]
+                                .reads
+                                .insert(STATE_WILDCARD_KEY.to_string());
+                            access_sets[func_idx]
+                                .writes
+                                .insert(STATE_WILDCARD_KEY.to_string());
+                        }
+                    }
+                    ir::Instr::CallContract { .. } => {
+                        hint_diagnostics.state_wildcards =
+                            hint_diagnostics.state_wildcards.saturating_add(1);
+                        record_hint_skip(
+                            &mut hint_skips[func_idx],
+                            "contract call target is not compiler-resolved",
+                        );
+                        access_sets[func_idx]
+                            .reads
+                            .insert(STATE_WILDCARD_KEY.to_string());
+                        access_sets[func_idx]
+                            .writes
+                            .insert(STATE_WILDCARD_KEY.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn record_isi_access(
     instr: &ir::Instr,
     func_idx: usize,
     string_map: &HashMap<(usize, ir::Temp), String>,
+    authority_account_temps: &HashSet<(usize, ir::Temp)>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
+    instruction_literal_access_map: &HashMap<(usize, ir::Temp), AccessSets>,
     access_set: &mut AccessSets,
     hint_diagnostics: &mut AccessHintDiagnostics,
     hint_skips: &mut IndexSet<String>,
 ) {
     let mut apply_fallback =
         |access_set: &mut AccessSets, hint_diagnostics: &mut AccessHintDiagnostics| {
-            record_hint_skip(hint_skips, "opaque ISI access requires global wildcard");
+            record_hint_skip(hint_skips, "opaque ISI access is not compiler-resolved");
             hint_diagnostics.isi_wildcards = hint_diagnostics.isi_wildcards.saturating_add(1);
             access_set.reads.insert(GLOBAL_WILDCARD_KEY.to_string());
             access_set.writes.insert(GLOBAL_WILDCARD_KEY.to_string());
@@ -9469,27 +9961,29 @@ fn record_isi_access(
             from, to, asset, ..
         } => {
             let (Some(from), Some(to), Some(asset_def)) = (
-                parse_account_temp(string_map, func_idx, *from),
-                parse_account_temp(string_map, func_idx, *to),
+                account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *from),
+                account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *to),
                 parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
-            let src = AssetId::of(asset_def.clone(), from);
-            let dst = AssetId::of(asset_def, to);
-            add_asset_rw(access_set, &src);
-            add_asset_rw(access_set, &dst);
+            add_asset_rw_for_account_hint(access_set, &asset_def, &from);
+            add_asset_rw_for_account_hint(access_set, &asset_def, &to);
         }
         ir::Instr::MintAsset { account, asset, .. }
         | ir::Instr::BurnAsset { account, asset, .. } => {
             let (Some(account), Some(asset_def)) = (
-                parse_account_temp(string_map, func_idx, *account),
+                account_access_hint_for_temp(
+                    string_map,
+                    authority_account_temps,
+                    func_idx,
+                    *account,
+                ),
                 parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
-            let asset_id = AssetId::of(asset_def.clone(), account);
-            add_asset_rw(access_set, &asset_id);
+            add_asset_rw_for_account_hint(access_set, &asset_def, &account);
             add_asset_def_rw(access_set, &asset_def);
         }
         ir::Instr::RegisterDomain { domain } | ir::Instr::UnregisterDomain { domain } => {
@@ -9499,10 +9993,15 @@ fn record_isi_access(
             add_domain_rw(access_set, &id);
         }
         ir::Instr::RegisterAccount { account } | ir::Instr::UnregisterAccount { account } => {
-            let Some(id) = parse_account_temp(string_map, func_idx, *account) else {
+            let Some(id) = account_access_hint_for_temp(
+                string_map,
+                authority_account_temps,
+                func_idx,
+                *account,
+            ) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
-            add_account_rw(access_set, &id);
+            add_account_hint_rw(access_set, &id);
         }
         ir::Instr::UnregisterAsset { asset } => {
             let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) else {
@@ -9513,12 +10012,17 @@ fn record_isi_access(
         }
         ir::Instr::SetAccountDetail { account, key, .. } => {
             let (Some(id), Some(key)) = (
-                parse_account_temp(string_map, func_idx, *account),
+                account_access_hint_for_temp(
+                    string_map,
+                    authority_account_temps,
+                    func_idx,
+                    *account,
+                ),
                 parse_temp(string_map, func_idx, *key),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
-            add_account_detail_rw(access_set, &id, &key);
+            add_account_detail_hint_rw(access_set, &id, &key);
         }
         ir::Instr::CreateNft { nft, .. } | ir::Instr::BurnNft { nft } => {
             let Some(id) = parse_temp(string_map, func_idx, *nft) else {
@@ -9528,14 +10032,14 @@ fn record_isi_access(
         }
         ir::Instr::TransferNft { from, nft, to } => {
             let (Some(from), Some(to), Some(id)) = (
-                parse_account_temp(string_map, func_idx, *from),
-                parse_account_temp(string_map, func_idx, *to),
+                account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *from),
+                account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *to),
                 parse_temp(string_map, func_idx, *nft),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
-            add_account_r(access_set, &from);
-            add_account_r(access_set, &to);
+            add_account_hint_r(access_set, &from);
+            add_account_hint_r(access_set, &to);
             add_nft_rw(access_set, &id);
         }
         ir::Instr::RemoveTrigger { name } | ir::Instr::SetTriggerEnabled { name, .. } => {
@@ -9552,18 +10056,28 @@ fn record_isi_access(
         }
         ir::Instr::GrantRole { account, name } | ir::Instr::RevokeRole { account, name } => {
             let (Some(account), Some(role)) = (
-                parse_account_temp(string_map, func_idx, *account),
+                account_access_hint_for_temp(
+                    string_map,
+                    authority_account_temps,
+                    func_idx,
+                    *account,
+                ),
                 parse_temp(string_map, func_idx, *name),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
-            add_account_rw(access_set, &account);
+            add_account_hint_rw(access_set, &account);
             add_role_r(access_set, &role);
-            add_role_binding_w(access_set, &account, &role);
+            add_role_binding_hint_w(access_set, &account, &role);
         }
         ir::Instr::GrantPermission { account, token }
         | ir::Instr::RevokePermission { account, token } => {
-            let Some(account) = parse_account_temp(string_map, func_idx, *account) else {
+            let Some(account) = account_access_hint_for_temp(
+                string_map,
+                authority_account_temps,
+                func_idx,
+                *account,
+            ) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
             let Some(perm) =
@@ -9571,12 +10085,31 @@ fn record_isi_access(
             else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
-            add_account_rw(access_set, &account);
-            add_permission_account_w(access_set, &account, &perm);
+            add_account_hint_rw(access_set, &account);
+            add_permission_account_hint_w(access_set, &account, &perm);
         }
-        // Asset-definition construction is opaque; fall back to wildcard.
-        ir::Instr::RegisterAsset { .. } | ir::Instr::CreateNewAsset { .. } => {
-            apply_fallback(access_set, hint_diagnostics)
+        ir::Instr::RegisterAsset { asset, .. } => {
+            let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            add_asset_def_domain_r_if_projected(access_set, &id);
+            add_asset_def_rw(access_set, &id);
+        }
+        ir::Instr::CreateNewAsset { asset, account, .. } => {
+            let (Some(asset_def), Some(account)) = (
+                parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset),
+                account_access_hint_for_temp(
+                    string_map,
+                    authority_account_temps,
+                    func_idx,
+                    *account,
+                ),
+            ) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            add_asset_def_domain_r_if_projected(access_set, &asset_def);
+            add_asset_def_rw(access_set, &asset_def);
+            add_asset_rw_for_account_hint(access_set, &asset_def, &account);
         }
         ir::Instr::CreateTrigger { json } => {
             let Some(raw) = string_map.get(&(func_idx, *json)) else {
@@ -9588,6 +10121,10 @@ fn record_isi_access(
             add_trigger_rw(access_set, &id);
         }
         ir::Instr::VendorExecuteInstruction { payload } => {
+            if let Some(access) = instruction_literal_access_map.get(&(func_idx, *payload)) {
+                access_set.union_with(access);
+                return;
+            }
             let Some(raw) = string_map.get(&(func_idx, *payload)) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
@@ -9609,18 +10146,23 @@ fn record_isi_access(
                 apply_fallback(access_set, hint_diagnostics);
             }
         }
+        ir::Instr::BuildSubmitBallotInline { .. } | ir::Instr::BuildUnshieldInline { .. } => {}
         ir::Instr::TransferDomain { domain, to } => {
             let (Some(domain), Some(to)) = (
                 parse_domain_temp(string_map, func_idx, *domain),
-                parse_account_temp(string_map, func_idx, *to),
+                account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *to),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
             add_domain_rw(access_set, &domain);
-            add_account_r(access_set, &to);
+            add_account_hint_r(access_set, &to);
         }
-        // SetNftData lacks a metadata key in IR; fall back to wildcard.
-        ir::Instr::SetNftData { .. } => apply_fallback(access_set, hint_diagnostics),
+        ir::Instr::SetNftData { nft, .. } => {
+            let Some(id) = parse_temp(string_map, func_idx, *nft) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            add_nft_rw(access_set, &id);
+        }
         // AXT/ZK helpers carry opaque payloads; fall back to wildcard.
         ir::Instr::RegisterPeer { .. }
         | ir::Instr::UnregisterPeer { .. }
@@ -9631,8 +10173,6 @@ fn record_isi_access(
         | ir::Instr::ActorSign { .. }
         | ir::Instr::SubscriptionBill
         | ir::Instr::SubscriptionRecordUsage
-        | ir::Instr::BuildSubmitBallotInline { .. }
-        | ir::Instr::BuildUnshieldInline { .. }
         | ir::Instr::AxtBegin { .. }
         | ir::Instr::AxtTouch { .. }
         | ir::Instr::VerifyDsProof { .. }
@@ -9643,6 +10183,8 @@ fn record_isi_access(
 }
 
 fn decode_instruction_box_literal(raw: &str) -> Option<InstructionBox> {
+    use iroha_data_model::isi::zk as DMZk;
+
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
     let payload = match crate::pointer_abi::validate_tlv_bytes(&bytes) {
         Ok(tlv) => {
@@ -9653,7 +10195,29 @@ fn decode_instruction_box_literal(raw: &str) -> Option<InstructionBox> {
         }
         Err(_) => bytes,
     };
-    norito::decode_from_bytes(&payload).ok()
+    if let Ok(instr) = norito::decode_from_bytes::<InstructionBox>(&payload) {
+        return Some(instr);
+    }
+    if let Ok(instr) = norito::decode_from_bytes::<DMZk::CreateElection>(&payload) {
+        return Some(InstructionBox::from(instr));
+    }
+    if let Ok(instr) = norito::decode_from_bytes::<DMZk::SubmitBallot>(&payload) {
+        return Some(InstructionBox::from(instr));
+    }
+    if let Ok(instr) = norito::decode_from_bytes::<DMZk::FinalizeElection>(&payload) {
+        return Some(InstructionBox::from(instr));
+    }
+    if let Ok(instr) = norito::decode_from_bytes::<DMZk::Unshield>(&payload) {
+        return Some(InstructionBox::from(instr));
+    }
+    None
+}
+
+fn access_for_instruction_literal(raw: &str) -> Option<AccessSets> {
+    let instr = decode_instruction_box_literal(raw)?;
+    let mut access = AccessSets::default();
+    record_instruction_box_access(&instr, &mut access)?;
+    Some(access)
 }
 
 fn decode_query_request_literal(raw: &str) -> Option<QueryRequest> {
@@ -9670,6 +10234,94 @@ fn decode_query_request_literal(raw: &str) -> Option<QueryRequest> {
     norito::decode_from_bytes(&payload).ok()
 }
 
+#[allow(clippy::too_many_arguments)]
+fn submit_ballot_inline_instruction_literal(
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    func_idx: usize,
+    election_id: ir::Temp,
+    ciphertext: ir::Temp,
+    nullifier: ir::Temp,
+    backend: ir::Temp,
+    proof: ir::Temp,
+    vk: ir::Temp,
+) -> Option<String> {
+    use iroha_data_model::{
+        isi::zk as DMZk,
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
+    };
+
+    let literal = |temp| string_map.get(&(func_idx, temp)).cloned();
+    let eid = literal(election_id)?;
+    let backend_str = literal(backend)?;
+    let ct_bytes = decode_hex_or_raw_bytes(&literal(ciphertext)?).ok()?;
+    let nf_bytes = decode_hex_or_raw_bytes(&literal(nullifier)?).ok()?;
+    let null32: [u8; 32] = nf_bytes.try_into().ok()?;
+    let proof_bytes = decode_hex_or_raw_bytes(&literal(proof)?).ok()?;
+    let vk_ref = literal(vk)?;
+    let ballot_proof = ProofAttachment::new_ref(
+        backend_str.clone(),
+        ProofBox::new(backend_str.clone(), proof_bytes),
+        VerifyingKeyId::new(backend_str, vk_ref),
+    );
+    let submit = DMZk::SubmitBallot {
+        election_id: eid,
+        ciphertext: ct_bytes,
+        ballot_proof,
+        nullifier: null32,
+    };
+    let boxed = InstructionBox::from(submit);
+    let bytes = norito::to_bytes(&boxed).ok()?;
+    Some(format!("0x{}", hex::encode(bytes)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn unshield_inline_instruction_literal(
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    int_const_map: &HashMap<(usize, ir::Temp), i64>,
+    func_idx: usize,
+    asset: ir::Temp,
+    to: ir::Temp,
+    amount: ir::Temp,
+    inputs: ir::Temp,
+    backend: ir::Temp,
+    proof: ir::Temp,
+    vk: ir::Temp,
+) -> Option<String> {
+    use iroha_data_model::{
+        isi::zk as DMZk,
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
+    };
+
+    let literal = |temp| string_map.get(&(func_idx, temp)).cloned();
+    let asset_id = AssetDefinitionId::parse_address_literal(&literal(asset)?).ok()?;
+    let account = AccountId::parse_encoded(&literal(to)?)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .ok()?;
+    let public_amount = u128::try_from(*int_const_map.get(&(func_idx, amount))?).ok()?;
+    let inputs_bytes = decode_hex_or_raw_bytes(&literal(inputs)?).ok()?;
+    let input: [u8; 32] = inputs_bytes.try_into().ok()?;
+    let backend_str = literal(backend)?;
+    let proof_bytes = decode_hex_or_raw_bytes(&literal(proof)?).ok()?;
+    let vk_ref = literal(vk)?;
+    let proof = ProofAttachment::new_ref(
+        backend_str.clone(),
+        ProofBox::new(backend_str.clone(), proof_bytes),
+        VerifyingKeyId::new(backend_str, vk_ref),
+    );
+    let unshield = DMZk::Unshield {
+        asset: asset_id,
+        to: account,
+        public_amount,
+        inputs: vec![input],
+        outputs: Vec::new(),
+        proof,
+        root_hint: None,
+    };
+    let boxed = InstructionBox::from(unshield);
+    let bytes = norito::to_bytes(&boxed).ok()?;
+    Some(format!("0x{}", hex::encode(bytes)))
+}
+
 fn record_instruction_box_access(
     instr: &InstructionBox,
     access_set: &mut AccessSets,
@@ -9677,6 +10329,29 @@ fn record_instruction_box_access(
     let any = instr.as_any();
 
     if any.downcast_ref::<Log>().is_some() {
+        return Some(());
+    }
+
+    if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::zk::CreateElection>() {
+        add_zk_election_w(access_set, instr.election_id());
+        return Some(());
+    }
+    if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::zk::SubmitBallot>() {
+        add_zk_election_submit_w(access_set, instr.election_id());
+        return Some(());
+    }
+    if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::zk::FinalizeElection>() {
+        add_zk_election_tally_w(access_set, instr.election_id());
+        return Some(());
+    }
+    if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::zk::Unshield>() {
+        let asset = AssetId::of(instr.asset().clone(), instr.to().clone());
+        add_asset_rw(access_set, &asset);
+        add_zk_asset_rw(access_set, instr.asset());
+        let Ok(key) = "zk.unshield.last".parse::<Name>() else {
+            return None;
+        };
+        add_asset_def_detail_rw(access_set, instr.asset(), &key);
         return Some(());
     }
 
@@ -9918,6 +10593,18 @@ fn parse_account_temp(
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
 }
 
+fn account_access_hint_for_temp(
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    authority_account_temps: &HashSet<(usize, ir::Temp)>,
+    func_idx: usize,
+    temp: ir::Temp,
+) -> Option<AccountAccessHint> {
+    if authority_account_temps.contains(&(func_idx, temp)) {
+        return Some(AccountAccessHint::Authority);
+    }
+    parse_account_temp(string_map, func_idx, temp).map(AccountAccessHint::Literal)
+}
+
 fn permission_name_from_token(
     string_map: &HashMap<(usize, ir::Temp), String>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
@@ -9969,6 +10656,13 @@ fn key_account(id: &AccountId) -> String {
     format!("account:{id}")
 }
 
+fn key_account_hint(account: &AccountAccessHint) -> String {
+    match account {
+        AccountAccessHint::Literal(id) => key_account(id),
+        AccountAccessHint::Authority => AUTHORITY_ACCOUNT_KEY.to_owned(),
+    }
+}
+
 fn key_domain(id: &DomainId) -> String {
     format!("domain:{id}")
 }
@@ -9979,6 +10673,18 @@ fn key_asset_def(id: &AssetDefinitionId) -> String {
 
 fn key_asset(id: &AssetId) -> String {
     format!("asset:{id}")
+}
+
+fn key_asset_for_account_hint(
+    definition: &AssetDefinitionId,
+    account: &AccountAccessHint,
+) -> String {
+    match account {
+        AccountAccessHint::Literal(account) => {
+            key_asset(&AssetId::of(definition.clone(), account.clone()))
+        }
+        AccountAccessHint::Authority => format!("asset:{definition}:{AUTHORITY_PLACEHOLDER}"),
+    }
 }
 
 fn key_nft(id: &NftId) -> String {
@@ -9993,8 +10699,22 @@ fn key_role_binding(account: &AccountId, role: &RoleId) -> String {
     format!("role.binding:{account}:{role}")
 }
 
+fn key_role_binding_hint(account: &AccountAccessHint, role: &RoleId) -> String {
+    match account {
+        AccountAccessHint::Literal(account) => key_role_binding(account, role),
+        AccountAccessHint::Authority => format!("role.binding:{AUTHORITY_PLACEHOLDER}:{role}"),
+    }
+}
+
 fn key_perm_account(account: &AccountId, perm: &str) -> String {
     format!("perm.account:{account}:{perm}")
+}
+
+fn key_perm_account_hint(account: &AccountAccessHint, perm: &str) -> String {
+    match account {
+        AccountAccessHint::Literal(account) => key_perm_account(account, perm),
+        AccountAccessHint::Authority => format!("perm.account:{AUTHORITY_PLACEHOLDER}:{perm}"),
+    }
 }
 
 fn key_perm_role(role: &RoleId, perm: &str) -> String {
@@ -10025,12 +10745,20 @@ fn key_asset_def_detail(id: &AssetDefinitionId, key: &Name) -> String {
     format!("asset_def.detail:{id}:{key}")
 }
 
+fn key_zk_asset(id: &AssetDefinitionId) -> String {
+    format!("zk_asset:{id}")
+}
+
 fn key_nft_detail(id: &NftId, key: &Name) -> String {
     format!("nft.detail:{id}:{key}")
 }
 
 fn add_account_r(set: &mut AccessSets, id: &AccountId) {
     set.reads.insert(key_account(id));
+}
+
+fn add_account_hint_r(set: &mut AccessSets, account: &AccountAccessHint) {
+    set.reads.insert(key_account_hint(account));
 }
 
 fn add_domain_r(set: &mut AccessSets, id: &DomainId) {
@@ -10043,9 +10771,25 @@ fn add_account_rw(set: &mut AccessSets, id: &AccountId) {
     set.writes.insert(key);
 }
 
+fn add_account_hint_rw(set: &mut AccessSets, account: &AccountAccessHint) {
+    let key = key_account_hint(account);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
 fn add_account_detail_rw(set: &mut AccessSets, id: &AccountId, key: &Name) {
     add_account_r(set, id);
     let detail = key_account_detail(id, key);
+    set.reads.insert(detail.clone());
+    set.writes.insert(detail);
+}
+
+fn add_account_detail_hint_rw(set: &mut AccessSets, account: &AccountAccessHint, key: &Name) {
+    add_account_hint_r(set, account);
+    let detail = match account {
+        AccountAccessHint::Literal(id) => key_account_detail(id, key),
+        AccountAccessHint::Authority => format!("account.detail:{AUTHORITY_PLACEHOLDER}:{key}"),
+    };
     set.reads.insert(detail.clone());
     set.writes.insert(detail);
 }
@@ -10093,6 +10837,28 @@ fn add_asset_def_detail_rw(set: &mut AccessSets, id: &AssetDefinitionId, key: &N
     set.writes.insert(detail);
 }
 
+fn add_zk_asset_rw(set: &mut AccessSets, id: &AssetDefinitionId) {
+    let key = key_zk_asset(id);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_zk_election_w(set: &mut AccessSets, election_id: &str) {
+    set.writes.insert(format!("zk:election:{election_id}"));
+}
+
+fn add_zk_election_submit_w(set: &mut AccessSets, election_id: &str) {
+    set.writes
+        .insert(format!("zk:election:{election_id}:ciphertexts"));
+    set.writes
+        .insert(format!("zk:election:{election_id}:nullifiers"));
+}
+
+fn add_zk_election_tally_w(set: &mut AccessSets, election_id: &str) {
+    set.writes
+        .insert(format!("zk:election:{election_id}:tally"));
+}
+
 fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
     let key = key_asset(id);
     set.reads.insert(key.clone());
@@ -10100,6 +10866,19 @@ fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
     add_account_r(set, id.account());
     add_asset_def_domain_r_if_projected(set, id.definition());
     add_asset_def_r(set, id.definition());
+}
+
+fn add_asset_rw_for_account_hint(
+    set: &mut AccessSets,
+    definition: &AssetDefinitionId,
+    account: &AccountAccessHint,
+) {
+    let key = key_asset_for_account_hint(definition, account);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+    add_account_hint_r(set, account);
+    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_def_r(set, definition);
 }
 
 fn add_nft_rw(set: &mut AccessSets, id: &NftId) {
@@ -10129,8 +10908,16 @@ fn add_role_binding_w(set: &mut AccessSets, account: &AccountId, role: &RoleId) 
     set.writes.insert(key_role_binding(account, role));
 }
 
+fn add_role_binding_hint_w(set: &mut AccessSets, account: &AccountAccessHint, role: &RoleId) {
+    set.writes.insert(key_role_binding_hint(account, role));
+}
+
 fn add_permission_account_w(set: &mut AccessSets, account: &AccountId, perm: &str) {
     set.writes.insert(key_perm_account(account, perm));
+}
+
+fn add_permission_account_hint_w(set: &mut AccessSets, account: &AccountAccessHint, perm: &str) {
+    set.writes.insert(key_perm_account_hint(account, perm));
 }
 
 fn add_permission_role_w(set: &mut AccessSets, role: &RoleId, perm: &str) {

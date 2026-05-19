@@ -75,7 +75,7 @@ use iroha_data_model::{
     },
     confidential::ConfidentialFeatureDigest,
     consensus::{
-        ConsensusKeyRole, NposConsensusEffects, PreviousRosterEvidence, Qc,
+        ConsensusKeyRole, NposConsensusEffects, PreviousRosterEvidence,
         VALIDATOR_SET_HASH_VERSION_V1, VrfEpochRecord, VrfParticipantRecord,
     },
     da::{
@@ -506,7 +506,6 @@ fn lane_relay_envelopes_for_block(
     da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
     lane_settlement_commitments: &[LaneBlockCommitment],
     lane_summaries: &BTreeMap<LaneId, LaneSummary>,
-    commit_qc: Option<&Qc>,
 ) -> Vec<LaneRelayEnvelope> {
     lane_settlement_commitments
         .iter()
@@ -517,7 +516,7 @@ fn lane_relay_envelopes_for_block(
 
             LaneRelayEnvelope::new(
                 *block_header,
-                commit_qc.cloned(),
+                None,
                 da_commitment_hash,
                 commitment.clone(),
                 rbc_bytes_total,
@@ -3357,8 +3356,7 @@ pub(crate) mod valid {
                         &binding_name,
                         &mutation.state_key,
                         mutation.operation,
-                        mutation.payload_bytes,
-                        mutation.payload_commitment,
+                        mutation.payload,
                         mutation.encryption,
                         runtime_receipt.receipt_id,
                         request.execution_sequence,
@@ -8841,11 +8839,6 @@ pub(crate) mod valid {
                 );
                 let block_header = block.header();
                 let da_commitment_hash = block_header.da_commitments_hash();
-                let commit_qc = state_block
-                    .world
-                    .commit_qcs()
-                    .get(&block_header.hash())
-                    .cloned();
                 let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> = state_block
                     .axt_policy_snapshot()
                     .entries
@@ -8863,7 +8856,6 @@ pub(crate) mod valid {
                     da_commitment_hash,
                     &lane_settlement_commitments,
                     &lane_summaries,
-                    commit_qc.as_ref(),
                 );
                 attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
                 crate::sumeragi::status::set_lane_relay_envelopes(lane_relay_envelopes);
@@ -10818,6 +10810,36 @@ pub(crate) mod valid {
                 apply_results_ms = to_ms(start.elapsed());
             }
 
+            let mut deterministic_pipeline_events = Vec::with_capacity(n.saturating_add(1));
+            for idx in 0..n {
+                let status = match &ordered_results[idx] {
+                    Ok(_) => TransactionStatus::Approved,
+                    Err(reason) => TransactionStatus::Rejected(Box::new(reason.clone())),
+                };
+                deterministic_pipeline_events.push(PipelineEventBox::from(TransactionEvent {
+                    hash: txs[idx].hash(),
+                    block_height: Some(block.header().height()),
+                    lane_id: routing_decisions[idx].lane_id,
+                    dataspace_id: routing_decisions[idx].dataspace_id,
+                    status,
+                }));
+            }
+            deterministic_pipeline_events.push(PipelineEventBox::from(BlockEvent {
+                header: block.header(),
+                status: BlockStatus::Approved,
+            }));
+            {
+                let mut transaction = state_block.transaction();
+                transaction
+                    .execute_pipeline_triggers(deterministic_pipeline_events)
+                    .map_err(|reason| {
+                        BlockValidationError::ExecutionContextInvalid(format!(
+                            "pipeline trigger execution failed: {reason}"
+                        ))
+                    })?;
+                transaction.apply();
+            }
+
             let time_triggers_start = timings.as_ref().map(|_| Instant::now());
             let (time_trgs, mut time_trg_hashes, mut time_trg_results) =
                 state_block.execute_time_triggers(&block.header());
@@ -11751,7 +11773,8 @@ pub(crate) mod valid {
             let binding_name: iroha_data_model::name::Name =
                 "vault".parse().expect("valid binding name");
             let state_key = "/state/private/patient-1".to_string();
-            let payload_commitment = Hash::new(b"portal-runtime-state-payload");
+            let payload = b"portal-runtime-state-payload".to_vec();
+            let payload_commitment = Hash::new(&payload);
             let (service_name, message_id) = seed_soracloud_mailbox_fixture(
                 &mut world,
                 vec![SoraStateBindingV1 {
@@ -11774,7 +11797,8 @@ pub(crate) mod valid {
                     state_key: state_key.clone(),
                     operation: SoraStateMutationOperationV1::Upsert,
                     encryption: SoraStateEncryptionV1::Plaintext,
-                    payload_bytes: Some(256),
+                    payload_bytes: Some(u64::try_from(payload.len()).expect("payload length")),
+                    payload: Some(payload),
                     payload_commitment: Some(payload_commitment),
                 },
             ]);
@@ -11816,7 +11840,7 @@ pub(crate) mod valid {
                 assert_eq!(runtime_state.last_receipt_id, Some(receipt.receipt_id));
                 assert_eq!(receipt.mailbox_message_id, Some(message_id));
                 assert_eq!(entry.encryption, SoraStateEncryptionV1::Plaintext);
-                assert_eq!(entry.payload_bytes.get(), 256);
+                assert_eq!(entry.payload_bytes.get(), 28);
                 assert_eq!(entry.payload_commitment, payload_commitment);
                 assert_eq!(entry.governance_tx_hash, receipt.receipt_id);
                 assert_eq!(entry.last_update_sequence, receipt.emitted_sequence);
@@ -17667,7 +17691,8 @@ mod tests {
         prelude::*,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SealedTransactionReveal,
-            SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
+            SignedSealedTransactionCommitment, SignedTransaction,
+            compute_sealed_transaction_commitment,
         },
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
@@ -17681,6 +17706,7 @@ mod tests {
         block::event::map_sig_err_to_reason,
         kura::Kura,
         query::store::LiveQueryStore,
+        smartcontracts::Execute,
         state::{State, World},
         sumeragi::network_topology::test_topology,
         tx::AcceptedTransaction,
@@ -17699,26 +17725,11 @@ mod tests {
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
 
-    #[test]
-    fn native_amx_receipt_records_participant_dataspace_legs() {
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
-        let (authority_id, keypair) = gen_account_in("wonderland");
-        let paynet = DataSpaceId::new(7);
-        let cbuae = DataSpaceId::new(8);
-        let tx = TransactionBuilder::new(chain_id, authority_id)
-            .with_instructions([
-                InstructionBox::from(Register::domain(Domain::new(
-                    DomainId::try_new("merchant", "paynet").expect("domain id"),
-                ))),
-                InstructionBox::from(Register::domain(Domain::new(
-                    DomainId::try_new("treasury", "cbuae").expect("domain id"),
-                ))),
-            ])
-            .sign(keypair.private_key());
-        let tx_hash = AcceptedTransaction::prepare_signed_metadata(&tx).signed_hash;
-        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+    fn native_amx_test_catalog(
+        paynet: DataSpaceId,
+        cbuae: DataSpaceId,
+    ) -> iroha_data_model::nexus::DataSpaceCatalog {
+        iroha_data_model::nexus::DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata::default(),
             iroha_data_model::nexus::DataSpaceMetadata {
                 id: paynet,
@@ -17733,7 +17744,38 @@ mod tests {
                 fault_tolerance: 1,
             },
         ])
-        .expect("dataspace catalog");
+        .expect("dataspace catalog")
+    }
+
+    fn signed_domain_registration_tx(
+        domains: &[(&str, &str)],
+    ) -> (SignedTransaction, HashOf<SignedTransaction>) {
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let (authority_id, keypair) = gen_account_in("wonderland");
+        let instructions = domains
+            .iter()
+            .map(|(name, dataspace_alias)| {
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new(*name, *dataspace_alias).expect("domain id"),
+                )))
+            })
+            .collect::<Vec<_>>();
+        let tx = TransactionBuilder::new(chain_id, authority_id)
+            .with_instructions(instructions)
+            .sign(keypair.private_key());
+        let tx_hash = AcceptedTransaction::prepare_signed_metadata(&tx).signed_hash;
+        (tx, tx_hash)
+    }
+
+    #[test]
+    fn native_amx_receipt_records_participant_dataspace_legs() {
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let (tx, tx_hash) =
+            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
+        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
         let world = World::new();
         let world_view = world.view();
 
@@ -17759,6 +17801,105 @@ mod tests {
                 .map(|leg| (leg.dataspace_id, leg.prepared, leg.committed))
                 .collect::<Vec<_>>(),
             vec![(paynet, true, true), (cbuae, true, true)]
+        );
+    }
+
+    #[test]
+    fn native_amx_receipt_skips_non_universal_route() {
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let (tx, tx_hash) =
+            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
+        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        let world = World::new();
+        let world_view = world.view();
+
+        let receipt = native_amx_receipt_for_transaction(
+            &tx,
+            tx_hash,
+            42,
+            crate::queue::RoutingDecision::new(LaneId::SINGLE, paynet),
+            &dataspace_catalog,
+            &world_view,
+        );
+
+        assert!(
+            receipt.is_none(),
+            "non-universal routing must not emit native AMX receipts"
+        );
+    }
+
+    #[test]
+    fn native_amx_receipt_skips_single_participant_universal_route() {
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let (tx, tx_hash) = signed_domain_registration_tx(&[("merchant", "paynet")]);
+        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        let world = World::new();
+        let world_view = world.view();
+
+        let receipt = native_amx_receipt_for_transaction(
+            &tx,
+            tx_hash,
+            42,
+            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            &dataspace_catalog,
+            &world_view,
+        );
+
+        assert!(
+            receipt.is_none(),
+            "single-participant universal routes must not emit native AMX receipts"
+        );
+    }
+
+    #[test]
+    fn native_amx_receipt_skips_unknown_dataspace_alias() {
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let (tx, tx_hash) =
+            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "rogue")]);
+        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        let world = World::new();
+        let world_view = world.view();
+
+        let receipt = native_amx_receipt_for_transaction(
+            &tx,
+            tx_hash,
+            42,
+            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            &dataspace_catalog,
+            &world_view,
+        );
+
+        assert!(
+            receipt.is_none(),
+            "unknown dataspace aliases must not create synthetic native AMX receipt legs"
+        );
+    }
+
+    #[test]
+    fn native_amx_receipt_deduplicates_repeated_participant_dataspaces() {
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let (tx, tx_hash) =
+            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "paynet")]);
+        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        let world = World::new();
+        let world_view = world.view();
+
+        let receipt = native_amx_receipt_for_transaction(
+            &tx,
+            tx_hash,
+            42,
+            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            &dataspace_catalog,
+            &world_view,
+        );
+
+        assert!(
+            receipt.is_none(),
+            "repeated references to one dataspace must not be counted as multi-leg native AMX"
         );
     }
 
@@ -17966,14 +18107,12 @@ mod tests {
     }
 
     #[test]
-    fn lane_relay_helper_threads_commit_qc_and_rbc_bytes() {
+    fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
         use iroha_crypto::{Hash, HashOf};
-        use iroha_data_model::consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1};
         use iroha_data_model::{
             block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
             da::commitment::DaCommitmentBundle,
             nexus::{DataSpaceId, LaneId},
-            peer::PeerId,
         };
 
         let da_hash: Option<HashOf<DaCommitmentBundle>> = Some(HashOf::from_untyped_unchecked(
@@ -18023,63 +18162,29 @@ mod tests {
             },
         );
 
-        let validator_set: Vec<PeerId> = Vec::new();
-        let commit_qc = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: block_header.hash(),
-            parent_state_root: Hash::prehashed([0xCE; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0xCD; Hash::LENGTH]),
-            height: block_header.height().get(),
-            view: 3,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0x01],
-                bls_aggregate_signature: vec![0x02],
-            },
-        };
-
-        let with_qc = lane_relay_envelopes_for_block(
+        let relays = lane_relay_envelopes_for_block(
             &block_header,
             da_hash,
             std::slice::from_ref(&settlement),
             &lane_summaries,
-            Some(&commit_qc),
         );
-        assert_eq!(with_qc.len(), 1);
-        let envelope = &with_qc[0];
-        assert_eq!(envelope.qc.as_ref(), Some(&commit_qc));
+        assert_eq!(relays.len(), 1);
+        let envelope = &relays[0];
+        assert!(
+            envelope.qc.is_none(),
+            "block-level commit QC must not be copied into lane relay QC"
+        );
         assert_eq!(envelope.rbc_bytes_total, 2048);
         envelope.verify().expect("envelope should validate");
-
-        let without_qc = lane_relay_envelopes_for_block(
-            &block_header,
-            da_hash,
-            &[settlement],
-            &lane_summaries,
-            None,
-        );
-        assert_eq!(without_qc.len(), 1);
-        assert!(without_qc[0].qc.is_none());
-        assert_eq!(without_qc[0].rbc_bytes_total, 2048);
-        without_qc[0].verify().expect("envelope should validate");
     }
 
     #[test]
     fn lane_relay_envelopes_attach_manifest_roots() {
         use iroha_crypto::{Hash, HashOf};
-        use iroha_data_model::consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1};
         use iroha_data_model::{
             block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
             da::commitment::DaCommitmentBundle,
             nexus::{DataSpaceId, LaneId},
-            peer::PeerId,
         };
 
         let da_hash: Option<HashOf<DaCommitmentBundle>> = Some(HashOf::from_untyped_unchecked(
@@ -18129,34 +18234,11 @@ mod tests {
             },
         );
 
-        let validator_set: Vec<PeerId> = Vec::new();
-        let commit_qc = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: block_header.hash(),
-            parent_state_root: Hash::prehashed([0xCE; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0xCD; Hash::LENGTH]),
-            height: block_header.height().get(),
-            view: 3,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0x01],
-                bls_aggregate_signature: vec![0x02],
-            },
-        };
-
         let mut envelopes = lane_relay_envelopes_for_block(
             &block_header,
             da_hash,
             std::slice::from_ref(&settlement),
             &lane_summaries,
-            Some(&commit_qc),
         );
         let manifest_root = [0x44; 32];
         let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> =
@@ -19099,6 +19181,2182 @@ mod tests {
         assert_eq!(
             assets.get(&payer_fee_asset).expect("payer xor").0,
             Numeric::from(9_u32)
+        );
+    }
+
+    #[test]
+    fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-non-transfer-fallback-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("asset name"));
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, sink],
+            [fee_asset_definition],
+            [Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32))],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let marker_key: Name = "fee_fallback_marker".parse().expect("metadata key");
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([SetKeyValue::account(
+                payer_id.clone(),
+                marker_key.clone(),
+                Json::from(true),
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert!(
+            valid_block.as_ref().errors().next().is_none(),
+            "supported non-transfer fee transaction should be accepted through sequential fallback"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+        assert_eq!(
+            snapshot
+                .pipeline_execution
+                .detached_fallback_fee_postprocessing_total,
+            1
+        );
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets.get(&payer_fee_asset).expect("payer xor").0,
+            Numeric::from(9_u32)
+        );
+        let marker_value = state_block
+            .world
+            .map_account(&payer_id, |account| {
+                account.value().metadata().get(&marker_key).cloned()
+            })
+            .expect("payer account exists");
+        assert_eq!(marker_value, Some(Json::from(true)));
+    }
+
+    #[test]
+    fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-insufficient-fee-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_fee_asset.clone(), Numeric::zero()),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "insufficient fee must reject the transaction"
+        );
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets.get(&payer_transfer_asset).expect("payer rose").0,
+            Numeric::from(5_u32),
+            "business transfer must not leak when fee charging fails"
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose")
+                .0,
+            Numeric::zero(),
+            "recipient balance must remain unchanged when fee charging fails"
+        );
+        assert_eq!(
+            assets.get(&payer_fee_asset).expect("payer xor").0,
+            Numeric::zero(),
+            "failed fee debit must not create a negative or partial fee state"
+        );
+    }
+
+    #[test]
+    fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-data-trigger-fallback-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let trigger_marker_key: Name = "fee_trigger_marker".parse().expect("metadata key");
+        let trigger_id: TriggerId = "fee_transfer_trigger_guard".parse().unwrap();
+        let trigger = Trigger::new(
+            trigger_id,
+            Action::new(
+                vec![InstructionBox::from(SetKeyValue::account(
+                    payer_id.clone(),
+                    trigger_marker_key.clone(),
+                    Json::from("triggered"),
+                ))],
+                Repeats::Exactly(1),
+                payer_id.clone(),
+                DataEventFilter::Asset(
+                    AssetEventFilter::new().for_asset(payer_transfer_asset.clone()),
+                ),
+            ),
+        );
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let setup_block = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let setup_signed: SignedBlock = setup_block.clone().into();
+        {
+            let mut setup_state_block = state.block(setup_block.as_ref().header());
+            let mut setup_tx = setup_state_block.transaction();
+            Register::trigger(trigger)
+                .execute(&payer_id, &mut setup_tx)
+                .expect("register data trigger");
+            setup_tx.apply();
+            setup_state_block.commit().expect("commit trigger setup");
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id.clone(),
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&setup_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert!(
+            valid_block.as_ref().errors().next().is_none(),
+            "fee-enabled transfer with an active data trigger should be accepted through fallback"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+        assert_eq!(
+            snapshot
+                .pipeline_execution
+                .detached_fallback_fee_postprocessing_total,
+            1
+        );
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets.get(&payer_transfer_asset).expect("payer rose").0,
+            Numeric::from(4_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose")
+                .0,
+            Numeric::from(1_u32)
+        );
+        assert_eq!(
+            assets.get(&payer_fee_asset).expect("payer xor").0,
+            Numeric::from(9_u32)
+        );
+        let marker_value = state_block
+            .world
+            .map_account(&payer_id, |account| {
+                account.value().metadata().get(&trigger_marker_key).cloned()
+            })
+            .expect("payer account exists");
+        assert_eq!(marker_value, Some(Json::from("triggered")));
+    }
+
+    #[test]
+    fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_missing() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-missing-fee-asset-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "missing payer fee asset must reject the transaction"
+        );
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets.get(&payer_transfer_asset).expect("payer rose").0,
+            Numeric::from(5_u32),
+            "business transfer must not leak when fee asset lookup fails"
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose")
+                .0,
+            Numeric::zero(),
+            "recipient balance must remain unchanged when fee asset lookup fails"
+        );
+        assert!(
+            assets.get(&payer_fee_asset).is_none(),
+            "fee charging must not create the missing payer fee asset"
+        );
+    }
+
+    #[test]
+    fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-same-asset-fee-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "rose".parse().expect("asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("rose".to_owned())
+            .build(&payer_id);
+        let payer_asset = AssetId::of(asset_definition_id.clone(), payer_id.clone());
+        let recipient_asset = AssetId::of(asset_definition_id.clone(), recipient_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient, sink],
+            [asset_definition],
+            [
+                Asset::new(payer_asset.clone(), Numeric::from(1_u32)),
+                Asset::new(recipient_asset.clone(), Numeric::zero()),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Transfer::asset_numeric(
+                payer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "fee debit must reject when the payer only has enough balance for the transfer itself"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets.get(&payer_asset).expect("payer rose").0,
+            Numeric::from(1_u32),
+            "transfer must not leak when post-transfer fee debit fails"
+        );
+        assert_eq!(
+            assets.get(&recipient_asset).expect("recipient rose").0,
+            Numeric::zero(),
+            "recipient must not receive funds from a transaction rejected during fee charging"
+        );
+    }
+
+    #[test]
+    fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_prior_success() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-shared-fee-balance-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_fee_asset.clone(), Numeric::from(1_u32)),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut first_builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        first_builder.set_creation_time(Duration::from_millis(0));
+        let first_tx = first_builder
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id.clone(),
+            )])
+            .sign(payer_keypair.private_key());
+        let first_tx = AcceptedTransaction::accept(
+            first_tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("first transaction should pass stateless admission");
+
+        let mut second_builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        second_builder.set_creation_time(Duration::from_millis(1));
+        let second_tx = second_builder
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let second_tx = AcceptedTransaction::accept(
+            second_tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("second transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block =
+            BlockBuilder::new_with_time_source(vec![first_tx, second_tx], block_time_source)
+                .chain(1, Some(&latest_signed))
+                .sign(payer_keypair.private_key())
+                .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().count(),
+            1,
+            "only one of the two transfers can pay the configured base fee"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(
+            snapshot.pipeline_execution.detached_merged_total, 1,
+            "one transfer should stay on the detached merge path"
+        );
+        assert_eq!(
+            snapshot.pipeline_execution.detached_fallback_total, 1,
+            "the fee-exhausted transfer should retry through sequential fallback before rejection"
+        );
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after block")
+                .0,
+            Numeric::from(4_u32),
+            "the accepted transfer must remain committed"
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after block")
+                .0,
+            Numeric::from(1_u32),
+            "the rejected transfer must not leak after the first fee drains the payer"
+        );
+        assert_eq!(
+            assets
+                .get(&payer_fee_asset)
+                .map(|asset| asset.0.clone())
+                .unwrap_or_else(Numeric::zero),
+            Numeric::zero(),
+            "only the accepted transaction may consume the available fee balance"
+        );
+    }
+
+    #[test]
+    fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_transfer() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-transfer-then-fail-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let missing_domain_id = DomainId::try_new("missing-domain", "universal").unwrap();
+        let tx = builder
+            .with_instructions::<InstructionBox>([
+                Transfer::asset_numeric(payer_transfer_asset.clone(), 1_u32, recipient_id).into(),
+                Unregister::domain(missing_domain_id).into(),
+            ])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "the failing instruction after the transfer must reject the whole transaction"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+        assert_eq!(
+            snapshot
+                .pipeline_execution
+                .detached_fallback_unsupported_instruction_total,
+            1,
+            "multi-instruction transfer transactions must not use detached transfer merge"
+        );
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after rejected transfer")
+                .0,
+            Numeric::from(5_u32),
+            "payer balance must remain unchanged after rejected transfer"
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after rejected transfer")
+                .0,
+            Numeric::zero(),
+            "recipient must not receive assets from a transaction rejected after the transfer"
+        );
+        assert_eq!(
+            assets
+                .get(&payer_fee_asset)
+                .expect("payer xor after rejected transfer")
+                .0,
+            Numeric::from(9_u32),
+            "rejected business execution must still charge the configured Nexus fee"
+        );
+    }
+
+    #[test]
+    fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-sequence-admission-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
+        let mut world = World::with_assets(
+            [domain],
+            [payer, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+            ],
+            [],
+        );
+        let mut params = iroha_data_model::parameter::system::Parameters::default();
+        params.transaction = params.transaction.with_ingress_enforcement(false, true);
+        world.parameters = mv::cell::Cell::new(params);
+        world.tx_sequences.insert(payer_id.clone(), 5);
+
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("tx_sequence").expect("metadata key"),
+            Json::from(5_u64),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_metadata(metadata)
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "non-increasing tx_sequence must reject before transfer or fee application"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after sequence rejection")
+                .0,
+            Numeric::from(5_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after sequence rejection")
+                .0,
+            Numeric::zero()
+        );
+        assert_eq!(
+            assets
+                .get(&payer_fee_asset)
+                .expect("payer xor after sequence rejection")
+                .0,
+            Numeric::from(10_u32),
+            "stateful admission failures must not charge Nexus fees"
+        );
+        assert_eq!(
+            state_block.world.tx_sequences.get(&payer_id),
+            Some(&5),
+            "rejected sequence must not advance stored per-authority state"
+        );
+    }
+
+    #[test]
+    fn fee_enabled_invalid_sink_before_burn_rejects_without_partial_transfer_or_fee() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-invalid-sink-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = "not-an-account-literal".to_owned();
+            nexus.fees.burn_from_unix_timestamp_ms = 20;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "invalid pre-burn fee sink must reject the transaction"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after invalid sink rejection")
+                .0,
+            Numeric::from(5_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after invalid sink rejection")
+                .0,
+            Numeric::zero()
+        );
+        assert_eq!(
+            assets
+                .get(&payer_fee_asset)
+                .expect("payer xor after invalid sink rejection")
+                .0,
+            Numeric::from(10_u32),
+            "fee routing config failures must not debit the payer"
+        );
+    }
+
+    #[test]
+    fn fee_enabled_unauthorized_sponsor_rejects_without_transfer_or_sponsor_debit() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-unauthorized-sponsor-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, sponsor, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(sponsor_fee_asset.clone(), Numeric::from(10_u32)),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("metadata key"),
+            Json::new(sponsor_id.to_string()),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_metadata(metadata)
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "unauthorized fee sponsor metadata must reject the transaction"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after sponsor rejection")
+                .0,
+            Numeric::from(5_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after sponsor rejection")
+                .0,
+            Numeric::zero()
+        );
+        assert_eq!(
+            assets
+                .get(&sponsor_fee_asset)
+                .expect("sponsor xor after sponsor rejection")
+                .0,
+            Numeric::from(10_u32),
+            "unauthorized sponsor rejection must not debit the sponsor"
+        );
+    }
+
+    #[test]
+    fn fee_enabled_disabled_sponsor_rejects_without_transfer_or_sponsor_debit() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-disabled-sponsor-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, sponsor, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(sponsor_fee_asset.clone(), Numeric::from(10_u32)),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = false;
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("metadata key"),
+            Json::new(sponsor_id.to_string()),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_metadata(metadata)
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "fee_sponsor metadata must reject when sponsorship is disabled"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after disabled sponsor rejection")
+                .0,
+            Numeric::from(5_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after disabled sponsor rejection")
+                .0,
+            Numeric::zero()
+        );
+        assert_eq!(
+            assets
+                .get(&sponsor_fee_asset)
+                .expect("sponsor xor after disabled sponsor rejection")
+                .0,
+            Numeric::from(10_u32),
+            "disabled sponsorship must not debit the requested sponsor"
+        );
+    }
+
+    #[test]
+    fn fee_enabled_sponsor_cap_rejects_without_transfer_or_sponsor_debit() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-sponsor-cap-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
+        let mut world = World::with_assets(
+            [domain],
+            [payer, sponsor, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(sponsor_fee_asset.clone(), Numeric::from(10_u32)),
+            ],
+            [],
+        );
+        let fee_permission: Permission =
+            iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
+                sponsor: sponsor_id.clone(),
+            }
+            .into();
+        world.account_permissions.insert(
+            payer_id.clone(),
+            std::collections::BTreeSet::from([fee_permission]),
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(2_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.sponsor_max_fee = Numeric::from(1_u32);
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("metadata key"),
+            Json::new(sponsor_id.to_string()),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_metadata(metadata)
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "fee_sponsor metadata must reject when computed fee exceeds sponsor_max_fee"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after sponsor cap rejection")
+                .0,
+            Numeric::from(5_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after sponsor cap rejection")
+                .0,
+            Numeric::zero()
+        );
+        assert_eq!(
+            assets
+                .get(&sponsor_fee_asset)
+                .expect("sponsor xor after sponsor cap rejection")
+                .0,
+            Numeric::from(10_u32),
+            "sponsor cap rejection must not debit the sponsor"
+        );
+    }
+
+    #[test]
+    fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-invalid-fee-asset-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "rose".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient, sink],
+            [transfer_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = "not-an-asset-literal".to_owned();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "invalid configured fee asset must reject the transaction"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after invalid fee asset rejection")
+                .0,
+            Numeric::from(5_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after invalid fee asset rejection")
+                .0,
+            Numeric::zero()
+        );
+    }
+
+    #[test]
+    fn fee_enabled_malformed_sponsor_metadata_rejects_without_transfer_or_fee() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-malformed-sponsor-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("metadata key"),
+            Json::from(true),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_metadata(metadata)
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "malformed fee_sponsor metadata must reject the transaction"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after malformed sponsor rejection")
+                .0,
+            Numeric::from(5_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after malformed sponsor rejection")
+                .0,
+            Numeric::zero()
+        );
+        assert_eq!(
+            assets
+                .get(&payer_fee_asset)
+                .expect("payer xor after malformed sponsor rejection")
+                .0,
+            Numeric::from(10_u32),
+            "malformed sponsor metadata must not fall back to payer debit"
+        );
+    }
+
+    #[test]
+    fn fee_enabled_missing_gas_asset_metadata_rejects_without_partial_transfer() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-missing-gas-asset-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let gas_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let gas_asset_definition = AssetDefinition::numeric(gas_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let payer_gas_asset = AssetId::of(gas_asset_definition_id.clone(), payer_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient],
+            [transfer_asset_definition, gas_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_gas_asset.clone(), Numeric::from(10_u32)),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        state.pipeline.gas.accepted_assets = vec![gas_asset_definition_id.to_string()];
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "gas policy must reject a transaction missing gas_asset_id metadata"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after missing gas asset rejection")
+                .0,
+            Numeric::from(5_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after missing gas asset rejection")
+                .0,
+            Numeric::zero()
+        );
+        assert_eq!(
+            assets
+                .get(&payer_gas_asset)
+                .expect("payer gas asset after missing gas metadata rejection")
+                .0,
+            Numeric::from(10_u32)
+        );
+    }
+
+    #[test]
+    fn fee_enabled_missing_gas_rate_mapping_rejects_without_partial_transfer() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("fee-detached-missing-gas-rate-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let gas_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let gas_asset_definition = AssetDefinition::numeric(gas_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let payer_gas_asset = AssetId::of(gas_asset_definition_id.clone(), payer_id.clone());
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient],
+            [transfer_asset_definition, gas_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_gas_asset.clone(), Numeric::from(10_u32)),
+            ],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        state.pipeline.gas.accepted_assets = vec![gas_asset_definition_id.to_string()];
+        state.pipeline.gas.units_per_gas.clear();
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("gas_asset_id").expect("metadata key"),
+            Json::new(gas_asset_definition_id.to_string()),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_metadata(metadata)
+            .with_instructions([Transfer::asset_numeric(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0),
+            "accepted gas_asset_id without units_per_gas mapping must reject"
+        );
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+
+        let assets = state_block.world.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after missing gas rate rejection")
+                .0,
+            Numeric::from(5_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after missing gas rate rejection")
+                .0,
+            Numeric::zero()
+        );
+        assert_eq!(
+            assets
+                .get(&payer_gas_asset)
+                .expect("payer gas asset after missing gas rate rejection")
+                .0,
+            Numeric::from(10_u32)
         );
     }
 

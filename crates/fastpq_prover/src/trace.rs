@@ -2467,6 +2467,53 @@ mod tests {
 
     #[cfg(feature = "fastpq-gpu")]
     #[test]
+    fn metal_poseidon_column_batch_matches_cpu_self_test_cases() {
+        if !matches!(
+            backend::current_gpu_backend(),
+            Some(backend::GpuBackend::Metal)
+        ) {
+            eprintln!("skipping Metal Poseidon column parity test; backend unavailable");
+            return;
+        }
+        let domains = [
+            "fastpq:v1:trace:column:selftest:a",
+            "fastpq:v1:trace:column:selftest:b",
+        ];
+        let columns = vec![vec![1u64, 2, 3, 4], vec![5u64, 6, 7, 8]];
+        let batch =
+            PoseidonColumnBatch::from_domains_and_columns(&domains, &columns).expect("batch");
+        let actual = gpu::poseidon_hash_columns(&batch, backend::GpuBackend::Metal)
+            .expect("Metal Poseidon column batch should run");
+        let expected = hash_columns_cpu_batch_inputs(&domains, &columns).expect("valid CPU batch");
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn metal_poseidon_merkle_pair_batch_matches_cpu_self_test_cases() {
+        if !matches!(
+            backend::current_gpu_backend(),
+            Some(backend::GpuBackend::Metal)
+        ) {
+            eprintln!("skipping Metal Poseidon Merkle pair parity test; backend unavailable");
+            return;
+        }
+        let pairs = [
+            [0u64, 0u64],
+            [1u64, 2u64],
+            [GOLDILOCKS_MODULUS - 1, 42u64],
+            [0xd1b5_4a32_d192_ed03, 0x9e37_79b9_7f4a_7c15],
+        ];
+        let batch = PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN, &pairs)
+            .expect("pair batch");
+        let actual = gpu::poseidon_hash_columns(&batch, backend::GpuBackend::Metal)
+            .expect("Metal Poseidon Merkle pair batch should run");
+        let expected = hash_trace_merkle_pairs_cpu(&pairs);
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
     fn poseidon_column_batch_windows_preserve_offsets() {
         let domains = vec![
             "fastpq:v1:trace:column:a",

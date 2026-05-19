@@ -47,7 +47,7 @@ impl QueryExecutor for MockExec {
     fn start_query(
         &self,
         _query: QueryWithParams,
-    ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+    ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
         let end = self.page.min(self.data.len());
         let batch = self.data[..end].to_vec();
         let tuple = QueryOutputBatchBoxTuple {
@@ -59,16 +59,16 @@ impl QueryExecutor for MockExec {
         } else {
             None
         };
-        Ok((tuple, remaining, cursor))
+        Ok((tuple, Some(remaining), cursor))
     }
 
     fn continue_query(
         _cursor: Self::Cursor,
-    ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+    ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
         let tuple = QueryOutputBatchBoxTuple {
             tuple: vec![QueryOutputBatchBox::Account(Vec::new())],
         };
-        Ok((tuple, 0, None))
+        Ok((tuple, Some(0), None))
     }
 }
 

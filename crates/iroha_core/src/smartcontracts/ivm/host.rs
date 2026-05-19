@@ -11245,12 +11245,10 @@ mod tests {
 seiyaku AliasPayout {{
   state AssetDefinitionId SettlementAsset;
 
-  #[access(read="*", write="*")]
   kotoage fn bind(settlement_asset: AssetDefinitionId) {{
     SettlementAsset = settlement_asset;
   }}
 
-  #[access(read="*", write="*")]
   kotoage fn pay(amount: int) -> int permission(AssetOps) {{
     let merchant = {recipient_expr};
     transfer_asset(authority(), merchant, SettlementAsset, amount);
@@ -13895,7 +13893,6 @@ seiyaku StoredAccountView {
 
   state AccountId Stored;
 
-  #[access(read="*", write="*")]
   kotoage fn bind(account_id: AccountId) {
     Stored = account_id;
   }
@@ -14253,7 +14250,6 @@ seiyaku Caller {
   state bytes VaultContract;
   state AssetDefinitionId SettlementAsset;
 
-  #[access(read="*", write="*")]
   kotoage fn bind(caller_account: AccountId,
                   vault_contract: bytes,
                   settlement_asset: AssetDefinitionId) {
@@ -14262,7 +14258,6 @@ seiyaku Caller {
     SettlementAsset = settlement_asset;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn open(amount: int) -> int permission(AssetOps) {
     transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
     let payload = json_object();
@@ -14281,14 +14276,12 @@ seiyaku Vault {
   state AccountId VaultAccount;
   state AssetDefinitionId SettlementAsset;
 
-  #[access(read="*", write="*")]
   kotoage fn bind(vault_account: AccountId,
                   settlement_asset: AssetDefinitionId) {
     VaultAccount = vault_account;
     SettlementAsset = settlement_asset;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn deposit(amount: int) -> int permission(AssetOps) {
     transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
     return amount;
@@ -14433,12 +14426,10 @@ seiyaku Vault {
 seiyaku AliasPayout {
   state AssetDefinitionId SettlementAsset;
 
-  #[access(read="*", write="*")]
   kotoage fn bind(settlement_asset: AssetDefinitionId) {
     SettlementAsset = settlement_asset;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
     transfer_asset(authority(), account_id("merchant@paynet"), SettlementAsset, amount);
     return amount;
@@ -14609,12 +14600,10 @@ seiyaku AliasPayout {
 seiyaku AliasPayout {
   state AssetDefinitionId SettlementAsset;
 
-  #[access(read="*", write="*")]
   kotoage fn bind(settlement_asset: AssetDefinitionId) {
     SettlementAsset = settlement_asset;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
     let merchant = resolve_account_alias("merchant@paynet");
     transfer_asset(authority(), merchant, SettlementAsset, amount);
@@ -14981,12 +14970,10 @@ seiyaku AliasPayout {
 seiyaku AliasPayout {
   state AssetDefinitionId SettlementAsset;
 
-  #[access(read="*", write="*")]
   kotoage fn bind(settlement_asset: AssetDefinitionId) {
     SettlementAsset = settlement_asset;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
     let merchant = resolve_account_alias("merchant@paynet");
     transfer_asset(authority(), merchant, SettlementAsset, amount);
@@ -16549,12 +16536,10 @@ seiyaku AliasPayout {
 seiyaku AliasPayout {
   state AssetDefinitionId SettlementAsset;
 
-  #[access(read="*", write="*")]
   kotoage fn bind(settlement_asset: AssetDefinitionId) {
     SettlementAsset = settlement_asset;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
     transfer_asset(authority(), account_id("merchant@bank.paynet"), SettlementAsset, amount);
     return amount;
@@ -16684,7 +16669,6 @@ seiyaku Caller {
   state bytes ForwarderContract;
   state AssetDefinitionId SettlementAsset;
 
-  #[access(read="*", write="*")]
   kotoage fn bind(caller_account: AccountId,
                   forwarder_contract: bytes,
                   settlement_asset: AssetDefinitionId) {
@@ -16693,7 +16677,6 @@ seiyaku Caller {
     SettlementAsset = settlement_asset;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn open(amount: int) -> int permission(AssetOps) {
     transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
     let payload = json_object();
@@ -16713,7 +16696,6 @@ seiyaku Forwarder {
   state bytes VaultContract;
   state AssetDefinitionId SettlementAsset;
 
-  #[access(read="*", write="*")]
   kotoage fn bind(forwarder_account: AccountId,
                   vault_contract: bytes,
                   settlement_asset: AssetDefinitionId) {
@@ -16722,7 +16704,6 @@ seiyaku Forwarder {
     SettlementAsset = settlement_asset;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn forward(amount: int) -> int permission(AssetOps) {
     transfer_asset(authority(), ForwarderAccount, SettlementAsset, amount);
     let payload = json_object();
@@ -16741,14 +16722,12 @@ seiyaku Vault {
   state AccountId VaultAccount;
   state AssetDefinitionId SettlementAsset;
 
-  #[access(read="*", write="*")]
   kotoage fn bind(vault_account: AccountId,
                   settlement_asset: AssetDefinitionId) {
     VaultAccount = vault_account;
     SettlementAsset = settlement_asset;
   }
 
-  #[access(read="*", write="*")]
   kotoage fn deposit(amount: int) -> int permission(AssetOps) {
     transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
     return amount;

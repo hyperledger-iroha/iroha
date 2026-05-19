@@ -8748,20 +8748,20 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             _query: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             // Return an empty Domain batch to satisfy type expectations
             Ok((
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Domain(vec![])],
                 },
-                0,
+                Some(0),
                 None,
             ))
         }
 
         fn continue_query(
             _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             unreachable!("no continuation in this test")
         }
     }
@@ -8876,7 +8876,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             // Build three domains with metadata key `rank`: 2, 1, and None
             let domain_id1: iroha::data_model::domain::DomainId = DomainId::try_new("d1", "universal").unwrap();
             let domain_id2: iroha::data_model::domain::DomainId = DomainId::try_new("d2", "universal").unwrap();
@@ -8929,14 +8929,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Domain(v)],
                 },
-                0,
+                Some(0),
                 None,
             ))
         }
 
         fn continue_query(
             _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             unreachable!("single batch only")
         }
     }
@@ -8996,7 +8996,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
@@ -9045,14 +9045,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Account(v)],
                 },
-                0,
+                Some(0),
                 None,
             ))
         }
 
         fn continue_query(
             _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             unreachable!("single batch only")
         }
     }
@@ -9141,7 +9141,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
@@ -9210,14 +9210,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::AssetDefinition(v)],
                 },
-                0,
+                Some(0),
                 None,
             ))
         }
 
         fn continue_query(
             _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             unreachable!("single batch only")
         }
     }
@@ -9299,7 +9299,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             PAGED_DOMAINS_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
@@ -9345,14 +9345,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Domain(first)],
                 },
-                remaining,
+                Some(remaining),
                 next,
             ))
         }
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             match cursor {
                 DomCursor::Domains {
                     items,
@@ -9378,7 +9378,7 @@ mod cli_integration_harness_tests {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::Domain(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -9440,7 +9440,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             PSD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
@@ -9503,14 +9503,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Domain(first)],
                 },
-                remaining,
+                Some(remaining),
                 next,
             ))
         }
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             match cursor {
                 PSDCursor::Domains {
                     items,
@@ -9536,7 +9536,7 @@ mod cli_integration_harness_tests {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::Domain(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -9561,7 +9561,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             PSD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
@@ -9631,14 +9631,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Domain(first)],
                 },
-                remaining,
+                Some(remaining),
                 next,
             ))
         }
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             match cursor {
                 PSDCursor::Domains {
                     items,
@@ -9664,7 +9664,7 @@ mod cli_integration_harness_tests {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::Domain(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -9761,7 +9761,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             PSA_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
@@ -9830,14 +9830,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Account(first)],
                 },
-                remaining,
+                Some(remaining),
                 next,
             ))
         }
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             match cursor {
                 PSACursor::Accounts {
                     items,
@@ -9863,7 +9863,7 @@ mod cli_integration_harness_tests {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::Account(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -9888,7 +9888,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             PSA_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
@@ -9962,14 +9962,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Account(first)],
                 },
-                remaining,
+                Some(remaining),
                 next,
             ))
         }
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             match cursor {
                 PSACursor::Accounts {
                     items,
@@ -9995,7 +9995,7 @@ mod cli_integration_harness_tests {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::Account(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -10102,7 +10102,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             PSAD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
@@ -10181,14 +10181,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::AssetDefinition(first)],
                 },
-                remaining,
+                Some(remaining),
                 next,
             ))
         }
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             match cursor {
                 PSADCursor::Ads {
                     items,
@@ -10214,7 +10214,7 @@ mod cli_integration_harness_tests {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::AssetDefinition(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -10280,7 +10280,7 @@ mod cli_integration_harness_tests {
             fn start_query(
                 &self,
                 q: QueryWithParams,
-            ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error>
+            ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
             {
                 PSAD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
                 use iroha::data_model::account::AccountId;
@@ -10368,14 +10368,14 @@ mod cli_integration_harness_tests {
                     QueryOutputBatchBoxTuple {
                         tuple: vec![QueryOutputBatchBox::AssetDefinition(first)],
                     },
-                    remaining,
+                    Some(remaining),
                     next,
                 ))
             }
 
             fn continue_query(
                 cursor: Self::Cursor,
-            ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error>
+            ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
             {
                 match cursor {
                     PSADCursor::Ads {
@@ -10402,7 +10402,7 @@ mod cli_integration_harness_tests {
                             QueryOutputBatchBoxTuple {
                                 tuple: vec![QueryOutputBatchBox::AssetDefinition(batch)],
                             },
-                            remaining,
+                            Some(remaining),
                             next,
                         ))
                     }
@@ -10460,7 +10460,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
@@ -10507,14 +10507,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Nft(v)],
                 },
-                0,
+                Some(0),
                 None,
             ))
         }
 
         fn continue_query(
             _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             unreachable!("single batch only")
         }
     }
@@ -10593,7 +10593,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             PSN_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
@@ -10672,14 +10672,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Nft(first)],
                 },
-                remaining,
+                Some(remaining),
                 next,
             ))
         }
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             match cursor {
                 PSNCursor::Nfts {
                     items,
@@ -10705,7 +10705,7 @@ mod cli_integration_harness_tests {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::Nft(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -10763,7 +10763,7 @@ mod cli_integration_harness_tests {
             fn start_query(
                 &self,
                 q: QueryWithParams,
-            ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error>
+            ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
             {
                 PSN_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
                 use iroha::data_model::account::AccountId;
@@ -10841,14 +10841,14 @@ mod cli_integration_harness_tests {
                     QueryOutputBatchBoxTuple {
                         tuple: vec![QueryOutputBatchBox::Nft(first)],
                     },
-                    remaining,
+                    Some(remaining),
                     next,
                 ))
             }
 
             fn continue_query(
                 cursor: Self::Cursor,
-            ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error>
+            ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
             {
                 match cursor {
                     PSNCursor::Nfts {
@@ -10875,7 +10875,7 @@ mod cli_integration_harness_tests {
                             QueryOutputBatchBoxTuple {
                                 tuple: vec![QueryOutputBatchBox::Nft(batch)],
                             },
-                            remaining,
+                            Some(remaining),
                             next,
                         ))
                     }
@@ -10937,7 +10937,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             PAGED_ACCOUNTS_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
@@ -10986,14 +10986,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Account(first)],
                 },
-                remaining,
+                Some(remaining),
                 next,
             ))
         }
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             let AccCursor::Accounts {
                 items,
                 idx,
@@ -11018,7 +11018,7 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::Account(batch)],
                 },
-                remaining,
+                Some(remaining),
                 next,
             ))
         }
@@ -11085,7 +11085,7 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             PAGED_ADS_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
@@ -11142,14 +11142,14 @@ mod cli_integration_harness_tests {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::AssetDefinition(first)],
                 },
-                remaining,
+                Some(remaining),
                 next,
             ))
         }
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             match cursor {
                 AdCursor::Ads {
                     items,
@@ -11175,7 +11175,7 @@ mod cli_integration_harness_tests {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::AssetDefinition(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -11491,7 +11491,7 @@ mod cli_integration_harness {
         fn start_query(
             &self,
             query: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             // Apply simple sorting by metadata key for known item types
             let sort_by = query.params.sorting.sort_by_metadata_key.clone();
             let desc = matches!(
@@ -11554,7 +11554,7 @@ mod cli_integration_harness {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::DomainId(first_ids)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ));
                 }
@@ -11571,7 +11571,7 @@ mod cli_integration_harness {
                     QueryOutputBatchBoxTuple {
                         tuple: vec![QueryOutputBatchBox::Domain(first)],
                     },
-                    remaining,
+                    Some(remaining),
                     next,
                 ));
             }
@@ -11615,7 +11615,7 @@ mod cli_integration_harness {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::AccountId(first_ids)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ));
                 }
@@ -11632,7 +11632,7 @@ mod cli_integration_harness {
                     QueryOutputBatchBoxTuple {
                         tuple: vec![QueryOutputBatchBox::Account(first)],
                     },
-                    remaining,
+                    Some(remaining),
                     next,
                 ));
             }
@@ -11676,7 +11676,7 @@ mod cli_integration_harness {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::AssetDefinitionId(first_ids)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ));
                 }
@@ -11693,7 +11693,7 @@ mod cli_integration_harness {
                     QueryOutputBatchBoxTuple {
                         tuple: vec![QueryOutputBatchBox::AssetDefinition(first)],
                     },
-                    remaining,
+                    Some(remaining),
                     next,
                 ));
             }
@@ -11701,14 +11701,14 @@ mod cli_integration_harness {
                 QueryOutputBatchBoxTuple {
                     tuple: vec![QueryOutputBatchBox::String(vec![])],
                 },
-                0,
+                Some(0),
                 None,
             ))
         }
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
             match cursor {
                 MockCursor::Domains { items, idx, fetch } => {
                     let end = (idx + fetch).min(items.len());
@@ -11727,7 +11727,7 @@ mod cli_integration_harness {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::Domain(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -11748,7 +11748,7 @@ mod cli_integration_harness {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::Account(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -11769,7 +11769,7 @@ mod cli_integration_harness {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::AssetDefinition(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -11791,7 +11791,7 @@ mod cli_integration_harness {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::DomainId(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -11813,7 +11813,7 @@ mod cli_integration_harness {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::AccountId(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }
@@ -11835,7 +11835,7 @@ mod cli_integration_harness {
                         QueryOutputBatchBoxTuple {
                             tuple: vec![QueryOutputBatchBox::AssetDefinitionId(batch)],
                         },
-                        remaining,
+                        Some(remaining),
                         next,
                     ))
                 }

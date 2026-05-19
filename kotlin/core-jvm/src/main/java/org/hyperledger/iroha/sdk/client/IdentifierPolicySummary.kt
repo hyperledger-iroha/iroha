@@ -14,17 +14,18 @@ class IdentifierPolicySummary @JvmOverloads constructor(
     @JvmField val note: String?,
     @JvmField val proofVerifier: RamLfeProofVerifierMetadata? = null,
 ) {
-    fun plaintextRequest(input: String): IdentifierResolveRequest =
-        IdentifierResolveRequest.plaintext(this, input)
-
-    fun encryptedRequest(encryptedInputHex: String): IdentifierResolveRequest =
-        IdentifierResolveRequest.encrypted(this, encryptedInputHex)
+    fun encryptedRequest(encryptedInputHex: String, outputOpening: RamLfeOutputOpening): IdentifierResolveRequest =
+        IdentifierResolveRequest.encrypted(this, encryptedInputHex, outputOpening)
 
     @JvmOverloads
     fun encryptInput(input: String, seed: ByteArray? = null): String =
         IdentifierBfvEnvelopeBuilder.encrypt(this, input, seed)
 
     @JvmOverloads
-    fun encryptedRequestFromInput(input: String, seed: ByteArray? = null): IdentifierResolveRequest =
-        IdentifierResolveRequest.encryptedFromInput(this, input, seed)
+    fun encryptedRequestFromInput(
+        input: String,
+        outputOpening: RamLfeOutputOpening,
+        seed: ByteArray? = null,
+    ): IdentifierResolveRequest =
+        IdentifierResolveRequest.encryptedFromInput(this, input, outputOpening, seed)
 }

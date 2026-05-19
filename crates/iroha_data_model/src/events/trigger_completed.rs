@@ -35,7 +35,7 @@ mod model {
     #[getset(get = "pub")]
     pub struct TriggerCompletedEvent {
         trigger_id: TriggerId,
-        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        trigger_execution_hash: HashOf<TransactionEntrypoint>,
         step_index: u32,
         outcome: TriggerCompletedOutcome,
     }
@@ -173,14 +173,19 @@ pub mod prelude {
 mod tests {
     use super::*;
     use crate::events::EventFilter;
+    use norito::codec::{Decode, Encode};
+
+    fn dummy_trigger_execution_hash() -> HashOf<TransactionEntrypoint> {
+        HashOf::<TransactionEntrypoint>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+            [0; iroha_crypto::Hash::LENGTH],
+        ))
+    }
 
     #[test]
     fn trigger_completed_events_filter() {
         let trigger_id_1: TriggerId = "trigger_1".parse().expect("Valid");
         let trigger_id_2: TriggerId = "trigger_2".parse().expect("Valid");
-        let dummy_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            iroha_crypto::Hash::prehashed([0; iroha_crypto::Hash::LENGTH]),
-        );
+        let dummy_hash = dummy_trigger_execution_hash();
 
         let event_1_failure = TriggerCompletedEvent::new(
             trigger_id_1.clone(),
@@ -270,5 +275,90 @@ mod tests {
         assert!(!filter_accept_2_success.matches(&event_1_success));
         assert!(!filter_accept_2_success.matches(&event_2_failure));
         assert!(filter_accept_2_success.matches(&event_2_success));
+    }
+
+    #[test]
+    fn trigger_completed_event_codec_roundtrip_preserves_invocation_identity() {
+        let trigger_id: TriggerId = "trigger".parse().expect("Valid");
+        let trigger_execution_hash = dummy_trigger_execution_hash();
+        let event = TriggerCompletedEvent::new(
+            trigger_id,
+            trigger_execution_hash,
+            3,
+            TriggerCompletedOutcome::Success,
+        );
+
+        let encoded = event.encode();
+        let mut cursor = encoded.as_slice();
+        let decoded = TriggerCompletedEvent::decode(&mut cursor).expect("decode");
+
+        assert_eq!(decoded, event);
+        assert_eq!(decoded.trigger_execution_hash(), &trigger_execution_hash);
+        assert_eq!(*decoded.step_index(), 3);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn trigger_completed_event_json_roundtrip_preserves_invocation_identity() {
+        let trigger_id: TriggerId = "trigger".parse().expect("Valid");
+        let trigger_execution_hash = dummy_trigger_execution_hash();
+        let event = TriggerCompletedEvent::new(
+            trigger_id,
+            trigger_execution_hash,
+            2,
+            TriggerCompletedOutcome::Failure("boom".to_owned()),
+        );
+
+        let json = norito::json::to_json(&event).expect("serialize");
+        let decoded: TriggerCompletedEvent = norito::json::from_str(&json).expect("deserialize");
+
+        assert_eq!(decoded, event);
+        assert_eq!(decoded.trigger_execution_hash(), &trigger_execution_hash);
+        assert_eq!(*decoded.step_index(), 2);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn trigger_completed_event_json_rejects_non_base64_payload_without_panicking() {
+        let err = norito::json::from_json::<TriggerCompletedEvent>(r#""not valid base64!!!""#)
+            .expect_err("non-base64 trigger-completed payload must be rejected");
+
+        assert!(
+            err.to_string().contains("Invalid symbol"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn trigger_completed_event_json_rejects_invalid_norito_payload_without_panicking() {
+        let err = norito::json::from_json::<TriggerCompletedEvent>(r#""AQIDBA==""#)
+            .expect_err("base64 payload with invalid Norito bytes must be rejected");
+
+        assert!(
+            !err.to_string().is_empty(),
+            "decode failure should produce a diagnostic"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn trigger_completed_event_json_rejects_non_string_payload_without_panicking() {
+        let err = norito::json::from_json::<TriggerCompletedEvent>(r#"{"event":"completed"}"#)
+            .expect_err("trigger-completed JSON must be encoded as a base64 string");
+
+        assert!(
+            !err.to_string().is_empty(),
+            "wrong JSON shape should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn trigger_completed_outcome_type_rejects_unknown_discriminant() {
+        assert_eq!(
+            TriggerCompletedOutcomeType::try_from(2_u8),
+            Err(()),
+            "unknown outcome discriminants must be rejected"
+        );
     }
 }

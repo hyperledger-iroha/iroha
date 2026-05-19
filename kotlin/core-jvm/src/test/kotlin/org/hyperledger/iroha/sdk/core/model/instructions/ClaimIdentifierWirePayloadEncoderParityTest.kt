@@ -4,6 +4,8 @@ import org.hyperledger.iroha.sdk.client.IdentifierReceiptAttestation
 import org.hyperledger.iroha.sdk.client.IdentifierResolutionExecutionPayload
 import org.hyperledger.iroha.sdk.client.IdentifierResolutionPayload
 import org.hyperledger.iroha.sdk.client.IdentifierResolutionReceipt
+import org.hyperledger.iroha.sdk.client.RamLfeOutputOpening
+import org.hyperledger.iroha.sdk.client.RamLfeOutputOpeningPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -37,10 +39,27 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
                 programDigest = fixtureHash,
                 backend = "hkdf-sha3-512-prf-v1",
                 verificationMode = "signed",
+                inputCiphertextHash = fixtureHash,
+                outputCiphertextHash = fixtureHash,
+                parameterDigest = fixtureHash,
+                evaluationKeyDigest = fixtureHash,
                 outputHash = fixtureHash,
                 associatedDataHash = fixtureHash,
                 executedAtMs = 1_735_000_000_000L,
                 expiresAtMs = null,
+            ),
+            opening = RamLfeOutputOpening(
+                payload = RamLfeOutputOpeningPayload(
+                    programId = "parity_test",
+                    inputCiphertextHash = fixtureHash,
+                    outputCiphertextHash = fixtureHash,
+                    parameterDigest = fixtureHash,
+                    evaluationKeyDigest = fixtureHash,
+                    openedOutputHash = fixtureHash,
+                    openedAtMs = 1_735_000_000_000L,
+                    expiresAtMs = null,
+                ),
+                signature = signatureHex,
             ),
             opaqueId = "opaque:$fixtureHash",
             receiptHash = fixtureHash,

@@ -110,12 +110,9 @@ public final class IdentifierPolicySummary {
     return note;
   }
 
-  public IdentifierResolveRequest plaintextRequest(final String input) {
-    return IdentifierResolveRequest.plaintext(this, input);
-  }
-
-  public IdentifierResolveRequest encryptedRequest(final String encryptedInputHex) {
-    return IdentifierResolveRequest.encrypted(this, encryptedInputHex);
+  public IdentifierResolveRequest encryptedRequest(
+      final String encryptedInputHex, final RamLfeOutputOpening outputOpening) {
+    return IdentifierResolveRequest.encrypted(this, encryptedInputHex, outputOpening);
   }
 
   public String encryptInput(final String input) {
@@ -126,11 +123,13 @@ public final class IdentifierPolicySummary {
     return IdentifierBfvEnvelopeBuilder.encrypt(this, input, seed);
   }
 
-  public IdentifierResolveRequest encryptedRequestFromInput(final String input) {
-    return IdentifierResolveRequest.encryptedFromInput(this, input);
+  public IdentifierResolveRequest encryptedRequestFromInput(
+      final String input, final RamLfeOutputOpening outputOpening) {
+    return IdentifierResolveRequest.encryptedFromInput(this, input, outputOpening);
   }
 
-  public IdentifierResolveRequest encryptedRequestFromInput(final String input, final byte[] seed) {
-    return IdentifierResolveRequest.encryptedFromInput(this, input, seed);
+  public IdentifierResolveRequest encryptedRequestFromInput(
+      final String input, final RamLfeOutputOpening outputOpening, final byte[] seed) {
+    return IdentifierResolveRequest.encryptedFromInput(this, input, outputOpening, seed);
   }
 }

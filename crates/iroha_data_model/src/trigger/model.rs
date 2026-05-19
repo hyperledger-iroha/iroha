@@ -307,29 +307,45 @@ pub mod action {
     }
 
     impl Action {
-        /// Construct an action given `executable`, `repeats`, `authority` and `filter`.
-        /// Filter of type [`EventFilterBox::TriggerCompleted`] is not allowed.
+        /// Try to construct an action given `executable`, `repeats`, `authority` and `filter`.
         ///
-        /// # Panics
+        /// # Errors
         ///
-        /// - if filter matches [`EventFilterBox::TriggerCompleted`]
-        pub fn new(
+        /// Returns an error if the filter is not valid for triggers, if the filter-bound
+        /// authority conflicts with the trigger authority, or if retry policy constraints
+        /// are violated.
+        pub fn try_new(
             executable: impl Into<Executable>,
             repeats: impl Into<Repeats>,
             authority: AccountId,
             filter: impl Into<EventFilterBox>,
-        ) -> Self {
-            let filter = filter.into().ensure_trigger_authority(&authority).unwrap();
-            let action = candidate::ActionCandidate {
+        ) -> Result<Self, &'static str> {
+            let filter = filter.into().ensure_trigger_authority(&authority)?;
+            candidate::ActionCandidate {
                 executable: executable.into(),
                 repeats: repeats.into(),
                 authority,
                 filter,
                 retry_policy: None,
                 metadata: Metadata::default(),
-            };
+            }
+            .validate()
+        }
 
-            action.validate().unwrap()
+        /// Construct an action given `executable`, `repeats`, `authority` and `filter`.
+        /// Filter of type [`EventFilterBox::TriggerCompleted`] is not allowed.
+        ///
+        /// # Panics
+        ///
+        /// - if filter matches [`EventFilterBox::TriggerCompleted`]
+        /// - if the filter-bound authority conflicts with `authority`
+        pub fn new(
+            executable: impl Into<Executable>,
+            repeats: impl Into<Repeats>,
+            authority: AccountId,
+            filter: impl Into<EventFilterBox>,
+        ) -> Self {
+            Self::try_new(executable, repeats, authority, filter).unwrap()
         }
 
         /// Add [`Metadata`] to the trigger replacing previously defined
@@ -367,8 +383,11 @@ pub mod action {
         use super::*;
         use crate::{
             account::AccountId,
-            events::execute_trigger::ExecuteTriggerEventFilter,
             events::time::{ExecutionTime, Schedule, TimeEventFilter},
+            events::{
+                execute_trigger::ExecuteTriggerEventFilter,
+                trigger_completed::TriggerCompletedEventFilter,
+            },
             transaction::{Executable, IvmBytecode},
             trigger::TriggerId,
         };
@@ -398,6 +417,41 @@ pub mod action {
                 panic!("expected execute trigger filter");
             };
             assert_eq!(bound.authority(), Some(&authority));
+        }
+
+        #[test]
+        fn try_new_rejects_mismatched_execute_trigger_authority() {
+            let authority = account_in("wonderland");
+            let other = account_in("wonderland");
+            let err = Action::try_new(
+                sample_executable(),
+                Repeats::Exactly(1),
+                authority,
+                ExecuteTriggerEventFilter::new().under_authority(other),
+            )
+            .expect_err("mismatched authority must be rejected");
+
+            assert_eq!(
+                err,
+                "ExecuteTrigger filter authority must match trigger owner"
+            );
+        }
+
+        #[test]
+        fn try_new_rejects_trigger_completed_filter() {
+            let authority = account_in("wonderland");
+            let err = Action::try_new(
+                sample_executable(),
+                Repeats::Exactly(1),
+                authority,
+                TriggerCompletedEventFilter::new(),
+            )
+            .expect_err("trigger-completed filters must be rejected");
+
+            assert!(
+                err.contains("TriggerCompleted cannot be used as filter"),
+                "unexpected error: {err}"
+            );
         }
 
         #[test]
@@ -478,6 +532,88 @@ pub mod action {
             assert_eq!(restored, action);
         }
 
+        #[test]
+        fn action_try_deserialize_rejects_invalid_filter_without_panicking() {
+            let authority = account_in("wonderland");
+            let invalid_action = Action {
+                executable: sample_executable(),
+                repeats: Repeats::Exactly(1),
+                authority,
+                filter: TriggerCompletedEventFilter::new().into(),
+                retry_policy: None,
+                metadata: Metadata::default(),
+            };
+
+            let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
+            let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
+            let err = norito::core::NoritoDeserialize::try_deserialize(archived)
+                .expect_err("invalid action must be rejected");
+
+            assert!(
+                err.to_string()
+                    .contains("TriggerCompleted cannot be used as filter"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn action_try_deserialize_rejects_mismatched_execute_authority_without_panicking() {
+            let authority = account_in("wonderland");
+            let other = account_in("wonderland");
+            let invalid_action = Action {
+                executable: sample_executable(),
+                repeats: Repeats::Exactly(1),
+                authority,
+                filter: ExecuteTriggerEventFilter::new()
+                    .under_authority(other)
+                    .into(),
+                retry_policy: None,
+                metadata: Metadata::default(),
+            };
+
+            let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
+            let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
+            let err = norito::core::NoritoDeserialize::try_deserialize(archived)
+                .expect_err("mismatched action authority must be rejected");
+
+            assert!(
+                err.to_string()
+                    .contains("ExecuteTrigger filter authority must match trigger owner"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn action_try_deserialize_rejects_non_scheduled_retry_policy_without_panicking() {
+            let authority = account_in("wonderland");
+            let trigger_id: TriggerId = "test_trigger".parse().unwrap();
+            let invalid_action = Action {
+                executable: sample_executable(),
+                repeats: Repeats::Exactly(1),
+                authority: authority.clone(),
+                filter: ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id)
+                    .under_authority(authority)
+                    .into(),
+                retry_policy: Some(TimeTriggerRetryPolicy {
+                    max_retries: NonZeroU32::new(1).expect("nonzero"),
+                    retry_after_ms: NonZeroU64::new(10).expect("nonzero"),
+                }),
+                metadata: Metadata::default(),
+            };
+
+            let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
+            let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
+            let err = norito::core::NoritoDeserialize::try_deserialize(archived)
+                .expect_err("retry policy on non-scheduled action must be rejected");
+
+            assert!(
+                err.to_string()
+                    .contains("retry policy is only supported for scheduled time-trigger actions"),
+                "unexpected error: {err}"
+            );
+        }
+
         #[cfg(feature = "json")]
         #[test]
         fn action_with_retry_policy_json_roundtrip() {
@@ -499,6 +635,120 @@ pub mod action {
             let json = norito::json::to_json(&action).expect("serialize action to json");
             let restored: Action = norito::json::from_json(&json).expect("deserialize action");
             assert_eq!(restored, action);
+        }
+
+        #[cfg(feature = "json")]
+        #[test]
+        fn action_json_deserialize_rejects_invalid_filter_without_panicking() {
+            let authority = account_in("wonderland");
+            let invalid_action = Action {
+                executable: sample_executable(),
+                repeats: Repeats::Exactly(1),
+                authority,
+                filter: TriggerCompletedEventFilter::new().into(),
+                retry_policy: None,
+                metadata: Metadata::default(),
+            };
+
+            let json = norito::json::to_json(&invalid_action).expect("serialize action to json");
+            let err = norito::json::from_json::<Action>(&json)
+                .expect_err("invalid action json must be rejected");
+
+            assert!(
+                err.to_string()
+                    .contains("TriggerCompleted cannot be used as filter"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[cfg(feature = "json")]
+        #[test]
+        fn action_json_deserialize_rejects_non_base64_payload_without_panicking() {
+            let err = norito::json::from_json::<Action>(r#""not valid base64!!!""#)
+                .expect_err("non-base64 action payload must be rejected");
+
+            assert!(
+                err.to_string().contains("Invalid symbol"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[cfg(feature = "json")]
+        #[test]
+        fn action_json_deserialize_rejects_invalid_norito_payload_without_panicking() {
+            let err = norito::json::from_json::<Action>(r#""AQIDBA==""#)
+                .expect_err("base64 payload with invalid Norito bytes must be rejected");
+
+            assert!(
+                !err.to_string().is_empty(),
+                "decode failure should produce a diagnostic"
+            );
+        }
+
+        #[cfg(feature = "json")]
+        #[test]
+        fn action_json_deserialize_rejects_non_string_payload_without_panicking() {
+            let err = norito::json::from_json::<Action>(r#"{"not":"an action"}"#)
+                .expect_err("Action JSON must be encoded as a base64 string");
+
+            assert!(
+                !err.to_string().is_empty(),
+                "wrong JSON shape should produce a diagnostic"
+            );
+        }
+
+        #[cfg(feature = "json")]
+        #[test]
+        fn action_json_deserialize_rejects_mismatched_execute_authority_without_panicking() {
+            let authority = account_in("wonderland");
+            let other = account_in("wonderland");
+            let invalid_action = Action {
+                executable: sample_executable(),
+                repeats: Repeats::Exactly(1),
+                authority,
+                filter: ExecuteTriggerEventFilter::new()
+                    .under_authority(other)
+                    .into(),
+                retry_policy: None,
+                metadata: Metadata::default(),
+            };
+
+            let json = norito::json::to_json(&invalid_action).expect("serialize action to json");
+            let err = norito::json::from_json::<Action>(&json)
+                .expect_err("mismatched action authority json must be rejected");
+
+            assert!(
+                err.to_string()
+                    .contains("ExecuteTrigger filter authority must match trigger owner"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[cfg(feature = "json")]
+        #[test]
+        fn action_json_deserialize_rejects_non_scheduled_retry_policy_without_panicking() {
+            let authority = account_in("wonderland");
+            let invalid_action = Action {
+                executable: sample_executable(),
+                repeats: Repeats::Exactly(1),
+                authority,
+                filter: TimeEventFilter::new(ExecutionTime::PreCommit).into(),
+                retry_policy: Some(TimeTriggerRetryPolicy {
+                    max_retries: NonZeroU32::new(1).expect("nonzero"),
+                    retry_after_ms: NonZeroU64::new(10).expect("nonzero"),
+                }),
+                metadata: Metadata::default(),
+            };
+
+            let json = norito::json::to_json(&invalid_action).expect("serialize action to json");
+            let err = norito::json::from_json::<Action>(&json)
+                .expect_err("retry policy on pre-commit action json must be rejected");
+
+            assert!(
+                err.to_string()
+                    .contains("retry policy is only supported for scheduled time-trigger actions"),
+                "unexpected error: {err}"
+            );
         }
     }
 
@@ -700,10 +950,17 @@ pub mod action {
 
         impl<'de> norito::core::NoritoDeserialize<'de> for Action {
             fn deserialize(archived: &'de norito::core::Archived<Action>) -> Self {
-                let candidate = <ActionCandidate as norito::core::NoritoDeserialize>::deserialize(
-                    archived.cast(),
-                );
-                candidate.validate().expect("invalid Action")
+                Self::try_deserialize(archived).expect("invalid Action")
+            }
+
+            fn try_deserialize(
+                archived: &'de norito::core::Archived<Action>,
+            ) -> Result<Self, norito::core::Error> {
+                let candidate =
+                    <ActionCandidate as norito::core::NoritoDeserialize>::try_deserialize(
+                        archived.cast(),
+                    )?;
+                candidate.validate().map_err(norito::core::Error::from)
             }
         }
 

@@ -90,6 +90,78 @@ class SoracloudPrivateUploadedModelJsonParserTest {
         assertFalse(response.hasMore)
     }
 
+    @Test
+    fun rejectsNegativeReceiptPaginationMetadata() {
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+                receiptListJson(total = "-1").toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+                receiptListJson(returnedItems = "-1").toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+                receiptListJson(remainingItems = "-1").toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+    }
+
+    @Test
+    fun rejectsNegativeReceiptArtifactAndSequenceFields() {
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                executeResponseJson()
+                    .replace("\"ciphertext_bytes\": 64", "\"ciphertext_bytes\": -1")
+                    .toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                executeResponseJson()
+                    .replace("\"emitted_sequence\": 17", "\"emitted_sequence\": -1")
+                    .toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+    }
+
+    @Test
+    fun rejectsBlankReceiptIdentityFields() {
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                executeResponseJson()
+                    .replace("\"receipt_id\": \"receipt-1\"", "\"receipt_id\": \"   \"")
+                    .toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                executeResponseJson()
+                    .replace("\"policy_id\": \"policy-1\"", "\"policy_id\": \"\"")
+                    .toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+    }
+
+    private fun receiptListJson(
+        total: String = "0",
+        returnedItems: String = "0",
+        remainingItems: String = "0",
+    ): String =
+        """
+            {
+              "schema_version": 1,
+              "receipts": [],
+              "total": $total,
+              "returned_items": $returnedItems,
+              "remaining_items": $remainingItems,
+              "has_more": false,
+              "count_mode": "exact"
+            }
+        """.trimIndent()
+
     private fun executeResponseJson(): String =
         """
             {
@@ -142,4 +214,3 @@ class SoracloudPrivateUploadedModelJsonParserTest {
             }
         """.trimIndent()
 }
-

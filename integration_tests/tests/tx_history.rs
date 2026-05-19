@@ -159,7 +159,11 @@ async fn submit_entrypoint_maybe_rejected(
     let deadline = Instant::now() + timeout;
     loop {
         let response = http
-            .post(client.torii_url.join("/transaction/entrypoint")?)
+            .post(
+                client
+                    .torii_url
+                    .join("/v1/pipeline/transaction-entrypoints")?,
+            )
             .header("content-type", "application/x-norito")
             .body(body.clone())
             .send()
@@ -200,7 +204,11 @@ async fn submit_entrypoint_once_maybe_rejected(
 ) -> Result<EntrypointSubmitOutcome> {
     let entrypoint_hash = entrypoint.hash();
     let response = http
-        .post(client.torii_url.join("/transaction/entrypoint")?)
+        .post(
+            client
+                .torii_url
+                .join("/v1/pipeline/transaction-entrypoints")?,
+        )
         .header("content-type", "application/x-norito")
         .body(encode_versioned_entrypoint(&entrypoint))
         .send()

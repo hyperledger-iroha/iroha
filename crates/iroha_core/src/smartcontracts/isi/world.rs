@@ -577,10 +577,15 @@ pub mod isi {
         let Some(suffix) = normalized.strip_prefix("halo2/pasta/ipa/") else {
             return false;
         };
+        fn legacy_merkle_family(suffix: &str, family: &str) -> bool {
+            suffix
+                .strip_prefix(family)
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with('-'))
+        }
         let is_legacy_vote_circuit = suffix == "vote-bool-commit"
-            || suffix.starts_with("vote-bool-commit-merkle2")
-            || suffix.starts_with("vote-bool-commit-merkle8")
-            || suffix.starts_with("vote-bool-commit-merkle16");
+            || legacy_merkle_family(suffix, "vote-bool-commit-merkle2")
+            || legacy_merkle_family(suffix, "vote-bool-commit-merkle8")
+            || legacy_merkle_family(suffix, "vote-bool-commit-merkle16");
         is_legacy_vote_circuit
             && (expected_id == VOTING_BALLOT_CIRCUIT_ID || expected_id == VOTING_TALLY_CIRCUIT_ID)
     }
@@ -6532,7 +6537,28 @@ pub mod isi {
                 ),
             ));
         }
+        if expects_envelope
+            && let Some(envelope) = envelope_meta
+            && !open_verify_backend_tag_matches(attachment.backend.as_str(), envelope.backend)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "OpenVerifyEnvelope backend tag mismatch".into(),
+            ));
+        }
         Ok(envelope_meta)
+    }
+
+    fn open_verify_backend_tag_matches(backend: &str, tag: BackendTag) -> bool {
+        if crate::zk::is_stark_fri_v1_backend(backend) {
+            return tag == BackendTag::Stark;
+        }
+        if backend == "halo2/bn254" || backend.starts_with("halo2/bn254/") {
+            return tag == BackendTag::Halo2Bn254;
+        }
+        if backend.starts_with("halo2/") {
+            return tag == BackendTag::Halo2IpaPasta;
+        }
+        true
     }
 
     struct ProofEventArgs<'a> {
@@ -12506,9 +12532,29 @@ pub mod isi {
                 "halo2/pasta/vote-bool-commit-merkle8",
                 "vote-tally"
             ));
+            assert!(voting_circuit_matches(
+                "halo2/ipa",
+                "halo2/pasta/ipa/vote-bool-commit-merkle8-v1",
+                "vote-ballot"
+            ));
             assert!(!voting_circuit_matches(
                 "halo2/ipa",
                 "halo2/pasta/ipa/any-circuit",
+                "vote-ballot"
+            ));
+            assert!(!voting_circuit_matches(
+                "halo2/ipa",
+                "halo2/pasta/ipa/vote-bool-commit-merkle8evil",
+                "vote-ballot"
+            ));
+            assert!(!voting_circuit_matches(
+                "halo2/ipa",
+                "halo2/pasta/ipa/vote-bool-commit-merkle32",
+                "vote-tally"
+            ));
+            assert!(!voting_circuit_matches(
+                "halo2/ipa",
+                "halo2/pasta/ipa/vote-bool-commit-merkle8/vote-ballot",
                 "vote-ballot"
             ));
             assert!(voting_circuit_matches(
@@ -12822,6 +12868,90 @@ pub mod isi {
             assert_eq!(decoded.circuit_id, envelope.circuit_id);
             assert_eq!(decoded.public_inputs, envelope.public_inputs);
             assert_eq!(decoded.proof_bytes, envelope.proof_bytes);
+        }
+
+        #[test]
+        fn open_verify_backend_tag_matches_rejects_cross_family_tags() {
+            assert!(open_verify_backend_tag_matches(
+                "halo2/ipa",
+                BackendTag::Halo2IpaPasta
+            ));
+            assert!(!open_verify_backend_tag_matches(
+                "halo2/ipa",
+                BackendTag::Halo2Bn254
+            ));
+            assert!(open_verify_backend_tag_matches(
+                "halo2/bn254",
+                BackendTag::Halo2Bn254
+            ));
+            assert!(!open_verify_backend_tag_matches(
+                "halo2/bn254",
+                BackendTag::Halo2IpaPasta
+            ));
+            assert!(open_verify_backend_tag_matches(
+                "stark/fri/sha256-goldilocks",
+                BackendTag::Stark
+            ));
+            assert!(!open_verify_backend_tag_matches(
+                "stark/fri/sha256-goldilocks",
+                BackendTag::Halo2IpaPasta
+            ));
+        }
+
+        #[test]
+        fn validate_proof_attachment_rejects_mismatched_attachment_triples() {
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:tiny-add",
+                [0u8; 32],
+                Vec::new(),
+                vec![1, 2, 3],
+            );
+            let proof = ProofBox::new(
+                "halo2/ipa".into(),
+                norito::to_bytes(&envelope).expect("encode envelope"),
+            );
+            let valid = ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                proof.clone(),
+                VerifyingKeyId::new("halo2/ipa", "vk"),
+            );
+            assert!(
+                validate_proof_attachment(&valid, &proof, true, Some(&envelope)).is_ok(),
+                "well-formed attachment triple should pass validation"
+            );
+
+            let wrong_outer_backend = ProofAttachment::new_ref(
+                "stark/fri".into(),
+                proof.clone(),
+                VerifyingKeyId::new("stark/fri", "vk"),
+            );
+            let err =
+                validate_proof_attachment(&wrong_outer_backend, &proof, true, Some(&envelope))
+                    .expect_err("outer attachment backend must match proof backend");
+            assert!(
+                smart_contract_instruction_error_message(err).contains("proof backend mismatch")
+            );
+
+            let wrong_vk_backend = ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                proof.clone(),
+                VerifyingKeyId::new("stark/fri", "vk"),
+            );
+            let err = validate_proof_attachment(&wrong_vk_backend, &proof, true, Some(&envelope))
+                .expect_err("vk_ref backend must match attachment backend");
+            assert!(
+                smart_contract_instruction_error_message(err)
+                    .contains("verifying key backend mismatch")
+            );
+
+            let err = validate_proof_attachment(&valid, &proof, true, None)
+                .expect_err("enveloped backends must carry an OpenVerifyEnvelope");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("OpenVerifyEnvelope"),
+                "unexpected error: {msg}"
+            );
         }
 
         #[test]
@@ -18412,6 +18542,553 @@ pub mod isi {
                 msg.contains("verifying key bytes missing"),
                 "unexpected msg: {msg}"
             );
+        }
+
+        #[test]
+        fn verify_proof_preverified_cache_does_not_bypass_wrong_vk_commitment_key() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let exec = Executor::default();
+
+            let mut stx = block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let mut stx = block.transaction();
+            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_wrong_cache_commitment");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![9, 9, 9]);
+            let vk_commitment = hash_vk(&vk_box);
+            let public_inputs = vec![1, 2, 3];
+            let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "circuit_wrong_cache_commitment".to_string(),
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                public_inputs_schema_hash,
+                vk_commitment,
+            );
+            rec.vk_len = 3;
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box.clone());
+            rec.gas_schedule_id = Some("halo2_default".into());
+            let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                id: vk_id.clone(),
+                record: rec,
+            }
+            .into();
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+                .expect("register vk");
+            stx.apply();
+
+            let envelope = OpenVerifyEnvelope {
+                backend: BackendTag::Halo2IpaPasta,
+                circuit_id: "circuit_wrong_cache_commitment".to_string(),
+                vk_hash: vk_commitment,
+                public_inputs,
+                proof_bytes: vec![4, 5, 6],
+                aux: Vec::new(),
+            };
+            let proof_box = ProofBox::new(
+                "halo2/ipa".into(),
+                norito::to_bytes(&envelope).expect("encode envelope"),
+            );
+            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+            let mut map = BTreeMap::new();
+            map.insert(
+                crate::zk::PreverifiedProofKey::new(
+                    &attachment.proof,
+                    &attachment.vk_ref,
+                    [0xFF; 32],
+                ),
+                true,
+            );
+            block.set_preverified_batch(Arc::new(map));
+
+            let pid = iroha_data_model::proof::ProofId {
+                backend: attachment.backend.clone(),
+                proof_hash: crate::zk::hash_proof(&attachment.proof),
+            };
+            let mut stx_verify = block.transaction();
+            let verify: InstructionBox =
+                iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+            exec.execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                .expect("wrong preverify key must fall through to backend verification");
+            let record = stx_verify
+                .world
+                .proofs
+                .get(&pid)
+                .expect("VerifyProof should record the backend result");
+            assert_eq!(
+                record.status,
+                iroha_data_model::proof::ProofStatus::Rejected,
+                "wrong cache commitment must not produce a preverified success"
+            );
+        }
+
+        #[test]
+        fn verify_proof_preverified_cache_does_not_bypass_wrong_envelope_backend_tag() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let exec = Executor::default();
+
+            let mut stx = block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let mut stx = block.transaction();
+            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_wrong_envelope_tag");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![7, 7, 1]);
+            let vk_commitment = hash_vk(&vk_box);
+            let public_inputs = vec![1, 2, 3, 4];
+            let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "circuit_wrong_envelope_tag".to_string(),
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                public_inputs_schema_hash,
+                vk_commitment,
+            );
+            rec.vk_len = 3;
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box.clone());
+            rec.gas_schedule_id = Some("halo2_default".into());
+            let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                id: vk_id.clone(),
+                record: rec,
+            }
+            .into();
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+                .expect("register vk");
+            stx.apply();
+
+            let envelope = OpenVerifyEnvelope {
+                backend: BackendTag::Stark,
+                circuit_id: "circuit_wrong_envelope_tag".to_string(),
+                vk_hash: vk_commitment,
+                public_inputs,
+                proof_bytes: vec![4, 5, 6],
+                aux: Vec::new(),
+            };
+            let proof_box = ProofBox::new(
+                "halo2/ipa".into(),
+                norito::to_bytes(&envelope).expect("encode envelope"),
+            );
+            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+            let mut map = BTreeMap::new();
+            map.insert(
+                crate::zk::PreverifiedProofKey::new(
+                    &attachment.proof,
+                    &attachment.vk_ref,
+                    vk_commitment,
+                ),
+                true,
+            );
+            block.set_preverified_batch(Arc::new(map));
+
+            let mut stx_verify = block.transaction();
+            let verify: InstructionBox =
+                iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+            let err = exec
+                .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                .expect_err("wrong envelope backend tag should reject before preverify lookup");
+            let msg = smart_contract_error_message(err);
+            assert!(
+                msg.contains("OpenVerifyEnvelope backend tag mismatch"),
+                "unexpected msg: {msg}"
+            );
+        }
+
+        #[test]
+        fn verify_proof_preverified_cache_does_not_bypass_envelope_metadata_mismatches() {
+            #[derive(Clone, Copy)]
+            enum Tamper {
+                PublicInputs,
+                VerifyingKeyHash,
+                InactiveKey,
+            }
+
+            for (suffix, tamper, expected_msg) in [
+                (
+                    "schema",
+                    Tamper::PublicInputs,
+                    "public inputs schema hash mismatch",
+                ),
+                (
+                    "vk_hash",
+                    Tamper::VerifyingKeyHash,
+                    "verifying key commitment mismatch",
+                ),
+                (
+                    "inactive",
+                    Tamper::InactiveKey,
+                    "verifying key is not active",
+                ),
+            ] {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let exec = Executor::default();
+
+                let mut stx = block.transaction();
+                bootstrap_alice_account(&mut stx);
+                let perm = Permission::new(
+                    "CanManageVerifyingKeys".parse().unwrap(),
+                    iroha_primitives::json::Json::new(()),
+                );
+                Grant::account_permission(perm, ALICE_ID.clone())
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("grant manage vk");
+                stx.apply();
+
+                let mut stx = block.transaction();
+                let circuit_id = format!("circuit_preverify_metadata_{suffix}");
+                let vk_id =
+                    VerifyingKeyId::new("halo2/ipa", format!("vk_preverify_{suffix}").as_str());
+                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![3, 1, 4]);
+                let vk_commitment = hash_vk(&vk_box);
+                let expected_public_inputs = vec![1, 2, 3];
+                let public_inputs_schema_hash: [u8; 32] =
+                    CryptoHash::new(&expected_public_inputs).into();
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    circuit_id.clone(),
+                    None,
+                    "test",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    public_inputs_schema_hash,
+                    vk_commitment,
+                );
+                rec.vk_len = 3;
+                rec.status = if matches!(tamper, Tamper::InactiveKey) {
+                    ConfidentialStatus::Proposed
+                } else {
+                    ConfidentialStatus::Active
+                };
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some("halo2_default".into());
+                let register_vk_instruction: InstructionBox =
+                    verifying_keys::RegisterVerifyingKey {
+                        id: vk_id.clone(),
+                        record: rec,
+                    }
+                    .into();
+                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+                    .expect("register vk");
+                stx.apply();
+
+                let mut envelope_public_inputs = expected_public_inputs;
+                let mut envelope_vk_hash = vk_commitment;
+                match tamper {
+                    Tamper::PublicInputs => envelope_public_inputs = vec![9, 9, 9],
+                    Tamper::VerifyingKeyHash => envelope_vk_hash[0] ^= 0x80,
+                    Tamper::InactiveKey => {}
+                }
+                let envelope = OpenVerifyEnvelope {
+                    backend: BackendTag::Halo2IpaPasta,
+                    circuit_id,
+                    vk_hash: envelope_vk_hash,
+                    public_inputs: envelope_public_inputs,
+                    proof_bytes: vec![4, 5, 6],
+                    aux: Vec::new(),
+                };
+                let proof_box = ProofBox::new(
+                    "halo2/ipa".into(),
+                    norito::to_bytes(&envelope).expect("encode envelope"),
+                );
+                let attachment =
+                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+                let mut map = BTreeMap::new();
+                map.insert(
+                    crate::zk::PreverifiedProofKey::new(
+                        &attachment.proof,
+                        &attachment.vk_ref,
+                        vk_commitment,
+                    ),
+                    true,
+                );
+                block.set_preverified_batch(Arc::new(map));
+
+                let mut stx_verify = block.transaction();
+                let verify: InstructionBox =
+                    iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+                let err = exec
+                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                    .expect_err("metadata mismatch must reject before preverified cache lookup");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains(expected_msg),
+                    "expected {expected_msg:?}, got {msg:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn verify_proof_preverified_cache_does_not_bypass_existing_proof_record() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let exec = Executor::default();
+
+            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_replay_preverified");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![2, 4, 6, 8]);
+            let vk_commitment = hash_vk(&vk_box);
+            let public_inputs = vec![1, 2, 3];
+            let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "circuit_replay_preverified".to_string(),
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                public_inputs_schema_hash,
+                vk_commitment,
+            );
+            rec.vk_len = 4;
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box);
+            rec.gas_schedule_id = Some("halo2_default".into());
+
+            let envelope = OpenVerifyEnvelope {
+                backend: BackendTag::Halo2IpaPasta,
+                circuit_id: "circuit_replay_preverified".to_string(),
+                vk_hash: vk_commitment,
+                public_inputs,
+                proof_bytes: vec![9, 8, 7],
+                aux: Vec::new(),
+            };
+            let proof_box = ProofBox::new(
+                "halo2/ipa".into(),
+                norito::to_bytes(&envelope).expect("encode envelope"),
+            );
+            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+            let pid = iroha_data_model::proof::ProofId {
+                backend: attachment.backend.clone(),
+                proof_hash: crate::zk::hash_proof(&attachment.proof),
+            };
+
+            let mut stx = block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
+            stx.world
+                .verifying_keys_by_circuit
+                .insert((rec.circuit_id.clone(), rec.version), vk_id.clone());
+            stx.world.proofs.insert(
+                pid.clone(),
+                iroha_data_model::proof::ProofRecord {
+                    id: pid,
+                    vk_ref: Some(vk_id),
+                    vk_commitment: Some(vk_commitment),
+                    status: iroha_data_model::proof::ProofStatus::Rejected,
+                    verified_at_height: Some(1),
+                    bridge: None,
+                },
+            );
+            stx.apply();
+
+            let mut map = BTreeMap::new();
+            map.insert(
+                crate::zk::PreverifiedProofKey::new(
+                    &attachment.proof,
+                    &attachment.vk_ref,
+                    vk_commitment,
+                ),
+                true,
+            );
+            block.set_preverified_batch(Arc::new(map));
+
+            let mut stx_verify = block.transaction();
+            let verify: InstructionBox =
+                iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+            let err = exec
+                .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                .expect_err("duplicate proof record must reject before preverified cache lookup");
+            assert!(
+                matches!(
+                    err,
+                    ValidationFail::InstructionFailed(InstructionExecutionError::Repetition(_))
+                ),
+                "expected duplicate proof repetition, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn verify_proof_preverified_cache_does_not_bypass_registry_invariants() {
+            #[derive(Clone, Copy)]
+            enum Tamper {
+                MissingCircuitIndex,
+                StoredKeyBackend,
+            }
+
+            for (suffix, tamper, expected_msg) in [
+                (
+                    "missing_circuit_index",
+                    Tamper::MissingCircuitIndex,
+                    "verifying key circuit/version not active",
+                ),
+                (
+                    "stored_key_backend",
+                    Tamper::StoredKeyBackend,
+                    "verifying key backend mismatch",
+                ),
+            ] {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let exec = Executor::default();
+
+                let circuit_id = format!("circuit_registry_invariant_{suffix}");
+                let vk_id = VerifyingKeyId::new(
+                    "halo2/ipa",
+                    format!("vk_registry_invariant_{suffix}").as_str(),
+                );
+                let stored_vk = match tamper {
+                    Tamper::MissingCircuitIndex => {
+                        VerifyingKeyBox::new("halo2/ipa".into(), vec![3, 5, 7])
+                    }
+                    Tamper::StoredKeyBackend => {
+                        VerifyingKeyBox::new("stark/fri".into(), vec![3, 5, 7])
+                    }
+                };
+                let vk_commitment = hash_vk(&stored_vk);
+                let public_inputs = vec![1, 2, 3];
+                let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    circuit_id.clone(),
+                    None,
+                    "test",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    public_inputs_schema_hash,
+                    vk_commitment,
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(stored_vk);
+                rec.gas_schedule_id = Some("halo2_default".into());
+
+                let envelope = OpenVerifyEnvelope {
+                    backend: BackendTag::Halo2IpaPasta,
+                    circuit_id: circuit_id.clone(),
+                    vk_hash: vk_commitment,
+                    public_inputs,
+                    proof_bytes: vec![9, 8, 7],
+                    aux: Vec::new(),
+                };
+                let proof_box = ProofBox::new(
+                    "halo2/ipa".into(),
+                    norito::to_bytes(&envelope).expect("encode envelope"),
+                );
+                let attachment =
+                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+
+                let mut stx = block.transaction();
+                bootstrap_alice_account(&mut stx);
+                stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
+                if matches!(tamper, Tamper::StoredKeyBackend) {
+                    stx.world
+                        .verifying_keys_by_circuit
+                        .insert((rec.circuit_id.clone(), rec.version), vk_id);
+                }
+                stx.apply();
+
+                let mut map = BTreeMap::new();
+                map.insert(
+                    crate::zk::PreverifiedProofKey::new(
+                        &attachment.proof,
+                        &attachment.vk_ref,
+                        vk_commitment,
+                    ),
+                    true,
+                );
+                block.set_preverified_batch(Arc::new(map));
+
+                let mut stx_verify = block.transaction();
+                let verify: InstructionBox =
+                    iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+                let err = exec
+                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                    .expect_err("registry invariant must reject before preverified cache lookup");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains(expected_msg),
+                    "expected {expected_msg:?}, got {msg:?}"
+                );
+            }
         }
 
         #[test]

@@ -13,6 +13,8 @@ fn contract_manifest_roundtrip_norito() {
                 "account:sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_string(),
             ],
             write_keys: vec!["asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_string()],
+            dynamic_reads: Vec::new(),
+            dynamic_writes: Vec::new(),
         }),
         entrypoints: None,
         kotoba: None,

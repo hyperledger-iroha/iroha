@@ -91,10 +91,15 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 
 ### Triggers and Events
 - `TriggerId { name: Name }` and `Trigger { id, action: action::Action }`.
-- `action::Action { executable: Executable, repeats: Repeats, authority: AccountId, filter: EventFilterBox, metadata }`.
+- `action::Action { executable: Executable, repeats: Repeats, authority: AccountId, filter: EventFilterBox, retry_policy, metadata }`.
+  - Construction: `Action::try_new(...)` is the fallible constructor for SDK and runtime paths; `Action::new(...)` remains an infallible convenience wrapper and panics on invalid trigger filters.
   - `Repeats`: `Indefinitely` or `Exactly(u32)`; ordering and depletion utilities included.
+  - `retry_policy`: optional scheduled-time-trigger retry settings; non-scheduled triggers reject retry policies.
   - Safety: `TriggerCompleted` cannot be used as an action’s filter (validated during (de)serialization).
+  - Enabled state: triggers are enabled by default. The reserved `__enabled` metadata flag disables execution when set to `false` or `0`; malformed values fail closed and are treated as disabled. Active-trigger queries return only enabled triggers with remaining repeats.
+  - Pipeline triggers: state-mutating pipeline triggers are deterministic-only. They may target transaction `Approved`/`Rejected` events or block `Approved` events derived from committed block validation. Local queue, warning, witness, merge-ledger, created, committed, and rejected-block notifications remain subscription events only.
 - `EventBox`: sum type for pipeline, pipeline-batch, data, time, execute-trigger, and trigger-completed events; `EventFilterBox` mirrors that for subscriptions and trigger filters.
+- `TriggerCompletedEvent`: reports the trigger id, `trigger_execution_hash`, `step_index`, and success/failure outcome for each trigger invocation. `trigger_execution_hash` identifies the actual trigger invocation rather than an external transaction, and `step_index` is the zero-based position inside the trigger sequence including chained data triggers.
 
 ## Parameters and Configuration
 

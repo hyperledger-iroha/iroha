@@ -7138,7 +7138,7 @@ export declare class ToriiClient {
   ): Promise<{ total: number; items: Array<Record<string, unknown>> }>;
   executeRamLfeProgram(
     programId: string,
-    options: { inputHex?: string; encryptedInput?: string; signal?: AbortSignal },
+    options: { encryptedInput: string; signal?: AbortSignal },
   ): Promise<Record<string, unknown> | null>;
   verifyRamLfeReceipt(
     options: { receipt: Record<string, unknown>; outputHex?: string; signal?: AbortSignal },

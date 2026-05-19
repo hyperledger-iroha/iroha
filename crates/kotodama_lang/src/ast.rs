@@ -1,7 +1,7 @@
 //! Abstract syntax tree definitions for KOTODAMA.
 //!
-//! These structures represent a small subset of the language used for
-//! demonstration purposes.
+//! These structures represent the parsed Kotodama source surface accepted by
+//! the compiler.
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Program {
@@ -52,9 +52,11 @@ pub struct FunctionModifiers {
     pub visibility: FunctionVisibility,
     pub kind: FunctionKind,
     pub permission: Option<String>,
-    /// Optional explicit read access hints for this function.
+    /// Reserved parser storage for access hints; first-release Kotodama rejects
+    /// user-written access attributes before lowering.
     pub access_reads: Vec<String>,
-    /// Optional explicit write access hints for this function.
+    /// Reserved parser storage for access hints; first-release Kotodama rejects
+    /// user-written access attributes before lowering.
     pub access_writes: Vec<String>,
     /// Marks a function as a local-only Kotodama test.
     pub is_test: bool,

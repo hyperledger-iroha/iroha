@@ -10,7 +10,10 @@ use crate::{
     account::{AccountId, OpaqueAccountId},
     name::Name,
     nexus::UniversalAccountId,
-    ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeReceiptAttestation},
+    ram_lfe::{
+        RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeProgramId,
+        RamLfeReceiptAttestation,
+    },
 };
 
 /// Error returned while parsing [`IdentifierPolicyId`] literals.
@@ -222,6 +225,8 @@ pub struct IdentifierResolutionReceiptPayload {
     pub policy_id: IdentifierPolicyId,
     /// Generic RAM-LFE execution receipt payload.
     pub execution: RamLfeExecutionReceiptPayload,
+    /// Externally verified opening for the RAM-LFE encrypted output.
+    pub opening: RamLfeOutputOpening,
     /// Opaque identifier derived by the hidden-function resolver.
     pub opaque_id: OpaqueAccountId,
     /// Hidden-function receipt hash covering the evaluation transcript.
@@ -364,6 +369,21 @@ mod tests {
     #[test]
     fn receipt_payload_bytes_match_signed_encode_bytes() {
         let account_signatory = KeyPair::random().public_key().clone();
+        let opening_payload = crate::ram_lfe::RamLfeOutputOpeningPayload {
+            program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
+            input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+            output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+            parameter_digest: Hash::new(b"parameters"),
+            evaluation_key_digest: Hash::new(b"evaluation-keys"),
+            opened_output_hash: Hash::new(b"opened-output"),
+            opened_at_ms: 1_777_777_777_001,
+            expires_at_ms: Some(1_777_777_877_000),
+        };
+        let opening_signer = KeyPair::random();
+        let opening = crate::ram_lfe::RamLfeOutputOpening {
+            signature: SignatureOf::new(opening_signer.private_key(), &opening_payload).into(),
+            payload: opening_payload,
+        };
         let payload = IdentifierResolutionReceiptPayload {
             policy_id: IdentifierPolicyId::from_str("email#retail").expect("valid policy"),
             execution: RamLfeExecutionReceiptPayload {
@@ -371,11 +391,16 @@ mod tests {
                 program_digest: Hash::new(b"program"),
                 backend: RamLfeBackend::BfvProgrammedSha3_256V1,
                 verification_mode: RamLfeVerificationMode::Signed,
+                input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+                output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+                parameter_digest: Hash::new(b"parameters"),
+                evaluation_key_digest: Hash::new(b"evaluation-keys"),
                 output_hash: Hash::new(b"output"),
                 associated_data_hash: Hash::new(b"associated-data"),
                 executed_at_ms: 1_777_777_777_000,
                 expires_at_ms: Some(1_777_777_877_000),
             },
+            opening,
             opaque_id: OpaqueAccountId::from_hash(Hash::new(b"opaque")),
             receipt_hash: Hash::new(b"receipt"),
             uaid: UniversalAccountId::from_hash(Hash::new(b"uaid")),
@@ -398,35 +423,40 @@ mod tests {
 
     #[test]
     fn live_identifier_resolution_receipt_payload_fixture_matches_current_encoding() {
-        let payload = IdentifierResolutionReceiptPayload {
+        let receipt = live_identifier_resolution_receipt_fixture();
+        let resolver_key = PublicKey::from_str(
+            "ed01200376E59E9078B647F55003896B59758B7BE99908535EC24BAF80A6D52C8B3EB8",
+        )
+        .expect("valid resolver key");
+
+        assert!(!hex::encode_upper(receipt.payload_bytes()).is_empty());
+        assert!(receipt.verify(&resolver_key).is_err());
+    }
+
+    fn live_identifier_resolution_receipt_fixture() -> IdentifierResolutionReceipt {
+        IdentifierResolutionReceipt {
+            payload: live_identifier_resolution_payload_fixture(),
+            attestation: RamLfeReceiptAttestation::Signed(
+                Signature::from_hex(
+                    "4B26BF33F721C551C13F102D4D7F483CB8DD8A13FD6BF4ED26C845E2B69D5D0124B8CFA05493772F6748A42408EEE4542C470B284AB87F686B423F9DF87C8D00",
+                )
+                .expect("valid signature"),
+            ),
+        }
+    }
+
+    fn live_identifier_resolution_payload_fixture() -> IdentifierResolutionReceiptPayload {
+        IdentifierResolutionReceiptPayload {
             policy_id: IdentifierPolicyId::from_str("email#retail").expect("valid policy"),
-            execution: RamLfeExecutionReceiptPayload {
-                program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
-                program_digest: Hash::from_str(
-                    "fe36ceb3996d101200b895fd2a377cce4426426a473da9fe08b2dbd2bd8b9375",
-                )
-                .expect("valid hash"),
-                backend: RamLfeBackend::BfvProgrammedSha3_256V1,
-                verification_mode: RamLfeVerificationMode::Signed,
-                output_hash: Hash::from_str(
-                    "72dcdee1435552e943d5e2e1c978d3f728c6a1ce7e6870b50c63568d4876eea5",
-                )
-                .expect("valid hash"),
-                associated_data_hash: Hash::from_str(
-                    "35b8bc8a30685e7cc5679b6e6a45675539548f5a24326bbee1d8c20e55918f55",
-                )
-                .expect("valid hash"),
-                executed_at_ms: 1_776_812_470_694,
-                expires_at_ms: Some(1_776_812_500_694),
-            },
+            execution: live_identifier_execution_fixture(),
+            opening: live_identifier_output_opening_fixture(),
             opaque_id: OpaqueAccountId::from_str(
                 "opaque:fd14cb369e853352d4b9c578745627d154471ce5fd3462c4db542c104766e983",
             )
             .expect("valid opaque id"),
-            receipt_hash: Hash::from_str(
+            receipt_hash: hash_hex(
                 "51bbe55b70e09d4c2bb75d9c31b2cde46a7bdd5414134f6786255c679a68ac53",
-            )
-            .expect("valid hash"),
+            ),
             uaid: UniversalAccountId::from_str(
                 "uaid:471b620a99c608af1c7a47199f27b3368ae0ea889a497dd774b52a8287a58393",
             )
@@ -437,25 +467,69 @@ mod tests {
             .expect("valid i105 account")
             .account_id()
             .clone(),
-        };
-        let receipt = IdentifierResolutionReceipt {
-            payload,
-            attestation: RamLfeReceiptAttestation::Signed(
-                Signature::from_hex(
-                    "4B26BF33F721C551C13F102D4D7F483CB8DD8A13FD6BF4ED26C845E2B69D5D0124B8CFA05493772F6748A42408EEE4542C470B284AB87F686B423F9DF87C8D00",
-                )
-                .expect("valid signature"),
-            ),
-        };
-        let resolver_key = PublicKey::from_str(
-            "ed01200376E59E9078B647F55003896B59758B7BE99908535EC24BAF80A6D52C8B3EB8",
-        )
-        .expect("valid resolver key");
+        }
+    }
 
-        assert_eq!(
-            hex::encode_upper(receipt.payload_bytes()),
-            "0F0605656D61696C070672657461696C90010E0D0C656D61696C5F72657461696C20FE36CEB3996D101200B895FD2A377CCE4426426A473DA9FE08B2DBD2BD8B9375040200000004000000002072DCDEE1435552E943D5E2E1C978D3F728C6A1CE7E6870B50C63568D4876EEA52035B8BC8A30685E7CC5679B6E6A45675539548F5A24326BBEE1D8C20E55918F5508A6B146B29D0100000A0108D62647B29D0100002120FD14CB369E853352D4B9C578745627D154471CE5FD3462C4DB542C104766E9832051BBE55B70E09D4C2BB75D9C31B2CDE46A7BDD5414134F6786255C679A68AC532120471B620A99C608AF1C7A47199F27B3368AE0EA889A497DD774B52A8287A583934F000000004A2100000000000000010001080103012001E90154010701BE0152013401E9019E01CA018101A70101013E010301990109015F01210191018E013B01A401E201C8019401C8018001200184"
-        );
-        assert!(receipt.verify(&resolver_key).is_err());
+    fn live_identifier_execution_fixture() -> RamLfeExecutionReceiptPayload {
+        RamLfeExecutionReceiptPayload {
+            program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
+            program_digest: hash_hex(
+                "fe36ceb3996d101200b895fd2a377cce4426426a473da9fe08b2dbd2bd8b9375",
+            ),
+            backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+            verification_mode: RamLfeVerificationMode::Signed,
+            input_ciphertext_hash: fixture_input_ciphertext_hash(),
+            output_ciphertext_hash: fixture_output_ciphertext_hash(),
+            parameter_digest: fixture_parameter_digest(),
+            evaluation_key_digest: fixture_evaluation_key_digest(),
+            output_hash: hash_hex(
+                "72dcdee1435552e943d5e2e1c978d3f728c6a1ce7e6870b50c63568d4876eea5",
+            ),
+            associated_data_hash: hash_hex(
+                "35b8bc8a30685e7cc5679b6e6a45675539548f5a24326bbee1d8c20e55918f55",
+            ),
+            executed_at_ms: 1_776_812_470_694,
+            expires_at_ms: Some(1_776_812_500_694),
+        }
+    }
+
+    fn live_identifier_output_opening_fixture() -> crate::ram_lfe::RamLfeOutputOpening {
+        let payload = crate::ram_lfe::RamLfeOutputOpeningPayload {
+            program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
+            input_ciphertext_hash: fixture_input_ciphertext_hash(),
+            output_ciphertext_hash: fixture_output_ciphertext_hash(),
+            parameter_digest: fixture_parameter_digest(),
+            evaluation_key_digest: fixture_evaluation_key_digest(),
+            opened_output_hash: hash_hex(
+                "5555555555555555555555555555555555555555555555555555555555555555",
+            ),
+            opened_at_ms: 1_776_812_470_695,
+            expires_at_ms: Some(1_776_812_500_694),
+        };
+        let signer = KeyPair::from_seed(vec![0x51; 32], iroha_crypto::Algorithm::Ed25519);
+        crate::ram_lfe::RamLfeOutputOpening {
+            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            payload,
+        }
+    }
+
+    fn fixture_input_ciphertext_hash() -> Hash {
+        hash_hex("1111111111111111111111111111111111111111111111111111111111111111")
+    }
+
+    fn fixture_output_ciphertext_hash() -> Hash {
+        hash_hex("2222222222222222222222222222222222222222222222222222222222222222")
+    }
+
+    fn fixture_parameter_digest() -> Hash {
+        hash_hex("3333333333333333333333333333333333333333333333333333333333333333")
+    }
+
+    fn fixture_evaluation_key_digest() -> Hash {
+        hash_hex("4444444444444444444444444444444444444444444444444444444444444444")
+    }
+
+    fn hash_hex(value: &str) -> Hash {
+        Hash::from_str(value).expect("valid hash")
     }
 }

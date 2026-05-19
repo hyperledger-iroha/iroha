@@ -2717,6 +2717,7 @@ pub struct RamLfeProgramPolicySummaryDto {
     pub owner: String,
     pub active: bool,
     pub resolver_public_key: String,
+    pub output_opening_public_key: String,
     pub backend: String,
     pub verification_mode: String,
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -2767,15 +2768,45 @@ pub struct RamLfeProgramPolicyListDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
-/// Execute one RAM-LFE program from plaintext or BFV-encrypted input.
+#[derive(Debug, norito::derive::NoritoDeserialize)]
+/// Execute one RAM-LFE program from a BFV-encrypted input.
 pub struct RamLfeExecuteRequestDto {
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub input_hex: Option<String>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub encrypted_input: Option<String>,
+    pub encrypted_input: String,
+}
+
+#[cfg(feature = "app_api")]
+impl norito::json::JsonDeserialize for RamLfeExecuteRequestDto {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value =
+            <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::json_from_value(&value)
+    }
+
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        let object = value.as_object().ok_or_else(|| {
+            norito::json::Error::Message("expected RAM-LFE execute request object".into())
+        })?;
+        let mut encrypted_input = None;
+        for (key, value) in object {
+            match key.as_str() {
+                "encrypted_input" => {
+                    if encrypted_input.is_some() {
+                        return Err(norito::json::Error::duplicate_field(key));
+                    }
+                    encrypted_input = Some(
+                        <String as norito::json::JsonDeserialize>::json_from_value(value)?,
+                    );
+                }
+                other => return Err(norito::json::Error::unknown_field(other)),
+            }
+        }
+        Ok(Self {
+            encrypted_input: encrypted_input
+                .ok_or_else(|| norito::json::Error::missing_field("encrypted_input"))?,
+        })
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -2792,6 +2823,7 @@ pub struct RamLfeExecuteResponseDto {
     pub program_id: String,
     pub opaque_hash: String,
     pub receipt_hash: String,
+    pub output_ciphertext: String,
     pub output_hash: String,
     pub associated_data_hash: String,
     pub executed_at_ms: u64,
@@ -2817,6 +2849,10 @@ pub struct RamLfeExecutionReceiptPayloadDto {
     pub program_digest: String,
     pub backend: String,
     pub verification_mode: String,
+    pub input_ciphertext_hash: String,
+    pub output_ciphertext_hash: String,
+    pub parameter_digest: String,
+    pub evaluation_key_digest: String,
     pub output_hash: String,
     pub associated_data_hash: String,
     pub executed_at_ms: u64,
@@ -2915,6 +2951,7 @@ pub struct IdentifierPolicySummaryDto {
     pub active: bool,
     pub normalization: String,
     pub resolver_public_key: String,
+    pub output_opening_public_key: String,
     pub backend: String,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub input_encryption: Option<String>,
@@ -2947,16 +2984,68 @@ pub struct IdentifierPolicyListDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
-/// Resolve a raw identifier under one policy namespace.
+#[derive(Debug, norito::derive::NoritoDeserialize)]
+/// Resolve an encrypted identifier under one policy namespace.
 pub struct IdentifierResolveRequestDto {
     pub policy_id: String,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub input: Option<String>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub encrypted_input: Option<String>,
+    pub encrypted_input: String,
+    pub output_opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
+}
+
+#[cfg(feature = "app_api")]
+impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value =
+            <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::json_from_value(&value)
+    }
+
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        let object = value.as_object().ok_or_else(|| {
+            norito::json::Error::Message("expected identifier resolve request object".into())
+        })?;
+        let mut policy_id = None;
+        let mut encrypted_input = None;
+        let mut output_opening = None;
+        for (key, value) in object {
+            match key.as_str() {
+                "policy_id" => {
+                    if policy_id.is_some() {
+                        return Err(norito::json::Error::duplicate_field(key));
+                    }
+                    policy_id = Some(<String as norito::json::JsonDeserialize>::json_from_value(
+                        value,
+                    )?);
+                }
+                "encrypted_input" => {
+                    if encrypted_input.is_some() {
+                        return Err(norito::json::Error::duplicate_field(key));
+                    }
+                    encrypted_input = Some(
+                        <String as norito::json::JsonDeserialize>::json_from_value(value)?,
+                    );
+                }
+                "output_opening" => {
+                    if output_opening.is_some() {
+                        return Err(norito::json::Error::duplicate_field(key));
+                    }
+                    output_opening = Some(
+                        <iroha_data_model::ram_lfe::RamLfeOutputOpening as norito::json::JsonDeserialize>::json_from_value(value)?,
+                    );
+                }
+                other => return Err(norito::json::Error::unknown_field(other)),
+            }
+        }
+        Ok(Self {
+            policy_id: policy_id.ok_or_else(|| norito::json::Error::missing_field("policy_id"))?,
+            encrypted_input: encrypted_input
+                .ok_or_else(|| norito::json::Error::missing_field("encrypted_input"))?,
+            output_opening: output_opening
+                .ok_or_else(|| norito::json::Error::missing_field("output_opening"))?,
+        })
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -2987,6 +3076,7 @@ pub struct IdentifierResolveResponseDto {
 pub struct IdentifierResolutionReceiptPayloadDto {
     pub policy_id: String,
     pub execution: RamLfeExecutionReceiptPayloadDto,
+    pub opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
     pub opaque_id: String,
     pub receipt_hash: String,
     pub uaid: String,

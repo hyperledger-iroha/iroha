@@ -1,11 +1,16 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for executor upgrade workflows and permissions.
 
+use std::time::{Duration, Instant};
+
 use executor_custom_data_model::{complex_isi::NumericQuery, permissions::CanControlDomainLives};
 use eyre::{Context, Result, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
-use iroha::{client::Client, data_model::prelude::*};
+use iroha::{
+    client::Client,
+    data_model::{permission::Permission as DataPermission, prelude::*},
+};
 use iroha_executor_data_model::permission::{Permission as _, domain::CanUnregisterDomain};
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, load_sample_ivm};
@@ -17,6 +22,147 @@ fn start_network(
     context: &'static str,
 ) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(builder, context).unwrap()
+}
+
+fn wait_for_executor_permission_names(
+    client: &Client,
+    expectations: &[(String, bool)],
+    context: &str,
+) -> Result<()> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "executor data model was not queried".to_owned();
+
+    while Instant::now() < deadline {
+        let data_model = client.query_single(FindExecutorDataModel)?;
+        let permissions = data_model
+            .permissions()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let matches = expectations
+            .iter()
+            .all(|(expected_name, expected_present)| {
+                permissions
+                    .iter()
+                    .any(|permission| permission == expected_name)
+                    == *expected_present
+            });
+        last_observed = format!("permissions={permissions:?}");
+        if matches {
+            return Ok(());
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "timed out waiting for executor data model after {context}; expectations={expectations:?}; last_observed={last_observed}"
+    ))
+}
+
+fn wait_for_account_permission(
+    client: &Client,
+    account_id: &AccountId,
+    expected_present: bool,
+    context: &str,
+    mut matches_permission: impl FnMut(&DataPermission) -> bool,
+) -> Result<()> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "account permissions were not queried".to_owned();
+
+    while Instant::now() < deadline {
+        let permissions = client
+            .query(FindPermissionsByAccountId::new(account_id.clone()))
+            .execute_all()?;
+        let present = permissions
+            .iter()
+            .any(|permission| matches_permission(permission));
+        last_observed = format!("permission_present={present}");
+        if present == expected_present {
+            return Ok(());
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "timed out waiting for account permission after {context}; expected_present={expected_present}; last_observed={last_observed}"
+    ))
+}
+
+fn wait_for_role_permission(
+    client: &Client,
+    role_id: &RoleId,
+    expected_present: bool,
+    context: &str,
+    mut matches_permission: impl FnMut(&DataPermission) -> bool,
+) -> Result<()> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "roles were not queried".to_owned();
+
+    while Instant::now() < deadline {
+        let roles = client.query(FindRoles::new()).execute_all()?;
+        let Some(role) = roles.into_iter().find(|role| role.id() == role_id) else {
+            last_observed = "role missing".to_owned();
+            std::thread::sleep(POLL_INTERVAL);
+            continue;
+        };
+        let present = role
+            .permissions()
+            .any(|permission| matches_permission(permission));
+        last_observed = format!("permission_present={present}");
+        if present == expected_present {
+            return Ok(());
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "timed out waiting for role permission after {context}; expected_present={expected_present}; last_observed={last_observed}"
+    ))
+}
+
+fn wait_for_asset_value(
+    client: &Client,
+    asset_id: &AssetId,
+    expected: &Numeric,
+    context: &str,
+) -> Result<Asset> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "asset was not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client.query_single(FindAssetById::new(asset_id.clone())) {
+            Ok(asset) => {
+                last_observed = format!("{}", asset.value());
+                if asset.value() == expected {
+                    return Ok(asset);
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "timed out waiting for asset {asset_id} to equal {expected} after {context}; last_observed={last_observed}"
+    ))
 }
 
 const ADMIN_PUBLIC_KEY_MULTIHASH: &str =
@@ -122,30 +268,27 @@ fn executor_upgrade_should_run_migration() -> Result<()> {
     upgrade_executor(&client, "executor_with_custom_permission")?;
 
     // Check that `CanUnregisterDomain` doesn't exist
-    let data_model = client.query_single(FindExecutorDataModel)?;
-    assert!(
-        data_model
-            .permissions()
-            .iter()
-            .all(|permission| CanUnregisterDomain::name() != *permission)
-    );
-
-    assert!(
-        data_model
-            .permissions()
-            .iter()
-            .any(|permission| CanControlDomainLives::name() == *permission)
-    );
+    wait_for_executor_permission_names(
+        &client,
+        &[
+            (CanUnregisterDomain::name().to_string(), false),
+            (CanControlDomainLives::name().to_string(), true),
+        ],
+        "executor migration",
+    )?;
 
     // Check that Alice has `CanControlDomainLives` permission
-    let alice_permissions = client
-        .query(FindPermissionsByAccountId::new(alice_id.clone()))
-        .execute_all()?;
     let can_control_domain_lives = CanControlDomainLives;
-    assert!(alice_permissions.iter().any(|permission| {
-        CanControlDomainLives::try_from(permission)
-            .is_ok_and(|permission| permission == can_control_domain_lives)
-    }));
+    wait_for_account_permission(
+        &client,
+        &alice_id,
+        true,
+        "executor migration",
+        |permission| {
+            CanControlDomainLives::try_from(permission)
+                .is_ok_and(|permission| permission == can_control_domain_lives)
+        },
+    )?;
 
     Ok(())
 }
@@ -174,77 +317,69 @@ fn executor_upgrade_should_revoke_removed_permissions() -> Result<()> {
     client.submit_blocking(Register::role(test_role))?;
 
     // Check that permission exists
-    assert!(
-        client
-            .query_single(FindExecutorDataModel)?
-            .permissions()
-            .contains(&CanUnregisterDomain::name())
-    );
+    wait_for_executor_permission_names(
+        &client,
+        &[(CanUnregisterDomain::name().to_string(), true)],
+        "executor permission before removal",
+    )?;
 
     // Check that `TEST_ROLE` has permission
-    assert!(
-        client
-            .query(FindRoles::new())
-            .execute_all()?
-            .into_iter()
-            .find(|role| *role.id() == test_role_id)
-            .expect("Failed to find Role")
-            .permissions()
-            .any(|permission| {
-                CanUnregisterDomain::try_from(permission)
-                    .is_ok_and(|permission| permission == can_unregister_domain)
-            })
-    );
+    wait_for_role_permission(
+        &client,
+        &test_role_id,
+        true,
+        "role permission before removal",
+        |permission| {
+            CanUnregisterDomain::try_from(permission)
+                .is_ok_and(|permission| permission == can_unregister_domain)
+        },
+    )?;
 
     // Check that Alice has permission
     let alice_id = ALICE_ID.clone();
-    assert!(
-        client
-            .query(FindPermissionsByAccountId::new(alice_id.clone()))
-            .execute_all()?
-            .iter()
-            .any(|permission| {
-                CanUnregisterDomain::try_from(permission)
-                    .is_ok_and(|permission| permission == can_unregister_domain)
-            })
-    );
+    wait_for_account_permission(
+        &client,
+        &alice_id,
+        true,
+        "account permission before removal",
+        |permission| {
+            CanUnregisterDomain::try_from(permission)
+                .is_ok_and(|permission| permission == can_unregister_domain)
+        },
+    )?;
 
     upgrade_executor(&client, "executor_remove_permission")?;
 
     // Check that permission doesn't exist
-    assert!(
-        !client
-            .query_single(FindExecutorDataModel)?
-            .permissions()
-            .contains(&CanUnregisterDomain::name())
-    );
+    wait_for_executor_permission_names(
+        &client,
+        &[(CanUnregisterDomain::name().to_string(), false)],
+        "executor permission removal",
+    )?;
 
     // Check that `TEST_ROLE` doesn't have permission
-    assert!(
-        !client
-            .query(FindRoles::new())
-            .execute_all()?
-            .into_iter()
-            .find(|role| *role.id() == test_role_id)
-            .expect("Failed to find Role")
-            .permissions()
-            .any(|permission| {
-                CanUnregisterDomain::try_from(permission)
-                    .is_ok_and(|permission| permission == can_unregister_domain)
-            })
-    );
+    wait_for_role_permission(
+        &client,
+        &test_role_id,
+        false,
+        "role permission removal",
+        |permission| {
+            CanUnregisterDomain::try_from(permission)
+                .is_ok_and(|permission| permission == can_unregister_domain)
+        },
+    )?;
 
     // Check that Alice doesn't have permission
-    assert!(
-        !client
-            .query(FindPermissionsByAccountId::new(alice_id.clone()))
-            .execute_all()?
-            .iter()
-            .any(|permission| {
-                CanUnregisterDomain::try_from(permission)
-                    .is_ok_and(|permission| permission == can_unregister_domain)
-            })
-    );
+    wait_for_account_permission(
+        &client,
+        &alice_id,
+        false,
+        "account permission removal",
+        |permission| {
+            CanUnregisterDomain::try_from(permission)
+                .is_ok_and(|permission| permission == can_unregister_domain)
+        },
+    )?;
 
     Ok(())
 }
@@ -274,19 +409,13 @@ fn executor_custom_instructions_simple() -> Result<()> {
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     client.submit_blocking(Mint::asset_numeric(Numeric::from(1u32), bob_rose.clone()))?;
 
-    let get_value = |id: &AssetId| -> Result<Numeric> {
-        Ok(client
-            .query(FindAssets)
-            .execute_all()?
-            .into_iter()
-            .find(|asset| asset.id() == id)
-            .expect("asset not found")
-            .value()
-            .clone())
-    };
-
     // Check that bob has 1 rose
-    assert_eq!(get_value(&bob_rose)?, Numeric::from(1u32));
+    wait_for_asset_value(
+        &client,
+        &bob_rose,
+        &Numeric::from(1u32),
+        "simple custom initial mint",
+    )?;
 
     // Give 1 rose to all
     let isi = MintAssetForAllAccounts {
@@ -296,7 +425,12 @@ fn executor_custom_instructions_simple() -> Result<()> {
     client.submit_blocking(InstructionBox::from(isi))?;
 
     // Check that bob has 2 roses
-    assert_eq!(get_value(&bob_rose)?, Numeric::from(2u32));
+    wait_for_asset_value(
+        &client,
+        &bob_rose,
+        &Numeric::from(2u32),
+        "simple custom mint for all",
+    )?;
 
     Ok(())
 }
@@ -328,19 +462,13 @@ fn executor_custom_instructions_complex() -> Result<()> {
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     client.submit_blocking(Mint::asset_numeric(Numeric::from(6u32), bob_rose.clone()))?;
 
-    let get_value = |id: &AssetId| -> Result<Numeric> {
-        Ok(client
-            .query(FindAssets)
-            .execute_all()?
-            .into_iter()
-            .find(|asset| asset.id() == id)
-            .expect("asset not found")
-            .value()
-            .clone())
-    };
-
     // Check that bob has 6 roses
-    assert_eq!(get_value(&bob_rose)?, Numeric::from(6u32));
+    wait_for_asset_value(
+        &client,
+        &bob_rose,
+        &Numeric::from(6u32),
+        "complex custom initial mint",
+    )?;
 
     // If bob has more then 5 roses, then burn 1 rose
     let burn_bob_rose_if_more_then_5 = || -> Result<()> {
@@ -360,12 +488,22 @@ fn executor_custom_instructions_complex() -> Result<()> {
     burn_bob_rose_if_more_then_5()?;
 
     // Check that bob has 5 roses
-    assert_eq!(get_value(&bob_rose)?, Numeric::from(5u32));
+    wait_for_asset_value(
+        &client,
+        &bob_rose,
+        &Numeric::from(5u32),
+        "complex custom conditional burn",
+    )?;
 
     burn_bob_rose_if_more_then_5()?;
 
     // Check that bob has 5 roses
-    assert_eq!(get_value(&bob_rose)?, Numeric::from(5u32));
+    wait_for_asset_value(
+        &client,
+        &bob_rose,
+        &Numeric::from(5u32),
+        "complex custom skipped conditional burn",
+    )?;
 
     Ok(())
 }
@@ -459,14 +597,12 @@ fn executor_with_fuel() -> Result<()> {
         // Each instruction will use 30_000_000 additional fuel, so this should cover it.
         additional_fuel(90_000_000),
     )?;
-    let value = client
-        .query(FindAssets)
-        .execute_all()?
-        .into_iter()
-        .find(|asset| asset.id() == &bob_rose)
-        .map(|asset| asset.value().clone())
-        .expect("asset not found");
-    assert_eq!(value, Numeric::from(3u32));
+    wait_for_asset_value(
+        &client,
+        &bob_rose,
+        &Numeric::from(3u32),
+        "executor fuel mint",
+    )?;
 
     let res = client.submit_all_blocking_with_metadata(
         [
@@ -541,14 +677,12 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
     let execute_trigger = ExecuteTrigger::new(trigger_id);
     client.submit_blocking_with_metadata(execute_trigger.clone(), additional_fuel(90_000_000))?;
 
-    let value = client
-        .query(FindAssets)
-        .execute_all()?
-        .into_iter()
-        .find(|asset| asset.id() == &bob_rose)
-        .map(|asset| asset.value().clone())
-        .expect("asset not found");
-    assert_eq!(value, Numeric::from(3u32));
+    wait_for_asset_value(
+        &client,
+        &bob_rose,
+        &Numeric::from(3u32),
+        "executor fuel trigger mint",
+    )?;
 
     let res =
         client.submit_blocking_with_metadata(execute_trigger.clone(), additional_fuel(80_000_000));

@@ -92,7 +92,7 @@ translator: machine-google-reviewed
 
 ხილვადობა
 - `kotoage fn` აღნიშნავს საჯარო შესასვლელ წერტილს; ხილვადობა გავლენას ახდენს დისპეტჩერის ნებართვებზე და არა კოდგენზე.
-- სურვილისამებრ დაშვების მინიშნებები: `#[access(read=..., write=...)]` შეიძლება წინ უსწრებდეს `fn`/`kotoage fn` მანიფესტის წაკითხვის/ჩაწერის გასაღებების მიწოდებას. შემდგენელი ასევე ავტომატურად გამოსცემს საკონსულტაციო მინიშნებებს; გაუმჭვირვალე მასპინძელი ზარები უბრუნდება კონსერვატიულ კლავიშებს (`*`) და ასახავს დიაგნოზს, თუ მკაფიო წვდომის მინიშნებები არ არის მოწოდებული, ასე რომ, დამგეგმავებს შეუძლიათ აირჩიონ დინამიური წინასწარი გადასასვლელი უფრო წვრილმარცვლოვანი კლავიშებისთვის.
+- Access metadata is compiler-owned. Manual `#[access(...)]` attributes are rejected; deployable compilation succeeds only when the compiler can emit complete read/write metadata without wildcard keys.
 
 ## კონტრაქტის კონტეინერი და მეტამონაცემები
 
@@ -308,7 +308,7 @@ Host/sycall ჩაშენებული (რუკა SCALL-ზე; ზუს
 - `.take(n)`: გაიმეორეთ პირველი `n` ჩანაწერები თავიდანვე.
 - `.range(start, end)`: ჩანაწერების გამეორება ნახევრად ღია ინტერვალში `[start, end)`. სემანტიკა უდრის `start` და `n = end - start`.შენიშვნები დინამიური საზღვრების შესახებ
 - ლიტერალური საზღვრები: `n`, `start` და `end`, როგორც მთელი რიცხვების ლიტერალები, სრულად არის მხარდაჭერილი და შედგენილია გამეორებების ფიქსირებულ რაოდენობაზე.
-- არა ლიტერატურული საზღვრები: როდესაც `kotodama_dynamic_bounds` ფუნქცია ჩართულია `ivm` ყუთში, შემდგენელი იღებს დინამიურ `n`, `start` და `ivm` გამოთქმებს უსაფრთხოების ჩასართავად (არაუარყოფითი, `end >= start`). დაწევა ასხივებს K-მდე დაცულ გამეორებებს `if (i < n)` შემოწმებით, რათა თავიდან აიცილოს სხეულის ზედმეტი შესრულება (ნაგულისხმევი K=2). შეგიძლიათ K-ის დაყენება პროგრამულად `CompilerOptions { dynamic_iter_cap, .. }`-ის საშუალებით.
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - გაუშვით `koto_lint`, რათა შეამოწმოთ Kotodama გაფრთხილებები კომპილაციამდე; მთავარი შემდგენელი ყოველთვის აგრძელებს შემცირებას გარჩევისა და ტიპის შემოწმების შემდეგ.
 - შეცდომების კოდები დოკუმენტირებულია [Kotodama შემდგენელის შეცდომის კოდები] (./kotodama_error_codes.md); გამოიყენეთ `koto_compile --explain <code>` სწრაფი ახსნისთვის.
 

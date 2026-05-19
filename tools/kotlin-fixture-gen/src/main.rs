@@ -23,7 +23,8 @@ use iroha_data_model::name::Name;
 use iroha_data_model::nexus::UniversalAccountId;
 use iroha_data_model::prelude::Numeric;
 use iroha_data_model::ram_lfe::{
-    RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeReceiptAttestation,
+    RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
+    RamLfeProgramId, RamLfeReceiptAttestation,
 };
 
 /// Well-known public key shared with the Kotlin parity tests.
@@ -92,10 +93,14 @@ fn emit_claim_identifier() {
     let program_id: RamLfeProgramId = "parity_test".parse().unwrap();
     let dummy_hash = iroha_crypto::Hash::new([0xAB; 32]);
     let execution = RamLfeExecutionReceiptPayload {
-        program_id,
+        program_id: program_id.clone(),
         program_digest: dummy_hash,
         backend: RamLfeBackend::HkdfSha3_512PrfV1,
         verification_mode: RamLfeVerificationMode::Signed,
+        input_ciphertext_hash: dummy_hash,
+        output_ciphertext_hash: dummy_hash,
+        parameter_digest: dummy_hash,
+        evaluation_key_digest: dummy_hash,
         output_hash: dummy_hash,
         associated_data_hash: dummy_hash,
         executed_at_ms: 1_735_000_000_000,
@@ -103,17 +108,30 @@ fn emit_claim_identifier() {
     };
     let opaque_id = OpaqueAccountId::from_hash(dummy_hash);
     let uaid = UniversalAccountId::from_hash(dummy_hash);
+    // Deterministic signature bytes (64 bytes of 0xCD).
+    let signature_bytes = [0xCD_u8; 64];
 
     let receipt_payload = IdentifierResolutionReceiptPayload {
         policy_id,
         execution,
+        opening: RamLfeOutputOpening {
+            payload: RamLfeOutputOpeningPayload {
+                program_id,
+                input_ciphertext_hash: dummy_hash,
+                output_ciphertext_hash: dummy_hash,
+                parameter_digest: dummy_hash,
+                evaluation_key_digest: dummy_hash,
+                opened_output_hash: dummy_hash,
+                opened_at_ms: 1_735_000_000_000,
+                expires_at_ms: None,
+            },
+            signature: iroha_crypto::Signature::from_bytes(&signature_bytes),
+        },
         opaque_id,
         receipt_hash: dummy_hash,
         uaid,
         account_id: account_id.clone(),
     };
-    // Deterministic signature bytes (64 bytes of 0xCD).
-    let signature_bytes = [0xCD_u8; 64];
     let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
 
     let receipt = IdentifierResolutionReceipt {

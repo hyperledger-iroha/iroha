@@ -35,10 +35,11 @@ use iroha_config::parameters::actual::{
     SumeragiRecovery, SumeragiResilience, SumeragiVNext, SumeragiWorker,
 };
 use iroha_crypto::{
-    Algorithm, BfvParameters, Hash, HashOf, KeyPair, MerkleTree, PublicKey, RamLfeBackend,
-    RamLfeVerificationMode, Signature, SignatureOf, bfv_programmed_policy_commitment_with_program,
-    bfv_programmed_public_parameters_with_program, default_bfv_programmed_hidden_program,
-    derive_identifier_key_material_from_seed,
+    Algorithm, BfvEvaluationKeyBundle, BfvParameters, Hash, HashOf, KeyPair, MerkleTree, PublicKey,
+    RamLfeBackend, RamLfeVerificationMode, Signature, SignatureOf,
+    bfv_programmed_policy_commitment_with_program, bfv_programmed_public_parameters_with_program,
+    default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
+    ram_lfe_bfv_parameters_v1,
 };
 use iroha_data_model::{
     ChainId, Encode as _, Level, Registrable,
@@ -104,7 +105,7 @@ use crate::{
     block::BlockValidationError,
     kura::Kura,
     query::store::LiveQueryStore,
-    queue::{Queue, SingleLaneRouter},
+    queue::{LaneRouter, Queue, SingleLaneRouter},
     smartcontracts::Execute,
     state::{State, StateReadOnly, World},
     sumeragi::consensus::{
@@ -900,9 +901,11 @@ fn sample_lane_relay_envelope_with_bitmap(
         1_700_000_000_000,
         0,
     );
+    let lane_mode_tag =
+        LaneRelayEnvelope::lane_qc_mode_tag_for(lane_id, DataSpaceId::UNIVERSAL, mode_tag);
     let qc = commit_qc_with_signers(
         chain_id,
-        mode_tag,
+        &lane_mode_tag,
         &header,
         Hash::new([0xBC; 4]),
         Hash::new([0xAB; 4]),
@@ -5576,7 +5579,7 @@ async fn merge_committee_signatures_commit_merge_entry() {
     );
     assert_eq!(
         entry.merge_hint_roots().as_slice(),
-        &[*envelope.settlement_hash]
+        &[envelope.merge_hint_root().expect("merge hint root")]
     );
     assert_eq!(entry.merge_qc.signers_bitmap, vec![0x01]);
     assert!(!entry.merge_qc.aggregate_signature.is_empty());
@@ -78272,6 +78275,19 @@ fn interleave_lane_indices_handles_single_lane() {
     assert_eq!(order, vec![0, 1]);
 }
 
+#[test]
+fn interleave_lane_indices_for_slot_rotates_starting_lane() {
+    let routing = vec![
+        RoutingDecision::new(LaneId::new(1), DataSpaceId::new(10)),
+        RoutingDecision::new(LaneId::new(1), DataSpaceId::new(11)),
+        RoutingDecision::new(LaneId::new(2), DataSpaceId::new(20)),
+        RoutingDecision::new(LaneId::new(2), DataSpaceId::new(21)),
+    ];
+
+    let order = super::interleave_lane_indices_for_slot(&routing, 1, 0);
+    assert_eq!(order, vec![2, 0, 3, 1]);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn derive_rbc_allocations_splits_chunks_across_lanes() {
     let mut harness = test_actor_harness(4).await;
@@ -107295,6 +107311,113 @@ async fn proposal_queue_scan_budget_limits_fetch() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
+    struct HashLaneRouter {
+        routes: Mutex<BTreeMap<HashOf<SignedTransaction>, RoutingDecision>>,
+    }
+
+    impl HashLaneRouter {
+        fn new() -> Self {
+            Self {
+                routes: Mutex::new(BTreeMap::new()),
+            }
+        }
+
+        fn insert(&self, hash: HashOf<SignedTransaction>, routing: RoutingDecision) {
+            self.routes
+                .lock()
+                .expect("router lock")
+                .insert(hash, routing);
+        }
+    }
+
+    impl LaneRouter for HashLaneRouter {
+        fn route(&self, tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            self.routes
+                .lock()
+                .expect("router lock")
+                .get(&tx.hash())
+                .copied()
+                .unwrap_or_default()
+        }
+    }
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let router = Arc::new(HashLaneRouter::new());
+    let queue_router: Arc<dyn LaneRouter> = router.clone();
+    actor.queue = Arc::new(Queue::test_with_router_for_routes(
+        QueueConfig::default(),
+        &time_source,
+        queue_router,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::new(1)),
+        ],
+    ));
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+    let mut accepted = Vec::new();
+    for routing in [lane0, lane0, lane0, lane1] {
+        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction()));
+        router.insert(tx.hash(), routing);
+        actor
+            .queue
+            .push(tx.clone(), actor.state.view())
+            .expect("push tx");
+        accepted.push((tx.hash(), routing));
+    }
+    let expected_lane1_hash = accepted
+        .iter()
+        .find_map(|(hash, routing)| (*routing == lane1).then_some(*hash))
+        .expect("lane1 transaction");
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        4,
+        None,
+        None,
+        false,
+        &mut tx_guards,
+        1,
+        0,
+    );
+
+    assert_eq!(tx_guards.len(), 1);
+    assert_eq!(tx_guards[0].as_accepted().hash(), expected_lane1_hash);
+    assert_eq!(tx_guards[0].routing(), lane1);
+    assert_eq!(
+        deferred.len(),
+        3,
+        "lookahead transactions that do not fit the slot are returned for requeue"
+    );
+    assert!(
+        deferred
+            .iter()
+            .all(|(_, routing)| routing.lane_id == LaneId::SINGLE),
+        "only the lane0 burst should be deferred after the rotated lane wins"
+    );
+
+    drop(tx_guards);
+    for (tx, routing) in deferred {
+        actor
+            .queue
+            .push_requeued_with_routing(tx, routing, actor.state.as_ref())
+            .expect("requeue deferred tx");
+    }
+    assert_eq!(actor.queue.queued_len(), 3);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -117928,10 +118051,7 @@ async fn block_created_from_block_sync_accepts_catchup_when_local_removed_from_w
                 },
                 None,
                 true,
-                false,
-                false,
-                false,
-                None,
+                super::proposal_handlers::BlockSyncRecoveryMode::PayloadOnly,
             )
             .expect("handle block-sync BlockCreated");
     }
@@ -120993,10 +121113,7 @@ async fn block_sync_block_created_retries_ready_after_existing_session_hydration
             },
             None,
             false,
-            false,
-            false,
-            false,
-            None,
+            super::proposal_handlers::BlockSyncRecoveryMode::PayloadOnly,
         )
         .expect("handle duplicate BlockCreated from block sync");
 
@@ -148253,12 +148370,7 @@ fn sample_ivm_transaction() -> SignedTransaction {
 }
 
 fn sample_identifier_bfv_parameters() -> BfvParameters {
-    BfvParameters {
-        polynomial_degree: 64,
-        ciphertext_modulus: 1_u64 << 52,
-        plaintext_modulus: 256,
-        decomposition_base_log: 12,
-    }
+    ram_lfe_bfv_parameters_v1()
 }
 
 fn sample_ram_lfe_policy_transaction(note_len: usize) -> SignedTransaction {
@@ -148274,15 +148386,21 @@ fn sample_ram_lfe_policy_transaction(note_len: usize) -> SignedTransaction {
         .parse::<RamLfeProgramId>()
         .expect("valid program id");
     let hidden_program = default_bfv_programmed_hidden_program();
-    let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
+    let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
         &sample_identifier_bfv_parameters(),
         63,
         b"email-secret",
         &norito::to_bytes(&program_id).expect("encode program id"),
     )
     .expect("derive key material");
+    let evaluation_keys = BfvEvaluationKeyBundle {
+        relinearization_key,
+        rotation_keys: Vec::new(),
+        bootstrap_key: None,
+    };
     let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
         public_parameters,
+        evaluation_keys,
         &hidden_program,
         RamLfeVerificationMode::Signed,
         None,
@@ -150610,10 +150728,7 @@ async fn block_sync_payload_with_cached_commit_qc_supersedes_lock_conflicting_st
             },
             None,
             true,
-            false,
-            false,
-            false,
-            None,
+            super::proposal_handlers::BlockSyncRecoveryMode::PayloadOnly,
         )
         .expect("handle payload-only block sync recovery with cached commit QC");
 
@@ -156740,6 +156855,121 @@ async fn unfinalized_vrf_snapshot_strips_penalties_but_preserves_application_mar
     harness.shutdown.send();
 }
 
+fn vrf_epoch_record_for_stage_test(
+    epoch: u64,
+    seed: [u8; 32],
+    updated_at_height: u64,
+) -> VrfEpochRecord {
+    VrfEpochRecord {
+        epoch,
+        seed,
+        epoch_length: 10,
+        commit_deadline_offset: 3,
+        reveal_deadline_offset: 7,
+        roster_len: 4,
+        finalized: false,
+        updated_at_height,
+        participants: Vec::new(),
+        late_reveals: Vec::new(),
+        committed_no_reveal: Vec::new(),
+        no_participation: Vec::new(),
+        penalties_applied: false,
+        penalties_applied_at_height: None,
+        validator_election: None,
+    }
+}
+
+#[test]
+fn merge_vrf_epoch_records_rejects_conflicting_participant_commitment() {
+    let mut base = vrf_epoch_record_for_stage_test(6, [0x66; 32], 60);
+    base.participants.push(VrfParticipantRecord {
+        signer: 1,
+        commitment: Some([0xA1; 32]),
+        reveal: None,
+        last_updated_height: 60,
+    });
+    let mut incoming = base.clone();
+    incoming.updated_at_height = 61;
+    incoming.participants[0].commitment = Some([0xA2; 32]);
+
+    assert!(
+        Actor::merge_vrf_epoch_records(&base, &incoming).is_none(),
+        "same-signer commitment rewrites must not be merged into pending proposal effects"
+    );
+}
+
+#[test]
+fn merge_vrf_epoch_records_rejects_conflicting_late_reveal() {
+    let mut base = vrf_epoch_record_for_stage_test(7, [0x77; 32], 70);
+    base.late_reveals.push(VrfLateRevealRecord {
+        signer: 2,
+        reveal: [0xB1; 32],
+        noted_at_height: 70,
+    });
+    let mut incoming = base.clone();
+    incoming.updated_at_height = 71;
+    incoming.late_reveals[0].reveal = [0xB2; 32];
+
+    assert!(
+        Actor::merge_vrf_epoch_records(&base, &incoming).is_none(),
+        "same-signer late reveal rewrites must be treated as adversarial"
+    );
+}
+
+#[test]
+fn merge_vrf_epoch_records_rejects_conflicting_penalty_application_height() {
+    let mut base = vrf_epoch_record_for_stage_test(8, [0x88; 32], 80);
+    base.penalties_applied = true;
+    base.penalties_applied_at_height = Some(80);
+    let mut incoming = base.clone();
+    incoming.updated_at_height = 81;
+    incoming.penalties_applied_at_height = Some(81);
+
+    assert!(
+        Actor::merge_vrf_epoch_records(&base, &incoming).is_none(),
+        "penalty application markers are state transitions and cannot be rewritten"
+    );
+}
+
+#[test]
+fn merge_vrf_epoch_records_rejects_overlapping_offender_categories() {
+    let mut base = vrf_epoch_record_for_stage_test(9, [0x99; 32], 90);
+    base.finalized = true;
+    base.committed_no_reveal = vec![1];
+    let mut incoming = base.clone();
+    incoming.updated_at_height = 91;
+    incoming.no_participation = vec![1];
+
+    assert!(
+        Actor::merge_vrf_epoch_records(&base, &incoming).is_none(),
+        "a signer cannot be merged into both finalized VRF offender categories"
+    );
+}
+
+#[test]
+fn merge_vrf_epoch_records_preserves_finalized_committed_state_for_late_snapshot() {
+    let mut committed = vrf_epoch_record_for_stage_test(10, [0xA0; 32], 100);
+    committed.finalized = true;
+    committed.committed_no_reveal = vec![2];
+    committed.no_participation = vec![3];
+
+    let mut late_snapshot = vrf_epoch_record_for_stage_test(10, [0xA0; 32], 104);
+    late_snapshot.late_reveals.push(VrfLateRevealRecord {
+        signer: 1,
+        reveal: [0xC1; 32],
+        noted_at_height: 104,
+    });
+
+    let merged = Actor::merge_vrf_epoch_records(&committed, &late_snapshot)
+        .expect("compatible late snapshot should extend finalized committed state");
+    assert!(merged.finalized);
+    assert_eq!(merged.updated_at_height, 104);
+    assert_eq!(merged.committed_no_reveal, vec![2]);
+    assert_eq!(merged.no_participation, vec![3]);
+    assert_eq!(merged.late_reveals.len(), 1);
+    assert_eq!(merged.late_reveals[0].signer, 1);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn stage_vrf_snapshot_preserves_committed_vrf_observations() {
     let mut consensus_cfg = test_sumeragi_config();
@@ -156819,6 +157049,138 @@ async fn stage_vrf_snapshot_preserves_committed_vrf_observations() {
     assert_eq!(staged.participants[1].signer, 1);
     assert_eq!(staged.participants[1].commitment, Some([0x11; 32]));
     assert_eq!(staged.participants[1].reveal, None);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stage_vrf_snapshot_keeps_committed_compatible_pending_over_bad_snapshot() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 3;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 7;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    harness
+        .actor
+        .epoch_manager
+        .as_mut()
+        .expect("epoch manager available")
+        .set_params(10, 3, 7);
+
+    let committed = vrf_epoch_record_for_stage_test(11, [0xB0; 32], 110);
+    {
+        let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        block.vrf_epochs.insert(11, committed.clone());
+        block.commit();
+    }
+
+    let mut compatible_pending = committed.clone();
+    compatible_pending.updated_at_height = 111;
+    compatible_pending.participants.push(VrfParticipantRecord {
+        signer: 0,
+        commitment: Some([0xD0; 32]),
+        reveal: None,
+        last_updated_height: 111,
+    });
+    harness
+        .actor
+        .pending_npos_vrf_records
+        .insert(11, compatible_pending);
+
+    let bad_snapshot = EpochSnapshot {
+        epoch: 11,
+        seed: [0xB1; 32],
+        commits: vec![(1, [0xD1; 32])],
+        reveals: Vec::new(),
+        late_reveals: Vec::new(),
+        committed_no_reveal: Vec::new(),
+        no_participation: Vec::new(),
+        roster_len: 4,
+        updated_at_height: 112,
+    };
+
+    harness
+        .actor
+        .stage_vrf_snapshot(bad_snapshot, false, None)
+        .expect("bad snapshot should be dropped without damaging compatible pending state");
+
+    let staged = harness
+        .actor
+        .pending_npos_vrf_records
+        .get(&11)
+        .expect("compatible pending record should be retained");
+    assert_eq!(staged.seed, [0xB0; 32]);
+    assert_eq!(staged.updated_at_height, 111);
+    assert_eq!(staged.participants.len(), 1);
+    assert_eq!(staged.participants[0].signer, 0);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stage_vrf_snapshot_replaces_bad_pending_with_committed_compatible_snapshot() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 3;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 7;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    harness
+        .actor
+        .epoch_manager
+        .as_mut()
+        .expect("epoch manager available")
+        .set_params(10, 3, 7);
+
+    let committed = vrf_epoch_record_for_stage_test(12, [0xC0; 32], 120);
+    {
+        let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        block.vrf_epochs.insert(12, committed.clone());
+        block.commit();
+    }
+
+    let mut bad_pending = committed.clone();
+    bad_pending.seed = [0xC1; 32];
+    bad_pending.updated_at_height = 121;
+    harness
+        .actor
+        .pending_npos_vrf_records
+        .insert(12, bad_pending);
+
+    let compatible_snapshot = EpochSnapshot {
+        epoch: 12,
+        seed: [0xC0; 32],
+        commits: vec![(1, [0xE1; 32])],
+        reveals: Vec::new(),
+        late_reveals: Vec::new(),
+        committed_no_reveal: Vec::new(),
+        no_participation: Vec::new(),
+        roster_len: 4,
+        updated_at_height: 122,
+    };
+
+    harness
+        .actor
+        .stage_vrf_snapshot(compatible_snapshot, false, None)
+        .expect("compatible snapshot should replace incompatible pending poison");
+
+    let staged = harness
+        .actor
+        .pending_npos_vrf_records
+        .get(&12)
+        .expect("compatible snapshot should remain pending");
+    assert_eq!(staged.seed, [0xC0; 32]);
+    assert_eq!(staged.updated_at_height, 122);
+    assert_eq!(staged.participants.len(), 1);
+    assert_eq!(staged.participants[0].signer, 1);
+    assert_eq!(staged.participants[0].commitment, Some([0xE1; 32]));
 
     harness.shutdown.send();
 }

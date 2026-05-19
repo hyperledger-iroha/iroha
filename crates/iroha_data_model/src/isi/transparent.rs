@@ -461,7 +461,7 @@ impl ExecuteTrigger {
     pub fn new(trigger: TriggerId) -> Self {
         Self {
             trigger,
-            args: Json::default(),
+            args: Json::new(norito::json!({})),
         }
     }
 
@@ -1868,6 +1868,14 @@ mod tests {
     #[test]
     fn trigger_upgrade_custom_decode_from_slice_roundtrips() {
         let trigger: TriggerId = "nightly_tick".parse().expect("trigger id");
+        let execute_without_args = ExecuteTrigger::new(trigger.clone());
+        let execute_without_args_bytes = execute_without_args.encode();
+        let (decoded_without_args, used_without_args) =
+            ExecuteTrigger::decode_from_slice(&execute_without_args_bytes)
+                .expect("decode execute trigger without args");
+        assert_eq!(used_without_args, execute_without_args_bytes.len());
+        assert_eq!(decoded_without_args, execute_without_args);
+
         let execute = ExecuteTrigger::new(trigger).with_args(norito::json!({"a": 1_u32}));
         let execute_bytes = execute.encode();
         let (decoded, used) =

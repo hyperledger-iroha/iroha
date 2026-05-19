@@ -1,6 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Data-trigger execution and rollback scenarios.
 
+use std::time::{Duration, Instant};
+
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{client, data_model::prelude::*};
@@ -24,6 +26,8 @@ use iroha_test_samples::{ALICE_ID, gen_account_in};
 use tokio::task::spawn_blocking;
 
 const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+const ASSET_VALUE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const ASSET_VALUE_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
     sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
@@ -104,6 +108,46 @@ fn ensure_account_alias_registration_lease(
     }
 }
 
+fn asset_value(client: &client::Client, asset_id: &AssetId) -> Result<Numeric> {
+    let assets = client.query(FindAssets::new()).execute_all()?;
+    let asset = assets
+        .into_iter()
+        .find(|asset| asset.id() == asset_id)
+        .ok_or_else(|| eyre::eyre!("asset {asset_id} not found"))?;
+
+    Ok(asset.value().clone())
+}
+
+fn wait_for_asset_value(
+    client: &client::Client,
+    asset_id: &AssetId,
+    expected: &Numeric,
+    context: &str,
+) -> Result<Numeric> {
+    let deadline = Instant::now() + ASSET_VALUE_TIMEOUT;
+    let mut last_observed = "asset was not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match asset_value(client, asset_id) {
+            Ok(value) => {
+                last_observed = value.to_string();
+                if &value == expected {
+                    return Ok(value);
+                }
+            }
+            Err(error) => {
+                last_observed = format!("query failed: {error}");
+            }
+        }
+
+        std::thread::sleep(ASSET_VALUE_POLL_INTERVAL);
+    }
+
+    Err(eyre::eyre!(
+        "timed out waiting for asset {asset_id} to equal {expected} after {context}; last_observed={last_observed}"
+    ))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_non_intersecting_execution_paths() -> Result<()> {
     let Some(network) = start_network(stringify!(two_non_intersecting_execution_paths)).await?
@@ -120,24 +164,12 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         );
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
 
-        let get_asset_value = |iroha: &client::Client, asset_id: AssetId| -> Numeric {
-            iroha
-                .query(FindAssets::new())
-                .execute_all()
-                .unwrap()
-                .into_iter()
-                .find(|asset| asset.id() == &asset_id)
-                .unwrap()
-                .value()
-                .clone()
-        };
-
         let prev_value = spawn_blocking({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
-            move || get_asset_value(&client, asset_id)
+            move || asset_value(&client, &asset_id)
         })
-        .await?;
+        .await??;
 
         let instruction = Mint::asset_numeric(1u32, asset_id.clone());
         let alias_domain = DomainId::try_new("wonderland", "universal")?;
@@ -214,13 +246,20 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
 
+        let expected_new_value = prev_value.checked_add(numeric!(1)).unwrap();
         let new_value = spawn_blocking({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
-            move || get_asset_value(&client, asset_id)
+            move || {
+                wait_for_asset_value(
+                    &client,
+                    &asset_id,
+                    &expected_new_value,
+                    "account-created trigger",
+                )
+            }
         })
-        .await?;
-        assert_eq!(new_value, prev_value.checked_add(numeric!(1)).unwrap());
+        .await??;
 
         let neverland: DomainId = DomainId::try_new("neverland", "universal")?;
         ensure_domain_registration_lease_for_network(&network, &neverland)?;
@@ -230,13 +269,22 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
 
+        let expected_newer_value = new_value.checked_add(numeric!(1)).unwrap();
+        let expected_newer_value_for_wait = expected_newer_value.clone();
         let newer_value = spawn_blocking({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
-            move || get_asset_value(&client, asset_id)
+            move || {
+                wait_for_asset_value(
+                    &client,
+                    &asset_id,
+                    &expected_newer_value_for_wait,
+                    "domain-created trigger",
+                )
+            }
         })
-        .await?;
-        assert_eq!(newer_value, new_value.checked_add(numeric!(1)).unwrap());
+        .await??;
+        assert_eq!(newer_value, expected_newer_value);
 
         Ok(())
     })

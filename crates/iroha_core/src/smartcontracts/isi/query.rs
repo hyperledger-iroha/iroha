@@ -4354,7 +4354,6 @@ mod tests {
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
     use nonzero_ext::nonzero;
-    use tokio::test;
 
     use super::*;
     use crate::{
@@ -4827,6 +4826,165 @@ mod tests {
         assert!(matches!(err, Error::Expired));
     }
 
+    #[tokio::test]
+    async fn stored_unsorted_bounded_replay_limit_boundary_does_not_probe_or_store_cursor() {
+        use std::sync::{
+            Arc, Weak,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        use iroha_data_model::{
+            domain::Domain,
+            query::{
+                domain::prelude::FindDomains,
+                dsl::CompoundPredicate,
+                parameters::{FetchSize, Pagination, QueryParams, Sorting},
+            },
+        };
+        use nonzero_ext::nonzero;
+
+        let domains = ["d1", "d2", "d3", "d4", "d5"]
+            .into_iter()
+            .map(|name| Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&ALICE_ID))
+            .collect::<Vec<_>>();
+        let expected_ids = domains
+            .iter()
+            .map(|domain| domain.id.clone())
+            .collect::<Vec<_>>();
+        let visited = Arc::new(AtomicUsize::new(0));
+        let visited_for_iter = Arc::clone(&visited);
+        let iter = domains.into_iter().inspect(move |_| {
+            visited_for_iter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let params = QueryParams {
+            pagination: Pagination {
+                limit: Some(nonzero!(2_u64)),
+                offset: 1,
+            },
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(5_u64))),
+        };
+        let prepared = prepare_stored_unsorted_bounded_replay_start(
+            iter,
+            FindDomains,
+            CompoundPredicate::PASS,
+            SelectorTuple::<Domain>::default(),
+            &params,
+            QueryLimits::default().with_count_mode(QueryCountMode::Bounded),
+            Weak::<State>::new(),
+        )
+        .expect("bounded replay prepared start");
+
+        assert_eq!(
+            visited.load(Ordering::SeqCst),
+            3,
+            "explicit limit should consume offset plus the requested rows and skip the probe"
+        );
+        assert!(prepared.paged_continuation.is_none());
+
+        let handle = LiveQueryStore::start_test();
+        let first = handle
+            .handle_iter_start_paged_prepared(prepared, &ALICE_ID, None)
+            .expect("store prepared");
+        assert_eq!(first.remaining_items, None);
+        assert!(!first.has_more);
+        let (first_batch, first_remaining_hint, cursor) = first.into_parts();
+        assert_eq!(first_remaining_hint, 0);
+        assert!(cursor.is_none());
+        assert_eq!(
+            domain_ids_from_batch(first_batch),
+            expected_ids[1..3].to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_unsorted_bounded_page_rejects_returned_offset_at_limit_without_reading() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        use iroha_data_model::{
+            domain::Domain,
+            query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        };
+        use nonzero_ext::nonzero;
+
+        let visited = Arc::new(AtomicUsize::new(0));
+        let visited_for_iter = Arc::clone(&visited);
+        let iter = ["d1", "d2", "d3"].into_iter().map(move |name| {
+            visited_for_iter.fetch_add(1, Ordering::SeqCst);
+            Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&ALICE_ID)
+        });
+        let params = QueryParams {
+            pagination: Pagination {
+                limit: Some(nonzero!(2_u64)),
+                offset: 0,
+            },
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
+        };
+
+        let err = collect_unsorted_bounded_page(
+            iter,
+            SelectorTuple::<Domain>::default(),
+            &params,
+            QueryLimits::default().with_count_mode(QueryCountMode::Bounded),
+            2,
+        )
+        .expect_err("cursor at the limit is done");
+
+        assert!(matches!(err, Error::CursorDone));
+        assert_eq!(
+            visited.load(Ordering::SeqCst),
+            0,
+            "limit-exhausted continuations must fail before reading source rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_unsorted_bounded_page_rejects_oversized_fetch_without_reading() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        use iroha_data_model::{
+            domain::Domain,
+            query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        };
+        use nonzero_ext::nonzero;
+
+        let visited = Arc::new(AtomicUsize::new(0));
+        let visited_for_iter = Arc::clone(&visited);
+        let iter = ["d1", "d2", "d3"].into_iter().map(move |name| {
+            visited_for_iter.fetch_add(1, Ordering::SeqCst);
+            Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&ALICE_ID)
+        });
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
+        };
+
+        let err = collect_unsorted_bounded_page(
+            iter,
+            SelectorTuple::<Domain>::default(),
+            &params,
+            QueryLimits::new(1).with_count_mode(QueryCountMode::Bounded),
+            0,
+        )
+        .expect_err("oversized fetch should fail");
+
+        assert!(matches!(err, Error::FetchSizeTooBig));
+        assert_eq!(
+            visited.load(Ordering::SeqCst),
+            0,
+            "fetch-size abuse must fail before reading source rows"
+        );
+    }
+
     fn domain_ids_from_batch(
         batch: iroha_data_model::query::QueryOutputBatchBoxTuple,
     ) -> Vec<DomainId> {
@@ -4974,7 +5132,7 @@ mod tests {
         assert_eq!(domain_ids_from_batch(next.0), expected_second_ids);
     }
 
-    #[test]
+    #[tokio::test]
     async fn validate_for_ivm_uses_validator() -> Result<()> {
         struct DummyValidator {
             authority: AccountId,
@@ -6656,7 +6814,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[tokio::test]
     async fn find_all_blocks() -> Result<()> {
         let num_blocks = 100;
 
@@ -6674,7 +6832,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     async fn find_all_block_headers() -> Result<()> {
         let num_blocks = 100;
 
@@ -6689,7 +6847,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     async fn find_blocks_and_headers_by_height() -> Result<()> {
         let state = state_with_test_blocks_and_transactions(10, 1, 1)?;
         let state_view = state.view();
@@ -6745,7 +6903,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     async fn find_block_header_by_hash() -> Result<()> {
         let state = state_with_test_blocks_and_transactions(1, 1, 1)?;
         let state_view = state.view();
@@ -6770,7 +6928,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     async fn start_iterable_query_for_domains() -> Result<()> {
         use iroha_data_model::query::{
             ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryWithParams,
@@ -6809,7 +6967,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     async fn iterable_sorting_by_metadata_desc() -> Result<()> {
         use iroha_data_model::query::{
             QueryWithParams,
@@ -7248,7 +7406,7 @@ mod tests {
         assert_eq!(boxed_set, fast_set);
     }
 
-    #[test]
+    #[tokio::test]
     async fn find_all_transactions() -> Result<()> {
         let num_blocks = 100;
 
@@ -7269,7 +7427,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     async fn find_transactions_by_block_hash_uses_block_index() -> Result<()> {
         let state = state_with_test_blocks_and_transactions(8, 1, 1)?;
         let state_view = state.view();
@@ -7313,7 +7471,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     async fn find_transactions_by_entrypoint_hash_uses_kura_index() -> Result<()> {
         let num_blocks = 8;
         let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
@@ -7396,7 +7554,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     async fn find_transactions_by_authority_timestamp_and_result_use_kura_indexes() -> Result<()> {
         let num_blocks = 8;
         let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
@@ -7512,7 +7670,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     async fn find_transactions_by_filter_timestamp_range_uses_kura_index() -> Result<()> {
         let num_blocks = 8;
         let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
@@ -7624,7 +7782,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     async fn find_proof_records_intersects_backend_and_status_indexes() -> Result<()> {
         fn proof_record(
             backend: &str,
@@ -8857,7 +9015,7 @@ mod tests {
         assert!(cursor2.is_none());
     }
 
-    #[test]
+    #[tokio::test]
     async fn find_transaction() -> Result<()> {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 

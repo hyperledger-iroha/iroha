@@ -351,10 +351,27 @@ final class TxBuilderTests: XCTestCase {
                 programDigest: Self.fixtureClaimProgramDigestHex,
                 backend: "bfv-programmed-sha3-256-v1",
                 verificationMode: "signed",
+                inputCiphertextHash: String(repeating: "ab", count: 32),
+                outputCiphertextHash: String(repeating: "bb", count: 32),
+                parameterDigest: String(repeating: "cd", count: 32),
+                evaluationKeyDigest: String(repeating: "dd", count: 32),
                 outputHash: Self.fixtureClaimOutputHashHex,
                 associatedDataHash: Self.fixtureClaimAssociatedDataHashHex,
                 executedAtMs: Self.fixtureClaimResolvedAtMs,
                 expiresAtMs: Self.fixtureClaimExpiresAtMs
+            ),
+            opening: ToriiRamLfeOutputOpening(
+                payload: ToriiRamLfeOutputOpeningPayload(
+                    programId: Self.fixtureClaimProgramId,
+                    inputCiphertextHash: String(repeating: "ab", count: 32),
+                    outputCiphertextHash: String(repeating: "bb", count: 32),
+                    parameterDigest: String(repeating: "cd", count: 32),
+                    evaluationKeyDigest: String(repeating: "dd", count: 32),
+                    openedOutputHash: Self.fixtureClaimOutputHashHex,
+                    openedAtMs: Self.fixtureClaimResolvedAtMs,
+                    expiresAtMs: Self.fixtureClaimExpiresAtMs
+                ),
+                signature: String(repeating: "ff", count: 64)
             )
         )
         guard let payloadJSON = String(data: try JSONEncoder().encode(payload), encoding: .utf8) else {

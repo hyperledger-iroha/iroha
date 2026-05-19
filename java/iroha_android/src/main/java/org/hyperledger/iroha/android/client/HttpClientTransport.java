@@ -335,19 +335,21 @@ public final class HttpClientTransport implements IrohaClient {
     final byte[] body =
         encodeJsonBody(
             buildIdentifierResolvePayload(
-                requestBody.policyId(), requestBody.input(), requestBody.encryptedInputHex()));
+                requestBody.policyId(),
+                requestBody.encryptedInputHex(),
+                requestBody.outputOpening()));
     final TransportRequest request = buildJsonPostRequest("/v1/identifiers/resolve", body);
     return fetchJsonAllowingNotFound(
         request, IdentifierJsonParser::parseResolutionReceipt, "identifier resolve");
   }
 
-  /**
-   * Resolves a hidden identifier by posting either a plaintext input or BFV ciphertext hex to
-   * `/v1/identifiers/resolve`.
-   */
+  /** Resolves a hidden identifier by posting encrypted input and a verified output opening. */
   public CompletableFuture<Optional<IdentifierResolutionReceipt>> resolveIdentifier(
-      final String policyId, final String input, final String encryptedInputHex) {
-    return resolveIdentifier(buildIdentifierResolveRequest(policyId, input, encryptedInputHex));
+      final String policyId,
+      final String encryptedInputHex,
+      final RamLfeOutputOpening outputOpening) {
+    return resolveIdentifier(
+        IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening));
   }
 
   /** Issues a claim receipt using a typed request wrapper. */
@@ -358,7 +360,9 @@ public final class HttpClientTransport implements IrohaClient {
     final byte[] body =
         encodeJsonBody(
             buildIdentifierResolvePayload(
-                requestBody.policyId(), requestBody.input(), requestBody.encryptedInputHex()));
+                requestBody.policyId(),
+                requestBody.encryptedInputHex(),
+                requestBody.outputOpening()));
     final TransportRequest request =
         buildJsonPostRequest(
             "/v1/accounts/"
@@ -369,17 +373,14 @@ public final class HttpClientTransport implements IrohaClient {
         request, IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt");
   }
 
-  /**
-   * Issues a claim receipt for {@code accountId} by posting either a plaintext input or BFV
-   * ciphertext hex to `/v1/accounts/{account_id}/identifiers/claim-receipt`.
-   */
+  /** Issues a claim receipt by posting encrypted input and a verified output opening. */
   public CompletableFuture<Optional<IdentifierResolutionReceipt>> issueIdentifierClaimReceipt(
       final String accountId,
       final String policyId,
-      final String input,
-      final String encryptedInputHex) {
+      final String encryptedInputHex,
+      final RamLfeOutputOpening outputOpening) {
     return issueIdentifierClaimReceipt(
-        accountId, buildIdentifierResolveRequest(policyId, input, encryptedInputHex));
+        accountId, IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening));
   }
 
   /** Executes a RAM-LFE program using a typed request wrapper. */
@@ -388,8 +389,7 @@ public final class HttpClientTransport implements IrohaClient {
     Objects.requireNonNull(requestBody, "requestBody");
     final String normalizedProgramId = normalizeNonBlank(programId, "programId");
     final byte[] body =
-        encodeJsonBody(
-            buildRamLfeExecutePayload(requestBody.inputHex(), requestBody.encryptedInputHex()));
+        encodeJsonBody(buildRamLfeExecutePayload(requestBody.encryptedInputHex()));
     final TransportRequest request =
         buildJsonPostRequest(
             "/v1/ram-lfe/programs/" + encodePathSegment(normalizedProgramId) + "/execute", body);
@@ -398,13 +398,12 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   /**
-   * Executes a RAM-LFE program by posting either plaintext input bytes or BFV ciphertext hex to
+   * Executes a RAM-LFE program by posting BFV ciphertext hex to
    * `/v1/ram-lfe/programs/{program_id}/execute`.
    */
   public CompletableFuture<Optional<RamLfeExecuteResponse>> executeRamLfeProgram(
-      final String programId, final String inputHex, final String encryptedInputHex) {
-    return executeRamLfeProgram(
-        programId, buildRamLfeExecuteRequest(inputHex, encryptedInputHex));
+      final String programId, final String encryptedInputHex) {
+    return executeRamLfeProgram(programId, buildRamLfeExecuteRequest(encryptedInputHex));
   }
 
   /** Verifies a RAM-LFE execution receipt against the node's registered program policy. */
@@ -1778,76 +1777,41 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   static IdentifierResolveRequest buildIdentifierResolveRequest(
-      final String policyId, final String input, final String encryptedInputHex) {
-    final String normalizedInput = normalizeOptionalNonBlank(input, "input");
+      final String policyId,
+      final String encryptedInputHex,
+      final RamLfeOutputOpening outputOpening) {
+    final String normalizedPolicyId = normalizeNonBlank(policyId, "policyId");
     final String normalizedEncryptedInput =
-        encryptedInputHex == null
-            ? null
-            : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
-    if ((normalizedInput == null) == (normalizedEncryptedInput == null)) {
-      throw new IllegalArgumentException(
-          "Exactly one of input or encryptedInputHex must be provided");
-    }
-    return normalizedInput != null
-        ? IdentifierResolveRequest.plaintext(policyId, normalizedInput)
-        : IdentifierResolveRequest.encrypted(policyId, normalizedEncryptedInput);
+        normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    return IdentifierResolveRequest.encrypted(
+        normalizedPolicyId, normalizedEncryptedInput, outputOpening);
   }
 
-  static RamLfeExecuteRequest buildRamLfeExecuteRequest(
-      final String inputHex, final String encryptedInputHex) {
-    final String normalizedInputHex =
-        inputHex == null ? null : normalizeEvenLengthHex(inputHex, "inputHex");
+  static RamLfeExecuteRequest buildRamLfeExecuteRequest(final String encryptedInputHex) {
     final String normalizedEncryptedInput =
-        encryptedInputHex == null
-            ? null
-            : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
-    if ((normalizedInputHex == null) == (normalizedEncryptedInput == null)) {
-      throw new IllegalArgumentException(
-          "Exactly one of inputHex or encryptedInputHex must be provided");
-    }
-    return normalizedInputHex != null
-        ? RamLfeExecuteRequest.plaintext(normalizedInputHex)
-        : RamLfeExecuteRequest.encrypted(normalizedEncryptedInput);
+        normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    return RamLfeExecuteRequest.encrypted(normalizedEncryptedInput);
   }
 
   static Map<String, Object> buildIdentifierResolvePayload(
-      final String policyId, final String input, final String encryptedInputHex) {
+      final String policyId,
+      final String encryptedInputHex,
+      final RamLfeOutputOpening outputOpening) {
     final String normalizedPolicyId = normalizeNonBlank(policyId, "policyId");
-    final String normalizedInput = normalizeOptionalNonBlank(input, "input");
     final String normalizedEncryptedInput =
-        encryptedInputHex == null ? null : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
-    if ((normalizedInput == null) == (normalizedEncryptedInput == null)) {
-      throw new IllegalArgumentException(
-          "Exactly one of input or encryptedInputHex must be provided");
-    }
+        normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("policy_id", normalizedPolicyId);
-    if (normalizedInput != null) {
-      payload.put("input", normalizedInput);
-    } else {
-      payload.put("encrypted_input", normalizedEncryptedInput);
-    }
+    payload.put("encrypted_input", normalizedEncryptedInput);
+    payload.put("output_opening", Objects.requireNonNull(outputOpening, "outputOpening").toJsonMap());
     return payload;
   }
 
-  static Map<String, Object> buildRamLfeExecutePayload(
-      final String inputHex, final String encryptedInputHex) {
-    final String normalizedInputHex =
-        inputHex == null ? null : normalizeEvenLengthHex(inputHex, "inputHex");
+  static Map<String, Object> buildRamLfeExecutePayload(final String encryptedInputHex) {
     final String normalizedEncryptedInput =
-        encryptedInputHex == null
-            ? null
-            : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
-    if ((normalizedInputHex == null) == (normalizedEncryptedInput == null)) {
-      throw new IllegalArgumentException(
-          "Exactly one of inputHex or encryptedInputHex must be provided");
-    }
+        normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
     final Map<String, Object> payload = new LinkedHashMap<>();
-    if (normalizedInputHex != null) {
-      payload.put("input_hex", normalizedInputHex);
-    } else {
-      payload.put("encrypted_input", normalizedEncryptedInput);
-    }
+    payload.put("encrypted_input", normalizedEncryptedInput);
     return payload;
   }
 

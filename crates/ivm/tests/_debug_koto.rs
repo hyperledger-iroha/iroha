@@ -1,11 +1,19 @@
-//! Temporary debug to inspect compiled words for specific snippets
+//! Debug-oriented opcode inspection for selected Kotodama snippets.
 
-use ivm::{encoding, instruction::wide, kotodama::compiler::Compiler};
+use ivm::{
+    encoding,
+    instruction::wide,
+    kotodama::compiler::{Compiler, CompilerMode, CompilerOptions},
+};
 
 #[test]
 fn debug_create_nfts_and_set_detail_words() {
     let src = "fn main() { create_nfts_for_all_users(); set_execution_depth(111); set_account_detail(authority(), name(\"cursor\"), json(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); }";
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let compiler = Compiler::new_with_options(CompilerOptions {
+        mode: CompilerMode::Test,
+        ..CompilerOptions::default()
+    });
+    let code = compiler.compile_source(src).expect("compile");
     let off = ivm::ProgramMetadata::parse(&code).unwrap().code_offset;
     let mut words = Vec::new();
     let mut i = off;

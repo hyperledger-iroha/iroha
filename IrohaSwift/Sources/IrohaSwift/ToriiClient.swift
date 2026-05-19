@@ -728,7 +728,7 @@ public struct ToriiIdentifierBfvPublicParameters: Decodable, Sendable {
 }
 
 public enum ToriiIdentifierRamFheEncryptedInputMode: String, Codable, Sendable {
-    case resolverCanonicalizedEnvelopeV1 = "resolver_canonicalized_envelope_v1"
+    case encryptedEnvelopeV1 = "encrypted_envelope_v1"
 
     private struct TaggedModePayload: Decodable {
         let mode: String
@@ -736,8 +736,8 @@ public enum ToriiIdentifierRamFheEncryptedInputMode: String, Codable, Sendable {
 
     private static func normalizedMode(from raw: String) -> ToriiIdentifierRamFheEncryptedInputMode? {
         switch raw.trimmingCharacters(in: .whitespacesAndNewlines) {
-        case "resolver_canonicalized_envelope_v1", "ResolverCanonicalizedEnvelopeV1":
-            return .resolverCanonicalizedEnvelopeV1
+        case "encrypted_envelope_v1", "EncryptedEnvelopeV1":
+            return .encryptedEnvelopeV1
         default:
             return nil
         }
@@ -801,8 +801,17 @@ public struct ToriiRamLfeProofVerifierMetadata: Decodable, Sendable {
 
 fileprivate enum ToriiIdentifierReceiptWireValue {
     static func normalizedHash(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.lowercased()
+        var body = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if body.lowercased().hasPrefix("hash:") {
+            body = String(body.dropFirst("hash:".count))
+        }
+        if let suffix = body.firstIndex(of: "#") {
+            body = String(body[..<suffix])
+        }
+        if body.hasPrefix("0x") || body.hasPrefix("0X") {
+            body = String(body.dropFirst(2))
+        }
+        return body.lowercased()
     }
 
     static func normalizedOpaqueId(_ raw: String) -> String {
@@ -922,6 +931,30 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
         )
         executionPayload.writeField(
             try encodeHash(
+                execution.inputCiphertextHash,
+                field: "payload.execution.inputCiphertextHash"
+            )
+        )
+        executionPayload.writeField(
+            try encodeHash(
+                execution.outputCiphertextHash,
+                field: "payload.execution.outputCiphertextHash"
+            )
+        )
+        executionPayload.writeField(
+            try encodeHash(
+                execution.parameterDigest,
+                field: "payload.execution.parameterDigest"
+            )
+        )
+        executionPayload.writeField(
+            try encodeHash(
+                execution.evaluationKeyDigest,
+                field: "payload.execution.evaluationKeyDigest"
+            )
+        )
+        executionPayload.writeField(
+            try encodeHash(
                 execution.outputHash,
                 field: "payload.execution.outputHash"
             )
@@ -940,9 +973,67 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
             )
         )
 
+        let opening = payload.opening
+        var openingProgramId = OfflineCompactNoritoWriter()
+        openingProgramId.writeField(
+            OfflineCompactNorito.encodeString(
+                try normalizedNonEmpty(
+                    opening.payload.programId,
+                    field: "payload.opening.payload.programId"
+                )
+            )
+        )
+        var openingPayload = OfflineCompactNoritoWriter()
+        openingPayload.writeField(openingProgramId.data)
+        openingPayload.writeField(
+            try encodeHash(
+                opening.payload.inputCiphertextHash,
+                field: "payload.opening.payload.inputCiphertextHash"
+            )
+        )
+        openingPayload.writeField(
+            try encodeHash(
+                opening.payload.outputCiphertextHash,
+                field: "payload.opening.payload.outputCiphertextHash"
+            )
+        )
+        openingPayload.writeField(
+            try encodeHash(
+                opening.payload.parameterDigest,
+                field: "payload.opening.payload.parameterDigest"
+            )
+        )
+        openingPayload.writeField(
+            try encodeHash(
+                opening.payload.evaluationKeyDigest,
+                field: "payload.opening.payload.evaluationKeyDigest"
+            )
+        )
+        openingPayload.writeField(
+            try encodeHash(
+                opening.payload.openedOutputHash,
+                field: "payload.opening.payload.openedOutputHash"
+            )
+        )
+        openingPayload.writeField(OfflineCompactNorito.encodeUInt64(opening.payload.openedAtMs))
+        openingPayload.writeField(
+            try OfflineCompactNorito.encodeOption(
+                opening.payload.expiresAtMs,
+                encode: OfflineCompactNorito.encodeUInt64
+            )
+        )
+        var openingWriter = OfflineCompactNoritoWriter()
+        openingWriter.writeField(openingPayload.data)
+        openingWriter.writeField(
+            encodeBytesVec(
+                try decodeHex(opening.signature, field: "payload.opening.signature")
+            )
+        )
+
         var payloadWriter = OfflineCompactNoritoWriter()
         payloadWriter.writeField(policyId.data)
         payloadWriter.writeField(executionPayload.data)
+        payloadWriter.writeField(openingWriter.data)
         payloadWriter.writeField(
             try encodePrefixedHash(
                 payload.opaqueId,
@@ -1039,6 +1130,13 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
         return bytes
     }
 
+    private static func encodeBytesVec(_ bytes: Data) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeLength(UInt64(bytes.count))
+        writer.writeBytes(bytes)
+        return writer.data
+    }
+
     private static func encodeAccountId(_ raw: String) throws -> Data {
         do {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1080,11 +1178,122 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
     }
 }
 
+public struct ToriiRamLfeOutputOpeningPayload: Codable, Sendable {
+    public let programId: String
+    public let inputCiphertextHash: String
+    public let outputCiphertextHash: String
+    public let parameterDigest: String
+    public let evaluationKeyDigest: String
+    public let openedOutputHash: String
+    public let openedAtMs: UInt64
+    public let expiresAtMs: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case programId = "program_id"
+        case inputCiphertextHash = "input_ciphertext_hash"
+        case outputCiphertextHash = "output_ciphertext_hash"
+        case parameterDigest = "parameter_digest"
+        case evaluationKeyDigest = "evaluation_key_digest"
+        case openedOutputHash = "opened_output_hash"
+        case openedAtMs = "opened_at_ms"
+        case expiresAtMs = "expires_at_ms"
+    }
+
+    public init(programId: String,
+                inputCiphertextHash: String,
+                outputCiphertextHash: String,
+                parameterDigest: String,
+                evaluationKeyDigest: String,
+                openedOutputHash: String,
+                openedAtMs: UInt64,
+                expiresAtMs: UInt64?) {
+        self.programId = programId
+        self.inputCiphertextHash = ToriiIdentifierReceiptWireValue.normalizedHash(inputCiphertextHash)
+        self.outputCiphertextHash = ToriiIdentifierReceiptWireValue.normalizedHash(outputCiphertextHash)
+        self.parameterDigest = ToriiIdentifierReceiptWireValue.normalizedHash(parameterDigest)
+        self.evaluationKeyDigest = ToriiIdentifierReceiptWireValue.normalizedHash(evaluationKeyDigest)
+        self.openedOutputHash = ToriiIdentifierReceiptWireValue.normalizedHash(openedOutputHash)
+        self.openedAtMs = openedAtMs
+        self.expiresAtMs = expiresAtMs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        programId = try container.decode(String.self, forKey: .programId)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !programId.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .programId,
+                in: container,
+                debugDescription: "opening.payload.program_id must not be empty."
+            )
+        }
+        inputCiphertextHash = try Self.requiredHash(container, .inputCiphertextHash)
+        outputCiphertextHash = try Self.requiredHash(container, .outputCiphertextHash)
+        parameterDigest = try Self.requiredHash(container, .parameterDigest)
+        evaluationKeyDigest = try Self.requiredHash(container, .evaluationKeyDigest)
+        openedOutputHash = try Self.requiredHash(container, .openedOutputHash)
+        openedAtMs = try container.decode(UInt64.self, forKey: .openedAtMs)
+        expiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .expiresAtMs)
+    }
+
+    private static func requiredHash(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        _ key: CodingKeys
+    ) throws -> String {
+        guard let value = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: key
+        ) else {
+            throw DecodingError.keyNotFound(
+                key,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "\(key.stringValue) is required."
+                )
+            )
+        }
+        return value
+    }
+}
+
+public struct ToriiRamLfeOutputOpening: Codable, Sendable {
+    public let payload: ToriiRamLfeOutputOpeningPayload
+    public let signature: String
+
+    private enum CodingKeys: String, CodingKey {
+        case payload
+        case signature
+    }
+
+    public init(payload: ToriiRamLfeOutputOpeningPayload, signature: String) {
+        self.payload = payload
+        var normalized = signature.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
+            normalized = String(normalized.dropFirst(2))
+        }
+        self.signature = normalized.lowercased()
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        payload = try container.decode(ToriiRamLfeOutputOpeningPayload.self, forKey: .payload)
+        signature = try ToriiRequestValidation.normalizedEvenLengthHex(
+            container.decode(String.self, forKey: .signature),
+            field: "opening.signature"
+        )
+    }
+}
+
 public struct ToriiIdentifierResolutionExecutionPayload: Codable, Sendable {
     public let programId: String
     public let programDigest: String
     public let backend: String
     public let verificationMode: String
+    public let inputCiphertextHash: String
+    public let outputCiphertextHash: String
+    public let parameterDigest: String
+    public let evaluationKeyDigest: String
     public let outputHash: String
     public let associatedDataHash: String
     public let executedAtMs: UInt64
@@ -1095,6 +1304,10 @@ public struct ToriiIdentifierResolutionExecutionPayload: Codable, Sendable {
         case programDigest = "program_digest"
         case backend
         case verificationMode = "verification_mode"
+        case inputCiphertextHash = "input_ciphertext_hash"
+        case outputCiphertextHash = "output_ciphertext_hash"
+        case parameterDigest = "parameter_digest"
+        case evaluationKeyDigest = "evaluation_key_digest"
         case outputHash = "output_hash"
         case associatedDataHash = "associated_data_hash"
         case executedAtMs = "executed_at_ms"
@@ -1105,6 +1318,10 @@ public struct ToriiIdentifierResolutionExecutionPayload: Codable, Sendable {
                 programDigest: String,
                 backend: String,
                 verificationMode: String,
+                inputCiphertextHash: String,
+                outputCiphertextHash: String,
+                parameterDigest: String,
+                evaluationKeyDigest: String,
                 outputHash: String,
                 associatedDataHash: String,
                 executedAtMs: UInt64,
@@ -1113,6 +1330,10 @@ public struct ToriiIdentifierResolutionExecutionPayload: Codable, Sendable {
         self.programDigest = programDigest
         self.backend = backend
         self.verificationMode = verificationMode
+        self.inputCiphertextHash = ToriiIdentifierReceiptWireValue.normalizedHash(inputCiphertextHash)
+        self.outputCiphertextHash = ToriiIdentifierReceiptWireValue.normalizedHash(outputCiphertextHash)
+        self.parameterDigest = ToriiIdentifierReceiptWireValue.normalizedHash(parameterDigest)
+        self.evaluationKeyDigest = ToriiIdentifierReceiptWireValue.normalizedHash(evaluationKeyDigest)
         self.outputHash = outputHash
         self.associatedDataHash = associatedDataHash
         self.executedAtMs = executedAtMs
@@ -1171,6 +1392,58 @@ public struct ToriiIdentifierResolutionExecutionPayload: Codable, Sendable {
             )
         }
         self.verificationMode = verificationMode
+        guard let inputCiphertextHash = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: .inputCiphertextHash
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.inputCiphertextHash,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "payload.execution.input_ciphertext_hash is required."
+                )
+            )
+        }
+        self.inputCiphertextHash = inputCiphertextHash
+        guard let outputCiphertextHash = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: .outputCiphertextHash
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.outputCiphertextHash,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "payload.execution.output_ciphertext_hash is required."
+                )
+            )
+        }
+        self.outputCiphertextHash = outputCiphertextHash
+        guard let parameterDigest = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: .parameterDigest
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.parameterDigest,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "payload.execution.parameter_digest is required."
+                )
+            )
+        }
+        self.parameterDigest = parameterDigest
+        guard let evaluationKeyDigest = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: .evaluationKeyDigest
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.evaluationKeyDigest,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "payload.execution.evaluation_key_digest is required."
+                )
+            )
+        }
+        self.evaluationKeyDigest = evaluationKeyDigest
         guard let outputHash = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
             from: container,
             forKey: .outputHash
@@ -1211,10 +1484,12 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
     public let resolvedAtMs: UInt64
     public let expiresAtMs: UInt64?
     public let execution: ToriiIdentifierResolutionExecutionPayload
+    public let opening: ToriiRamLfeOutputOpening
 
     private enum CodingKeys: String, CodingKey {
         case policyId = "policy_id"
         case execution
+        case opening
         case opaqueId = "opaque_id"
         case receiptHash = "receipt_hash"
         case uaid
@@ -1228,7 +1503,8 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
                 receiptHash: String,
                 uaid: String,
                 accountId: String,
-                execution: ToriiIdentifierResolutionExecutionPayload) {
+                execution: ToriiIdentifierResolutionExecutionPayload,
+                opening: ToriiRamLfeOutputOpening) {
         self.policyId = policyId
         self.opaqueId = opaqueId
         self.receiptHash = receiptHash
@@ -1237,6 +1513,7 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
         self.resolvedAtMs = execution.executedAtMs
         self.expiresAtMs = execution.expiresAtMs
         self.execution = execution
+        self.opening = opening
     }
 
     public init(from decoder: Decoder) throws {
@@ -1279,6 +1556,7 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
             ToriiIdentifierResolutionExecutionPayload.self,
             forKey: .execution
         )
+        opening = try container.decode(ToriiRamLfeOutputOpening.self, forKey: .opening)
         resolvedAtMs = execution.executedAtMs
         expiresAtMs = execution.expiresAtMs
     }
@@ -1291,6 +1569,7 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
         try container.encode(uaid, forKey: .uaid)
         try container.encode(accountId, forKey: .accountId)
         try container.encode(execution, forKey: .execution)
+        try container.encode(opening, forKey: .opening)
     }
 }
 
@@ -1432,82 +1711,67 @@ public struct ToriiIdentifierResolutionReceipt: Codable, Sendable {
 
 public struct ToriiIdentifierLookupRequest: Encodable, Sendable {
     public let policyId: String
-    public let input: String?
-    public let encryptedInputHex: String?
+    public let encryptedInputHex: String
+    public let outputOpening: ToriiRamLfeOutputOpening
 
     private enum CodingKeys: String, CodingKey {
         case policyId = "policy_id"
-        case input
         case encryptedInputHex = "encrypted_input"
+        case outputOpening = "output_opening"
     }
 
-    public static func plaintext(policyId: String, input: String) throws -> ToriiIdentifierLookupRequest {
-        let normalizedPolicyId = try ToriiRequestValidation.normalizedNonEmpty(policyId, field: "policyId")
-        let normalizedInput = try ToriiRequestValidation.normalizedNonEmpty(input, field: "input")
-        return ToriiIdentifierLookupRequest(policyId: normalizedPolicyId,
-                                            input: normalizedInput,
-                                            encryptedInputHex: nil)
-    }
-
-    public static func encrypted(policyId: String, encryptedInputHex: String) throws -> ToriiIdentifierLookupRequest {
+    public static func encrypted(policyId: String,
+                                 encryptedInputHex: String,
+                                 outputOpening: ToriiRamLfeOutputOpening) throws -> ToriiIdentifierLookupRequest {
         let normalizedPolicyId = try ToriiRequestValidation.normalizedNonEmpty(policyId, field: "policyId")
         let normalizedEncryptedInput = try ToriiRequestValidation.normalizedEvenLengthHex(
             encryptedInputHex,
             field: "encryptedInputHex"
         )
         return ToriiIdentifierLookupRequest(policyId: normalizedPolicyId,
-                                            input: nil,
-                                            encryptedInputHex: normalizedEncryptedInput)
-    }
-
-    public static func plaintext(policy: ToriiIdentifierPolicySummary,
-                                 input: String) throws -> ToriiIdentifierLookupRequest {
-        let normalizedInput = try policy.normalization.normalize(input, field: "input")
-        return try plaintext(policyId: policy.policyId, input: normalizedInput)
+                                            encryptedInputHex: normalizedEncryptedInput,
+                                            outputOpening: outputOpening)
     }
 
     public static func encrypted(policy: ToriiIdentifierPolicySummary,
-                                 encryptedInputHex: String) throws -> ToriiIdentifierLookupRequest {
+                                 encryptedInputHex: String,
+                                 outputOpening: ToriiRamLfeOutputOpening) throws -> ToriiIdentifierLookupRequest {
         guard policy.inputEncryption?.lowercased() == "bfv-v1" else {
             throw ToriiClientError.invalidPayload(
                 "Policy \(policy.policyId) does not publish BFV encrypted-input support."
             )
         }
-        return try encrypted(policyId: policy.policyId, encryptedInputHex: encryptedInputHex)
+        return try encrypted(
+            policyId: policy.policyId,
+            encryptedInputHex: encryptedInputHex,
+            outputOpening: outputOpening
+        )
     }
 
     public static func encrypted(policy: ToriiIdentifierPolicySummary,
                                  input: String,
+                                 outputOpening: ToriiRamLfeOutputOpening,
                                  seedHex: String? = nil) throws -> ToriiIdentifierLookupRequest {
         let encryptedInputHex = try ToriiIdentifierBfvEnvelopeBuilder.encrypt(
             policy: policy,
             input: input,
             seedHex: seedHex
         )
-        return try encrypted(policyId: policy.policyId, encryptedInputHex: encryptedInputHex)
+        return try encrypted(
+            policyId: policy.policyId,
+            encryptedInputHex: encryptedInputHex,
+            outputOpening: outputOpening
+        )
     }
 }
 
 public typealias ToriiRamLfeExecutionReceipt = [String: ToriiJSONValue]
 
 public struct ToriiRamLfeExecuteRequest: Encodable, Sendable {
-    public let inputHex: String?
-    public let encryptedInputHex: String?
+    public let encryptedInputHex: String
 
     private enum CodingKeys: String, CodingKey {
-        case inputHex = "input_hex"
         case encryptedInputHex = "encrypted_input"
-    }
-
-    public static func plaintext(inputHex: String) throws -> ToriiRamLfeExecuteRequest {
-        let normalizedInputHex = try ToriiRequestValidation.normalizedEvenLengthHex(
-            inputHex,
-            field: "inputHex"
-        )
-        return ToriiRamLfeExecuteRequest(
-            inputHex: normalizedInputHex,
-            encryptedInputHex: nil
-        )
     }
 
     public static func encrypted(encryptedInputHex: String) throws -> ToriiRamLfeExecuteRequest {
@@ -1515,10 +1779,7 @@ public struct ToriiRamLfeExecuteRequest: Encodable, Sendable {
             encryptedInputHex,
             field: "encryptedInputHex"
         )
-        return ToriiRamLfeExecuteRequest(
-            inputHex: nil,
-            encryptedInputHex: normalizedEncryptedInput
-        )
+        return ToriiRamLfeExecuteRequest(encryptedInputHex: normalizedEncryptedInput)
     }
 }
 
@@ -1586,20 +1847,28 @@ public struct ToriiRamLfeReceiptVerifyResponse: Decodable, Sendable {
 }
 
 public extension ToriiIdentifierPolicySummary {
-    func plaintextRequest(input: String) throws -> ToriiIdentifierLookupRequest {
-        try ToriiIdentifierLookupRequest.plaintext(policy: self, input: input)
-    }
-
-    func encryptedRequest(encryptedInputHex: String) throws -> ToriiIdentifierLookupRequest {
-        try ToriiIdentifierLookupRequest.encrypted(policy: self, encryptedInputHex: encryptedInputHex)
+    func encryptedRequest(encryptedInputHex: String,
+                          outputOpening: ToriiRamLfeOutputOpening) throws -> ToriiIdentifierLookupRequest {
+        try ToriiIdentifierLookupRequest.encrypted(
+            policy: self,
+            encryptedInputHex: encryptedInputHex,
+            outputOpening: outputOpening
+        )
     }
 
     func encryptInput(_ input: String, seedHex: String? = nil) throws -> String {
         try ToriiIdentifierBfvEnvelopeBuilder.encrypt(policy: self, input: input, seedHex: seedHex)
     }
 
-    func encryptedRequest(input: String, seedHex: String? = nil) throws -> ToriiIdentifierLookupRequest {
-        try ToriiIdentifierLookupRequest.encrypted(policy: self, input: input, seedHex: seedHex)
+    func encryptedRequest(input: String,
+                          outputOpening: ToriiRamLfeOutputOpening,
+                          seedHex: String? = nil) throws -> ToriiIdentifierLookupRequest {
+        try ToriiIdentifierLookupRequest.encrypted(
+            policy: self,
+            input: input,
+            outputOpening: outputOpening,
+            seedHex: seedHex
+        )
     }
 }
 
@@ -11140,14 +11409,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @discardableResult
     public func resolveIdentifier(policyId: String,
-                                  input: String? = nil,
-                                  encryptedInputHex: String? = nil,
+                                  encryptedInputHex: String,
+                                  outputOpening: ToriiRamLfeOutputOpening,
                                   completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.resolveIdentifier(
                 policyId: policyId,
-                input: input,
-                encryptedInputHex: encryptedInputHex
+                encryptedInputHex: encryptedInputHex,
+                outputOpening: outputOpening
             )
         }
     }
@@ -11168,15 +11437,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func issueIdentifierClaimReceipt(accountId: String,
                                             policyId: String,
-                                            input: String? = nil,
-                                            encryptedInputHex: String? = nil,
+                                            encryptedInputHex: String,
+                                            outputOpening: ToriiRamLfeOutputOpening,
                                             completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.issueIdentifierClaimReceipt(
                 accountId: accountId,
                 policyId: policyId,
-                input: input,
-                encryptedInputHex: encryptedInputHex
+                encryptedInputHex: encryptedInputHex,
+                outputOpening: outputOpening
             )
         }
     }
@@ -11190,13 +11459,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @discardableResult
     public func executeRamLfeProgram(programId: String,
-                                     inputHex: String? = nil,
-                                     encryptedInputHex: String? = nil,
+                                     encryptedInputHex: String,
                                      completion: @escaping (Result<ToriiRamLfeExecuteResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.executeRamLfeProgram(
                 programId: programId,
-                inputHex: inputHex,
                 encryptedInputHex: encryptedInputHex
             )
         }
@@ -12227,13 +12494,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func resolveIdentifier(policyId: String,
-                                  input: String? = nil,
-                                  encryptedInputHex: String? = nil) async throws -> ToriiIdentifierResolutionReceipt? {
+                                  encryptedInputHex: String,
+                                  outputOpening: ToriiRamLfeOutputOpening) async throws -> ToriiIdentifierResolutionReceipt? {
         try await resolveIdentifier(
             buildIdentifierResolveRequest(
                 policyId: policyId,
-                input: input,
-                encryptedInputHex: encryptedInputHex
+                encryptedInputHex: encryptedInputHex,
+                outputOpening: outputOpening
             )
         )
     }
@@ -12284,14 +12551,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func issueIdentifierClaimReceipt(accountId: String,
                                             policyId: String,
-                                            input: String? = nil,
-                                            encryptedInputHex: String? = nil) async throws -> ToriiIdentifierResolutionReceipt? {
+                                            encryptedInputHex: String,
+                                            outputOpening: ToriiRamLfeOutputOpening) async throws -> ToriiIdentifierResolutionReceipt? {
         try await issueIdentifierClaimReceipt(
             accountId: accountId,
             requestBody: buildIdentifierResolveRequest(
                 policyId: policyId,
-                input: input,
-                encryptedInputHex: encryptedInputHex
+                encryptedInputHex: encryptedInputHex,
+                outputOpening: outputOpening
             )
         )
     }
@@ -12319,14 +12586,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func executeRamLfeProgram(programId: String,
-                                     inputHex: String? = nil,
-                                     encryptedInputHex: String? = nil) async throws -> ToriiRamLfeExecuteResponse? {
+                                     encryptedInputHex: String) async throws -> ToriiRamLfeExecuteResponse? {
         try await executeRamLfeProgram(
             programId: programId,
-            requestBody: buildRamLfeExecuteRequest(
-                inputHex: inputHex,
-                encryptedInputHex: encryptedInputHex
-            )
+            requestBody: buildRamLfeExecuteRequest(encryptedInputHex: encryptedInputHex)
         )
     }
 
@@ -14954,38 +15217,26 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     private func buildIdentifierResolveRequest(policyId: String,
-                                               input: String?,
-                                               encryptedInputHex: String?) throws -> ToriiIdentifierLookupRequest {
+                                               encryptedInputHex: String,
+                                               outputOpening: ToriiRamLfeOutputOpening) throws -> ToriiIdentifierLookupRequest {
         let normalizedPolicyId = try ToriiRequestValidation.normalizedNonEmpty(policyId, field: "policyId")
-        let normalizedInput = try ToriiRequestValidation.normalizedOptionalNonEmpty(input, field: "input")
-        let normalizedEncryptedInput = try encryptedInputHex.map {
-            try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "encryptedInputHex")
-        }
-        guard (normalizedInput == nil) != (normalizedEncryptedInput == nil) else {
-            throw ToriiClientError.invalidPayload("Exactly one of input or encryptedInputHex must be provided.")
-        }
+        let normalizedEncryptedInput = try ToriiRequestValidation.normalizedEvenLengthHex(
+            encryptedInputHex,
+            field: "encryptedInputHex"
+        )
         return ToriiIdentifierLookupRequest(
             policyId: normalizedPolicyId,
-            input: normalizedInput,
-            encryptedInputHex: normalizedEncryptedInput
+            encryptedInputHex: normalizedEncryptedInput,
+            outputOpening: outputOpening
         )
     }
 
-    private func buildRamLfeExecuteRequest(inputHex: String?,
-                                           encryptedInputHex: String?) throws -> ToriiRamLfeExecuteRequest {
-        let normalizedInputHex = try inputHex.map {
-            try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "inputHex")
-        }
-        let normalizedEncryptedInput = try encryptedInputHex.map {
-            try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "encryptedInputHex")
-        }
-        guard (normalizedInputHex == nil) != (normalizedEncryptedInput == nil) else {
-            throw ToriiClientError.invalidPayload("Exactly one of inputHex or encryptedInputHex must be provided.")
-        }
-        return ToriiRamLfeExecuteRequest(
-            inputHex: normalizedInputHex,
-            encryptedInputHex: normalizedEncryptedInput
+    private func buildRamLfeExecuteRequest(encryptedInputHex: String) throws -> ToriiRamLfeExecuteRequest {
+        let normalizedEncryptedInput = try ToriiRequestValidation.normalizedEvenLengthHex(
+            encryptedInputHex,
+            field: "encryptedInputHex"
         )
+        return ToriiRamLfeExecuteRequest(encryptedInputHex: normalizedEncryptedInput)
     }
 
     private func makeRequest(path: String,

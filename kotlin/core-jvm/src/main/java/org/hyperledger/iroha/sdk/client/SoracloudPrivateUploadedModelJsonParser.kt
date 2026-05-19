@@ -30,9 +30,9 @@ object SoracloudPrivateUploadedModelJsonParser {
         return SoracloudPrivateUploadedModelReceiptListResponse(
             schemaVersion = asLong(root["schema_version"], "soracloud private receipt list.schema_version"),
             receipts = receipts,
-            total = if (root.containsKey("total")) asOptionalLong(root["total"], "soracloud private receipt list.total") else null,
-            returnedItems = asLong(root["returned_items"], "soracloud private receipt list.returned_items"),
-            remainingItems = asLong(root["remaining_items"], "soracloud private receipt list.remaining_items"),
+            total = if (root.containsKey("total")) asOptionalNonNegativeLong(root["total"], "soracloud private receipt list.total") else null,
+            returnedItems = asNonNegativeLong(root["returned_items"], "soracloud private receipt list.returned_items"),
+            remainingItems = asNonNegativeLong(root["remaining_items"], "soracloud private receipt list.remaining_items"),
             hasMore = asBoolean(root["has_more"], "soracloud private receipt list.has_more"),
             countMode = requiredString(root["count_mode"], "soracloud private receipt list.count_mode").lowercase(),
             continueCursor = optionalString(root["continue_cursor"]),
@@ -67,7 +67,7 @@ object SoracloudPrivateUploadedModelJsonParser {
             outputCommitment = requiredString(root["output_commitment"], "$context.output_commitment"),
             requestCommitment = requiredString(root["request_commitment"], "$context.request_commitment"),
             resultCommitment = requiredString(root["result_commitment"], "$context.result_commitment"),
-            emittedSequence = asLong(root["emitted_sequence"], "$context.emitted_sequence"),
+            emittedSequence = asNonNegativeLong(root["emitted_sequence"], "$context.emitted_sequence"),
         )
 
     private fun parseArtifact(root: Map<String, Any?>, context: String): SoracloudPrivateModelArtifactRef =
@@ -75,7 +75,7 @@ object SoracloudPrivateUploadedModelJsonParser {
             schemaVersion = asLong(root["schema_version"], "$context.schema_version"),
             sorafsManifestDigest = requiredString(root["sorafs_manifest_digest"], "$context.sorafs_manifest_digest"),
             artifactHash = requiredString(root["artifact_hash"], "$context.artifact_hash"),
-            ciphertextBytes = asLong(root["ciphertext_bytes"], "$context.ciphertext_bytes"),
+            ciphertextBytes = asNonNegativeLong(root["ciphertext_bytes"], "$context.ciphertext_bytes"),
             artifactRole = requiredString(root["artifact_role"], "$context.artifact_role"),
         )
 
@@ -109,11 +109,10 @@ object SoracloudPrivateUploadedModelJsonParser {
         return value as Map<String, Any?>
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun asArrayOrEmpty(value: Any?, path: String): List<Any?> {
         if (value == null) return emptyList()
         check(value is List<*>) { "$path must be a JSON array" }
-        return value as List<Any?>
+        return value
     }
 
     private fun requiredString(value: Any?, path: String): String {
@@ -129,7 +128,14 @@ object SoracloudPrivateUploadedModelJsonParser {
 
     private fun asLong(value: Any?, path: String): Long = JsonNumbers.asLong(value, path)
 
-    private fun asOptionalLong(value: Any?, path: String): Long? = if (value == null) null else asLong(value, path)
+    private fun asNonNegativeLong(value: Any?, path: String): Long {
+        val parsed = asLong(value, path)
+        check(parsed >= 0) { "$path must be non-negative" }
+        return parsed
+    }
+
+    private fun asOptionalNonNegativeLong(value: Any?, path: String): Long? =
+        if (value == null) null else asNonNegativeLong(value, path)
 
     private fun asBoolean(value: Any?, path: String): Boolean {
         check(value is Boolean) { "$path must be a boolean" }
@@ -147,4 +153,3 @@ object SoracloudPrivateUploadedModelJsonParser {
         return trimmed.lowercase()
     }
 }
-

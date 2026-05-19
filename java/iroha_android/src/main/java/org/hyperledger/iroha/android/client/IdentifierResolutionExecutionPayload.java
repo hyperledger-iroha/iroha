@@ -8,6 +8,10 @@ public final class IdentifierResolutionExecutionPayload {
   private final String programDigest;
   private final String backend;
   private final String verificationMode;
+  private final String inputCiphertextHash;
+  private final String outputCiphertextHash;
+  private final String parameterDigest;
+  private final String evaluationKeyDigest;
   private final String outputHash;
   private final String associatedDataHash;
   private final long executedAtMs;
@@ -18,6 +22,10 @@ public final class IdentifierResolutionExecutionPayload {
       final String programDigest,
       final String backend,
       final String verificationMode,
+      final String inputCiphertextHash,
+      final String outputCiphertextHash,
+      final String parameterDigest,
+      final String evaluationKeyDigest,
       final String outputHash,
       final String associatedDataHash,
       final long executedAtMs,
@@ -26,6 +34,10 @@ public final class IdentifierResolutionExecutionPayload {
     this.programDigest = Objects.requireNonNull(programDigest, "programDigest");
     this.backend = Objects.requireNonNull(backend, "backend");
     this.verificationMode = Objects.requireNonNull(verificationMode, "verificationMode");
+    this.inputCiphertextHash = Objects.requireNonNull(inputCiphertextHash, "inputCiphertextHash");
+    this.outputCiphertextHash = Objects.requireNonNull(outputCiphertextHash, "outputCiphertextHash");
+    this.parameterDigest = Objects.requireNonNull(parameterDigest, "parameterDigest");
+    this.evaluationKeyDigest = Objects.requireNonNull(evaluationKeyDigest, "evaluationKeyDigest");
     this.outputHash = Objects.requireNonNull(outputHash, "outputHash");
     this.associatedDataHash = Objects.requireNonNull(associatedDataHash, "associatedDataHash");
     this.executedAtMs = executedAtMs;
@@ -46,6 +58,22 @@ public final class IdentifierResolutionExecutionPayload {
 
   public String verificationMode() {
     return verificationMode;
+  }
+
+  public String inputCiphertextHash() {
+    return inputCiphertextHash;
+  }
+
+  public String outputCiphertextHash() {
+    return outputCiphertextHash;
+  }
+
+  public String parameterDigest() {
+    return parameterDigest;
+  }
+
+  public String evaluationKeyDigest() {
+    return evaluationKeyDigest;
   }
 
   public String outputHash() {

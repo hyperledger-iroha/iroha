@@ -18,7 +18,6 @@ seiyaku ZkVoteAndUnshield {
   }
 
   // Verify a ballot proof, then enqueue a prebuilt SubmitBallot instruction via the vendor bridge.
-  #[access(read="*", write="*")]
   fn verify_and_submit_ballot(proof_env: Blob, submit: Blob) {
     // 1) Verify the ballot using ZK_VOTE_VERIFY_BALLOT.
     //    `proof_env` must be a Norito-encoded OpenVerifyEnvelope in a NoritoBytes TLV.
@@ -30,7 +29,6 @@ seiyaku ZkVoteAndUnshield {
   }
 
   // Verify an unshield proof, then enqueue a prebuilt Unshield instruction via the vendor bridge.
-  #[access(read="*", write="*")]
   fn verify_and_unshield(proof_env: Blob, unshield: Blob) {
     // 1) Verify the unshield using ZK_VERIFY_UNSHIELD (0x61).
     zk_verify_unshield(proof_env);
@@ -42,7 +40,6 @@ seiyaku ZkVoteAndUnshield {
   // Optional demo entrypoint: verifies and enqueues both operations using literal data.
   // The vendor bridge and unshield flow are privileged, so public entrypoints
   // that reach them must declare a permission tag.
-  #[access(read="*", write="*")]
   kotoage fn demo() permission(Admin) {
     // Mock envelope bytes (opaque here); in practice, pass a Norito-encoded OpenVerifyEnvelope.
     let env_ballot = norito_bytes("ENV-BALLOT");

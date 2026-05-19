@@ -10,6 +10,10 @@ tests:
         values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16'
       - series: 'fastpq_execution_mode_total{requested="gpu", resolved="cpu", backend="cpu", device_class="apple-m4"}'
         values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16'
+      - series: 'fastpq_gpu_disable_total{accelerator="metal", reason="parity_failure", device_class="apple-m4", chip_family="apple-m4-max", gpu_kind="apple-gpu"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16'
+      - series: 'fastpq_gpu_parity_failure_total{accelerator="metal", reason="sample_mismatch", device_class="apple-m4", chip_family="apple-m4-max", gpu_kind="apple-gpu"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16'
       - series: 'fastpq_metal_queue_ratio{metric="busy", device_class="apple-m4", queue="global"}'
         values: '0.6 0.58 0.55 0.52 0.5 0.48 0.46 0.45 0.44 0.43 0.42 0.4 0.38 0.37 0.36 0.35 0.34'
     alert_rule_test:
@@ -56,6 +60,41 @@ tests:
                 affected device class, confirm whether the queue headroom or zero-fill
                 alerts also fired, rerun `fastpq_metal_bench`, and attach the updated
                 evidence bundle before re-enabling GPU defaults.
+      - alertname: FastpqGpuDisabled
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              accelerator: metal
+              reason: parity_failure
+              device_class: apple-m4
+              chip_family: apple-m4-max
+              gpu_kind: apple-gpu
+              severity: warning
+            exp_annotations:
+              summary: "FASTPQ GPU accelerator disabled"
+              description: |
+                A FASTPQ GPU accelerator reported a disable event. Scalar CPU paths
+                remain authoritative, but the affected accelerator must stay disabled
+                until the reason is understood and fresh parity evidence is attached
+                for the reported device class and GPU kind.
+      - alertname: FastpqGpuParityFailure
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              accelerator: metal
+              reason: sample_mismatch
+              device_class: apple-m4
+              chip_family: apple-m4-max
+              gpu_kind: apple-gpu
+              severity: page
+            exp_annotations:
+              summary: "FASTPQ sampled GPU parity failure detected"
+              description: |
+                FASTPQ sampled runtime parity diverged from the scalar CPU reference.
+                Treat this as fail-closed evidence for the reported accelerator:
+                keep GPU execution disabled on that path, collect the failing sample,
+                and do not re-enable the accelerator until scalar-equivalent vectors
+                pass on matching hardware.
       - alertname: FastpqQueueDutyCycleDrop
         eval_time: 16m
         exp_alerts:
@@ -87,6 +126,38 @@ tests:
         exp_alerts: []
       - alertname: FastpqQueueDutyCycleDrop
         eval_time: 20m
+        exp_alerts: []
+      - alertname: FastpqGpuDisabled
+        eval_time: 20m
+        exp_alerts: []
+      - alertname: FastpqGpuParityFailure
+        eval_time: 20m
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'fastpq_gpu_disable_total{accelerator="metal", reason="operator_disabled", device_class="apple-m4", chip_family="apple-m4-max", gpu_kind="apple-gpu"}'
+        values: '7 7 7 7 7 7 7 7 7 7'
+      - series: 'fastpq_gpu_parity_failure_total{accelerator="metal", reason="sample_mismatch", device_class="apple-m4", chip_family="apple-m4-max", gpu_kind="apple-gpu"}'
+        values: '3 3 3 3 3 3 3 3 3 3'
+    alert_rule_test:
+      - alertname: FastpqGpuDisabled
+        eval_time: 9m
+        exp_alerts: []
+      - alertname: FastpqGpuParityFailure
+        eval_time: 9m
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'fastpq_gpu_disable_total{accelerator="metal", reason="parity_failure", device_class="apple-m4", chip_family="apple-m4-max", gpu_kind="apple-gpu"}'
+        values: '0 1 1 1 1 1 1 1 1 1'
+      - series: 'fastpq_gpu_parity_failure_total{accelerator="metal", reason="sample_mismatch", device_class="apple-m4", chip_family="apple-m4-max", gpu_kind="apple-gpu"}'
+        values: '0 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - alertname: FastpqGpuDisabled
+        eval_time: 9m
+        exp_alerts: []
+      - alertname: FastpqGpuParityFailure
+        eval_time: 9m
         exp_alerts: []
   - interval: 1m
     input_series:
@@ -124,3 +195,18 @@ tests:
                 the last 15 minutes. Capture a fresh `zero_fill_hotspots` sample via
                 `fastpq_metal_bench`, review PCIe/memory telemetry on the affected
                 host, and attach the evidence bundle to the Stage7 rollout ticket.
+  - interval: 1m
+    input_series:
+      - series: 'fastpq_metal_queue_depth{metric="limit", device_class="apple-m4"}'
+        values: '4 4 4 4 4 4 4 4 4 4 4 4'
+      - series: 'fastpq_metal_queue_depth{metric="max_in_flight", device_class="apple-m4"}'
+        values: '3 3 3 3 3 3 3 3 3 3 3 3'
+      - series: 'fastpq_zero_fill_duration_ms{device_class="apple-m4"}'
+        values: '0.40 0.40 0.40 0.40 0.40 0.40 0.40 0.40 0.40 0.40 0.40 0.40'
+    alert_rule_test:
+      - alertname: FastpqQueueHeadroomLow
+        eval_time: 11m
+        exp_alerts: []
+      - alertname: FastpqZeroFillRegression
+        eval_time: 11m
+        exp_alerts: []

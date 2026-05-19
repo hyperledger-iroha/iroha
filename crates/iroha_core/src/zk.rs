@@ -5050,8 +5050,8 @@ impl DedupCache {
         vk_commitment: Option<[u8; 32]>,
     ) -> bool {
         let mut h = Sha256::new();
-        h.update(proof.backend.as_bytes());
-        h.update(&proof.bytes);
+        h.update(b"iroha:zk:v1:preverify-dedup");
+        h.update(hash_proof(proof));
         if let Some(c) = vk_commitment {
             h.update(c);
         }
@@ -11256,8 +11256,212 @@ mod preverified_key_tests {
             None
         );
         assert_eq!(
+            map.get(&PreverifiedProofKey::new(
+                &proof,
+                &VerifyingKeyId::new("stark/fri", "vk_a"),
+                commitment
+            )),
+            None
+        );
+        assert_eq!(
             map.get(&PreverifiedProofKey::new(&proof, &vk_ref, [8u8; 32])),
             None
+        );
+    }
+
+    #[test]
+    fn preverified_proof_key_binds_proof_backend_and_bytes() {
+        let proof = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+        let vk_ref = VerifyingKeyId::new("halo2/ipa", "vk_a");
+        let commitment = [7u8; 32];
+        let mut map = PreverifiedProofMap::new();
+        map.insert(PreverifiedProofKey::new(&proof, &vk_ref, commitment), true);
+
+        assert_eq!(
+            map.get(&PreverifiedProofKey::new(
+                &ProofBox::new("stark/fri".into(), proof.bytes.clone()),
+                &vk_ref,
+                commitment
+            )),
+            None
+        );
+        assert_eq!(
+            map.get(&PreverifiedProofKey::new(
+                &ProofBox::new(proof.backend.clone(), vec![1, 2, 4]),
+                &vk_ref,
+                commitment
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn proof_hash_length_prefixes_backend_and_payload() {
+        let proof_a = ProofBox::new("ab".into(), b"cdef".to_vec());
+        let proof_b = ProofBox::new("abc".into(), b"def".to_vec());
+        assert_ne!(hash_proof(&proof_a), hash_proof(&proof_b));
+    }
+
+    #[test]
+    fn verifying_key_hash_length_prefixes_backend_and_payload() {
+        let vk_a = VerifyingKeyBox::new("ab".into(), b"cdef".to_vec());
+        let vk_b = VerifyingKeyBox::new("abc".into(), b"def".to_vec());
+        assert_ne!(hash_vk(&vk_a), hash_vk(&vk_b));
+    }
+
+    #[test]
+    fn preverify_dedup_key_length_prefixes_backend_and_payload() {
+        let mut dedup = DedupCache::new();
+        let proof_a = ProofBox::new("ab".into(), b"cdef".to_vec());
+        let proof_b = ProofBox::new("abc".into(), b"def".to_vec());
+        let commitment = Some([0x42; 32]);
+
+        assert!(dedup.check_and_insert_with_commitment(&proof_a, commitment));
+        assert!(
+            dedup.check_and_insert_with_commitment(&proof_b, commitment),
+            "distinct backend/payload boundaries must not collide in preverify dedup"
+        );
+    }
+
+    #[test]
+    fn preverify_dedup_key_separates_absent_and_present_commitment() {
+        let mut dedup = DedupCache::new();
+        let proof = ProofBox::new("halo2/ipa".into(), b"same-proof".to_vec());
+
+        assert!(dedup.check_and_insert_with_commitment(&proof, None));
+        assert!(
+            dedup.check_and_insert_with_commitment(&proof, Some([0u8; 32])),
+            "missing commitment and all-zero commitment must use distinct preverify dedup keys"
+        );
+    }
+
+    #[test]
+    fn failed_preverify_attempts_do_not_poison_dedup_cache() {
+        let proof = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
+        let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 6, 7, 8]);
+        let expected = hash_vk(&vk);
+
+        let mut budget_dedup = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut budget_dedup,
+                1,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::PreverifyBudgetExceeded
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut budget_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+
+        let mut mismatch_dedup = DedupCache::new();
+        let mut wrong = expected;
+        wrong[0] ^= 0x80;
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut mismatch_dedup,
+                0,
+                Some(wrong),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut mismatch_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+
+        let mut wrong_vk_dedup = DedupCache::new();
+        let wrong_vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![8, 7, 6, 5]);
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&wrong_vk),
+                &mut wrong_vk_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::VerifyingKeyMismatch
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut wrong_vk_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+
+        let mut inactive_dedup = DedupCache::new();
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut inactive_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                false,
+            ),
+            PreverifyResult::VerifyingKeyInactive
+        );
+        assert_eq!(
+            preverify_with_budget(
+                &proof,
+                Some(&vk),
+                &mut inactive_dedup,
+                0,
+                Some(expected),
+                Some(expected),
+                true,
+            ),
+            PreverifyResult::Accepted
+        );
+    }
+
+    #[test]
+    fn unsupported_backend_preverify_attempts_do_not_poison_dedup_cache() {
+        let mut dedup = DedupCache::new();
+        let proof = ProofBox::new(String::new(), vec![1, 2, 3, 4]);
+
+        assert_eq!(
+            preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+            PreverifyResult::UnsupportedBackend
+        );
+        assert_eq!(
+            preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+            PreverifyResult::UnsupportedBackend,
+            "unsupported proofs should keep failing as unsupported, not become dedup duplicates"
         );
     }
 }

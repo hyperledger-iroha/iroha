@@ -24,6 +24,7 @@ public final class IdentifierReceiptCanonicalEncoder {
     final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     encodeSizedField(writer, PassthroughBytesAdapter.INSTANCE, encodePolicyId(payload.policyId()));
     encodeSizedField(writer, PassthroughBytesAdapter.INSTANCE, encodeExecution(payload.execution()));
+    encodeSizedField(writer, PassthroughBytesAdapter.INSTANCE, encodeOutputOpening(payload.opening()));
     encodeSizedField(
         writer,
         PassthroughBytesAdapter.INSTANCE,
@@ -93,6 +94,22 @@ public final class IdentifierReceiptCanonicalEncoder {
     encodeSizedField(
         writer,
         PassthroughBytesAdapter.INSTANCE,
+        decodeHash(execution.inputCiphertextHash(), "payload.execution.input_ciphertext_hash"));
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
+        decodeHash(execution.outputCiphertextHash(), "payload.execution.output_ciphertext_hash"));
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
+        decodeHash(execution.parameterDigest(), "payload.execution.parameter_digest"));
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
+        decodeHash(execution.evaluationKeyDigest(), "payload.execution.evaluation_key_digest"));
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
         decodeHash(execution.outputHash(), "payload.execution.output_hash"));
     encodeSizedField(
         writer,
@@ -100,6 +117,47 @@ public final class IdentifierReceiptCanonicalEncoder {
         decodeHash(execution.associatedDataHash(), "payload.execution.associated_data_hash"));
     encodeSizedField(writer, U64_ADAPTER, execution.executedAtMs());
     encodeSizedField(writer, OptionalU64Adapter.INSTANCE, execution.expiresAtMs());
+    return writer.toByteArray();
+  }
+
+  private static byte[] encodeOutputOpening(final RamLfeOutputOpening opening) {
+    final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
+        encodeOutputOpeningPayload(opening.payload()));
+    encodeSizedField(
+        writer,
+        SIGNATURE_ADAPTER,
+        decodeHex(opening.signature(), "payload.opening.signature"));
+    return writer.toByteArray();
+  }
+
+  private static byte[] encodeOutputOpeningPayload(final RamLfeOutputOpeningPayload payload) {
+    final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
+    encodeSizedField(writer, PassthroughBytesAdapter.INSTANCE, encodeProgramId(payload.programId()));
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
+        decodeHash(payload.inputCiphertextHash(), "payload.opening.payload.input_ciphertext_hash"));
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
+        decodeHash(payload.outputCiphertextHash(), "payload.opening.payload.output_ciphertext_hash"));
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
+        decodeHash(payload.parameterDigest(), "payload.opening.payload.parameter_digest"));
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
+        decodeHash(payload.evaluationKeyDigest(), "payload.opening.payload.evaluation_key_digest"));
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
+        decodeHash(payload.openedOutputHash(), "payload.opening.payload.opened_output_hash"));
+    encodeSizedField(writer, U64_ADAPTER, payload.openedAtMs());
+    encodeSizedField(writer, OptionalU64Adapter.INSTANCE, payload.expiresAtMs());
     return writer.toByteArray();
   }
 
@@ -151,7 +209,15 @@ public final class IdentifierReceiptCanonicalEncoder {
   }
 
   private static byte[] decodeHash(final String raw, final String field) {
-    final byte[] bytes = decodeHex(raw.startsWith("hash:") ? raw.substring("hash:".length()) : raw, field);
+    String body = requireNonBlank(raw, field);
+    if (body.toLowerCase(Locale.ROOT).startsWith("hash:")) {
+      body = body.substring("hash:".length());
+    }
+    final int suffixIndex = body.indexOf('#');
+    if (suffixIndex >= 0) {
+      body = body.substring(0, suffixIndex);
+    }
+    final byte[] bytes = decodeHex(body, field);
     if (bytes.length != 32) {
       throw new IllegalArgumentException(field + " must contain 32 bytes");
     }

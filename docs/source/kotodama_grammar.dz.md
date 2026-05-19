@@ -92,7 +92,7 @@ translator: machine-google-reviewed
 
 མངོན་གསལ།
 - `kotoage fn` མི་མང་འཛུལ་སྒོ་ཅིག་སྟོནམ་ཨིན། མཐོང་སྣང་གིས་ གསང་ཡིག་མེན་པར་ བཏང་མི་ཆོག་པའི་གནང་བ་ཚུ་ལུ་ ཐོ་ཕོགཔ་ཨིན།
-- གདམ་ཁ་ཅན་གྱི་འཛུལ་སྤྱོད་ཀྱི་བརྡ་སྟོན་ཚུ་: `#[access(read=..., write=...)]` གིས་ `fn`/`kotoage fn` གིས་ གསལ་སྟོན་ལྷག་/ཡིག་ཆའི་ལྡེ་མིག་ཚུ་བཀྲམ་སྤེལ་འབད་ནི་ལུ་ སྔོན་སྒྲིག་འབད་ཚུགས། བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ བསླབ་བྱ་གི་བརྡ་སྟོན་ཚུ་ཡང་ རང་བཞིན་གྱིས་ བཏོནམ་ཨིན། opaque གི་འབོད་བརྡ་ཚུ་ རྙིང་མའི་ཝའིལ་ཀརཌ་ལྡེ་མིག་ཚུ་ལུ་ལོག་འོངམ་ཨིནམ་དང་ (`*`) དེ་ལས་ གསལ་ཏོག་ཏོ་སྦེ་འཛུལ་སྤྱོད་ཀྱི་བརྡ་སྟོན་ཚུ་ མ་བྱིན་ཚུན་ཚོད་ ནད་བརྟག་ཅིག་བཏོན་དོ་ཡོདཔ་ལས་ དུས་ཚོད་བཀོད་མི་ཚུ་གིས་ ལྡེ་མིག་ལེགས་ཤོམ་གྱི་དོན་ལུ་ ཕན་ནུས་ཅན་གྱི་ prepass ནང་ལུ་ གདམ་ཁ་རྐྱབ་ཚུགས།
+- Access metadata is compiler-owned. Manual `#[access(...)]` attributes are rejected; deployable compilation succeeds only when the compiler can emit complete read/write metadata without wildcard keys.
 
 ## གན་ཡིག་གན་ཡིག་དང་མེ་ཊ་ཌེ་ཊ་
 
@@ -308,7 +308,7 @@ register_trigger wake {
 - `.take(n)`: འགོ་བཙུགས་ཁམས་ཅིག་ལས་ `n` ཐོ་བཀོད་འགོ་དང་པ་འདི་ བསྐྱར་ལོག་འབད།
 - `.range(start, end)`: ཕྱེད་ཀ་ཁ་ཕྱེ་བའི་བར་མཚམས་ `[start, end)` ནང་ བསྐྱར་ལོག་ཐོ་བཀོད་ཚུ་. ཡིག་བརྡའི་རིག་པ་འདི་ `start` དང་ `n = end - start` དང་འདྲ་མཉམ་ཨིན།ཌའི་ནམ་མཐའམ་གུ་གི་དྲན་ཐོ།
 - ཚིག་དོན་མཐའ་མཚམས་ཚུ་: `n`, `start`, དང་ `end` འདི་ ཧྲིལ་གྲངས་ཡིག་ཆའི་ཚུ་ ཆ་ཚང་རྒྱབ་སྐྱོར་དང་ བསྐྱར་ལོག་ཀྱི་ཨང་གྲངས་གཏན་བཟོས་ལུ་ བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན།
-- ངོ་མ་མེན་པའི་མཐའ་མཚམས་: `kotodama_dynamic_bounds` ཁྱད་རྣམ་འདི་ `ivm` crate ནང་ལུ་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ ཌའི་ནམ་གྱི་ `start`, དང་ `end`, དང་ `end`, དང་ཉེན་སྲུང་གི་དོན་ལུ་ གཡོག་བཀོལ་བའི་དུས་ཚོད་ཚུ་ངོས་ལེན་འབདཝ་ཨིན། (ལོག་པ་, `end >= start`). ཀེ་ལུ་ ཕྱིར་བཏོན་འབད་མི་འདི་གིས་ གཟུགས་ཁ་སྐོང་བཀོལ་སྤྱོད་འབད་ནི་ལས་ བཀག་ཐབས་ལུ་ `if (i < n)` ཞིབ་དཔྱད་ཚུ་དང་གཅིག་ཁར་ བསྐྱར་ལོག་ཚུ་ ལྟ་རྟོག་འབད་ཡོདཔ་ཨིན། (སྔོན་སྒྲིག་ K=2) ཁྱོད་ཀྱིས་ K ལས་རིམ་གྱི་ཐོག་ལས་ `CompilerOptions { dynamic_iter_cap, .. }` བརྒྱུད་དེ་ བསྒྱུར་བཅོས་འབད་ཚུགས།
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - བསྡུ་སྒྲིག་འབད་མ་ཚར་བའི་ཧེ་མ་ Kotodama ལིན་ཊི་ཉེན་བརྡ་ཚུ་ བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ `koto_lint` གཡོག་བཀོལ། བསྡུ་སྒྲིག་འབད་མི་ངོ་མ་འདི་ དབྱེ་དཔྱད་འབད་བའི་ཤུལ་ལས་ མར་ཕབ་འབད་དེ་ དུས་རྒྱུན་དུ་ འགྱོཝ་ཨིན།
 - འཛོལ་བའི་ཨང་རྟགས་ཚུ་ [Kotodama བསྡུ་སྒྲིག་འཛོལ་བ་ཨང་རྟགས་](./kotodama_error_codes.md)ནང་ ཡིག་ཐོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན། མགྱོགས་དྲགས་འགྲེལ་བཤད་ཀྱི་དོན་ལུ་ `koto_compile --explain <code>` ལག་ལེན་འཐབ།
 

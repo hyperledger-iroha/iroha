@@ -754,6 +754,11 @@ fn parse_identifier_receipt_payload_value(
             .get("execution")
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
+    let opening = parse_identifier_output_opening_value(
+        object
+            .get("opening")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
     let opaque_id = parse_identifier_opaque_id_value(
         object
             .get("opaque_id")
@@ -776,10 +781,74 @@ fn parse_identifier_receipt_payload_value(
     Ok(IdentifierResolutionReceiptPayload {
         policy_id,
         execution,
+        opening,
         opaque_id,
         receipt_hash,
         uaid,
         account_id,
+    })
+}
+
+fn parse_identifier_output_opening_value(
+    value: &JsonValue,
+) -> BridgeResult<iroha_data_model::ram_lfe::RamLfeOutputOpening> {
+    let object = value.as_object().ok_or(BridgeError::IdentifierReceipt)?;
+    let payload_value = object
+        .get("payload")
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    let payload_object = payload_value
+        .as_object()
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    let program_id = parse_identifier_program_id_value(
+        payload_object
+            .get("program_id")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let input_ciphertext_hash = parse_identifier_hash_value(
+        payload_object
+            .get("input_ciphertext_hash")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let output_ciphertext_hash = parse_identifier_hash_value(
+        payload_object
+            .get("output_ciphertext_hash")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let parameter_digest = parse_identifier_hash_value(
+        payload_object
+            .get("parameter_digest")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let evaluation_key_digest = parse_identifier_hash_value(
+        payload_object
+            .get("evaluation_key_digest")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let opened_output_hash = parse_identifier_hash_value(
+        payload_object
+            .get("opened_output_hash")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let opened_at_ms = payload_object
+        .get("opened_at_ms")
+        .and_then(JsonValue::as_u64)
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    let expires_at_ms = payload_object
+        .get("expires_at_ms")
+        .and_then(JsonValue::as_u64);
+    let signature = parse_identifier_receipt_signature(object.get("signature"))?;
+    Ok(iroha_data_model::ram_lfe::RamLfeOutputOpening {
+        payload: iroha_data_model::ram_lfe::RamLfeOutputOpeningPayload {
+            program_id,
+            input_ciphertext_hash,
+            output_ciphertext_hash,
+            parameter_digest,
+            evaluation_key_digest,
+            opened_output_hash,
+            opened_at_ms,
+            expires_at_ms,
+        },
+        signature,
     })
 }
 
@@ -929,6 +998,26 @@ fn parse_identifier_execution_payload_value(
             .get("output_hash")
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
+    let input_ciphertext_hash = parse_identifier_hash_value(
+        object
+            .get("input_ciphertext_hash")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let output_ciphertext_hash = parse_identifier_hash_value(
+        object
+            .get("output_ciphertext_hash")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let parameter_digest = parse_identifier_hash_value(
+        object
+            .get("parameter_digest")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let evaluation_key_digest = parse_identifier_hash_value(
+        object
+            .get("evaluation_key_digest")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
     let associated_data_hash = parse_identifier_hash_value(
         object
             .get("associated_data_hash")
@@ -945,6 +1034,10 @@ fn parse_identifier_execution_payload_value(
         program_digest,
         backend,
         verification_mode,
+        input_ciphertext_hash,
+        output_ciphertext_hash,
+        parameter_digest,
+        evaluation_key_digest,
         output_hash,
         associated_data_hash,
         executed_at_ms,
@@ -11490,7 +11583,7 @@ pub unsafe extern "C" fn connect_norito_blake3_hash(
 mod tests {
     use std::{ffi::CString, mem::MaybeUninit};
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
     use iroha_data_model::isi::rwa::RwaInstructionBox;
 
     use super::*;
@@ -11567,6 +11660,19 @@ mod tests {
 
     fn sample_identifier_receipt_payload() -> IdentifierResolutionReceiptPayload {
         let signatory = KeyPair::random().public_key().clone();
+        let opening_payload = iroha_data_model::ram_lfe::RamLfeOutputOpeningPayload {
+            program_id: "identifier_lookup_retail"
+                .parse()
+                .expect("valid program id"),
+            input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+            output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+            parameter_digest: Hash::new(b"parameters"),
+            evaluation_key_digest: Hash::new(b"evaluation-keys"),
+            opened_output_hash: Hash::new(b"opened-output"),
+            opened_at_ms: 8,
+            expires_at_ms: Some(107),
+        };
+        let opening_signer = KeyPair::random();
         IdentifierResolutionReceiptPayload {
             policy_id: "email#retail".parse().expect("valid policy id"),
             execution: iroha_data_model::ram_lfe::RamLfeExecutionReceiptPayload {
@@ -11576,10 +11682,18 @@ mod tests {
                 program_digest: Hash::new(b"program"),
                 backend: iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1,
                 verification_mode: iroha_crypto::RamLfeVerificationMode::Signed,
+                input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+                output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+                parameter_digest: Hash::new(b"parameters"),
+                evaluation_key_digest: Hash::new(b"evaluation-keys"),
                 output_hash: Hash::new(b"output"),
                 associated_data_hash: Hash::new(b"associated-data"),
                 executed_at_ms: 7,
                 expires_at_ms: Some(107),
+            },
+            opening: iroha_data_model::ram_lfe::RamLfeOutputOpening {
+                signature: SignatureOf::new(opening_signer.private_key(), &opening_payload).into(),
+                payload: opening_payload,
             },
             opaque_id: iroha_data_model::account::OpaqueAccountId::from_hash(Hash::new(b"opaque")),
             receipt_hash: Hash::new(b"receipt"),
@@ -11620,6 +11734,22 @@ mod tests {
                             ("backend", JsonValue::from("bfv-programmed-sha3-256-v1")),
                             ("verification_mode", JsonValue::from("signed")),
                             (
+                                "input_ciphertext_hash",
+                                JsonValue::from(hex_hash(payload.execution.input_ciphertext_hash)),
+                            ),
+                            (
+                                "output_ciphertext_hash",
+                                JsonValue::from(hex_hash(payload.execution.output_ciphertext_hash)),
+                            ),
+                            (
+                                "parameter_digest",
+                                JsonValue::from(hex_hash(payload.execution.parameter_digest)),
+                            ),
+                            (
+                                "evaluation_key_digest",
+                                JsonValue::from(hex_hash(payload.execution.evaluation_key_digest)),
+                            ),
+                            (
                                 "output_hash",
                                 JsonValue::from(hex_hash(payload.execution.output_hash)),
                             ),
@@ -11636,6 +11766,70 @@ mod tests {
                                 JsonValue::from(
                                     payload.execution.expires_at_ms.expect("sample expiry"),
                                 ),
+                            ),
+                        ]),
+                    ),
+                    (
+                        "opening",
+                        json_object([
+                            (
+                                "payload",
+                                json_object([
+                                    (
+                                        "program_id",
+                                        JsonValue::from(
+                                            payload.opening.payload.program_id.to_string(),
+                                        ),
+                                    ),
+                                    (
+                                        "input_ciphertext_hash",
+                                        JsonValue::from(hex_hash(
+                                            payload.opening.payload.input_ciphertext_hash,
+                                        )),
+                                    ),
+                                    (
+                                        "output_ciphertext_hash",
+                                        JsonValue::from(hex_hash(
+                                            payload.opening.payload.output_ciphertext_hash,
+                                        )),
+                                    ),
+                                    (
+                                        "parameter_digest",
+                                        JsonValue::from(hex_hash(
+                                            payload.opening.payload.parameter_digest,
+                                        )),
+                                    ),
+                                    (
+                                        "evaluation_key_digest",
+                                        JsonValue::from(hex_hash(
+                                            payload.opening.payload.evaluation_key_digest,
+                                        )),
+                                    ),
+                                    (
+                                        "opened_output_hash",
+                                        JsonValue::from(hex_hash(
+                                            payload.opening.payload.opened_output_hash,
+                                        )),
+                                    ),
+                                    (
+                                        "opened_at_ms",
+                                        JsonValue::from(payload.opening.payload.opened_at_ms),
+                                    ),
+                                    (
+                                        "expires_at_ms",
+                                        JsonValue::from(
+                                            payload
+                                                .opening
+                                                .payload
+                                                .expires_at_ms
+                                                .expect("sample opening expiry"),
+                                        ),
+                                    ),
+                                ]),
+                            ),
+                            (
+                                "signature",
+                                JsonValue::from(hex::encode(payload.opening.signature.payload())),
                             ),
                         ]),
                     ),

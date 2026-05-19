@@ -93,13 +93,17 @@ pub struct Set {
 }
 
 impl Set {
+    fn action_is_active<F>(action: &LoadedAction<F>) -> bool {
+        !action.repeats.is_depleted() && trigger_is_enabled(&action.metadata)
+    }
+
     fn collect_active_ids<F: mv::Value>(
         triggers: &Storage<TriggerId, LoadedAction<F>>,
     ) -> ActiveTriggerIdStore {
         triggers
             .view()
             .iter()
-            .filter(|(_, action)| !action.repeats.is_depleted())
+            .filter(|(_, action)| Self::action_is_active(action))
             .map(|(id, _)| (id.clone(), ()))
             .collect()
     }
@@ -647,6 +651,18 @@ pub trait SetReadOnly {
         due_retries.into_iter().chain(scheduled)
     }
 
+    /// Returns an iterator over `(TriggerId, LoadedAction)` pairs for a deterministic pipeline event.
+    fn match_pipeline_event<'a>(
+        &'a self,
+        event: &'a PipelineEventBox,
+    ) -> impl Iterator<Item = (TriggerId, LoadedAction<PipelineEventFilterBox>)> + 'a {
+        self.pipeline_triggers()
+            .iter()
+            .filter(|(_, action)| Set::action_is_active(action))
+            .filter(move |(_, action)| action.filter.matches(event))
+            .map(move |(id, action)| (id.clone(), action.clone()))
+    }
+
     /// Get [`ExecutableRef`] for given [`TriggerId`].
     /// Returns `None` if `id` is not in the set.
     fn get_executable(&self, id: &TriggerId) -> Option<&ExecutableRef> {
@@ -912,6 +928,14 @@ impl<'set> SetBlock<'set> {
             current_block_time_ms,
         )
     }
+
+    /// Returns pipeline triggers matching a deterministic pipeline event.
+    pub fn match_pipeline_event<'a>(
+        &'a self,
+        event: &'a PipelineEventBox,
+    ) -> impl Iterator<Item = (TriggerId, LoadedAction<PipelineEventFilterBox>)> + 'a {
+        <Self as SetReadOnly>::match_pipeline_event(self, event)
+    }
 }
 
 trait TriggeringEventFilter: EventFilter {}
@@ -1107,7 +1131,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         if self.ids.get(&trigger_id).is_some() {
             return false;
         }
-        let active = !repeats.is_depleted();
+        let active = !repeats.is_depleted() && trigger_is_enabled(&metadata);
 
         let loaded_executable = match executable {
             Executable::Ivm(bytes) => {
@@ -1182,22 +1206,22 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         let result = match event_type {
             TriggeringEventType::Data => self.data_triggers.get_mut(id).map(|entry| {
                 let result = f(entry);
-                active = Some(!entry.repeats().is_depleted());
+                active = Some(Set::action_is_active(entry));
                 result
             }),
             TriggeringEventType::Pipeline => self.pipeline_triggers.get_mut(id).map(|entry| {
                 let result = f(entry);
-                active = Some(!entry.repeats().is_depleted());
+                active = Some(Set::action_is_active(entry));
                 result
             }),
             TriggeringEventType::Time => self.time_triggers.get_mut(id).map(|entry| {
                 let result = f(entry);
-                active = Some(!entry.repeats().is_depleted());
+                active = Some(Set::action_is_active(entry));
                 result
             }),
             TriggeringEventType::ExecuteTrigger => self.by_call_triggers.get_mut(id).map(|entry| {
                 let result = f(entry);
-                active = Some(!entry.repeats().is_depleted());
+                active = Some(Set::action_is_active(entry));
                 result
             }),
         };
@@ -2218,25 +2242,25 @@ impl TryFrom<SetDto> for Set {
             let mut block = set.block();
             let mut tx = block.transaction();
             for (k, v) in data {
-                if !v.repeats.is_depleted() {
+                if Set::action_is_active(&v) {
                     tx.active_data_trigger_ids.insert(k.clone(), ());
                 }
                 tx.data_triggers.insert(k, v);
             }
             for (k, v) in pipeline {
-                if !v.repeats.is_depleted() {
+                if Set::action_is_active(&v) {
                     tx.active_pipeline_trigger_ids.insert(k.clone(), ());
                 }
                 tx.pipeline_triggers.insert(k, v);
             }
             for (k, v) in time {
-                if !v.repeats.is_depleted() {
+                if Set::action_is_active(&v) {
                     tx.active_time_trigger_ids.insert(k.clone(), ());
                 }
                 tx.time_triggers.insert(k, v);
             }
             for (k, v) in by_call {
-                if !v.repeats.is_depleted() {
+                if Set::action_is_active(&v) {
                     tx.active_by_call_trigger_ids.insert(k.clone(), ());
                 }
                 tx.by_call_triggers.insert(k, v);

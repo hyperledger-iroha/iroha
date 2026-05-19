@@ -32,7 +32,7 @@ fn main() {
 cargo run -p ivm --bin koto_compile -- crates/ivm/docs/examples/10_meta_header.ko --out /tmp/meta.to --manifest-out /tmp/meta.manifest.json
 ```
 
-Flags: `--abi <u8>`, `--vl <u8>`, `--max-cycles <u64>`, `--iter-cap <u8>`, `--force-zk`, `--force-vector`, `--manifest-out <path.json|->`.
+Flags: `--abi <u8>`, `--vl <u8>`, `--max-cycles <u64>`, `--force-zk`, `--force-vector`, `--manifest-out <path.json|->`.
 Use `--manifest-out -` to print the manifest JSON to stdout instead of writing a file.
 Seiyaku `meta {}` in the source takes precedence where provided.
 
@@ -52,31 +52,31 @@ Contents
 - `13_register_and_mint.ko`: Register a new asset and mint to an account.
 - `14_map_sum_take2.ko`: Deterministic two-iteration map sum via `.take(2)` on a state map.
 - `15_modulo.ko`: `%` modulo operator, returns `a % b`.
- - `16_dynamic_take.ko`: Dynamic `.take(n)` guarded iteration (feature-gated).
- - `17_dynamic_range.ko`: Dynamic `.range(start,end)` guarded iteration (feature-gated).
+- `16_dynamic_take.ko`: Dynamic `.take(n)` guarded state-map iteration.
+- `17_dynamic_range.ko`: Dynamic `.range(start,end)` guarded state-map iteration.
 - `18_ternary.ko`: Ternary conditional `cond ? then : else` expression.
 
 Notes
 - Kotodama targets the Iroha Virtual Machine (IVM) and produces `.to` bytecode. RISC‑V–like encodings in the implementation are IVM’s mixed-format details and not a hardware target.
 - Pointer-ABI typed constructors (and their `account!(...)`, `name!(...)`, `json!(...)`, `nft_id!(...)`, `asset_definition!(...)` macro aliases) are compiled into Norito-encoded TLV blobs and passed to the host as pointers.
 - Seiyaku `meta {}` influences header fields (`abi_version`, `vector_length`, `max_cycles`) and mode bits (`zk`, `vector`). The compiler validates that `zk`/`vector` flags match the opcodes actually emitted. When omitted, the compiler defaults `abi_version` to 1 and leaves other fields at their option defaults.
-Dynamic bounds (feature-gated)
-- Enable the `kotodama_dynamic_bounds` feature on the `ivm` crate to accept non-literal bounds for `.take(n)` and `.range(start, end)`.
+Dynamic bounds
+- First-release Kotodama accepts non-literal bounds for durable `state Map<int, V>` `.take(n)` and `.range(start, end)` iteration.
 
-Compile examples with dynamic bounds enabled:
+Compile dynamic-bound examples:
 
 ```
-cargo run -p ivm --features kotodama_dynamic_bounds --bin koto_compile -- \
+cargo run -p ivm --bin koto_compile -- \
   crates/ivm/docs/examples/16_dynamic_take.ko --out /tmp/dyn_take.to
 
-cargo run -p ivm --features kotodama_dynamic_bounds --bin koto_compile -- \
+cargo run -p ivm --bin koto_compile -- \
   crates/ivm/docs/examples/17_dynamic_range.ko --out /tmp/dyn_range.to
 ```
 
 Notes:
 - The compiler inserts runtime assertions to ensure bounds are non-negative and consistent (e.g., `end >= start`).
-- Lowering emits up to K guarded iterations with `if (i < n)` checks (default K = 2) to avoid extra body executions.
-- You can tune K via CLI `--iter-cap <u8>` or programmatically with `CompilerOptions { dynamic_iter_cap, .. }`.
+- Lowering emits up to 64 guarded iterations with `if (i < n)` checks to avoid extra body executions.
+- The dynamic iteration cap is fixed for the first release; `--iter-cap` accepts only the fixed value for old scripts and cannot change compiler output.
 - Dynamic bounds are supported on state maps; in-memory maps accept only literal bounds (max 1 element).
 - Run `koto_lint` on source files to review Kotodama lint warnings before invoking the compiler.
 

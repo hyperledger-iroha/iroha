@@ -2958,10 +2958,10 @@ mod tests {
     };
     use iroha_config_base::WithOrigin;
     use iroha_crypto::{
-        Algorithm, BfvParameters, KeyPair, RamLfeBackend, RamLfeVerificationMode,
-        bfv_programmed_policy_commitment_with_program,
+        Algorithm, BfvEvaluationKeyBundle, BfvParameters, KeyPair, RamLfeBackend,
+        RamLfeVerificationMode, bfv_programmed_policy_commitment_with_program,
         bfv_programmed_public_parameters_with_program, default_bfv_programmed_hidden_program,
-        derive_identifier_key_material_from_seed,
+        derive_identifier_key_material_from_seed, ram_lfe_bfv_parameters_v1,
     };
     use iroha_data_model::{
         ChainId, DataSpaceId, Level,
@@ -3070,12 +3070,7 @@ mod tests {
     }
 
     fn identifier_bfv_parameters() -> BfvParameters {
-        BfvParameters {
-            polynomial_degree: 64,
-            ciphertext_modulus: 1_u64 << 52,
-            plaintext_modulus: 256,
-            decomposition_base_log: 12,
-        }
+        ram_lfe_bfv_parameters_v1()
     }
 
     fn register_ram_lfe_program_policy_tx() -> SignedTransaction {
@@ -3091,15 +3086,21 @@ mod tests {
             .parse::<RamLfeProgramId>()
             .expect("valid program id");
         let hidden_program = default_bfv_programmed_hidden_program();
-        let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
+        let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
             &identifier_bfv_parameters(),
             63,
             b"email-secret",
             &norito::to_bytes(&program_id).expect("encode program id"),
         )
         .expect("derive key material");
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            bootstrap_key: None,
+        };
         let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
             public_parameters,
+            evaluation_keys,
             &hidden_program,
             RamLfeVerificationMode::Signed,
             None,

@@ -469,7 +469,7 @@ fn expected_fhe_job_spec() -> FheJobSpecV1 {
         ],
         output_state_key: "/state/health/result-1".to_string(),
         requested_multiplication_depth: 0,
-        rotation_count: 0,
+        rotation_steps: 0,
         bootstrap_count: 0,
     }
 }

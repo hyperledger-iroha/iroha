@@ -92,7 +92,7 @@ Scalar አይነቶች
 
 ታይነት
 - `kotoage fn` የሕዝብ መግቢያ ነጥብ ያመለክታል; ታይነት የላኪ ፈቃዶችን እንጂ ኮድጅንን አይነካም።
-- የአማራጭ የመዳረሻ ፍንጮች፡- `#[access(read=..., write=...)]` የማንበብ/የመፃፍ ቁልፎችን ለማቅረብ `fn`/`kotoage fn` ሊቀድም ይችላል። አቀናባሪው የምክር ፍንጮችን በራስ ሰር ያወጣል፤ ግልጽ ያልሆነ አስተናጋጅ ጥሪዎች ወደ ወግ አጥባቂ የዱር ካርድ ቁልፎች (`*`) ይመለሳሉ እና ግልጽ የሆኑ የመዳረሻ ፍንጮች ካልተሰጡ በስተቀር የምርመራ ውጤትን ያሳያሉ፣ ስለዚህ መርሐግብር አውጪዎች ለደቃቁ-ጥራጥሬ ቁልፎች ወደ ተለዋዋጭ ፕሪፓስ ውስጥ መምረጥ ይችላሉ።
+- Access metadata is compiler-owned. Manual `#[access(...)]` attributes are rejected; deployable compilation succeeds only when the compiler can emit complete read/write metadata without wildcard keys.
 
 ## የኮንትራት ኮንቴይነር እና ሜታዳታ
 
@@ -308,7 +308,7 @@ Host/syscall builtins (ካርታ ወደ SCALL፤ ትክክለኛ ቁጥሮች �
 - `.take(n)`: ከመጀመሪያው የ `n` ግቤቶችን ይድገሙት።
 - `.range(start, end)`: በግማሽ ክፍት ጊዜ `[start, end)` ውስጥ ተደጋጋሚ ግቤቶች። ሴማቲክስ ከ `start` እና `n = end - start` ጋር እኩል ነው።በተለዋዋጭ ድንበሮች ላይ ማስታወሻዎች
 - የቃል ድንበሮች፡- `n`፣ `start`፣ እና `end` እንደ ኢንቲጀር ቃል በቃል የተደገፉ እና ወደ ቋሚ የድግግሞሽ ብዛት ያጠናቅራሉ።
-- ቃል በቃል ያልሆኑ ድንበሮች፡ የ`kotodama_dynamic_bounds` ባህሪ በ`ivm` ሳጥን ውስጥ ሲነቃ አቀናባሪው ተለዋዋጭ `n`፣ `start`፣ እና `end`ን ይቀበላል `end >= start`)። ተጨማሪ የሰውነት ግድያዎችን ለማስቀረት (ነባሪ K=2) በ`if (i < n)` ቼኮች እስከ ኬ የሚጠበቁ ድግግሞሾችን ዝቅ ማድረግ። K በፕሮግራም በ `CompilerOptions { dynamic_iter_cap, .. }` በኩል ማስተካከል ይችላሉ።
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - ከማጠናቀርዎ በፊት `koto_lint` የ Kotodama lint ማስጠንቀቂያዎችን ለመመርመር ያሂዱ; ዋናው ማጠናከሪያ ሁልጊዜ ከመተንተን እና ከተየመፈተሸ በኋላ ወደ ታች በማውረድ ይቀጥላል.
 - የስህተት ኮዶች በ [Kotodama Compiler Error Codes] (./kotodama_error_codes.md) ውስጥ ተመዝግበዋል; ለፈጣን ማብራሪያዎች `koto_compile --explain <code>` ይጠቀሙ።
 

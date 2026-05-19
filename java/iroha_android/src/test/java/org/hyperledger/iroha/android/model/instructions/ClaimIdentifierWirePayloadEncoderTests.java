@@ -7,6 +7,8 @@ import org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoder;
 import org.hyperledger.iroha.android.client.IdentifierResolutionExecutionPayload;
 import org.hyperledger.iroha.android.client.IdentifierResolutionPayload;
 import org.hyperledger.iroha.android.client.IdentifierResolutionReceipt;
+import org.hyperledger.iroha.android.client.RamLfeOutputOpening;
+import org.hyperledger.iroha.android.client.RamLfeOutputOpeningPayload;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -39,10 +41,15 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
                 "11".repeat(32),
                 "bfv-affine-sha3-256-v1",
                 "signed",
+                "AA".repeat(32),
+                "BB".repeat(32),
+                "CC".repeat(32),
+                "DD".repeat(32),
                 "22".repeat(32),
                 "33".repeat(32),
                 42L,
                 142L),
+            sampleOpening("identifier_lookup_retail", signatureHex),
             "opaque:" + "44".repeat(32),
             "55".repeat(32),
             "uaid:" + "66".repeat(32),
@@ -94,10 +101,15 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
                 "11".repeat(32),
                 "bfv-affine-sha3-256-v1",
                 "signed",
+                "AA".repeat(32),
+                "BB".repeat(32),
+                "CC".repeat(32),
+                "DD".repeat(32),
                 "22".repeat(32),
                 "33".repeat(32),
                 42L,
                 142L),
+            sampleOpening("email_retail", signatureHex),
             "opaque:" + "44".repeat(32),
             "55".repeat(32),
             "uaid:" + "66".repeat(32),
@@ -130,8 +142,13 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
                 "signed",
                 PARITY_HASH_HEX,
                 PARITY_HASH_HEX,
+                PARITY_HASH_HEX,
+                PARITY_HASH_HEX,
+                PARITY_HASH_HEX,
+                PARITY_HASH_HEX,
                 1_735_000_000_000L,
                 null),
+            sampleOpening("parity_test", PARITY_SIGNATURE_HEX, PARITY_HASH_HEX),
             "opaque:" + PARITY_HASH_HEX,
             PARITY_HASH_HEX,
             "uaid:" + PARITY_HASH_HEX,
@@ -193,6 +210,26 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
         + "CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01"
         + "CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01"
         + "CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD01CD";
+  }
+
+  private static RamLfeOutputOpening sampleOpening(
+      final String programId, final String signatureHex) {
+    return sampleOpening(programId, signatureHex, "EE".repeat(32));
+  }
+
+  private static RamLfeOutputOpening sampleOpening(
+      final String programId, final String signatureHex, final String hashHex) {
+    return new RamLfeOutputOpening(
+        new RamLfeOutputOpeningPayload(
+            programId,
+            hashHex,
+            hashHex,
+            hashHex,
+            hashHex,
+            hashHex,
+            1_735_000_000_000L,
+            null),
+        signatureHex);
   }
 
   private static byte[] readSizedField(final NoritoDecoder decoder) {

@@ -64,6 +64,37 @@ groups:
             affected device class, confirm whether the queue headroom or zero-fill
             alerts also fired, rerun `fastpq_metal_bench`, and attach the updated
             evidence bundle before re-enabling GPU defaults.
+      - alert: FastpqGpuDisabled
+        expr: |
+          sum by (accelerator, reason, device_class, chip_family, gpu_kind) (
+            increase(fastpq_gpu_disable_total[5m])
+          ) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FASTPQ GPU accelerator disabled"
+          description: |
+            A FASTPQ GPU accelerator reported a disable event. Scalar CPU paths
+            remain authoritative, but the affected accelerator must stay disabled
+            until the reason is understood and fresh parity evidence is attached
+            for the reported device class and GPU kind.
+      - alert: FastpqGpuParityFailure
+        expr: |
+          sum by (accelerator, reason, device_class, chip_family, gpu_kind) (
+            increase(fastpq_gpu_parity_failure_total[5m])
+          ) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "FASTPQ sampled GPU parity failure detected"
+          description: |
+            FASTPQ sampled runtime parity diverged from the scalar CPU reference.
+            Treat this as fail-closed evidence for the reported accelerator:
+            keep GPU execution disabled on that path, collect the failing sample,
+            and do not re-enable the accelerator until scalar-equivalent vectors
+            pass on matching hardware.
       - alert: FastpqQueueHeadroomLow
         expr: |
           (

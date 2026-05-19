@@ -41,6 +41,8 @@ fn manifest_pointer_roundtrip() {
                 "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
             ],
             write_keys: vec!["asset.detail:62Fk4FPcMuLvW5QjDGNF2a4jAmjM:balance".to_owned()],
+            dynamic_reads: Vec::new(),
+            dynamic_writes: Vec::new(),
         }),
         entrypoints: None,
         kotoba: None,

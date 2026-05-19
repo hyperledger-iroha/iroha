@@ -117,7 +117,7 @@ seiyaku Name {
 Семантика
 - `meta { ... }` переопределяет значения компилятора по умолчанию для заголовка IVM: `abi_version`, `vector_length` (0 означает не задано), `max_cycles` (0 означает дефолт компилятора), `features` включает биты фич (ZK‑трассировка, объявление вектора). Неподдерживаемые фичи игнорируются с предупреждением. Если `meta {}` отсутствует, компилятор эмитит `abi_version = 1` и использует дефолты опций для остальных полей заголовка.
 - `features: ["zk", "simd"]` (алиасы: `"vector"`) явно запрашивает соответствующие биты заголовка. Неизвестные строки фич теперь вызывают ошибку парсера, а не игнорируются.
-- `state` объявляет долговечные переменные контракта. Компилятор понижает обращения в syscalls `STATE_GET/STATE_SET/STATE_DEL`, а хост хранит их в overlay на транзакцию (checkpoint/restore для rollback, flush при commit в WSV). Access hints выпускаются для литеральных путей; динамические ключи падают в конфликты уровня map. Для явных чтений/записей через хост используйте `state_get/state_set/state_del` и map-helpers `map.ensure(...)`; они проходят через Norito TLV и сохраняют стабильные имена/порядок полей.
+- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Literal state paths emit exact keys, dynamic state-map keys emit map-level conflict keys, and bounded dynamic iteration emits structured dynamic access descriptors. Raw dynamic `state_get/state_set/state_del` paths are rejected for production artifacts unless the compiler can prove a precise state key.
 - Идентификаторы `state` зарезервированы; затенение имени `state` в параметрах или `let` запрещено (`E_STATE_SHADOWED`).
 - Значения state‑карт не являются первоклассными: используйте идентификатор состояния напрямую для операций карты и итерации. Привязка или передача state‑карт в пользовательские функции запрещена (`E_STATE_MAP_ALIAS`).
 - Durable state‑карты сейчас поддерживают только ключи типов `int` и pointer‑ABI; другие типы ключей отклоняются при компиляции.
@@ -295,7 +295,7 @@ Helpers для границ
 
 Примечания по динамическим границам
 - Литеральные границы: `n`, `start`, `end` как целочисленные литералы полностью поддерживаются и компилируются в фиксированное число итераций.
-- Нелитеральные границы: когда фича `kotodama_dynamic_bounds` включена в crate `ivm`, компилятор принимает динамические выражения `n`, `start`, `end` и вставляет рантайм‑ассерты для безопасности (неотрицательность, `end >= start`). Понижение эмитит до K охраняемых итераций с `if (i < n)`, чтобы избежать лишних выполнений тела (K по умолчанию = 2). Вы можете настраивать K через `CompilerOptions { dynamic_iter_cap, .. }`.
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - Запускайте `koto_lint` для проверки lint‑предупреждений Kotodama перед компиляцией; основной компилятор всегда продолжает lowering после парсинга и проверки типов.
 - Коды ошибок задокументированы в [Kotodama Compiler Error Codes](./kotodama_error_codes.md); используйте `koto_compile --explain <code>` для быстрых пояснений.
 

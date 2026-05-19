@@ -92,7 +92,7 @@ Nəticəni yazın
 
 Görünüş
 - `kotoage fn` ictimai giriş nöqtəsini bildirir; görünürlük kodgenə deyil, dispetçer icazələrinə təsir edir.
-- Əlavə giriş göstərişləri: `#[access(read=..., write=...)]` manifest oxuma/yazma düymələrini təmin etmək üçün `fn`/`kotoage fn`-dən əvvəl ola bilər. Kompilyator avtomatik olaraq məsləhət göstərişləri də verir; qeyri-şəffaf host zəngləri mühafizəkar joker işarələrə (`*`) qayıdır və açıq giriş göstərişləri verilmədikcə diaqnostikanı üzə çıxarır, beləliklə, planlaşdırıcılar daha incə düymələr üçün dinamik hazırlıqdan keçə bilərlər.
+- Access metadata is compiler-owned. Manual `#[access(...)]` attributes are rejected; deployable compilation succeeds only when the compiler can emit complete read/write metadata without wildcard keys.
 
 ## Müqavilə Konteyneri və Metadata
 
@@ -308,7 +308,7 @@ Həddi köməkçilər
 - `.take(n)`: başlanğıcdan ilk `n` girişlərini təkrarlayın.
 - `.range(start, end)`: `[start, end)` yarımaçıq intervalda qeydləri təkrarlayın. Semantika `start` və `n = end - start` ilə bərabərdir.Dinamik sərhədlər haqqında qeydlər
 - Hərfi sərhədlər: `n`, `start` və `end` tam ədəd literalları kimi tam dəstəklənir və sabit sayda iterasiyaya tərtib edilir.
-- Qeyri-hərfi sərhədlər: `kotodama_dynamic_bounds` xüsusiyyəti `ivm` qutusunda aktiv edildikdə, kompilyator dinamik `n`, `start` və `end` (təhlükəsizlik və daxilolma ifadəsi) kimi qəbul edir. `end >= start`). Azaldılması əlavə bədən icralarından qaçmaq üçün `if (i < n)` yoxlamaları ilə K qorunan iterasiyaya qədər emissiya edir (defolt K=2). `CompilerOptions { dynamic_iter_cap, .. }` vasitəsilə K-ni proqramlı şəkildə kökləyə bilərsiniz.
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - Tərtib etməzdən əvvəl Kotodama lint xəbərdarlıqlarını yoxlamaq üçün `koto_lint`-i işə salın; əsas kompilyator təhlildən və tip yoxlamasından sonra həmişə endirmə ilə davam edir.
 - Səhv kodları [Kotodama Compiler Error Codes](./kotodama_error_codes.md) bölməsində sənədləşdirilmişdir; sürətli izahatlar üçün `koto_compile --explain <code>` istifadə edin.
 

@@ -4,11 +4,11 @@
 //! settlement_hash)`, validates each payload, persists it to the Sumeragi status snapshot,
 //! and emits a high-priority control-plane frame so peers can ingest the relay evidence.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use iroha_data_model::{
     block::consensus::LaneBlockCommitment,
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
+    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError, LaneRelayProofStatus},
 };
 use iroha_p2p::{Broadcast, Priority};
 use iroha_telemetry::metrics;
@@ -62,7 +62,7 @@ impl LaneRelayTx for IrohaNetwork {
 #[derive(Clone)]
 pub struct LaneRelayBroadcaster<N: LaneRelayTx> {
     network: N,
-    seen: BTreeSet<LaneRelayKey>,
+    seen: BTreeMap<LaneRelayKey, LaneRelayProofStatus>,
 }
 
 impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
@@ -71,17 +71,20 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
     pub fn new(network: N) -> Self {
         Self {
             network,
-            seen: BTreeSet::new(),
+            seen: BTreeMap::new(),
         }
     }
 
     /// Validate, de-duplicate, record, and broadcast the provided envelopes.
     pub fn broadcast(&mut self, envelopes: impl IntoIterator<Item = LaneRelayEnvelope>) {
         for envelope in envelopes {
-            if let Err(err) = envelope
-                .verify()
-                .and_then(|()| envelope.verify_fastpq_proof_material())
-            {
+            if let Err(err) = envelope.verify().and_then(|()| {
+                if envelope.fastpq_proof.is_some() {
+                    envelope.verify_fastpq_proof_material()
+                } else {
+                    Ok(())
+                }
+            }) {
                 record_relay_error(&err);
                 iroha_logger::warn!(
                     lane_id = %envelope.lane_id,
@@ -89,14 +92,19 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
                     block_height = envelope.block_height,
                     error_kind = err.as_label(),
                     error = %err,
-                    "dropping invalid lane relay envelope before broadcast"
+                    "dropping structurally invalid lane relay envelope before broadcast"
                 );
                 continue;
             }
             let key = LaneRelayKey::from_envelope(&envelope);
-            if !self.seen.insert(key) {
+            let proof_status = envelope.proof_status();
+            if self.seen.get(&key).is_some_and(|existing| {
+                *existing == LaneRelayProofStatus::Verified
+                    || proof_status == LaneRelayProofStatus::Pending
+            }) {
                 continue;
             }
+            self.seen.insert(key, proof_status);
             status::push_lane_relay_envelope(envelope.clone());
             self.network.broadcast_relay(envelope);
         }
@@ -225,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn broadcaster_accepts_retry_after_missing_fastpq_proof() {
+    fn broadcaster_broadcasts_pending_then_upgrades_verified_relay() {
         let _guard = crate::sumeragi::status::lane_relay_test_guard();
         crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
         let network = MockNetwork::default();
@@ -236,16 +244,24 @@ mod tests {
         missing_proof.fastpq_proof = None;
 
         broadcaster.broadcast(vec![missing_proof]);
-        assert!(network.sent().is_empty());
-        assert!(crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty());
-
-        broadcaster.broadcast(vec![envelope]);
         let sent = network.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].block_height, 3);
+        assert!(sent[0].fastpq_proof.is_none());
+        let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert!(snapshot[0].fastpq_proof.is_none());
+
+        broadcaster.broadcast(vec![envelope]);
+        let sent = network.sent();
+        assert_eq!(sent.len(), 2);
+        assert!(sent[1].fastpq_proof.is_some());
+        let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
         assert_eq!(
-            crate::sumeragi::status::lane_relay_envelopes_snapshot().len(),
-            1
+            snapshot.len(),
+            1,
+            "status keeps one relay per key and upgrades pending to verified"
         );
+        assert!(snapshot[0].fastpq_proof.is_some());
     }
 }

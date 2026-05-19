@@ -23,7 +23,7 @@ Legend: ✅ Implemented, 🟨 Parsed, 💤 Planned
 | Public function `kotoage fn`/`言挙げ fn`     |  ✅    | compiled as function; “public” enforced by runtime |
 | Upgrade hook `kaizen`/`改善` + `permission` |  🟨    | parsed; governance/dispatch enforced by runtime |
 | `kotoba {…}` translations                    |  🟩    | parsed; emitted in manifest |
-| Access hints `#[access(read=..., write=...)]`|  ✅    | collected into manifest/entrypoint hints |
+| Compiler-owned access metadata              |  ✅    | manifest/entrypoint hints are generated; manual `#[access(...)]` attributes are rejected |
 | Trigger declarations `register_trigger {…}`  |  ✅    | time/execute/data/pipeline trigger DSL with metadata and explicit authority; manifest triggers auto-register on activation |
 | `state Type name;`                           |  ✅    | host-backed durable overlays (Norito TLV persistence + checkpoint/restore rollback) |
 | `struct Name { … }`                          |  ✅    | lowered to tuple layout; field access compiled |

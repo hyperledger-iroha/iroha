@@ -121,7 +121,7 @@ seiyaku Name {
 الدلالات
 - `meta { ... }` تتجاوز افتراضات المترجم لرأس IVM المُصدر: `abi_version`, `vector_length` (0 يعني غير مُحدد)، `max_cycles` (0 يعني افتراض المترجم)، `features` تُفعّل بتات الميزات في الرأس (تتبع ZK، إعلان المتجه). تُتجاهل الميزات غير المدعومة مع تحذير. عند غياب `meta {}` يصدر المترجم `abi_version = 1` ويستخدم افتراضات الخيارات لبقية حقول الرأس.
 - `features: ["zk", "simd"]` (مرادفات: `"vector"`) تطلب صراحة بتات الرأس المقابلة. السلاسل غير المعروفة للميزات تُنتج الآن خطأ في المحلل بدل التجاهل.
-- `state` تعلن متغيرات العقد الدائمة. يُخفض المترجم عمليات الوصول إلى syscalls `STATE_GET/STATE_SET/STATE_DEL`، ويحتفظ المضيف بها في overlay لكل معاملة (checkpoint/restore للتراجع، و flush عند الـ commit إلى WSV). تُصدر access hints للمسارات الحرفية؛ المفاتيح الديناميكية تهبط إلى تعارضات على مستوى الخريطة. لقراءات/كتابات المضيف الصريحة استخدم `state_get/state_set/state_del` ومساعدات الخرائط `map.ensure(...)`؛ تمر عبر Norito TLV وتحافظ على الأسماء/ترتيب الحقول ثابتة.
+- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Literal state paths emit exact keys, dynamic state-map keys emit map-level conflict keys, and bounded dynamic iteration emits structured dynamic access descriptors. Raw dynamic `state_get/state_set/state_del` paths are rejected for production artifacts unless the compiler can prove a precise state key.
 - معرفات `state` محجوزة؛ تظليل اسم `state` في المعاملات أو `let` مرفوض (`E_STATE_SHADOWED`).
 - قيم خرائط الحالة ليست من الدرجة الأولى: استخدم معرف الحالة مباشرةً لعمليات الخرائط والتكرار. ربط خرائط الحالة أو تمريرها إلى دوال المستخدم مرفوض (`E_STATE_MAP_ALIAS`).
 - خرائط الحالة الدائمة تدعم حاليًا مفاتيح `int` وأنواع pointer‑ABI فقط؛ الأنواع الأخرى للمفاتيح تُرفض في وقت الترجمة.
@@ -296,7 +296,7 @@ register_trigger wake {
 
 ملاحظات حول الحدود الديناميكية
 - الحدود الحرفية: `n`, `start`, و`end` كليترالات عددية مدعومة بالكامل وتُترجم إلى عدد ثابت من التكرارات.
-- الحدود غير الحرفية: عندما تُفعّل ميزة `kotodama_dynamic_bounds` في crate `ivm`، يقبل المترجم تعابير ديناميكية لـ `n` و`start` و`end` ويضيف تأكيدات وقت التشغيل للسلامة (غير سالب، `end >= start`). يولّد lowering حتى K تكرارات محروسة بـ `if (i < n)` لتجنّب تنفيذات زائدة للجسم (K الافتراضي = 2). يمكنك ضبط K برمجيًا عبر `CompilerOptions { dynamic_iter_cap, .. }`.
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - شغّل `koto_lint` لمراجعة تحذيرات lint في Kotodama قبل الترجمة؛ المترجم الرئيسي يتابع دائمًا بعد التحليل والنوع.
 - أكواد الخطأ موثقة في [Kotodama Compiler Error Codes](./kotodama_error_codes.md)؛ استخدم `koto_compile --explain <code>` للشروح السريعة.
 

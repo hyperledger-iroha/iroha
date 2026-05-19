@@ -73,6 +73,8 @@ pub struct RamLfeProgramPolicy {
     pub commitment: PolicyCommitment,
     /// Public key used to verify signed receipts.
     pub resolver_public_key: PublicKey,
+    /// Public key used to verify externally opened RAM-LFE output commitments.
+    pub output_opening_public_key: PublicKey,
     /// Whether the program policy is active for new execution receipts.
     pub active: bool,
     /// Optional human-readable note.
@@ -98,10 +100,18 @@ impl RamLfeProgramPolicy {
             backend,
             verification_mode,
             commitment,
-            resolver_public_key,
+            resolver_public_key: resolver_public_key.clone(),
+            output_opening_public_key: resolver_public_key,
             active: false,
             note: None,
         }
+    }
+
+    /// Override the output-opening verifier key.
+    #[must_use]
+    pub fn with_output_opening_public_key(mut self, public_key: PublicKey) -> Self {
+        self.output_opening_public_key = public_key;
+        self
     }
 
     /// Attach an optional operator note.
@@ -127,7 +137,15 @@ pub struct RamLfeExecutionReceiptPayload {
     pub backend: RamLfeBackend,
     /// Receipt verification mode.
     pub verification_mode: RamLfeVerificationMode,
-    /// Hash of the plaintext output bytes returned to the caller.
+    /// Hash of the encrypted input envelope evaluated by the program.
+    pub input_ciphertext_hash: Hash,
+    /// Hash of the encrypted output envelope produced by the program.
+    pub output_ciphertext_hash: Hash,
+    /// Digest of the registered BFV parameter set used for execution.
+    pub parameter_digest: Hash,
+    /// Digest of the BFV evaluation-key bundle used for execution.
+    pub evaluation_key_digest: Hash,
+    /// Hash of the encrypted output bytes returned to the caller.
     pub output_hash: Hash,
     /// Hash of the associated-data blob bound into the execution.
     pub associated_data_hash: Hash,
@@ -154,6 +172,57 @@ impl RamLfeExecutionReceiptPayload {
     /// Returns the underlying Norito encoding error when serialization fails.
     pub fn payload_hash(&self) -> Result<Hash, norito::core::Error> {
         self.to_bytes().map(Hash::new)
+    }
+}
+
+/// Canonical payload signed by an external RAM-LFE output-opening authority.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RamLfeOutputOpeningPayload {
+    /// Program policy whose output ciphertext was opened.
+    pub program_id: RamLfeProgramId,
+    /// Hash of the encrypted input envelope evaluated by the program.
+    pub input_ciphertext_hash: Hash,
+    /// Hash of the encrypted output envelope produced by the program.
+    pub output_ciphertext_hash: Hash,
+    /// Digest of the registered BFV parameter set used for execution.
+    pub parameter_digest: Hash,
+    /// Digest of the BFV evaluation-key bundle used for execution.
+    pub evaluation_key_digest: Hash,
+    /// Hash of the externally opened plaintext output bytes.
+    pub opened_output_hash: Hash,
+    /// Opening timestamp in milliseconds since Unix epoch.
+    pub opened_at_ms: u64,
+    /// Optional opening expiry timestamp in milliseconds since Unix epoch.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub expires_at_ms: Option<u64>,
+}
+
+/// Externally attested opening of a RAM-LFE encrypted output.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RamLfeOutputOpening {
+    /// Canonical opening payload.
+    pub payload: RamLfeOutputOpeningPayload,
+    /// Signature over the canonical opening payload bytes.
+    pub signature: Signature,
+}
+
+impl RamLfeOutputOpening {
+    /// Verify the opening authority signature.
+    ///
+    /// # Errors
+    /// Returns an error when the signature is invalid for the opening payload.
+    pub fn verify_signature(&self, public_key: &PublicKey) -> Result<(), iroha_crypto::Error> {
+        SignatureOf::<RamLfeOutputOpeningPayload>::from_signature(self.signature.clone())
+            .verify(public_key, &self.payload)
     }
 }
 
@@ -231,8 +300,9 @@ impl RamLfeExecutionReceipt {
 /// Prelude exports for RAM-LFE program-policy consumers.
 pub mod prelude {
     pub use super::{
-        RamLfeExecutionReceipt, RamLfeExecutionReceiptPayload, RamLfeProgramId,
-        RamLfeProgramIdParseError, RamLfeProgramPolicy, RamLfeReceiptAttestation,
+        RamLfeExecutionReceipt, RamLfeExecutionReceiptPayload, RamLfeOutputOpening,
+        RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramIdParseError,
+        RamLfeProgramPolicy, RamLfeReceiptAttestation,
     };
 }
 
@@ -250,6 +320,10 @@ mod tests {
             program_digest: Hash::new(b"program"),
             backend: RamLfeBackend::BfvProgrammedSha3_256V1,
             verification_mode: RamLfeVerificationMode::Signed,
+            input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+            output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+            parameter_digest: Hash::new(b"parameters"),
+            evaluation_key_digest: Hash::new(b"evaluation-keys"),
             output_hash: Hash::new(b"output"),
             associated_data_hash: Hash::new(b"associated-data"),
             executed_at_ms: 1_777_777_777_000,

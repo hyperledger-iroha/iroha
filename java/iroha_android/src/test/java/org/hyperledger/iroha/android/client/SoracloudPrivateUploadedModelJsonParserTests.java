@@ -12,6 +12,9 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
     parsesPrivateReceiptListPaginationMetadata();
     rejectsMissingOrMalformedReceiptInstruction();
     boundedReceiptListLeavesTotalAbsent();
+    rejectsNegativeReceiptPaginationMetadata();
+    rejectsNegativeReceiptArtifactAndSequenceFields();
+    rejectsBlankReceiptIdentityFields();
     System.out.println("[IrohaAndroid] SoracloudPrivateUploadedModelJsonParserTests passed.");
   }
 
@@ -82,6 +85,56 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
     assert !response.hasMore() : "has more";
   }
 
+  private static void rejectsNegativeReceiptPaginationMetadata() {
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(receiptListJson("-1", "0", "0"))),
+        "expected negative total rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(receiptListJson("0", "-1", "0"))),
+        "expected negative returned_items rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(receiptListJson("0", "0", "-1"))),
+        "expected negative remaining_items rejection");
+  }
+
+  private static void rejectsNegativeReceiptArtifactAndSequenceFields() {
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"ciphertext_bytes\":64", "\"ciphertext_bytes\":-1"))),
+        "expected negative ciphertext_bytes rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"emitted_sequence\":17", "\"emitted_sequence\":-1"))),
+        "expected negative emitted_sequence rejection");
+  }
+
+  private static void rejectsBlankReceiptIdentityFields() {
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"receipt_id\":\"receipt-1\"", "\"receipt_id\":\"   \""))),
+        "expected blank receipt_id rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"policy_id\":\"policy-1\"", "\"policy_id\":\"\""))),
+        "expected blank policy_id rejection");
+  }
+
+  private static String receiptListJson(
+      final String total, final String returnedItems, final String remainingItems) {
+    return "{"
+        + "\"schema_version\":1,"
+        + "\"receipts\":[],"
+        + "\"total\":" + total + ","
+        + "\"returned_items\":" + returnedItems + ","
+        + "\"remaining_items\":" + remainingItems + ","
+        + "\"has_more\":false,"
+        + "\"count_mode\":\"exact\""
+        + "}";
+  }
+
   private static String executeResponseJson() {
     return "{"
         + "\"schema_version\":1,"
@@ -142,4 +195,3 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
     throw new AssertionError(message);
   }
 }
-

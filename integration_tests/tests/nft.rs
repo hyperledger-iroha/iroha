@@ -1,9 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for non-fungible token lifecycle operations.
 
+use std::time::{Duration, Instant};
+
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::data_model::prelude::*;
+use iroha::{client::Client, data_model::prelude::*};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
 use tokio::runtime::Runtime;
@@ -14,6 +16,80 @@ fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, R
         context,
     )
     .unwrap()
+}
+
+fn wait_for_nft(
+    client: &Client,
+    nft_id: &NftId,
+    predicate: impl Fn(&Nft) -> bool,
+    context: &str,
+) -> Nft {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "nft was not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client.query(FindNfts::new()).execute_all() {
+            Ok(nfts) => {
+                let matching = nfts.into_iter().find(|nft| nft.id() == nft_id);
+                if let Some(nft) = matching {
+                    last_observed =
+                        format!("owner={:?}, content={:?}", nft.owned_by(), nft.content());
+                    if predicate(&nft) {
+                        return nft;
+                    }
+                } else {
+                    last_observed = "nft missing".to_owned();
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    panic!("timed out waiting for nft after {context}; id={nft_id}; last_observed={last_observed}");
+}
+
+fn wait_for_nft_owner(client: &Client, nft_id: &NftId, expected_owner: &AccountId, context: &str) {
+    wait_for_nft(
+        client,
+        nft_id,
+        |nft| nft.owned_by() == expected_owner,
+        context,
+    );
+}
+
+fn wait_for_nft_absent(client: &Client, nft_id: &NftId, context: &str) {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "nft was not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client.query(FindNfts::new()).execute_all() {
+            Ok(nfts) => {
+                if nfts.iter().all(|nft| nft.id() != nft_id) {
+                    return;
+                }
+                last_observed = "nft still present".to_owned();
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    panic!(
+        "timed out waiting for nft removal after {context}; id={nft_id}; last_observed={last_observed}"
+    );
 }
 
 #[test]
@@ -32,23 +108,11 @@ fn nft_lifecycle_scenarios() -> Result<()> {
 
         client.submit_blocking(Register::nft(Nft::new(nft_id.clone(), Metadata::default())))?;
 
-        let nft = client
-            .query(FindNfts::new())
-            .execute_all()?
-            .into_iter()
-            .find(|nft| nft.id() == &nft_id)
-            .expect("nft should exist");
-        assert_eq!(nft.owned_by(), &alice_id);
+        wait_for_nft_owner(&client, &nft_id, &alice_id, "nft registration");
 
         client.submit_blocking(Transfer::nft(alice_id, nft_id.clone(), bob_id.clone()))?;
 
-        let nft = client
-            .query(FindNfts::new())
-            .execute_all()?
-            .into_iter()
-            .find(|nft| nft.id() == &nft_id)
-            .expect("nft should exist");
-        assert_eq!(nft.owned_by(), &bob_id);
+        wait_for_nft_owner(&client, &nft_id, &bob_id, "nft transfer");
     }
 
     // client_register_nft_second_time_should_fail
@@ -60,12 +124,12 @@ fn nft_lifecycle_scenarios() -> Result<()> {
 
         client.submit_blocking(register_nft.clone())?;
 
-        let nft = client
-            .query(FindNfts::new())
-            .execute_all()?
-            .into_iter()
-            .find(|nft| *nft.id() == nft_id)
-            .expect("nft should exist");
+        let nft = wait_for_nft(
+            &client,
+            &nft_id,
+            |nft| nft.content() == &metadata,
+            "nft duplicate registration seed",
+        );
         assert_eq!(*nft.content(), metadata);
 
         assert!(client.submit_blocking(register_nft).is_err());
@@ -78,22 +142,15 @@ fn nft_lifecycle_scenarios() -> Result<()> {
         let unregister_nft = Unregister::nft(nft_id.clone());
 
         client.submit_blocking(register_nft)?;
-        assert!(
-            client
-                .query(FindNfts::new())
-                .execute_all()?
-                .iter()
-                .any(|nft| *nft.id() == nft_id)
+        wait_for_nft(
+            &client,
+            &nft_id,
+            |_| true,
+            "nft unregister registration seed",
         );
 
         client.submit_blocking(unregister_nft)?;
-        assert!(
-            client
-                .query(FindNfts::new())
-                .execute_all()?
-                .iter()
-                .all(|nft| *nft.id() != nft_id)
-        );
+        wait_for_nft_absent(&client, &nft_id, "nft unregister");
     }
 
     // nft_owner_cant_modify_nft

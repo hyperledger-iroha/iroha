@@ -108,105 +108,113 @@ publish` run (roadmap reference: `ལམ་གྱི་ས་ཁྲ།md:2209`).
 ཡང་ན་ རྩིས་ཐོའི་དྲན་ཐོ་ཚུ་ནང་ འབྲེལ་མཐུད་འབད་ཡོད་པའི་མངའ་ཁོངས་ས་སྒོ་གང་རུང་ཅིག་ རེ་བ་བསྐྱེདཔ་ ག་ཅི་འབད་ཟེར་བ་ཅིན་ མིང་གཞན་ཅིག་ཡང་ན་
 route གིས་ མངའ་ཁོངས་ཆ་ཤས་ཅིག་འབག་འོང་།
 
-ད་ལྟོའི་Torii ལམ་ཚུ།| ལམ། | དམིགས་ཡུལ། |
-|--------|---------|
-| `GET /v1/ram-lfe/program-policies` | ཤུགས་ལྡན་དང་ཤུགས་མེད་ RAM-LFE ལས་རིམ་སྲིད་བྱུས་ཚུ་དང་ གདམ་ཁ་ཅན་གྱི་ BFV `input_encryption` ཚད་གཞི་ཚུ་དང་ ལས་རིམ་བཟོ་ཡོད་པའི་རྒྱབ་རྟེན་ `ram_fhe_profile` ཚུ་རྩིས་ཏེ་ ཁོང་རའི་མི་མང་ལག་ལེན་འཐབ་ནིའི་མེ་ཊ་ཌེ་ཊ་ཚུ་ཐོ་བཀོད་འབདཝ་ཨིན། |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | གཏན་གཏན་སྦེ་ `{ input_hex }` ཡང་ན་ `{ encrypted_input }` ལས་གཅིག་ངོས་ལེན་འབདཝ་ཨིནམ་དང་ སེལ་འཐུ་འབད་ཡོད་པའི་ལས་རིམ་གྱི་དོན་ལུ་ གནས་སྟངས་མེད་པའི་ `RamLfeExecutionReceipt` དང་ `{ output_hash, receipt_hash }` སླར་ལོག་འབདཝ་ཨིན། RAM-LFE གི་གསལ་བའི་ཡིག་རྐྱང་གྲུབ་འབྲས་འདི་ Torii གིས་སླར་ལོག་མི་འབད། ད་ལྟོའི་Torii རཱན་ཊའིམ་འདི་གིས་ ལས་རིམ་བཟོ་ཡོད་པའི་བི་ཨེཕ་ཝི་རྒྱབ་གཞི་གི་དོན་ལུ་ འབྱོར་རྟགས་ཚུ་བཏོནམ་ཨིན། |
-| `POST /v1/ram-lfe/receipts/verify` | མངའ་སྡེ་མེད་པར་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་ རིམ་སྒྲིག་ལས་རིམ་སྲིད་བྱུས་ལུ་འགལ་བའི་ `RamLfeExecutionReceipt` འདི་ བདེན་དཔྱད་འབདཝ་ཨིནམ་དང་ གདམ་ཁ་ཅན་སྦེ་ ཁ་སླབ་མི་གིས་ བཀྲམ་སྤེལ་འབད་མི་ `output_hex` འདི་ འོང་འབབ་ `output_hash` དང་མཐུན་སྒྲིག་འབདཝ་ཨིན་ན་ ཞིབ་དཔྱད་འབདཝ་ཨིན། |
-| `GET /v1/identifier-policies` | གདམ་ཁ་ཅན་གྱི་ BFV `input_encryption` ཚད་གཞི་ཚུ་རྩིས་ཏེ་ ཤུགས་ལྡན་དང་ཤུགས་མེད་གསང་བའི་ལས་འགན་སྲིད་བྱུས་མིང་ས་སྒོ་ཚུ་དང་ དེ་ཚུ་གི་མི་མང་མེ་ཊ་ཌེ་ཊ་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན། |
-| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | `{ input }` ཡང་ན་ `{ encrypted_input }` ལས་གཅིག་ཏག་ཏག་སྦེ་ངོས་ལེན་འབདཝ་ཨིན། ཚིག་ཡིག་གསལ་པོ་ `input` འདི་ སར་བར་ཕྱོགས་ལུ་ སྤྱིར་བཏང་བཟོ་ཡོདཔ་ཨིན། BFV `encrypted_input` འདི་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་སྲིད་བྱུས་ཐབས་ལམ་དང་འཁྲིལ་ཏེ་ ཧེ་མ་ལས་རང་ སྤྱིར་བཏང་བཟོ་དགོ། དེ་ལས་ མཇུག་སྣོད་འདི་གིས་ `opaque:` ལག་ལེན་འཐབ་མི་འདི་ འཐོབ་ཞིནམ་ལས་ `ClaimIdentifier` གིས་ རིམ་སྒྲིག་གུ་ཕུལ་ཚུགས་པའི་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ འབྱོར་རྟགས་འདི་སླར་ལོག་འབདཝ་ཨིན། || `POST /v1/identifiers/resolve` | `{ input }` ཡང་ན་ `{ encrypted_input }` ལས་གཅིག་ཏག་ཏག་སྦེ་ངོས་ལེན་འབདཝ་ཨིན། ཚིག་ཡིག་གསལ་པོ་ `input` འདི་ སྤྱིར་བཏང་བཟོ་ཡོད་པའི་སར་བར་ཕྱོགས་ཨིན། BFV `encrypted_input` འདི་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་སྲིད་བྱུས་ཐབས་ལམ་དང་འཁྲིལ་ཏེ་ ཧེ་མ་ལས་རང་ སྤྱིར་བཏང་བཟོ་དགོ། མཇུག་སྣོད་འདི་གིས་ ཤུགས་ལྡན་ཐོབ་བརྗོད་ཅིག་ཡོད་པའི་སྐབས་ ངོས་འཛིན་འབད་མི་འདི་ `{ opaque_id, receipt_hash, uaid, account_id, signature }` ནང་ལུ་སེལ་འཐུ་འབདཝ་ཨིནམ་དང་ དེ་མ་ཚད་ ཀེ་ནོ་ནིཀ་མིང་རྟགས་བཀོད་ཡོད་པའི་ པེ་ལོཌི་འདི་ `{ signature_payload_hex, signature_payload }` སྦེ་སླར་ལོག་འབདཝ་ཨིན། |
-| `GET /v1/identifiers/receipts/{receipt_hash}` | བཀོལ་སྤྱོད་པ་དང་ཨེསི་ཌི་ཀེ་ཚུ་གིས་ བདག་དབང་ཐོབ་བརྗོད་རྩིས་ཞིབ་འབད་ནི་དང་ ཡང་ན་ ངོས་འཛིན་ཟུར་ཐོ་ཆ་ཚང་ པར་ལོག་མ་བཏབ་པར་ བསྐྱར་རྩེད་/མ་མཐུན་པའི་འཐུས་ཤོར་ཚུ་ བརྟག་དཔྱད་འབད་ཚུགས། |
+Current Torii routes:
 
-Torii གི་བྱ་རིམ་ནང་ལག་ལེན་འཐབ་ནིའི་རན་ཊའིམ་འདི་ ༡ གི་འོག་ལུ་རིམ་སྒྲིག་འབད་ཡོདཔ་ཨིན།
-`torii.ram_lfe.programs[*]`, keyed by `program_id`. ངོས་འཛིན་འབད་མི་འགྲུལ་ལམ་ཚུ་ ད་ལྟོ་
-RAM-LFE རན་ཊའིམ་དེ་ སོ་སོ་ཅིག་ `identifier_resolver` གི་ཚབ་ལུ་ ལོག་སྟེ་ལག་ལེན་འཐབ།
-config ཁ་ངོས།
+| Route | Purpose |
+|-------|---------|
+| `GET /v1/ram-lfe/program-policies` | Lists active and inactive RAM-LFE program policies plus their public execution metadata, including optional BFV `input_encryption` parameters and the programmed-backend `ram_fhe_profile`. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | Accepts `{ encrypted_input }` only and returns the stateless `RamLfeExecutionReceipt`, `{ output_ciphertext, output_hash, receipt_hash }`, and no plaintext output. The current Torii runtime issues receipts for the programmed BFV backend. |
+| `POST /v1/ram-lfe/receipts/verify` | Statelessly validates a `RamLfeExecutionReceipt` against the published on-chain program policy and optionally checks that a caller-supplied encrypted `output_hex` matches the receipt `output_hash`. |
+| `GET /v1/identifier-policies` | Lists active and inactive hidden-function policy namespaces plus their public metadata, including optional BFV `input_encryption` parameters, the required `normalization` mode for encrypted client-side input, and `ram_fhe_profile` for programmed BFV policies. |
+| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Accepts `{ policy_id, encrypted_input, output_opening }`. The BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint derives the `opaque:` handle from the verified external `RamLfeOutputOpening` and returns a signed receipt that `ClaimIdentifier` can submit on-chain. |
+| `POST /v1/identifiers/resolve` | Accepts `{ policy_id, encrypted_input, output_opening }`. The endpoint re-evaluates the encrypted input, verifies the external output opening, derives the `opaque:` handle from the opened output hash, and returns a nested `{ payload, attestation }` receipt when an active claim exists. |
+| `GET /v1/identifiers/receipts/{receipt_hash}` | Looks up the persisted `IdentifierClaimRecord` bound to a deterministic receipt hash so operators and SDKs can audit claim ownership or diagnose replay / mismatch failures without scanning the full identifier index. |
 
-ད་ལྟོའི་ཨེསི་ཌི་ཀེ་རྒྱབ་སྐྱོར།- `normalizeIdentifierInput(value, normalization)` གིས་ རསཊ་ལུ་མཐུན་སྒྲིག་འབདཝ་ཨིན།
-  ཀེ་ནོ་ནི་ཀ་ལའི་ཛར་ཚུ་ ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༡༢༣ཨེགསི་, ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༡༢༤ཨེགསི་, ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༡༢༥ཨེགསི་,
-  `email_address`, དང་ `account_number` ཡིན།
-- `ToriiClient.listIdentifierPolicies()` གིས་ བི་ཨེཕ་ཝི་རྩིས་ཏེ་ སྲིད་བྱུས་མེ་ཊ་ཌེ་ཊ་ཐོ་བཀོད་འབདཝ་ཨིན།
-  སྲིད་བྱུས་འདི་གིས་དཔར་བསྐྲུན་འབད་བའི་སྐབས་ ཨིན་པུཊི་-གསང་བཟོ་མེ་ཊ་ཌེ་ཊ།
-  `input_encryption_public_parameters_decoded` བརྒྱུད་དེ་ BFV ཚད་བཟུང་དངོས་པོ།
-  ལས་རིམ་བཟོ་ཡོད་པའི་སྲིད་བྱུས་ཚུ་གིས་ཡང་ ཌི་ཀོཌ་འབད་ཡོད་པའི་ `ram_fhe_profile` འདི་ གསལ་སྟོན་འབདཝ་ཨིན། ས་སྒོ་དེ་ནི།
-  བསམ་བཞིན་དུ་ བི་ཨེཕ་ཝི་-ཁྱབ་ཁོངས་: འདི་གིས་ དངུལ་ཁུག་ཚུ་ལུ་ རེ་བ་བསྐྱེད་མི་ཐོ་བཀོད་འདི་ བདེན་དཔྱད་འབད་བཅུགཔ་ཨིན།
-  གྱངས་ཁ་, ལམ་གྱངས་ཁ་, ཀེ་ནོ་ནི་ཀ་ལའི་ཛེ་ཤཱན་ཐབས་ལམ་, དང་ ཉུང་མཐའི་གསང་ཡིག་ཚིག་ཡིག་ཚད་གཞི་ ༡ གི་དོན་ལུ་
-  མཁོ་སྤྲོད་འབད་མི་ཕྱོགས་ཀྱི་ཨིན་པུཊི་གསང་བཟོ་མ་འབད་བའི་ཧེ་མ་ ལས་རིམ་བཟོ་ཡོད་པའི་ཨེཕ་ཨེཆ་ཨི་རྒྱབ་ཁེན།
-- `getIdentifierBfvPublicParameters(policy)` དང་།
-  `buildIdentifierRequestForPolicy(policy, { input | encryptedInput })` རོགས་རམ།
-  ཇེ་ཨེསི་འབོད་བརྡ་འབད་མི་ཚུ་གིས་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་ བི་ཨེཕ་ཝི་མེ་ཊ་ཌེ་ཊ་ བཀོལ་སྤྱོད་འབདཝ་ཨིནམ་དང་ སྲིད་བྱུས་ཤེས་རྟོགས་ཅན་གྱི་ཞུ་བ་བཟོཝ་ཨིན།
-  སྲིད་བྱུས་-ཨའི་ཌི་དང་ སྤྱིར་བཏང་བཟོ་ནི་གི་ལམ་ལུགས་ཚུ་ ལོག་སྟེ་ལག་ལེན་འཐབ་མ་དགོ་པའི་ གཟུགས་ཚུ།
-- `encryptIdentifierInputForPolicy(policy, input, { seedHex? })` དང་།
-  `buildIdentifierRequestForPolicy(policy, { input, encrypt: true })` ད་ལྟ།
-  ཇེ་ཨེསི་དངུལ་ཁུག་ཚུ་གིས་ བི་ཨེཕ་ཝི་ཨའི་༡༨ཨེན་ཊི་༠༠༠༠༠༠༠༠༡ཨེགསི་ སི་ཕར་ཊེགསི་ཡིག་ཤུབས་ཆ་ཚང་འདི་ ཉེ་གནས་ལས་ བཟོ་བསྐྲུན་འབདཝ་ཨིན།
-  སྔོན་སྒྲིག་སི་ཕར་ཊེགསི་ཧེགསི་སྐྱེལ་འདྲེན་འབད་ནིའི་ཚབ་ལུ་ སྲིད་བྱུས་ཚད་གཞི་ཚུ་དཔར་བསྐྲུན་འབད་ཡོདཔ།
-- ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༡༣༥X
-  སྦ་བཞག་ཡོད་པའི་ངོས་འཛིན་འབད་མི་ཅིག་སེལ་འཐུ་འབདཝ་ཨིནམ་དང་ མིང་རྟགས་བཀོད་ཡོད་པའི་འབྱོར་འཛིན་པེ་ལོཌི་འདི་སླར་ལོག་འབདཝ་ཨིན།
-  དེའི་ནང་`receipt_hash`, `signature_payload_hex`, དང་
-  `signature_payload`.
-- `ToriiClient.issueངོས་འཛིན་འབད་མི་ཐོབ་བརྗོད་ཐོབ་ཐངས་(རྩིས་ཐོ་ཨའི་ཌི་, { སྲིད་བྱུས་ཨའི་ཌི་, ཨིན་པུཊི་ |
-  གསང་བཟོས་ཨིན་པུཊི་ })` issues the signed receipt needed by `ཐོབ་བརྗོད་ངོས་འཛིན་པ་`.
-- `verifyIdentifierResolutionReceipt(receipt, policy)` གིས་ སླར་ལོག་འབད་ཡོད་པའི་བདེན་དཔྱད་འབདཝ་ཨིན།
-  མཁོ་མངགས་འབད་མི་ཕྱོགས་ལུ་ སྲིད་བྱུས་ཐག་གཅོད་འབད་མི་ལྡེ་མིག་ལུ་འགལ་བའི་ འཐོབ་ཐངས་དང་`ToriiClient.getIdentifierClaimByReceiptHash(receiptHash)` གིས་ འདི་ལེན་འོང་།
-  ཤུལ་ལས་རྩིས་ཞིབ་/རྐྱེན་སེལ་རྒྱུན་རིམ་ཚུ་གི་དོན་ལུ་ ཐོབ་བརྗོད་དྲན་ཐོ།
-- `IrohaSwift.ToriiClient` ད་ལྟོ་ `listIdentifierPolicies()`, གསལ་སྟོན་འབདཝ་ཨིན།
-  I༡༨NI༠༠༠༠༡༤༤X,
-  I༡༨NI༠༠༠༠༡༤༥X,
-  དང་ `getIdentifierClaimByReceiptHash(_)`, བསྡོམས་པ།
-  ཁ་པར་/གློག་འཕྲིན་/རྩིས་ཐོ་-ཨང་གཅིག་པའི་དོན་ལུ་ `ToriiIdentifierNormalization`
-  ཁྲིམས་མཐུན་བཟོ་ནི་གི་ཐབས་ལམ་ཚུ།
-- `ToriiIdentifierLookupRequest` དང་།
-  I༡༨NI༠༠༠༠༡༤༩X /
-  `.encryptedRequest(...)` གྲོགས་རམ་འབད་མི་ཚུ་གིས་ ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ སུའིཕཊི་ཞུ་བ་ཁ་ཐོག་འདི་ ༢༠༢༠ གི་དོན་ལུ་བྱིནམ་ཨིན།
-  ཐབས་ཤེས་དང་ ཐོབ་བརྗོད་-འཐོབ་ཐངས་འབོད་བརྡ་ དེ་ལས་ སུའིཕཊི་སྲིད་བྱུས་ཚུ་གིས་ ད་ལྟོ་ བི་ཨེཕ་ཝི་འདི་ བཏོན་ཚུགས།
-  སི་ཕར་ཊེགསི་འདི་ ཉེ་གནས་ལུ་ `encryptInput(...)` / `encryptedRequest(input:...)` བརྒྱུད་དེ་ཨིན།
-- `ToriiIdentifierResolutionReceipt.verifySignature(using:)` གིས་ དེ་བདེན་དཔྱད་འབདཝ་ཨིན།
-  མཐོ་རིམ་གནས་རིམ་གྱི་འཐོབ་ལམ་ས་སྒོ་ཚུ་ མིང་རྟགས་བཀོད་ཡོད་པའི་ པེ་ལོཌི་དང་མཐུན་སྒྲིག་འབད་དེ་ བདེན་བཤད་འབདཝ་ཨིན།
-  མ་བཙུགས་པའི་ཧེ་མ་ resolver མིང་རྟགས་ client-ཕྱོགས་ལུ།
-- ཨེན་ཀྲོཌ་ཨེསི་ཌི་ཀེ་ནང་ `HttpClientTransport` ད་ལྟོ་གསལ་སྟོན་འབདཝ་ཨིན།
-  `listIdentifierPolicies()`, `ཐབས་ཤེས་ངོས་འཛིན་པ་(སྲིད་བྱུས་ཨའི་ཌི་, ཨིན་པུཊི་,
-  encryptedInputHex)`, `issueIdentifierClaimReceipt(རྩིས་ཐོ་ཨའི་ཌི་, སྲིད་བྱུས་ཨའི་ཌི་,
-  ཨིན་པུཊི་, གསང་བཟོ་འབད་ཡོད་པའི་ཨིན་པུཊི་ཧེགསི་)Toriiེགསི་གེཊི་ངོས་འཛིན་འབད་མི་ ཀླེམ་བཱའི་སི་པིཊི་ཧེཤ་(...)`,
-  plus `IdentifierNormalization` ཅོག་འཐདཔ་ ཀེ་ནོ་ནིཀ་ལའི་ལམ་ལུགས་ཚུ་གི་དོན་ལུ་ཨིན།
-- `IdentifierResolveRequest` དང་།
-  `IdentifierPolicySummary.plaintextRequest(...)` /
-  `.encryptedRequest(...)` རོགས་རམ་པ་ཚུ་གིས་ ཡིག་དཔར་རྐྱབ་ཡོད་པའི་ Android ཞུ་བ་ཁ་ཐོག་འདི་བྱིནམ་ཨིན།
-  while `IdentifierPolicySummary.encryptInput(...)` /
-  `.encryptedRequestFromInput(...)` གིས་ བི་ཨེཕ་ཝི་གསང་ཡིག་ཡིག་ཤུབས་ཡིག་ཤུབས་འདི་ཐོབ།
-  དཔར་བསྐྲུན་འབད་ཡོད་པའི་སྲིད་བྱུས་ཚད་གཞི་ཚུ་ལས་ ཉེ་གནས་ལུ།
-  `IdentifierResolutionReceipt.verifySignature(policy)` གིས་སླར་ལོག་འབད་ཡོད་མི་འདི་བདེན་སྦྱོར་འབདཝ་ཨིན།
-  resolver མིང་རྟགས་ མཁོ་སྤྲོད་འབད་མི་ཕྱོགས་ལུ།
+Torii's in-process execution runtime is configured under
+`torii.ram_lfe.programs[*]`, keyed by `program_id`. The identifier routes now
+reuse that same RAM-LFE runtime instead of a separate `identifier_resolver`
+config surface.
 
-ད་ལྟོའི་བཀོད་རྒྱ་ཆ་ཚན་:- `RegisterIdentifierPolicy`
-- ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༡༦༦X
-- `ClaimIdentifier` (འཐོབ་ཐངས་-བཀག་ཆ་; ངོ་མ་ `opaque_id` ཐོབ་བརྗོད་ཚུ་ ངོས་ལེན་མ་འབད་བས།)
+Current SDK support:
+
+- `normalizeIdentifierInput(value, normalization)` matches the Rust
+  canonicalizers for `exact`, `lowercase_trimmed`, `phone_e164`,
+  `email_address`, and `account_number`.
+- `ToriiClient.listIdentifierPolicies()` lists policy metadata, including BFV
+  input-encryption metadata when the policy publishes it, plus a decoded
+  BFV parameter object via `input_encryption_public_parameters_decoded`.
+  Programmed policies also expose the decoded `ram_fhe_profile`. That field is
+  intentionally BFV-scoped: it lets wallets verify the expected register
+  count, lane count, canonicalization mode, and minimum ciphertext modulus for
+  the programmed FHE backend before encrypting client-side input.
+- `getIdentifierBfvPublicParameters(policy)` and
+  `buildIdentifierRequestForPolicy(policy, { encryptedInput | input,
+  encrypt: true, outputOpening })` help JS callers consume published BFV
+  metadata and build policy-aware encrypted request bodies without
+  reimplementing policy-id and normalization rules.
+- `encryptIdentifierInputForPolicy(policy, input, { seedHex? })` and
+  `buildIdentifierRequestForPolicy(policy, { input, encrypt: true,
+  outputOpening })` now let JS wallets construct the full BFV Norito
+  ciphertext envelope locally from published policy parameters instead of
+  shipping prebuilt ciphertext hex.
+- `ToriiClient.resolveIdentifier({ policyId, encryptedInput, outputOpening })`
+  resolves a hidden identifier and returns the signed nested
+  `{ payload, attestation }` receipt.
+- `ToriiClient.issueIdentifierClaimReceipt(accountId, { policyId,
+  encryptedInput, outputOpening })` issues the signed receipt needed by
+  `ClaimIdentifier`.
+- `verifyIdentifierResolutionReceipt(receipt, policy)` verifies the returned
+  receipt against the policy resolver key on the client side, and
+  `ToriiClient.getIdentifierClaimByReceiptHash(receiptHash)` fetches the
+  persisted claim record for later audit/debug flows.
+- `IrohaSwift.ToriiClient` now exposes `listIdentifierPolicies()`,
+  `resolveIdentifier(policyId:encryptedInputHex:outputOpening:)`,
+  `issueIdentifierClaimReceipt(accountId:policyId:encryptedInputHex:outputOpening:)`,
+  and `getIdentifierClaimByReceiptHash(_)`, plus
+  `ToriiIdentifierNormalization` for the same phone/email/account-number
+  canonicalization modes.
+- `ToriiIdentifierLookupRequest` and encrypted request helpers provide the
+  typed Swift request surface for resolve and claim-receipt calls, and Swift
+  policies can now derive the BFV ciphertext locally via `encryptInput(...)`.
+- `ToriiIdentifierResolutionReceipt.verifySignature(using:)` validates that
+  the top-level receipt fields match the signed payload and verifies the
+  resolver signature client-side before submission.
+- `HttpClientTransport` in the Android SDK now exposes
+  `listIdentifierPolicies()`, encrypted-only `resolveIdentifier(...)`,
+  encrypted-only `issueIdentifierClaimReceipt(...)`, and
+  `getIdentifierClaimByReceiptHash(...)`,
+  plus `IdentifierNormalization` for the same canonicalization rules.
+- `IdentifierResolveRequest` and encrypted request helpers provide the typed
+  Android request surface, while `IdentifierPolicySummary.encryptInput(...)`
+  derives the BFV ciphertext envelope locally from published policy
+  parameters.
+  `IdentifierResolutionReceipt.verifySignature(policy)` verifies the returned
+  resolver signature client-side.
+
+Current instruction set:
+
+- `RegisterIdentifierPolicy`
+- `ActivateIdentifierPolicy`
+- `ClaimIdentifier` (receipt-bound; raw `opaque_id` claims are rejected)
 - `RevokeIdentifier`
 
-ད་ལྟོ་ `iroha_crypto::ram_lfe` ནང་ལུ་ རྒྱབ་ཐག་གསུམ་ཡོདཔ་ཨིན།
+Three backends now exist in `iroha_crypto::ram_lfe`:
 
-- ལོ་རྒྱུས་ཁས་ལེན་-བཀག་སྡོམ་གྱི་`HKDF-SHA3-512` PRF, དང་
-- བི་ཨེཕ་ཝི་གསང་བཟོ་འབད་ཡོད་པའི་ངོས་འཛིན་འབད་མི་འདི་ ལག་ལེན་འཐབ་མི་ བི་ཨེཕ་ཝི་རྒྱབ་སྐྱོར་འབད་མི་ གསང་བའི་ཨེཕ་ཕིན་བརྟག་ཞིབ་འབད་མི་ཅིག
-  slots ཐད་ཀར། `iroha_crypto` འདི་སྔོན་སྒྲིག་དང་གཅིག་ཁར་བཟོ་བསྐྲུན་འབད་བའི་སྐབས།
-  `bfv-accel` ཁྱད་རྣམ་, BFV སྒོར་སྒོར་བསྒྱུར་རྩིས་འདི་གིས་ གཏན་གཏན་གྱི་གཏན་འབེབས་ལག་ལེན་འཐབ་ཨིན།
-  ནང་འཁོད་ལུ་ CRT-NTT རྒྱབ་ཁེནཌ། ཁྱད་རྣམ་དེ་ལྕོགས་མིན་བཟོ་མི་འདི་གིས་ ལོག་སྟེ་ལུ་ལྷོདཔ་ཨིན།
-  ཐོན་འབྲས་འདྲ་མཚུངས་ཡོད་པའི་ སི་ཀེ་ལར་སློབ་གྲྭའི་ཀི་དེབ་འགྲུལ་ལམ།
-- བཀོད་རྒྱ་བཀོལ་སྤྱོད་འབད་མི་ བི་ཨེཕ་ཝི་རྒྱབ་སྐྱོར་འབད་མི་ གསང་བའི་ལས་རིམ་བརྟག་ཞིབ་འབད་མི་ཅིག
-  གསང་བཟོས་ཐོ་བཀོད་དང་ གསང་ཡིག་དྲན་ཚད་གུ་ RAM-བཟོ་རྣམ་ལག་ལེན་འཐབ་ནིའི་རྗེས་འདེད།
-  མ་གསལ་བའི་ངོས་འཛིན་དང་ ཐོབ་ལམ་གྱི་ཧ་ཤི་མ་ཐོབ་པའི་ཧེ་མ་ ལམ་ཚུ། ལས་རིམ་བཟོ་ཡོདཔ།
-  རྒྱབ་ཁེནཌི་ལུ་ ད་ལྟོ་ ཨེཕ་ཕིན་འགྲུལ་ལམ་ལས་ བི་ཨེཕ་ཝི་ མོ་ཌུ་ལཱསི་ གཞི་རྟེན་ཤུགས་ཅན་དགོཔ་ཨིན་ དེ་ལས་
-  དེ་གི་མི་མང་ཚད་གཞི་ཚུ་ ཀེ་ནོ་ནིཀ་བཱན་ཌལ་ནང་ལུ་ དཔར་བསྐྲུན་འབད་ཡོདཔ་ཨིན།
-  RAM-FHE ལག་ལེན་འཐབ་ནིའི་གསལ་སྡུད་འདི་ དངུལ་ཁུག་དང་བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ ཟ་སྤྱོད་འབད་ཡོདཔ་ཨིན།
+- the historical commitment-bound `HKDF-SHA3-512` PRF, and
+- a BFV-backed secret affine evaluator that consumes BFV-encrypted identifier
+  slots directly. When `iroha_crypto` is built with the default
+  `bfv-accel` feature, BFV ring multiplication uses an exact deterministic
+  CRT-NTT backend internally; disabling that feature falls back to the
+  scalar schoolbook path with identical outputs, and
+- a BFV-backed secret programmed evaluator that derives an instruction-driven
+  RAM-style execution trace over encrypted registers and ciphertext memory
+  lanes before deriving the opaque identifier and receipt hash. The programmed
+  backend now requires a stronger BFV modulus floor than the affine path, and
+  its public parameters are published in a canonical bundle that includes the
+  RAM-FHE execution profile consumed by wallets and verifiers.
 
-འདིར་BFV ཟེར་མི་འདི་ ༢༠༡༠ ལུ་ལག་ལེན་འཐབ་མི་ Brakerski/Fan-Vercauteren FHE འཆར་གཞི་འདི་ལུ་སླབ་ཨིན།
-`crates/iroha_crypto/src/fhe_bfv.rs`. འདི་གསང་བཟོས་-ལག་ལེན་འཐབ་ཐབས་ལམ་ཨིན།
-ཕྱི་ཁར་སྦ་བཞག་མི་གི་མིང་མེན་པར་ ཨེཕ་ཕིན་དང་ལས་རིམ་བཟོ་ཡོད་པའི་རྒྱབ་གཞི་ཚུ་གིས་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
-ལས་འགན་བཅུད་དོན།Torii གིས་ སྲིད་བྱུས་ཁས་བླངས་ཀྱིས་དཔར་བསྐྲུན་འབད་ཡོད་པའི་རྒྱབ་གཞི་འདི་ལག་ལེན་འཐབ་ཨིན། བི་ཨེཕ་ཝི་རྒྱབ་ཁབ་འདི་ག་དུས་ལུ།
-ཤུགས་ལྡན་ཨིན་ ཚིག་ཡིག་གཙང་མའི་ཞུ་བ་ཚུ་ སྤྱིར་བཏང་བཟོ་ཞིནམ་ལས་ ཧེ་མ་ སར་བར་ཕྱོགས་ལུ་ གསང་བཟོས་འབད་ཡོདཔ་ཨིན།
-བརྟག་ཞིབ། BFV `encrypted_input` ཞུ་བ་ཚུ་ ཨེཕ་ཕིན་རྒྱབ་གཞི་གི་དོན་ལུ་ བརྟག་ཞིབ་འབད་ཡོདཔ་ཨིན།
-ཐད་ཀར་དུ་ དང་ ཧེ་མ་ལས་རང་ མཁོ་སྤྲོད་འབད་མི་ཕྱོགས་ལུ་ སྤྱིར་བཏང་བཟོ་དགོཔ་ཨིན། ལས་རིམ་བཟོ་ཡོད་པའི་རྒྱབ་ཁམས།
-གསང་བཟོ་འབད་ཡོད་པའི་ཨིན་པུཊི་འདི་ ཐབས་ཤེས་བཏོན་མི་གི་ གཏན་འབེབས་བཟོ་མི་ བི་ཨེཕ་ཝི་ལུ་ ལོག་སྟེ་རང་ ཀེ་ནོ་ནིཀ་ལི་ཟིསི་འབདཝ་ཨིན།
-གསང་བའི་ RAM ལས་རིམ་འདི་ ལག་ལེན་མ་འཐབ་པའི་ཧེ་མ་ ཡིག་ཤུབས་འདི་ ཐོབ་ཐངས་ཧ་ཤི་ཚུ་ ལུས་འོང་།
-ཡིག་བརྡ་འདྲ་མཉམ་གྱི་གསང་ཚིག་ཚུ་ནང་ལུ་ བརྟན་ཏོག་ཏོ་ཨིན།
+Here BFV means the Brakerski/Fan-Vercauteren FHE scheme implemented in
+`crates/iroha_crypto/src/fhe_bfv.rs`. It is the encrypted-execution mechanism
+used by the affine and programmed backends, not the name of the outer hidden
+function abstraction.
+
+Torii uses the backend published by the policy commitment. For the first
+release, RAM-LFE and hidden-identifier routes are encrypted-only: Torii does
+not accept plaintext inputs, does not hold BFV secret keys, and does not
+decrypt input or output ciphertexts. Identifier claim and resolve requests must
+include an externally signed `RamLfeOutputOpening`; the `opaque:` identifier is
+derived from the verified opened-output hash, not from Torii-side plaintext or
+from the ciphertext hash alone.
 
 ## 2. UAIDs འབྱུང་ཁུངས་དང་བདེན་དཔྱད་འབད་ནི།
 

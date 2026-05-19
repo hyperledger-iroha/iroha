@@ -5,7 +5,14 @@ use std::{
     time::Duration,
 };
 
-use iroha_crypto::Hash;
+use iroha_crypto::{
+    Hash,
+    fhe_bfv::{
+        BfvCiphertext, BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvParameters,
+        add_ciphertexts, multiply_ciphertexts, multiply_plain_scalar, ram_lfe_bfv_parameters_v1,
+        registered_bfv_parameter_digest, validate_registered_bfv_parameters,
+    },
+};
 use iroha_data_model::{
     account::AccountId,
     isi::{
@@ -16,8 +23,8 @@ use iroha_data_model::{
     nexus::PublicLaneValidatorStatus,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheExecutionPolicyV1, FheJobSpecV1,
-        FheParamSetV1, SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
+        DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheExecutionPolicyV1, FheJobOperationV1,
+        FheJobSpecV1, FheParamSetV1, FheSchemeV1, SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
         SORA_AGENT_APARTMENT_RECORD_VERSION_V1, SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
         SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
         SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
@@ -648,6 +655,7 @@ fn verify_state_mutation_provenance(
     state_key: &str,
     operation: SoraStateMutationOperationV1,
     value_size_bytes: Option<u64>,
+    payload_commitment: Option<Hash>,
     encryption: SoraStateEncryptionV1,
     governance_tx_hash: Hash,
     provenance: &ManifestProvenance,
@@ -667,6 +675,7 @@ fn verify_state_mutation_provenance(
         state_key,
         operation_label,
         value_size_bytes,
+        payload_commitment,
         encryption,
         governance_tx_hash,
     )
@@ -689,6 +698,7 @@ fn verify_fhe_job_run_provenance(
     job: FheJobSpecV1,
     policy: FheExecutionPolicyV1,
     param_set: FheParamSetV1,
+    evaluation_keys: BfvEvaluationKeyBundle,
     governance_tx_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
@@ -703,6 +713,7 @@ fn verify_fhe_job_run_provenance(
         job,
         policy,
         param_set,
+        evaluation_keys,
         governance_tx_hash,
     )
     .map_err(|err| invalid_parameter(format!("failed to encode fhe job provenance: {err}")))?;
@@ -1914,25 +1925,6 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
     Ok(())
 }
 
-fn derive_state_mutation_commitment(
-    service_name: &str,
-    binding_name: &str,
-    state_key: &str,
-    payload_bytes: u64,
-    encryption: SoraStateEncryptionV1,
-    governance_tx_hash: Hash,
-) -> Hash {
-    Hash::new(Encode::encode(&(
-        "soracloud.state_mutation.ciphertext.v1",
-        service_name,
-        binding_name,
-        state_key,
-        payload_bytes,
-        encryption,
-        governance_tx_hash,
-    )))
-}
-
 /// Apply an authoritative Soracloud service-state mutation using the active binding contract.
 ///
 /// The `linkage_hash` is persisted in the service-state row's `governance_tx_hash` field.
@@ -1944,8 +1936,7 @@ pub(crate) fn apply_soracloud_state_mutation(
     binding_name: &iroha_data_model::name::Name,
     state_key: &str,
     operation: SoraStateMutationOperationV1,
-    payload_bytes: Option<u64>,
-    payload_commitment: Option<Hash>,
+    payload: Option<Vec<u8>>,
     encryption: SoraStateEncryptionV1,
     linkage_hash: Hash,
     sequence: u64,
@@ -2013,15 +2004,15 @@ pub(crate) fn apply_soracloud_state_mutation(
                     format!("binding `{binding_name}` is read-only").into(),
                 ));
             }
-            let value_size_bytes = payload_bytes.ok_or_else(|| {
-                invalid_parameter("payload_bytes is required for upsert mutations")
+            let payload = payload.ok_or_else(|| {
+                invalid_parameter("value_payload is required for upsert mutations")
             })?;
+            let value_size_bytes = u64::try_from(payload.len())
+                .map_err(|_| invalid_parameter("value_payload length exceeds u64 range"))?;
             let payload_bytes = std::num::NonZeroU64::new(value_size_bytes).ok_or_else(|| {
-                invalid_parameter("payload_bytes must be greater than zero for upsert mutations")
+                invalid_parameter("value_payload must be non-empty for upsert mutations")
             })?;
-            let payload_commitment = payload_commitment.ok_or_else(|| {
-                invalid_parameter("payload_commitment is required for upsert mutations")
-            })?;
+            let payload_commitment = Hash::new(&payload);
             if value_size_bytes > binding.max_item_bytes.get() {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -2063,6 +2054,7 @@ pub(crate) fn apply_soracloud_state_mutation(
                     binding_name: binding_name.clone(),
                     state_key: state_key.to_owned(),
                     encryption,
+                    payload,
                     payload_bytes,
                     payload_commitment,
                     last_update_sequence: sequence,
@@ -2072,9 +2064,9 @@ pub(crate) fn apply_soracloud_state_mutation(
             )?;
         }
         SoraStateMutationOperationV1::Delete => {
-            if payload_bytes.is_some() || payload_commitment.is_some() {
+            if payload.is_some() {
                 return Err(invalid_parameter(
-                    "delete mutations must not provide payload_bytes or payload_commitment",
+                    "delete mutations must not provide value_payload",
                 ));
             }
             if binding.mutability != iroha_data_model::soracloud::SoraStateMutabilityV1::ReadWrite {
@@ -4705,6 +4697,188 @@ fn binding_state_totals(
     (total_bytes, key_count)
 }
 
+fn registered_soracloud_bfv_parameters(
+    param_set: &FheParamSetV1,
+) -> Result<BfvParameters, InstructionExecutionError> {
+    if param_set.scheme != FheSchemeV1::Bfv {
+        return Err(invalid_parameter(
+            "Soracloud FHE jobs currently require the registered BFV parameter profile",
+        ));
+    }
+    let params = ram_lfe_bfv_parameters_v1();
+    validate_registered_bfv_parameters(&params)
+        .map_err(|err| invalid_parameter(format!("invalid registered BFV parameters: {err}")))?;
+    let parameter_digest = registered_bfv_parameter_digest(&params)
+        .map_err(|err| invalid_parameter(format!("failed to digest BFV parameters: {err}")))?;
+    if param_set.parameter_digest != parameter_digest {
+        return Err(invalid_parameter(
+            "fhe parameter-set digest does not match the registered BFV profile",
+        ));
+    }
+    Ok(params)
+}
+
+fn decode_soracloud_fhe_envelope(
+    payload: &[u8],
+) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
+    let archived = norito::from_bytes::<BfvIdentifierCiphertext>(payload)
+        .map_err(|err| invalid_parameter(format!("invalid FHE ciphertext envelope: {err}")))?;
+    Ok(norito::core::NoritoDeserialize::deserialize(archived))
+}
+
+fn load_soracloud_fhe_inputs(
+    state_transaction: &StateTransaction<'_, '_>,
+    service_name: &iroha_data_model::name::Name,
+    binding_name: &iroha_data_model::name::Name,
+    job: &FheJobSpecV1,
+) -> Result<Vec<BfvIdentifierCiphertext>, InstructionExecutionError> {
+    let mut envelopes = Vec::with_capacity(job.inputs.len());
+    for input in &job.inputs {
+        let state_entry_key = (
+            service_name.as_ref().to_owned(),
+            binding_name.as_ref().to_owned(),
+            input.state_key.clone(),
+        );
+        let entry = state_transaction
+            .world
+            .soracloud_service_state_entries
+            .get(&state_entry_key)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("fhe input state key `{}` is not present", input.state_key).into(),
+                )
+            })?;
+        if entry.encryption != SoraStateEncryptionV1::FheCiphertext {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("fhe input `{}` is not an FHE ciphertext", input.state_key).into(),
+            ));
+        }
+        if entry.payload_bytes != input.payload_bytes {
+            return Err(invalid_parameter(format!(
+                "fhe input `{}` payload size mismatch",
+                input.state_key
+            )));
+        }
+        if entry.payload_commitment != input.commitment {
+            return Err(invalid_parameter(format!(
+                "fhe input `{}` commitment mismatch",
+                input.state_key
+            )));
+        }
+        envelopes.push(decode_soracloud_fhe_envelope(&entry.payload)?);
+    }
+    Ok(envelopes)
+}
+
+fn ensure_matching_fhe_slots(
+    envelopes: &[BfvIdentifierCiphertext],
+) -> Result<usize, InstructionExecutionError> {
+    let first_slots = envelopes
+        .first()
+        .map(|envelope| envelope.slots.len())
+        .ok_or_else(|| invalid_parameter("fhe job requires at least one input envelope"))?;
+    if first_slots == 0 {
+        return Err(invalid_parameter(
+            "fhe ciphertext envelope must contain at least one slot",
+        ));
+    }
+    if envelopes
+        .iter()
+        .any(|envelope| envelope.slots.len() != first_slots)
+    {
+        return Err(invalid_parameter(
+            "fhe ciphertext envelopes must have matching slot counts",
+        ));
+    }
+    Ok(first_slots)
+}
+
+fn fold_fhe_slots(
+    params: &BfvParameters,
+    inputs: &[BfvIdentifierCiphertext],
+    mut combine: impl FnMut(
+        &BfvCiphertext,
+        &BfvCiphertext,
+    ) -> Result<BfvCiphertext, InstructionExecutionError>,
+) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
+    ensure_matching_fhe_slots(inputs)?;
+    let mut slots = inputs
+        .first()
+        .expect("input presence checked above")
+        .slots
+        .clone();
+    for envelope in &inputs[1..] {
+        for (slot, rhs) in slots.iter_mut().zip(&envelope.slots) {
+            *slot = combine(slot, rhs)?;
+        }
+    }
+    for slot in &slots {
+        multiply_plain_scalar(params, slot, 1)
+            .map_err(|err| invalid_parameter(format!("invalid FHE ciphertext slot: {err}")))?;
+    }
+    Ok(BfvIdentifierCiphertext { slots })
+}
+
+fn execute_soracloud_fhe_job(
+    params: &BfvParameters,
+    evaluation_keys: &BfvEvaluationKeyBundle,
+    job: &FheJobSpecV1,
+    inputs: &[BfvIdentifierCiphertext],
+) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
+    match job.operation {
+        FheJobOperationV1::Add => fold_fhe_slots(params, inputs, |lhs, rhs| {
+            add_ciphertexts(params, lhs, rhs)
+                .map_err(|err| invalid_parameter(format!("FHE add failed: {err}")))
+        }),
+        FheJobOperationV1::Multiply => fold_fhe_slots(params, inputs, |lhs, rhs| {
+            multiply_ciphertexts(params, &evaluation_keys.relinearization_key, lhs, rhs)
+                .map_err(|err| invalid_parameter(format!("FHE multiply failed: {err}")))
+        }),
+        FheJobOperationV1::RotateLeft => {
+            ensure_matching_fhe_slots(inputs)?;
+            if !evaluation_keys
+                .rotation_keys
+                .iter()
+                .any(|key| key.rotation_steps == job.rotation_steps)
+            {
+                return Err(invalid_parameter(format!(
+                    "missing BFV rotation key for {} steps",
+                    job.rotation_steps
+                )));
+            }
+            let mut slots = inputs
+                .first()
+                .expect("input presence checked above")
+                .slots
+                .clone();
+            let slot_count = slots.len();
+            slots.rotate_left(
+                usize::try_from(job.rotation_steps).unwrap_or(usize::MAX) % slot_count,
+            );
+            Ok(BfvIdentifierCiphertext { slots })
+        }
+        FheJobOperationV1::Bootstrap => {
+            ensure_matching_fhe_slots(inputs)?;
+            if evaluation_keys.bootstrap_key.is_none() {
+                return Err(invalid_parameter(
+                    "missing BFV bootstrap key for bootstrap operation",
+                ));
+            }
+            let slots = inputs
+                .first()
+                .expect("input presence checked above")
+                .slots
+                .iter()
+                .map(|slot| {
+                    multiply_plain_scalar(params, slot, 1)
+                        .map_err(|err| invalid_parameter(format!("FHE bootstrap failed: {err}")))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(BfvIdentifierCiphertext { slots })
+        }
+    }
+}
+
 fn insert_admitted_bundle(
     state_transaction: &mut StateTransaction<'_, '_>,
     bundle: SoraDeploymentBundleV1,
@@ -5287,48 +5461,58 @@ impl Execute for isi::MutateSoracloudState {
             state_key,
             operation,
             value_size_bytes,
+            value_payload,
             encryption,
             governance_tx_hash,
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
+        let (signed_value_size_bytes, signed_payload_commitment) = match operation {
+            SoraStateMutationOperationV1::Upsert => {
+                let payload = value_payload.as_ref().ok_or_else(|| {
+                    invalid_parameter("value_payload is required for upsert mutations")
+                })?;
+                let actual_size = u64::try_from(payload.len())
+                    .map_err(|_| invalid_parameter("value_payload length exceeds u64 range"))?;
+                if let Some(declared_size) = value_size_bytes
+                    && declared_size != actual_size
+                {
+                    return Err(invalid_parameter(format!(
+                        "value_size_bytes {declared_size} does not match value_payload length {actual_size}",
+                    )));
+                }
+                (Some(actual_size), Some(Hash::new(payload)))
+            }
+            SoraStateMutationOperationV1::Delete => {
+                if value_size_bytes.is_some() || value_payload.is_some() {
+                    return Err(invalid_parameter(
+                        "delete mutations must not provide value_size_bytes or value_payload",
+                    ));
+                }
+                (None, None)
+            }
+        };
         verify_state_mutation_provenance(
             authority,
             &service_name,
             &binding_name,
             &state_key,
             operation,
-            value_size_bytes,
+            signed_value_size_bytes,
+            signed_payload_commitment,
             encryption,
             governance_tx_hash,
             &provenance,
         )?;
 
         let sequence = next_soracloud_audit_sequence(state_transaction);
-        let payload_commitment = match operation {
-            SoraStateMutationOperationV1::Upsert => {
-                let payload_bytes = value_size_bytes.ok_or_else(|| {
-                    invalid_parameter("value_size_bytes is required for upsert mutations")
-                })?;
-                Some(derive_state_mutation_commitment(
-                    service_name.as_ref(),
-                    binding_name.as_ref(),
-                    &state_key,
-                    payload_bytes,
-                    encryption,
-                    governance_tx_hash,
-                ))
-            }
-            SoraStateMutationOperationV1::Delete => None,
-        };
         let (deployment, bundle) = apply_soracloud_state_mutation(
             state_transaction,
             &service_name,
             &binding_name,
             &state_key,
             operation,
-            value_size_bytes,
-            payload_commitment,
+            value_payload,
             encryption,
             governance_tx_hash,
             sequence,
@@ -5377,6 +5561,7 @@ impl Execute for isi::RunSoracloudFheJob {
             self.job.clone(),
             self.policy.clone(),
             self.param_set.clone(),
+            self.evaluation_keys.clone(),
             self.governance_tx_hash,
             &self.provenance,
         )?;
@@ -5389,6 +5574,26 @@ impl Execute for isi::RunSoracloudFheJob {
         self.job
             .validate_for_execution(&self.policy, &self.param_set)
             .map_err(|err| invalid_parameter(err.to_string()))?;
+        let bfv_params = registered_soracloud_bfv_parameters(&self.param_set)?;
+        self.evaluation_keys
+            .validate(&bfv_params)
+            .map_err(|err| invalid_parameter(format!("invalid BFV evaluation keys: {err}")))?;
+        let input_envelopes = load_soracloud_fhe_inputs(
+            state_transaction,
+            &self.service_name,
+            &self.binding_name,
+            &self.job,
+        )?;
+        let output_envelope = execute_soracloud_fhe_job(
+            &bfv_params,
+            &self.evaluation_keys,
+            &self.job,
+            &input_envelopes,
+        )?;
+        let output_payload = norito::to_bytes(&output_envelope)
+            .map_err(|err| invalid_parameter(format!("failed to encode FHE output: {err}")))?;
+        let output_payload_bytes = u64::try_from(output_payload.len())
+            .map_err(|_| invalid_parameter("FHE output payload length exceeds u64 range"))?;
 
         let sequence = next_soracloud_audit_sequence(state_transaction);
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
@@ -5432,10 +5637,18 @@ impl Execute for isi::RunSoracloudFheJob {
             ));
         }
 
-        let output_payload_bytes = self.job.deterministic_output_payload_bytes();
         let payload_bytes = std::num::NonZeroU64::new(output_payload_bytes).ok_or_else(|| {
             invalid_parameter("fhe output payload size must be greater than zero")
         })?;
+        if output_payload_bytes > self.policy.max_ciphertext_bytes.get() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "fhe output size {output_payload_bytes} exceeds policy max_ciphertext_bytes {}",
+                    self.policy.max_ciphertext_bytes
+                )
+                .into(),
+            ));
+        }
         if output_payload_bytes > binding.max_item_bytes.get() {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
@@ -5483,7 +5696,7 @@ impl Execute for isi::RunSoracloudFheJob {
         }
 
         let output_state_key = self.job.output_state_key.clone();
-        let output_commitment = self.job.deterministic_output_commitment();
+        let output_commitment = Hash::new(&output_payload);
         record_service_state_entry(
             state_transaction,
             SoraServiceStateEntryV1 {
@@ -5493,6 +5706,7 @@ impl Execute for isi::RunSoracloudFheJob {
                 binding_name: self.binding_name.clone(),
                 state_key: output_state_key.clone(),
                 encryption: SoraStateEncryptionV1::FheCiphertext,
+                payload: output_payload,
                 payload_bytes,
                 payload_commitment: output_commitment,
                 last_update_sequence: sequence,
@@ -10058,7 +10272,13 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Hash, KeyPair};
+    use iroha_crypto::{
+        Hash, KeyPair,
+        fhe_bfv::{
+            BfvBootstrapKey, BfvEvaluationKeyBundle, BfvIdentifierPublicParameters, BfvRotationKey,
+            encrypt_identifier_from_seed, keygen_from_seed,
+        },
+    };
     use iroha_data_model::{
         Encode,
         account::Account,
@@ -10615,6 +10835,7 @@ mod tests {
         state_key: &str,
         operation: SoraStateMutationOperationV1,
         value_size_bytes: Option<u64>,
+        payload_commitment: Option<Hash>,
         encryption: SoraStateEncryptionV1,
         governance_tx_hash: Hash,
     ) -> ManifestProvenance {
@@ -10628,6 +10849,7 @@ mod tests {
             state_key,
             operation_label,
             value_size_bytes,
+            payload_commitment,
             encryption,
             governance_tx_hash,
         )
@@ -10639,6 +10861,9 @@ mod tests {
     }
 
     fn sample_fhe_param_set() -> FheParamSetV1 {
+        let registered_params = ram_lfe_bfv_parameters_v1();
+        let parameter_digest = registered_bfv_parameter_digest(&registered_params)
+            .expect("registered BFV parameter digest");
         FheParamSetV1 {
             schema_version: iroha_data_model::soracloud::FHE_PARAM_SET_VERSION_V1,
             param_set: "bfv-default".parse().expect("valid name"),
@@ -10646,19 +10871,59 @@ mod tests {
             backend: "fhe/bfv-rns/v1".to_string(),
             scheme: FheSchemeV1::Bfv,
             ciphertext_modulus_bits: vec![
-                NonZeroU16::new(60).expect("nonzero"),
-                NonZeroU16::new(40).expect("nonzero"),
+                NonZeroU16::new(53).expect("nonzero"),
+                NonZeroU16::new(52).expect("nonzero"),
             ],
-            plaintext_modulus_bits: NonZeroU16::new(20).expect("nonzero"),
-            polynomial_modulus_degree: NonZeroU32::new(8_192).expect("nonzero"),
-            slot_count: NonZeroU32::new(4_096).expect("nonzero"),
+            plaintext_modulus_bits: NonZeroU16::new(9).expect("nonzero"),
+            polynomial_modulus_degree: NonZeroU32::new(u32::from(
+                registered_params.polynomial_degree,
+            ))
+            .expect("nonzero"),
+            slot_count: NonZeroU32::new(u32::from(registered_params.polynomial_degree))
+                .expect("nonzero"),
             security_level_bits: NonZeroU16::new(128).expect("nonzero"),
             max_multiplicative_depth: NonZeroU16::new(1).expect("nonzero"),
             lifecycle: FheParamLifecycleV1::Active,
             activation_height: Some(1),
             deprecation_height: None,
             withdraw_height: None,
-            parameter_digest: Hash::new(b"fhe-params"),
+            parameter_digest,
+        }
+    }
+
+    fn sample_bfv_evaluation_key_bundle() -> BfvEvaluationKeyBundle {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, _public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
+        BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: vec![BfvRotationKey { rotation_steps: 1 }],
+            bootstrap_key: Some(BfvBootstrapKey {
+                key_id: "bootstrap-test-key".to_string(),
+            }),
+        }
+    }
+
+    fn sample_fhe_payload(input: &[u8], seed: &[u8]) -> Vec<u8> {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, public_key, _relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key,
+            max_input_bytes: 8,
+        };
+        let ciphertext =
+            encrypt_identifier_from_seed(&public_parameters, input, seed).expect("encrypt");
+        norito::to_bytes(&ciphertext).expect("encode ciphertext")
+    }
+
+    fn sample_fhe_input_ref(state_key: &str, payload: &[u8]) -> FheJobInputRefV1 {
+        FheJobInputRefV1 {
+            state_key: state_key.to_string(),
+            payload_bytes: NonZeroU64::new(u64::try_from(payload.len()).expect("payload len"))
+                .expect("nonzero"),
+            commitment: Hash::new(payload),
         }
     }
 
@@ -10679,7 +10944,7 @@ mod tests {
         }
     }
 
-    fn sample_fhe_job() -> FheJobSpecV1 {
+    fn sample_fhe_job(inputs: Vec<FheJobInputRefV1>) -> FheJobSpecV1 {
         FheJobSpecV1 {
             schema_version: iroha_data_model::soracloud::FHE_JOB_SPEC_VERSION_V1,
             job_id: "job-1".to_string(),
@@ -10687,21 +10952,10 @@ mod tests {
             param_set: "bfv-default".parse().expect("valid name"),
             param_set_version: NonZeroU32::new(1).expect("nonzero"),
             operation: FheJobOperationV1::Add,
-            inputs: vec![
-                FheJobInputRefV1 {
-                    state_key: "/state/private/input-1".to_string(),
-                    payload_bytes: NonZeroU64::new(512).expect("nonzero"),
-                    commitment: Hash::new(b"in-1"),
-                },
-                FheJobInputRefV1 {
-                    state_key: "/state/private/input-2".to_string(),
-                    payload_bytes: NonZeroU64::new(512).expect("nonzero"),
-                    commitment: Hash::new(b"in-2"),
-                },
-            ],
+            inputs,
             output_state_key: "/state/private/output-1".to_string(),
             requested_multiplication_depth: 0,
-            rotation_count: 0,
+            rotation_steps: 0,
             bootstrap_count: 0,
         }
     }
@@ -10712,6 +10966,7 @@ mod tests {
         job: FheJobSpecV1,
         policy: FheExecutionPolicyV1,
         param_set: FheParamSetV1,
+        evaluation_keys: BfvEvaluationKeyBundle,
         governance_tx_hash: Hash,
     ) -> ManifestProvenance {
         let payload = encode_fhe_job_run_provenance_payload(
@@ -10720,6 +10975,7 @@ mod tests {
             job,
             policy,
             param_set,
+            evaluation_keys,
             governance_tx_hash,
         )
         .expect("fhe job payload");
@@ -14096,12 +14352,15 @@ mod tests {
         let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
         let binding_name: iroha_data_model::name::Name = "vault".parse().expect("valid");
         let governance_tx_hash = Hash::new(b"gov-state");
+        let value_payload = vec![0xAB; 256];
+        let value_payload_commitment = Hash::new(&value_payload);
         iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
             service_name: service_name.clone(),
             binding_name: binding_name.clone(),
             state_key: "/state/private/patient-1".to_string(),
             operation: SoraStateMutationOperationV1::Upsert,
             value_size_bytes: Some(256),
+            value_payload: Some(value_payload),
             encryption: SoraStateEncryptionV1::Plaintext,
             governance_tx_hash,
             provenance: state_mutation_provenance(
@@ -14110,6 +14369,7 @@ mod tests {
                 "/state/private/patient-1",
                 SoraStateMutationOperationV1::Upsert,
                 Some(256),
+                Some(value_payload_commitment),
                 SoraStateEncryptionV1::Plaintext,
                 governance_tx_hash,
             ),
@@ -14182,9 +14442,40 @@ mod tests {
 
         let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
         let binding_name: iroha_data_model::name::Name = "vault".parse().expect("valid");
-        let job = sample_fhe_job();
+        let input_1_payload = sample_fhe_payload(b"alice", b"seed-1");
+        let input_2_payload = sample_fhe_payload(b"bob", b"seed-2");
+        for (state_key, payload) in [
+            ("/state/private/input-1", input_1_payload.clone()),
+            ("/state/private/input-2", input_2_payload.clone()),
+        ] {
+            record_service_state_entry(
+                &mut stx,
+                SoraServiceStateEntryV1 {
+                    schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                    service_name: service_name.clone(),
+                    service_version: "1.0.0".to_string(),
+                    binding_name: binding_name.clone(),
+                    state_key: state_key.to_string(),
+                    encryption: SoraStateEncryptionV1::FheCiphertext,
+                    payload_bytes: NonZeroU64::new(
+                        u64::try_from(payload.len()).expect("payload len"),
+                    )
+                    .expect("nonzero"),
+                    payload_commitment: Hash::new(&payload),
+                    payload,
+                    last_update_sequence: 1,
+                    governance_tx_hash: Hash::new(b"input-state"),
+                    source_action: SoraServiceLifecycleActionV1::StateMutation,
+                },
+            )?;
+        }
+        let job = sample_fhe_job(vec![
+            sample_fhe_input_ref("/state/private/input-1", &input_1_payload),
+            sample_fhe_input_ref("/state/private/input-2", &input_2_payload),
+        ]);
         let policy = sample_fhe_policy();
         let param_set = sample_fhe_param_set();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
         let governance_tx_hash = Hash::new(b"gov-fhe");
         iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
             service_name: service_name.clone(),
@@ -14192,6 +14483,7 @@ mod tests {
             job: job.clone(),
             policy: policy.clone(),
             param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
@@ -14199,6 +14491,7 @@ mod tests {
                 job.clone(),
                 policy.clone(),
                 param_set.clone(),
+                evaluation_keys,
                 governance_tx_hash,
             ),
         })
@@ -14218,14 +14511,9 @@ mod tests {
             ))
             .expect("fhe output entry");
         assert_eq!(entry.encryption, SoraStateEncryptionV1::FheCiphertext);
-        assert_eq!(
-            entry.payload_bytes.get(),
-            job.deterministic_output_payload_bytes()
-        );
-        assert_eq!(
-            entry.payload_commitment,
-            job.deterministic_output_commitment()
-        );
+        assert_eq!(entry.payload_bytes.get(), entry.payload.len() as u64);
+        assert_eq!(entry.payload_commitment, Hash::new(&entry.payload));
+        assert!(!entry.payload.is_empty());
         assert_eq!(entry.source_action, SoraServiceLifecycleActionV1::FheJobRun);
         assert_eq!(
             world

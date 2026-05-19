@@ -146,11 +146,12 @@ class HttpClientTransport(
     }
 
     fun resolveIdentifier(requestBody: IdentifierResolveRequest): CompletableFuture<Optional<IdentifierResolutionReceipt>> {
-        val body = encodeJsonBody(buildIdentifierResolvePayload(requestBody.policyId, requestBody.input, requestBody.encryptedInputHex))
+        val body = encodeJsonBody(buildIdentifierResolvePayload(requestBody.policyId, requestBody.encryptedInputHex, requestBody.outputOpening))
         return fetchJsonAllowingNotFound(buildJsonPostRequest("/v1/identifiers/resolve", body), IdentifierJsonParser::parseResolutionReceipt, "identifier resolve")
     }
 
-    fun resolveIdentifier(policyId: String, input: String?, encryptedInputHex: String?): CompletableFuture<Optional<IdentifierResolutionReceipt>> = resolveIdentifier(buildIdentifierResolveRequest(policyId, input, encryptedInputHex))
+    fun resolveIdentifier(policyId: String, encryptedInputHex: String, outputOpening: RamLfeOutputOpening): CompletableFuture<Optional<IdentifierResolutionReceipt>> =
+        resolveIdentifier(IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening))
 
     override fun resolveAccountAlias(alias: String): CompletableFuture<Optional<AccountAliasResolution>> {
         val normalizedAlias = normalizeNonBlank(alias, "alias")
@@ -160,19 +161,18 @@ class HttpClientTransport(
 
     fun issueIdentifierClaimReceipt(accountId: String, requestBody: IdentifierResolveRequest): CompletableFuture<Optional<IdentifierResolutionReceipt>> {
         val normalizedAccountId = normalizeNonBlank(accountId, "accountId")
-        val body = encodeJsonBody(buildIdentifierResolvePayload(requestBody.policyId, requestBody.input, requestBody.encryptedInputHex))
+        val body = encodeJsonBody(buildIdentifierResolvePayload(requestBody.policyId, requestBody.encryptedInputHex, requestBody.outputOpening))
         return fetchJsonAllowingNotFound(buildJsonPostRequest("/v1/accounts/${encodePathSegment(normalizedAccountId)}/identifiers/claim-receipt", body), IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt")
     }
 
-    fun issueIdentifierClaimReceipt(accountId: String, policyId: String, input: String?, encryptedInputHex: String?): CompletableFuture<Optional<IdentifierResolutionReceipt>> = issueIdentifierClaimReceipt(accountId, buildIdentifierResolveRequest(policyId, input, encryptedInputHex))
+    fun issueIdentifierClaimReceipt(accountId: String, policyId: String, encryptedInputHex: String, outputOpening: RamLfeOutputOpening): CompletableFuture<Optional<IdentifierResolutionReceipt>> =
+        issueIdentifierClaimReceipt(accountId, IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening))
 
     fun executeRamLfeProgram(programId: String, requestBody: RamLfeExecuteRequest): CompletableFuture<Optional<RamLfeExecuteResponse>> {
         val normalizedProgramId = normalizeNonBlank(programId, "programId")
-        val body = encodeJsonBody(buildRamLfeExecutePayload(requestBody.inputHex, requestBody.encryptedInputHex))
+        val body = encodeJsonBody(buildRamLfeExecutePayload(requestBody.encryptedInputHex))
         return fetchJsonAllowingNotFound(buildJsonPostRequest("/v1/ram-lfe/programs/${encodePathSegment(normalizedProgramId)}/execute", body), RamLfeJsonParser::parseExecuteResponse, "ram-lfe execute")
     }
-
-    fun executeRamLfeProgram(programId: String, inputHex: String?, encryptedInputHex: String?): CompletableFuture<Optional<RamLfeExecuteResponse>> = executeRamLfeProgram(programId, buildRamLfeExecuteRequest(inputHex, encryptedInputHex))
 
     fun verifyRamLfeReceipt(requestBody: RamLfeReceiptVerifyRequest): CompletableFuture<RamLfeReceiptVerifyResponse> {
         val body = encodeJsonBody(buildRamLfeReceiptVerifyPayload(requestBody.receipt, requestBody.outputHex))
@@ -633,36 +633,38 @@ class HttpClientTransport(
         private fun urlEncode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.name())
         private fun encodeJsonBody(payload: Map<String, Any>): ByteArray = JsonEncoder.encode(payload).toByteArray(StandardCharsets.UTF_8)
 
-        @JvmStatic internal fun buildIdentifierResolveRequest(policyId: String, input: String?, encryptedInputHex: String?): IdentifierResolveRequest {
-            val normalizedInput = normalizeOptionalNonBlank(input, "input")
-            val normalizedEncryptedInput = encryptedInputHex?.let { normalizeEvenLengthHex(it, "encryptedInputHex") }
-            require((normalizedInput == null) != (normalizedEncryptedInput == null)) { "Exactly one of input or encryptedInputHex must be provided" }
-            return if (normalizedInput != null) IdentifierResolveRequest.plaintext(policyId, normalizedInput) else IdentifierResolveRequest.encrypted(policyId, normalizedEncryptedInput!!)
-        }
-
-        @JvmStatic internal fun buildRamLfeExecuteRequest(inputHex: String?, encryptedInputHex: String?): RamLfeExecuteRequest {
-            val normalizedInputHex = inputHex?.let { normalizeEvenLengthHex(it, "inputHex") }
-            val normalizedEncryptedInput = encryptedInputHex?.let { normalizeEvenLengthHex(it, "encryptedInputHex") }
-            require((normalizedInputHex == null) != (normalizedEncryptedInput == null)) { "Exactly one of inputHex or encryptedInputHex must be provided" }
-            return if (normalizedInputHex != null) RamLfeExecuteRequest.plaintext(normalizedInputHex) else RamLfeExecuteRequest.encrypted(normalizedEncryptedInput!!)
-        }
-
-        @JvmStatic internal fun buildIdentifierResolvePayload(policyId: String, input: String?, encryptedInputHex: String?): Map<String, Any> {
+        @JvmStatic internal fun buildIdentifierResolveRequest(
+            policyId: String,
+            encryptedInputHex: String,
+            outputOpening: RamLfeOutputOpening,
+        ): IdentifierResolveRequest {
             val normalizedPolicyId = normalizeNonBlank(policyId, "policyId")
-            val normalizedInput = normalizeOptionalNonBlank(input, "input")
-            val normalizedEncryptedInput = encryptedInputHex?.let { normalizeEvenLengthHex(it, "encryptedInputHex") }
-            require((normalizedInput == null) != (normalizedEncryptedInput == null)) { "Exactly one of input or encryptedInputHex must be provided" }
+            val normalizedEncryptedInput = normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex")
+            return IdentifierResolveRequest.encrypted(normalizedPolicyId, normalizedEncryptedInput, outputOpening)
+        }
+
+        @JvmStatic internal fun buildRamLfeExecuteRequest(encryptedInputHex: String): RamLfeExecuteRequest {
+            val normalizedEncryptedInput = normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex")
+            return RamLfeExecuteRequest.encrypted(normalizedEncryptedInput)
+        }
+
+        @JvmStatic internal fun buildIdentifierResolvePayload(
+            policyId: String,
+            encryptedInputHex: String,
+            outputOpening: RamLfeOutputOpening,
+        ): Map<String, Any> {
+            val normalizedPolicyId = normalizeNonBlank(policyId, "policyId")
+            val normalizedEncryptedInput = normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex")
             val payload = LinkedHashMap<String, Any>(); payload["policy_id"] = normalizedPolicyId
-            if (normalizedInput != null) payload["input"] = normalizedInput else payload["encrypted_input"] = normalizedEncryptedInput!!
+            payload["encrypted_input"] = normalizedEncryptedInput
+            payload["output_opening"] = outputOpening.toJsonMap()
             return payload
         }
 
-        @JvmStatic internal fun buildRamLfeExecutePayload(inputHex: String?, encryptedInputHex: String?): Map<String, Any> {
-            val normalizedInputHex = inputHex?.let { normalizeEvenLengthHex(it, "inputHex") }
-            val normalizedEncryptedInput = encryptedInputHex?.let { normalizeEvenLengthHex(it, "encryptedInputHex") }
-            require((normalizedInputHex == null) != (normalizedEncryptedInput == null)) { "Exactly one of inputHex or encryptedInputHex must be provided" }
+        @JvmStatic internal fun buildRamLfeExecutePayload(encryptedInputHex: String): Map<String, Any> {
+            val normalizedEncryptedInput = normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex")
             val payload = LinkedHashMap<String, Any>()
-            if (normalizedInputHex != null) payload["input_hex"] = normalizedInputHex else payload["encrypted_input"] = normalizedEncryptedInput!!
+            payload["encrypted_input"] = normalizedEncryptedInput
             return payload
         }
 

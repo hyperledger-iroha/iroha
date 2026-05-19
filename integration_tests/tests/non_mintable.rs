@@ -1,11 +1,49 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests covering single-mint asset semantics.
 
-use eyre::Result;
+use std::time::{Duration, Instant};
+
+use eyre::{Result, eyre};
 use integration_tests::sandbox;
-use iroha::data_model::{isi::InstructionBox, prelude::*};
+use iroha::{
+    client::Client,
+    data_model::{isi::InstructionBox, prelude::*},
+};
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
+
+fn wait_for_asset_value(
+    client: &Client,
+    asset_id: &AssetId,
+    expected_value: &Numeric,
+    context: &str,
+) -> Result<Asset> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "asset was not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client.query_single(FindAssetById::new(asset_id.clone())) {
+            Ok(asset) => {
+                last_observed = format!("value={:?}", asset.value());
+                if asset.value() == expected_value {
+                    return Ok(asset);
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "timed out waiting for asset after {context}; asset_id={asset_id}; expected_value={expected_value:?}; last_observed={last_observed}"
+    ))
+}
 
 #[test]
 fn non_mintable_asset_minting_rules() -> Result<()> {
@@ -35,25 +73,13 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
         );
 
         let metadata = Metadata::default();
-        let mint = Mint::asset_numeric(
-            200_u32,
-            AssetId::new(asset_definition_id.clone(), account_id.clone()),
-        );
+        let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+        let mint = Mint::asset_numeric(200_u32, asset_id.clone());
         let instructions: [InstructionBox; 2] = [create_asset.into(), mint.clone().into()];
         let tx = test_client.build_transaction(instructions, metadata);
 
         test_client.submit_transaction_blocking(&tx)?;
-        assert!(
-            test_client
-                .query(FindAssets::new())
-                .execute_all()?
-                .iter()
-                .any(|asset| {
-                    *asset.id().account() == account_id
-                        && *asset.id().definition() == asset_definition_id
-                        && *asset.value() == numeric!(200)
-                })
-        );
+        wait_for_asset_value(&test_client, &asset_id, &numeric!(200), "first mint")?;
 
         assert!(test_client.submit_all_blocking([mint]).is_err());
     }
@@ -80,17 +106,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
             create_asset.into(),
             register_asset.clone().into(),
         ])?;
-        assert!(
-            test_client
-                .query(FindAssets::new())
-                .execute_all()?
-                .iter()
-                .any(|asset| {
-                    *asset.id().account() == account_id
-                        && *asset.id().definition() == asset_definition_id
-                        && *asset.value() == numeric!(1)
-                })
-        );
+        wait_for_asset_value(&test_client, &asset_id, &numeric!(1), "seeded mint")?;
 
         assert!(test_client.submit_blocking(register_asset).is_err());
 

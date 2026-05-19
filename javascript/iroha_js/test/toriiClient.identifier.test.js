@@ -6,6 +6,7 @@ import {
   AccountAddress,
   ToriiClient,
   buildIdentifierRequestForPolicy,
+  encodeIdentifierResolutionReceiptPayload,
   encryptIdentifierInputForPolicy,
   getIdentifierBfvPublicParameters,
   normalizeIdentifierInput,
@@ -31,13 +32,20 @@ const OPAQUE_ID = `opaque:${"11".repeat(32)}`;
 const RECEIPT_HASH = "22".repeat(32);
 const UAID = `uaid:${"33".repeat(31)}35`;
 const SIGNATURE = "AA".repeat(64);
+const PROGRAM_DIGEST = "44".repeat(32);
+const INPUT_CIPHERTEXT_HASH = "55".repeat(32);
+const OUTPUT_CIPHERTEXT_HASH = "66".repeat(32);
+const PARAMETER_DIGEST = "77".repeat(32);
+const EVALUATION_KEY_DIGEST = "88".repeat(32);
+const OUTPUT_HASH = "99".repeat(32);
+const ASSOCIATED_DATA_HASH = "aa".repeat(32);
 const BFV_SEED_HEX =
   "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF";
 const BFV_PUBLIC_PARAMETERS = {
   parameters: {
     polynomial_degree: 8,
-    plaintext_modulus: 256,
-    ciphertext_modulus: 16_777_216,
+    plaintext_modulus: 257,
+    ciphertext_modulus: 16_842_752,
     decomposition_base_log: 12,
   },
   public_key: {
@@ -47,7 +55,7 @@ const BFV_PUBLIC_PARAMETERS = {
   max_input_bytes: 3,
 };
 const BFV_ENCRYPTED_INPUT_HEX =
-  "4e52543000001042e5b988077612440e4cd45673596b00b0040000000000007f6fd892e275492500a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002bab6f00000000000800000000000000440e93000000000008000000000000005b2502000000000008000000000000004a671400000000000800000000000000bc3e2600000000000800000000000000413d86000000000008000000000000005619f800000000000800000000000000bd73fa0000000000880000000000000008000000000000000800000000000000ee884300000000000800000000000000dd21b100000000000800000000000000fe7c52000000000008000000000000001639a5000000000008000000000000006a979d00000000000800000000000000ddd4430000000000080000000000000051086700000000000800000000000000ef13ae00000000002001000000000000880000000000000008000000000000000800000000000000776dc80000000000080000000000000093060d0000000000080000000000000033077500000000000800000000000000ddc4190000000000080000000000000062ea230000000000080000000000000056ef0b00000000000800000000000000ab52d500000000000800000000000000e9457c0000000000880000000000000008000000000000000800000000000000f2214200000000000800000000000000c9edcf000000000008000000000000001dfb5a00000000000800000000000000d16e640000000000080000000000000016ec0f000000000008000000000000003dee83000000000008000000000000006e7efa00000000000800000000000000c1fbbc0000000000200100000000000088000000000000000800000000000000080000000000000066c74d00000000000800000000000000c9c04900000000000800000000000000f01e8700000000000800000000000000aed22c000000000008000000000000006121980000000000080000000000000036ac8d00000000000800000000000000d143930000000000080000000000000089206d0000000000880000000000000008000000000000000800000000000000417ded00000000000800000000000000d79c33000000000008000000000000009f332d0000000000080000000000000091fe5700000000000800000000000000533de8000000000008000000000000005db9df00000000000800000000000000a8c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d656000000000008000000000000005d874500000000000800000000000000567ab30000000000080000000000000007272f00000000000800000000000000ff6d0a00000000000800000000000000077467000000000008000000000000006d1c1a00000000000800000000000000704fc100000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a000000000000800000000000000cbf92a000000000008000000000000005748720000000000080000000000000060909200000000000800000000000000f5f5dc00000000000800000000000000445a3a00000000000800000000000000999f680000000000";
+  "4e52543000001042e5b988077612440e4cd45673596b00b00400000000000075615d8ccdac6dc500a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002bab6e00000000000800000000000000440e92000000000008000000000000005b2500000000000008000000000000004a671100000000000800000000000000bc3e2300000000000800000000000000413d85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ee884300000000000800000000000000dd21b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006a979b00000000000800000000000000ddd4410000000000080000000000000051086600000000000800000000000000ef13ae00000000002001000000000000880000000000000008000000000000000800000000000000776dca0000000000080000000000000093060e0000000000080000000000000033077500000000000800000000000000ddc4190000000000080000000000000062ea230000000000080000000000000056ef0a00000000000800000000000000ab52d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f2214400000000000800000000000000c9edd2000000000008000000000000001dfb5b00000000000800000000000000d16e660000000000080000000000000016ec0e000000000008000000000000003dee83000000000008000000000000006e7ef900000000000800000000000000c1fbbb0000000000200100000000000088000000000000000800000000000000080000000000000066c74c00000000000800000000000000c9c04800000000000800000000000000f01e8700000000000800000000000000aed22c000000000008000000000000006121990000000000080000000000000036ac8c00000000000800000000000000d143930000000000080000000000000089206d0000000000880000000000000008000000000000000800000000000000417ded00000000000800000000000000d79c34000000000008000000000000009f332c0000000000080000000000000091fe5700000000000800000000000000533de8000000000008000000000000005db9df00000000000800000000000000a8c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005d874400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006d1c1a00000000000800000000000000704fc200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000cbf929000000000008000000000000005748730000000000080000000000000060909200000000000800000000000000f5f5dd00000000000800000000000000445a3b00000000000800000000000000999f690000000000";
 
 function jsonResponse(status, body) {
   return new Response(body == null ? null : JSON.stringify(body), {
@@ -66,29 +74,65 @@ function ed25519MultihashLiteral(publicKeyBytes) {
   return `ed25519:ed0120${Buffer.from(publicKeyBytes).toString("hex").toUpperCase()}`;
 }
 
+function sampleOutputOpening(overrides = {}) {
+  return {
+    payload: {
+      program_id: POLICY_ID,
+      input_ciphertext_hash: INPUT_CIPHERTEXT_HASH,
+      output_ciphertext_hash: OUTPUT_CIPHERTEXT_HASH,
+      parameter_digest: PARAMETER_DIGEST,
+      evaluation_key_digest: EVALUATION_KEY_DIGEST,
+      opened_output_hash: OUTPUT_HASH,
+      opened_at_ms: 42,
+      expires_at_ms: 142,
+      ...(overrides.payload ?? {}),
+    },
+    signature: overrides.signature ?? "ab".repeat(64),
+  };
+}
+
+function sampleExecution(overrides = {}) {
+  return {
+    program_id: POLICY_ID,
+    program_digest: PROGRAM_DIGEST,
+    backend: "bfv-programmed-sha3-256-v1",
+    verification_mode: "signed",
+    input_ciphertext_hash: INPUT_CIPHERTEXT_HASH,
+    output_ciphertext_hash: OUTPUT_CIPHERTEXT_HASH,
+    parameter_digest: PARAMETER_DIGEST,
+    evaluation_key_digest: EVALUATION_KEY_DIGEST,
+    output_hash: OUTPUT_HASH,
+    associated_data_hash: ASSOCIATED_DATA_HASH,
+    executed_at_ms: 42,
+    expires_at_ms: 142,
+    ...overrides,
+  };
+}
+
 function signedReceiptFixture(overrides = {}) {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const der = publicKey.export({ format: "der", type: "spki" });
   const rawPublicKey = new Uint8Array(der.subarray(der.length - 32));
-  const signaturePayloadHex = overrides.signaturePayloadHex ?? "01020304A0";
+  const payload = {
+    policy_id: POLICY_ID,
+    execution: sampleExecution(overrides.execution),
+    opening: overrides.opening ?? sampleOutputOpening(),
+    opaque_id: OPAQUE_ID,
+    receipt_hash: RECEIPT_HASH,
+    uaid: UAID,
+    account_id: ACCOUNT_ID,
+    ...(overrides.payload ?? {}),
+  };
+  const signaturePayload = encodeIdentifierResolutionReceiptPayload(payload);
   const signature = signRaw(
     null,
-    irohaPrehash(Buffer.from(signaturePayloadHex, "hex")),
+    irohaPrehash(signaturePayload),
     privateKey,
   ).toString("hex").toUpperCase();
   return {
     resolver_public_key: ed25519MultihashLiteral(rawPublicKey),
-    signature,
-    signature_payload_hex: signaturePayloadHex,
-    signature_payload: {
-      policy_id: POLICY_ID,
-      opaque_id: OPAQUE_ID,
-      receipt_hash: RECEIPT_HASH,
-      uaid: UAID,
-      account_id: ACCOUNT_ID,
-      resolved_at_ms: 42,
-      expires_at_ms: 142,
-    },
+    payload,
+    attestation: { kind: "signed", signature },
   };
 }
 
@@ -154,7 +198,7 @@ test("listIdentifierPolicies normalizes BFV metadata", async () => {
   });
 });
 
-test("resolveIdentifier posts plaintext input and normalizes response", async () => {
+test("resolveIdentifier posts encrypted input with output opening and normalizes response", async () => {
   let lastRequest = null;
   const signedReceipt = signedReceiptFixture();
   const client = new ToriiClient("https://example.test", {
@@ -164,36 +208,29 @@ test("resolveIdentifier posts plaintext input and normalizes response", async ()
       const payload = JSON.parse(init.body);
       assert.deepEqual(payload, {
         policy_id: POLICY_ID,
-        input: "+1 (555) 123-4567",
+        encrypted_input: "ABCD",
+        output_opening: sampleOutputOpening(),
       });
       return jsonResponse(200, {
-        policy_id: POLICY_ID,
-        opaque_id: OPAQUE_ID,
-        receipt_hash: RECEIPT_HASH,
-        uaid: UAID,
-        account_id: ACCOUNT_ID,
-        resolved_at_ms: 42,
-        expires_at_ms: 142,
-        backend: "bfv-affine-sha3-256-v1",
-        signature: signedReceipt.signature,
-        signature_payload_hex: signedReceipt.signature_payload_hex,
-        signature_payload: signedReceipt.signature_payload,
+        payload: signedReceipt.payload,
+        attestation: signedReceipt.attestation,
       });
     },
   });
 
   const result = await client.resolveIdentifier({
     policyId: POLICY_ID,
-    input: " +1 (555) 123-4567 ",
+    encryptedInput: "ABCD",
+    outputOpening: sampleOutputOpening(),
   });
   assert.equal(new URL(lastRequest.input).pathname, "/v1/identifiers/resolve");
-  assert.equal(result.policy_id, POLICY_ID);
-  assert.equal(result.opaque_id, OPAQUE_ID);
-  assert.equal(result.receipt_hash, RECEIPT_HASH);
-  assert.equal(result.uaid, UAID);
-  assert.equal(result.account_id, ACCOUNT_ID);
-  assert.equal(result.signature, signedReceipt.signature);
-  assert.equal(result.signature_payload.policy_id, POLICY_ID);
+  assert.equal(result.payload.policy_id, POLICY_ID);
+  assert.equal(result.payload.opaque_id, OPAQUE_ID);
+  assert.equal(result.payload.receipt_hash, RECEIPT_HASH);
+  assert.equal(result.payload.uaid, UAID);
+  assert.equal(result.payload.account_id, ACCOUNT_ID);
+  assert.equal(result.attestation.signature, signedReceipt.attestation.signature);
+  assert.equal(result.payload.execution.input_ciphertext_hash, INPUT_CIPHERTEXT_HASH);
   assert.equal(
     verifyIdentifierResolutionReceipt(result, {
       policy_id: POLICY_ID,
@@ -201,13 +238,13 @@ test("resolveIdentifier posts plaintext input and normalizes response", async ()
       active: true,
       normalization: "phone_e164",
       resolver_public_key: signedReceipt.resolver_public_key,
-      backend: "bfv-affine-sha3-256-v1",
+      backend: "bfv-programmed-sha3-256-v1",
     }),
     true,
   );
 });
 
-test("resolveIdentifier validates exactly one input mode", async () => {
+test("resolveIdentifier requires encrypted input and output opening", async () => {
   const client = new ToriiClient("https://example.test", {
     fetchImpl: async () => jsonResponse(200, {}),
   });
@@ -221,6 +258,14 @@ test("resolveIdentifier validates exactly one input mode", async () => {
       client.resolveIdentifier({
         policyId: POLICY_ID,
         input: "alice@example.com",
+        outputOpening: sampleOutputOpening(),
+      }),
+    (error) => error instanceof ValidationError,
+  );
+  await assert.rejects(
+    () =>
+      client.resolveIdentifier({
+        policyId: POLICY_ID,
         encryptedInput: "ABCD",
       }),
     (error) => error instanceof ValidationError,
@@ -248,10 +293,12 @@ test("encryptIdentifierInputForPolicy builds deterministic BFV Norito envelopes"
       input: "ab",
       encrypt: true,
       seedHex: BFV_SEED_HEX,
+      outputOpening: sampleOutputOpening(),
     }),
     {
       policyId: "string#retail",
       encryptedInput: BFV_ENCRYPTED_INPUT_HEX,
+      outputOpening: sampleOutputOpening(),
     },
   );
 });
@@ -263,6 +310,7 @@ test("resolveIdentifier accepts encrypted input and returns null for missing bin
       callCount += 1;
       const payload = JSON.parse(init.body);
       assert.equal(payload.encrypted_input, "ABCD");
+      assert.deepEqual(payload.output_opening, sampleOutputOpening());
       return jsonResponse(404, {});
     },
   });
@@ -270,14 +318,17 @@ test("resolveIdentifier accepts encrypted input and returns null for missing bin
   const result = await client.resolveIdentifier({
     policyId: POLICY_ID,
     encryptedInput: "ABCD",
+    outputOpening: sampleOutputOpening(),
   });
   assert.equal(callCount, 1);
   assert.equal(result, null);
 });
 
 test("issueIdentifierClaimReceipt posts account-scoped requests", async () => {
+  const outputOpening = sampleOutputOpening({ payload: { opened_at_ms: 7, expires_at_ms: null } });
   const signedReceipt = signedReceiptFixture({
-    signaturePayloadHex: "0A0B0C0D",
+    execution: { executed_at_ms: 7, expires_at_ms: null },
+    opening: outputOpening,
   });
   const client = new ToriiClient("https://example.test", {
     fetchImpl: async (input, init) => {
@@ -289,22 +340,11 @@ test("issueIdentifierClaimReceipt posts account-scoped requests", async () => {
       assert.deepEqual(payload, {
         policy_id: POLICY_ID,
         encrypted_input: "ABCD",
+        output_opening: outputOpening,
       });
       return jsonResponse(200, {
-        policy_id: POLICY_ID,
-        opaque_id: OPAQUE_ID,
-        receipt_hash: RECEIPT_HASH,
-        uaid: UAID,
-        account_id: ACCOUNT_ID,
-        resolved_at_ms: 7,
-        backend: "bfv-affine-sha3-256-v1",
-        signature: signedReceipt.signature,
-        signature_payload_hex: signedReceipt.signature_payload_hex,
-        signature_payload: {
-          ...signedReceipt.signature_payload,
-          resolved_at_ms: 7,
-          expires_at_ms: null,
-        },
+        payload: signedReceipt.payload,
+        attestation: signedReceipt.attestation,
       });
     },
   });
@@ -312,15 +352,18 @@ test("issueIdentifierClaimReceipt posts account-scoped requests", async () => {
   const result = await client.issueIdentifierClaimReceipt(ACCOUNT_ID, {
     policyId: POLICY_ID,
     encryptedInput: "ABCD",
+    outputOpening,
   });
-  assert.equal(result.opaque_id, OPAQUE_ID);
-  assert.equal(result.account_id, ACCOUNT_ID);
+  assert.equal(result.payload.opaque_id, OPAQUE_ID);
+  assert.equal(result.payload.account_id, ACCOUNT_ID);
 });
 
 test("issueIdentifierClaimReceipt accepts account aliases on account-id paths", async () => {
   const alias = "operator@banka.universal";
+  const outputOpening = sampleOutputOpening({ payload: { opened_at_ms: 7, expires_at_ms: null } });
   const signedReceipt = signedReceiptFixture({
-    signaturePayloadHex: "0A0B0C0D",
+    execution: { executed_at_ms: 7, expires_at_ms: null },
+    opening: outputOpening,
   });
   const client = new ToriiClient("https://example.test", {
     fetchImpl: async (input, init) => {
@@ -328,21 +371,11 @@ test("issueIdentifierClaimReceipt accepts account aliases on account-id paths", 
         new URL(input).pathname,
         `/v1/accounts/${encodeURIComponent(alias)}/identifiers/claim-receipt`,
       );
+      const payload = JSON.parse(init.body);
+      assert.deepEqual(payload.output_opening, outputOpening);
       return jsonResponse(200, {
-        policy_id: POLICY_ID,
-        opaque_id: OPAQUE_ID,
-        receipt_hash: RECEIPT_HASH,
-        uaid: UAID,
-        account_id: ACCOUNT_ID,
-        resolved_at_ms: 7,
-        backend: "bfv-affine-sha3-256-v1",
-        signature: signedReceipt.signature,
-        signature_payload_hex: signedReceipt.signature_payload_hex,
-        signature_payload: {
-          ...signedReceipt.signature_payload,
-          resolved_at_ms: 7,
-          expires_at_ms: null,
-        },
+        payload: signedReceipt.payload,
+        attestation: signedReceipt.attestation,
       });
     },
   });
@@ -350,27 +383,28 @@ test("issueIdentifierClaimReceipt accepts account aliases on account-id paths", 
   const result = await client.issueIdentifierClaimReceipt(alias, {
     policyId: POLICY_ID,
     encryptedInput: "ABCD",
+    outputOpening,
   });
-  assert.equal(result.account_id, ACCOUNT_ID);
+  assert.equal(result.payload.account_id, ACCOUNT_ID);
 });
 
-test("buildIdentifierRequestForPolicy canonicalizes plaintext input", () => {
-  const request = buildIdentifierRequestForPolicy(
-    {
-      policy_id: POLICY_ID,
-      owner: ACCOUNT_ID,
-      active: true,
-      normalization: "phone_e164",
-      resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
-      backend: "bfv-affine-sha3-256-v1",
-      input_encryption: "bfv-v1",
-    },
-    { input: " +1 (555) 123-4567 " },
+test("buildIdentifierRequestForPolicy rejects plaintext request bodies", () => {
+  assert.throws(
+    () =>
+      buildIdentifierRequestForPolicy(
+        {
+          policy_id: POLICY_ID,
+          owner: ACCOUNT_ID,
+          active: true,
+          normalization: "phone_e164",
+          resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+          backend: "bfv-programmed-sha3-256-v1",
+          input_encryption: "bfv-v1",
+        },
+        { input: " +1 (555) 123-4567 ", outputOpening: sampleOutputOpening() },
+      ),
+    ValidationError,
   );
-  assert.deepEqual(request, {
-    policyId: POLICY_ID,
-    input: "+15551234567",
-  });
 });
 
 test("getIdentifierClaimByReceiptHash returns null on 404", async () => {

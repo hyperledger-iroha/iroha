@@ -8,12 +8,10 @@ use std::{
 };
 
 use iroha_crypto::{
-    BfvError, BfvIdentifierCiphertext, BfvIdentifierPublicParameters,
-    BfvProgrammedPublicParameters, BfvRamProgramProfile, ClientRequest, EvalResponse, Hash,
-    KeyPair, RamLfeBackend, RamLfeError, RamLfeVerificationMode, Signature, SignatureOf,
-    decode_bfv_programmed_public_parameters, decrypt_identifier,
-    derive_identifier_key_material_from_seed, encrypt_identifier_from_seed, evaluate_commitment,
-    identifier_hashes_from_output_hash, ram_lfe_output_hash,
+    BfvIdentifierCiphertext, BfvIdentifierPublicParameters, BfvProgrammedPublicParameters,
+    BfvRamProgramProfile, ClientRequest, EvalResponse, Hash, KeyPair, RamLfeBackend, RamLfeError,
+    RamLfeVerificationMode, Signature, SignatureOf, decode_bfv_programmed_public_parameters,
+    evaluate_commitment, identifier_hashes_from_output_hash, ram_lfe_output_hash,
 };
 use iroha_data_model::{
     account::OpaqueAccountId,
@@ -24,7 +22,7 @@ use iroha_data_model::{
     nexus::UniversalAccountId,
     prelude::*,
     ram_lfe::{
-        RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeProgramPolicy,
+        RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeProgramId, RamLfeProgramPolicy,
         RamLfeReceiptAttestation,
     },
 };
@@ -53,8 +51,12 @@ pub struct RamLfeExecutionDraft {
     pub expires_at_ms: Option<u64>,
     pub backend: RamLfeBackend,
     pub output_hash: Hash,
+    pub input_ciphertext_hash: Hash,
+    pub output_ciphertext_hash: Hash,
     pub associated_data_hash: Hash,
     pub program_digest: Hash,
+    pub parameter_digest: Hash,
+    pub evaluation_key_digest: Hash,
     pub verification_mode: RamLfeVerificationMode,
 }
 
@@ -67,8 +69,13 @@ pub struct IdentifierResolutionDraft {
     pub expires_at_ms: Option<u64>,
     pub backend: RamLfeBackend,
     pub output_hash: Hash,
+    pub input_ciphertext_hash: Hash,
+    pub output_ciphertext_hash: Hash,
     pub program_digest: Hash,
+    pub parameter_digest: Hash,
+    pub evaluation_key_digest: Hash,
     pub verification_mode: RamLfeVerificationMode,
+    pub opening: RamLfeOutputOpening,
 }
 
 #[derive(Debug, Error)]
@@ -83,14 +90,16 @@ pub enum IdentifierResolutionError {
     InvalidFheParameters(String),
     #[error("RAM-LFE backend {0:?} does not yet support Torii app execution receipts")]
     UnsupportedBackend(RamLfeBackend),
+    #[error("RAM-LFE output opening is missing")]
+    MissingOutputOpening,
+    #[error("RAM-LFE output opening is invalid: {0}")]
+    InvalidOutputOpening(String),
     #[error("resolver BFV key material does not match the policy commitment")]
     FheKeyMismatch,
     #[error("encrypted identifier input is not valid UTF-8")]
     InvalidUtf8,
     #[error("RAM-LFE evaluation failed: {0}")]
     Evaluation(#[from] RamLfeError),
-    #[error("BFV input decryption failed: {0}")]
-    Fhe(#[from] BfvError),
     #[error("identifier policy transcript encoding failed: {0}")]
     Encoding(String),
     #[error("Torii cannot issue proof-mode RAM-LFE receipts without prover runtime support")]
@@ -125,30 +134,6 @@ impl IdentifierResolutionService {
             );
     }
 
-    /// Execute one RAM-LFE program from plaintext input bytes.
-    pub fn execute(
-        &self,
-        program_policy: &RamLfeProgramPolicy,
-        input: &[u8],
-    ) -> Result<RamLfeExecutionDraft, IdentifierResolutionError> {
-        if program_policy.commitment.backend != RamLfeBackend::BfvProgrammedSha3_256V1 {
-            return Err(IdentifierResolutionError::UnsupportedBackend(
-                program_policy.commitment.backend,
-            ));
-        }
-        let public_parameters = decode_bfv_public_parameters(program_policy)?;
-        let ciphertext = encrypt_identifier_from_seed(
-            &public_parameters,
-            input,
-            &derive_program_plaintext_encryption_seed(program_policy, input),
-        )?;
-        self.execute_request_payload(
-            program_policy,
-            norito::to_bytes(&ciphertext)
-                .map_err(|err| IdentifierResolutionError::Encoding(err.to_string()))?,
-        )
-    }
-
     /// Execute one RAM-LFE program from a BFV ciphertext envelope.
     pub fn execute_encrypted(
         &self,
@@ -160,10 +145,11 @@ impl IdentifierResolutionService {
                 program_policy.commitment.backend,
             ));
         }
-        // Canonicalize onto the resolver's deterministic envelope so receipt
-        // hashes stay stable across semantically equivalent BFV encryptions.
-        let raw = self.decrypt_program_input(program_policy, ciphertext)?;
-        self.execute(program_policy, &raw)
+        self.execute_request_payload(
+            program_policy,
+            norito::to_bytes(ciphertext)
+                .map_err(|err| IdentifierResolutionError::Encoding(err.to_string()))?,
+        )
     }
 
     fn execute_request_payload(
@@ -184,6 +170,8 @@ impl IdentifierResolutionService {
             backend,
         } = evaluate_commitment(&runtime.secret, &program_policy.commitment, &request)?;
         let output_hash = ram_lfe_output_hash(&output);
+        let input_ciphertext_hash = Hash::new(&request.normalized_input);
+        let output_ciphertext_hash = output_hash;
         let programmed_public_parameters = decode_programmed_public_parameters(program_policy)?
             .ok_or(IdentifierResolutionError::UnsupportedBackend(
                 program_policy.commitment.backend,
@@ -200,32 +188,13 @@ impl IdentifierResolutionService {
             expires_at_ms,
             backend,
             output_hash,
+            input_ciphertext_hash,
+            output_ciphertext_hash,
             associated_data_hash: Hash::new(associated_data),
             program_digest: programmed_public_parameters.hidden_program_digest,
+            parameter_digest: programmed_public_parameters.parameter_digest,
+            evaluation_key_digest: programmed_public_parameters.evaluation_key_digest,
             verification_mode: program_policy.verification_mode,
-        })
-    }
-
-    /// Derive the opaque identifier for a normalized input under the given policy.
-    pub fn derive(
-        &self,
-        _policy: &IdentifierPolicy,
-        program_policy: &RamLfeProgramPolicy,
-        normalized_input: &str,
-    ) -> Result<IdentifierResolutionDraft, IdentifierResolutionError> {
-        let execution = self.execute(program_policy, normalized_input.as_bytes())?;
-        let program_id_bytes = program_id_bytes(&program_policy.program_id);
-        let (opaque_id, receipt_hash) =
-            identifier_hashes_from_output_hash(&program_id_bytes, &execution.output_hash);
-        Ok(IdentifierResolutionDraft {
-            opaque_id: OpaqueAccountId::from_hash(opaque_id),
-            receipt_hash,
-            resolved_at_ms: execution.executed_at_ms,
-            expires_at_ms: execution.expires_at_ms,
-            backend: execution.backend,
-            output_hash: execution.output_hash,
-            program_digest: execution.program_digest,
-            verification_mode: execution.verification_mode,
         })
     }
 
@@ -235,11 +204,15 @@ impl IdentifierResolutionService {
         _policy: &IdentifierPolicy,
         program_policy: &RamLfeProgramPolicy,
         ciphertext: &BfvIdentifierCiphertext,
+        opening: RamLfeOutputOpening,
     ) -> Result<IdentifierResolutionDraft, IdentifierResolutionError> {
         let execution = self.execute_encrypted(program_policy, ciphertext)?;
+        validate_output_opening(&opening, &execution, program_policy)?;
         let program_id_bytes = program_id_bytes(&program_policy.program_id);
-        let (opaque_id, receipt_hash) =
-            identifier_hashes_from_output_hash(&program_id_bytes, &execution.output_hash);
+        let (opaque_id, receipt_hash) = identifier_hashes_from_output_hash(
+            &program_id_bytes,
+            &opening.payload.opened_output_hash,
+        );
         Ok(IdentifierResolutionDraft {
             opaque_id: OpaqueAccountId::from_hash(opaque_id),
             receipt_hash,
@@ -247,46 +220,14 @@ impl IdentifierResolutionService {
             expires_at_ms: execution.expires_at_ms,
             backend: execution.backend,
             output_hash: execution.output_hash,
+            input_ciphertext_hash: execution.input_ciphertext_hash,
+            output_ciphertext_hash: execution.output_ciphertext_hash,
             program_digest: execution.program_digest,
+            parameter_digest: execution.parameter_digest,
+            evaluation_key_digest: execution.evaluation_key_digest,
             verification_mode: execution.verification_mode,
+            opening,
         })
-    }
-
-    /// Decrypt BFV-wrapped identifier input published against the policy commitment.
-    pub fn decrypt_input(
-        &self,
-        policy: &IdentifierPolicy,
-        program_policy: &RamLfeProgramPolicy,
-        ciphertext: &BfvIdentifierCiphertext,
-    ) -> Result<String, IdentifierResolutionError> {
-        let _ = policy;
-        let plaintext = self.decrypt_program_input(program_policy, ciphertext)?;
-        String::from_utf8(plaintext).map_err(|_| IdentifierResolutionError::InvalidUtf8)
-    }
-
-    /// Decrypt BFV-wrapped program input published against the program commitment.
-    pub fn decrypt_program_input(
-        &self,
-        program_policy: &RamLfeProgramPolicy,
-        ciphertext: &BfvIdentifierCiphertext,
-    ) -> Result<Vec<u8>, IdentifierResolutionError> {
-        let runtime = self.runtime(program_policy)?;
-        let public_parameters = decode_bfv_public_parameters(program_policy)?;
-        let associated_data = program_id_bytes(&program_policy.program_id);
-        let (expected_public_parameters, secret_key, _) = derive_identifier_key_material_from_seed(
-            &public_parameters.parameters,
-            public_parameters.max_input_bytes,
-            &runtime.secret,
-            &associated_data,
-        )?;
-        if expected_public_parameters != public_parameters {
-            return Err(IdentifierResolutionError::FheKeyMismatch);
-        }
-        Ok(decrypt_identifier(
-            &public_parameters,
-            &secret_key,
-            ciphertext,
-        )?)
     }
 
     /// Sign a receipt binding a derived opaque identifier to the current ledger target.
@@ -337,6 +278,10 @@ impl IdentifierResolutionService {
             program_digest: draft.program_digest,
             backend: draft.backend,
             verification_mode: draft.verification_mode,
+            input_ciphertext_hash: draft.input_ciphertext_hash,
+            output_ciphertext_hash: draft.output_ciphertext_hash,
+            parameter_digest: draft.parameter_digest,
+            evaluation_key_digest: draft.evaluation_key_digest,
             output_hash: draft.output_hash,
             associated_data_hash: draft.associated_data_hash,
             executed_at_ms: draft.executed_at_ms,
@@ -370,6 +315,10 @@ impl IdentifierResolutionService {
             program_digest: draft.program_digest,
             backend: draft.backend,
             verification_mode: draft.verification_mode,
+            input_ciphertext_hash: draft.input_ciphertext_hash,
+            output_ciphertext_hash: draft.output_ciphertext_hash,
+            parameter_digest: draft.parameter_digest,
+            evaluation_key_digest: draft.evaluation_key_digest,
             output_hash: draft.output_hash,
             associated_data_hash: Hash::new(program_id_bytes(&program_policy.program_id)),
             executed_at_ms: draft.resolved_at_ms,
@@ -378,6 +327,7 @@ impl IdentifierResolutionService {
         let payload = IdentifierResolutionReceiptPayload {
             policy_id: policy.id.clone(),
             execution,
+            opening: draft.opening.clone(),
             opaque_id: draft.opaque_id,
             receipt_hash: draft.receipt_hash,
             uaid,
@@ -411,6 +361,62 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+fn validate_output_opening(
+    opening: &RamLfeOutputOpening,
+    execution: &RamLfeExecutionDraft,
+    program_policy: &RamLfeProgramPolicy,
+) -> Result<(), IdentifierResolutionError> {
+    let payload = &opening.payload;
+    if payload.program_id != program_policy.program_id {
+        return Err(IdentifierResolutionError::InvalidOutputOpening(format!(
+            "opening program {} does not match policy {}",
+            payload.program_id, program_policy.program_id
+        )));
+    }
+    if payload.input_ciphertext_hash != execution.input_ciphertext_hash {
+        return Err(IdentifierResolutionError::InvalidOutputOpening(
+            "input ciphertext hash mismatch".to_owned(),
+        ));
+    }
+    if payload.output_ciphertext_hash != execution.output_ciphertext_hash {
+        return Err(IdentifierResolutionError::InvalidOutputOpening(
+            "output ciphertext hash mismatch".to_owned(),
+        ));
+    }
+    if payload.parameter_digest != execution.parameter_digest {
+        return Err(IdentifierResolutionError::InvalidOutputOpening(
+            "parameter digest mismatch".to_owned(),
+        ));
+    }
+    if payload.evaluation_key_digest != execution.evaluation_key_digest {
+        return Err(IdentifierResolutionError::InvalidOutputOpening(
+            "evaluation-key digest mismatch".to_owned(),
+        ));
+    }
+    if payload.opened_output_hash == Hash::prehashed([0; Hash::LENGTH]) {
+        return Err(IdentifierResolutionError::InvalidOutputOpening(
+            "opened output hash must not be zero".to_owned(),
+        ));
+    }
+    let now = now_ms();
+    if payload.opened_at_ms > now {
+        return Err(IdentifierResolutionError::InvalidOutputOpening(
+            "opening timestamp is in the future".to_owned(),
+        ));
+    }
+    if payload
+        .expires_at_ms
+        .is_some_and(|expires_at_ms| expires_at_ms <= payload.opened_at_ms || expires_at_ms <= now)
+    {
+        return Err(IdentifierResolutionError::InvalidOutputOpening(
+            "opening is expired or has an invalid expiry".to_owned(),
+        ));
+    }
+    opening
+        .verify_signature(&program_policy.output_opening_public_key)
+        .map_err(|err| IdentifierResolutionError::InvalidOutputOpening(err.to_string()))
 }
 
 pub(crate) fn decode_bfv_public_parameters(
@@ -464,30 +470,18 @@ pub(crate) fn program_id_bytes(program_id: &RamLfeProgramId) -> Vec<u8> {
     norito::to_bytes(program_id).expect("RAM-LFE program id encoding must succeed")
 }
 
-fn derive_program_plaintext_encryption_seed(
-    program_policy: &RamLfeProgramPolicy,
-    input: &[u8],
-) -> [u8; Hash::LENGTH] {
-    Hash::new(
-        [
-            b"iroha.ram_lfe.execute.plaintext_bfv.v1".as_slice(),
-            &program_id_bytes(&program_policy.program_id),
-            input,
-        ]
-        .concat(),
-    )
-    .into()
-}
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{
-        BfvParameters, Hash, RamLfeBackend, RamLfeVerificationMode, SignatureOf,
+        BfvEvaluationKeyBundle, Hash, RamLfeBackend, RamLfeVerificationMode, SignatureOf,
         bfv_programmed_policy_commitment_with_program,
         bfv_programmed_public_parameters_with_program, default_bfv_programmed_hidden_program,
-        encrypt_identifier_from_seed,
+        derive_identifier_key_material_from_seed, encrypt_identifier_from_seed,
+        ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
     };
-    use iroha_data_model::ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy};
+    use iroha_data_model::ram_lfe::{
+        RamLfeOutputOpening, RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramPolicy,
+    };
 
     use super::*;
 
@@ -501,15 +495,21 @@ mod tests {
         let params = sample_identifier_bfv_parameters();
         let program_id = sample_program_id(&policy_id);
         let hidden_program = default_bfv_programmed_hidden_program();
-        let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
+        let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
             &params,
             63,
             secret,
             &program_id_bytes(&program_id),
         )
         .expect("identifier BFV parameters");
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            bootstrap_key: None,
+        };
         let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
             public_parameters,
+            evaluation_keys,
             &hidden_program,
             RamLfeVerificationMode::Signed,
             None,
@@ -538,19 +538,65 @@ mod tests {
         (policy, program_policy)
     }
 
-    fn sample_identifier_bfv_parameters() -> BfvParameters {
-        BfvParameters {
-            polynomial_degree: 64,
-            ciphertext_modulus: 1_u64 << 52,
-            plaintext_modulus: 256,
-            decomposition_base_log: 12,
-        }
+    fn sample_identifier_bfv_parameters() -> iroha_crypto::BfvParameters {
+        ram_lfe_bfv_parameters_v1()
     }
 
     fn sample_program_id(policy_id: &IdentifierPolicyId) -> RamLfeProgramId {
         format!("{}_{}", policy_id.kind, policy_id.business_rule)
             .parse()
             .expect("program id")
+    }
+
+    fn encrypted_identifier(
+        program_policy: &RamLfeProgramPolicy,
+        input: &[u8],
+        seed: &[u8],
+    ) -> BfvIdentifierCiphertext {
+        let public_parameters =
+            decode_bfv_public_parameters(program_policy).expect("decode BFV params");
+        encrypt_identifier_from_seed(&public_parameters, input, seed).expect("encrypt input")
+    }
+
+    fn opening_for_execution(
+        program_policy: &RamLfeProgramPolicy,
+        signer: &KeyPair,
+        execution: &RamLfeExecutionDraft,
+    ) -> RamLfeOutputOpening {
+        let payload = RamLfeOutputOpeningPayload {
+            program_id: program_policy.program_id.clone(),
+            input_ciphertext_hash: execution.input_ciphertext_hash,
+            output_ciphertext_hash: execution.output_ciphertext_hash,
+            parameter_digest: execution.parameter_digest,
+            evaluation_key_digest: execution.evaluation_key_digest,
+            opened_output_hash: ram_lfe_output_hash(&execution.output),
+            opened_at_ms: execution.executed_at_ms,
+            expires_at_ms: execution.expires_at_ms,
+        };
+        RamLfeOutputOpening {
+            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            payload,
+        }
+    }
+
+    fn bogus_opening(
+        program_policy: &RamLfeProgramPolicy,
+        signer: &KeyPair,
+    ) -> RamLfeOutputOpening {
+        let payload = RamLfeOutputOpeningPayload {
+            program_id: program_policy.program_id.clone(),
+            input_ciphertext_hash: Hash::new(b"input"),
+            output_ciphertext_hash: Hash::new(b"output"),
+            parameter_digest: Hash::new(b"parameters"),
+            evaluation_key_digest: Hash::new(b"evaluation-keys"),
+            opened_output_hash: Hash::new(b"opened-output"),
+            opened_at_ms: now_ms(),
+            expires_at_ms: None,
+        };
+        RamLfeOutputOpening {
+            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            payload,
+        }
     }
 
     #[test]
@@ -569,8 +615,17 @@ mod tests {
             Some(30_000),
         );
 
+        let ciphertext = encrypted_identifier(
+            &program_policy,
+            b"+15551234567",
+            b"derive-and-sign-ciphertext",
+        );
+        let execution = service
+            .execute_encrypted(&program_policy, &ciphertext)
+            .expect("execute encrypted input");
+        let opening = opening_for_execution(&program_policy, &signer, &execution);
         let draft = service
-            .derive(&policy, &program_policy, "+15551234567")
+            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
             .expect("derive opaque identifier");
         let claim = IdentifierClaimRecord {
             policy_id: policy_id.clone(),
@@ -608,86 +663,17 @@ mod tests {
         let (policy, program_policy) =
             sample_policy_bundle(policy_id.clone(), owner, &signer, b"hidden-email-policy");
 
+        let ciphertext =
+            encrypted_identifier(&program_policy, b"alice@example.com", b"missing-runtime");
+        let opening = bogus_opening(&program_policy, &signer);
         let err = service
-            .derive(&policy, &program_policy, "alice@example.com")
+            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
             .expect_err("missing runtime must fail");
         assert!(matches!(
             err,
             IdentifierResolutionError::UnknownProgram(found)
                 if found == program_policy.program_id
         ));
-    }
-
-    #[test]
-    fn decrypts_encrypted_identifier_input() {
-        let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
-        let (policy, program_policy) =
-            sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            signer,
-            Some(30_000),
-        );
-
-        let public_parameters =
-            decode_bfv_public_parameters(&program_policy).expect("decode BFV params");
-        let ciphertext = encrypt_identifier_from_seed(
-            &public_parameters,
-            b"+15551234567",
-            b"identifier-bfv-ciphertext",
-        )
-        .expect("encrypt identifier input");
-
-        let decrypted = service
-            .decrypt_input(&policy, &program_policy, &ciphertext)
-            .expect("decrypt input");
-        assert_eq!(decrypted, "+15551234567");
-    }
-
-    #[test]
-    fn encrypted_program_input_preserves_non_utf8_bytes() {
-        let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
-        let (policy, program_policy) =
-            sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            signer,
-            Some(30_000),
-        );
-
-        let input = [0xff, 0x00, 0x80, 0x41];
-        let plaintext = service
-            .execute(&program_policy, &input)
-            .expect("plaintext execute");
-        let public_parameters =
-            decode_bfv_public_parameters(&program_policy).expect("decode BFV params");
-        let ciphertext =
-            encrypt_identifier_from_seed(&public_parameters, &input, b"non-utf8-program-input")
-                .expect("encrypt non-UTF8 input");
-
-        let decrypted = service
-            .decrypt_program_input(&program_policy, &ciphertext)
-            .expect("decrypt program input");
-        assert_eq!(decrypted, input);
-        let encrypted = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("encrypted execute");
-        assert_eq!(plaintext.output_hash, encrypted.output_hash);
-
-        let err = service
-            .decrypt_input(&policy, &program_policy, &ciphertext)
-            .expect_err("identifier input must still be UTF-8");
-        assert!(matches!(err, IdentifierResolutionError::InvalidUtf8));
     }
 
     #[test]
@@ -702,15 +688,24 @@ mod tests {
         service.register_program_runtime(
             program_policy.program_id.clone(),
             secret,
-            signer,
+            signer.clone(),
             Some(30_000),
         );
 
+        let ciphertext = encrypted_identifier(
+            &program_policy,
+            b"+15551234567",
+            b"deterministic-programmed-ciphertext",
+        );
+        let execution = service
+            .execute_encrypted(&program_policy, &ciphertext)
+            .expect("execute encrypted input");
+        let opening = opening_for_execution(&program_policy, &signer, &execution);
         let first = service
-            .derive(&policy, &program_policy, "+15551234567")
+            .derive_encrypted(&policy, &program_policy, &ciphertext, opening.clone())
             .expect("first derive");
         let second = service
-            .derive(&policy, &program_policy, "+15551234567")
+            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
             .expect("second derive");
         assert_eq!(first.opaque_id, second.opaque_id);
         assert_eq!(first.receipt_hash, second.receipt_hash);
@@ -718,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn programmed_backend_matches_plaintext_and_encrypted_resolution() {
+    fn programmed_backend_resolves_encrypted_input() {
         let service = IdentifierResolutionService::new();
         let owner = AccountId::new(KeyPair::random().public_key().clone());
         let signer = KeyPair::random();
@@ -729,27 +724,23 @@ mod tests {
         service.register_program_runtime(
             program_policy.program_id.clone(),
             secret,
-            signer,
+            signer.clone(),
             Some(30_000),
         );
 
-        let plaintext = service
-            .derive(&policy, &program_policy, "+15551234567")
-            .expect("plaintext derive");
-        let public_parameters =
-            decode_bfv_public_parameters(&program_policy).expect("decode BFV params");
-        let ciphertext = encrypt_identifier_from_seed(
-            &public_parameters,
+        let ciphertext = encrypted_identifier(
+            &program_policy,
             b"+15551234567",
             b"programmed-bfv-ciphertext",
-        )
-        .expect("encrypt identifier input");
+        );
+        let execution = service
+            .execute_encrypted(&program_policy, &ciphertext)
+            .expect("execute encrypted input");
+        let opening = opening_for_execution(&program_policy, &signer, &execution);
         let encrypted = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext)
+            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
             .expect("encrypted derive");
 
-        assert_eq!(plaintext.opaque_id, encrypted.opaque_id);
-        assert_eq!(plaintext.receipt_hash, encrypted.receipt_hash);
         assert_eq!(encrypted.backend, RamLfeBackend::BfvProgrammedSha3_256V1);
     }
 }

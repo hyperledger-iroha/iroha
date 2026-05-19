@@ -1,7 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for sorting and pagination queries
 
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use eyre::{Result, WrapErr as _};
 use integration_tests::sandbox;
@@ -138,15 +141,165 @@ where
     Ok(())
 }
 
+fn wait_for_sorted_asset_definitions(
+    client: &Client,
+    sorting: Sorting,
+    included_asset_definitions: &HashSet<AssetDefinitionId>,
+    expected_asset_definitions: &[AssetDefinitionId],
+) -> Result<Vec<AssetDefinition>> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "asset definitions were not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client
+            .query(FindAssetsDefinitions::new())
+            .with_sorting(sorting.clone())
+            .execute_all()
+        {
+            Ok(asset_definitions) => {
+                let observed = asset_definitions
+                    .into_iter()
+                    .filter(|asset_definition| {
+                        included_asset_definitions.contains(asset_definition.id())
+                    })
+                    .collect::<Vec<_>>();
+                let observed_ids = observed
+                    .iter()
+                    .map(|asset_definition| asset_definition.id().clone())
+                    .collect::<Vec<_>>();
+                last_observed = observed_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if observed_ids == expected_asset_definitions {
+                    return Ok(observed);
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(eyre::eyre!(
+        "timed out waiting for sorted asset definitions; last_observed={last_observed}"
+    ))
+}
+
+fn wait_for_sorted_accounts(
+    client: &Client,
+    sorting: Sorting,
+    included_accounts: &HashSet<AccountId>,
+    expected_accounts: &[AccountId],
+) -> Result<Vec<Account>> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "accounts were not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client
+            .query(FindAccounts::new())
+            .with_sorting(sorting.clone())
+            .execute_all()
+        {
+            Ok(accounts) => {
+                let observed = accounts
+                    .into_iter()
+                    .filter(|account| included_accounts.contains(account.id()))
+                    .collect::<Vec<_>>();
+                let observed_ids = observed
+                    .iter()
+                    .map(|account| account.id().clone())
+                    .collect::<Vec<_>>();
+                last_observed = observed
+                    .iter()
+                    .map(Identifiable::id)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if observed_ids == expected_accounts {
+                    return Ok(observed);
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(eyre::eyre!(
+        "timed out waiting for sorted account ids; last_observed={last_observed}"
+    ))
+}
+
+fn wait_for_sorted_domains(
+    client: &Client,
+    sorting: Sorting,
+    included_domains: &HashSet<DomainId>,
+    expected_domains: &[DomainId],
+) -> Result<Vec<Domain>> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "domains were not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client
+            .query(FindDomains::new())
+            .with_sorting(sorting.clone())
+            .execute_all()
+        {
+            Ok(domains) => {
+                let observed = domains
+                    .into_iter()
+                    .filter(|domain| included_domains.contains(domain.id()))
+                    .collect::<Vec<_>>();
+                let observed_ids = observed
+                    .iter()
+                    .map(|domain| domain.id().clone())
+                    .collect::<Vec<_>>();
+                last_observed = observed_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if observed_ids == expected_domains {
+                    return Ok(observed);
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(eyre::eyre!(
+        "timed out waiting for sorted domains; last_observed={last_observed}"
+    ))
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
-fn correct_sorting_of_entities() {
+fn correct_sorting_of_entities() -> Result<()> {
     let auxiliary_domain_id = DomainId::try_new("_neverland", "universal").expect("Valid");
     let builder = NetworkBuilder::new()
         .with_genesis_instruction(Register::domain(Domain::new(auxiliary_domain_id.clone())));
     let Some((network, _rt)) = start_network(builder, stringify!(correct_sorting_of_entities))
     else {
-        return;
+        return Ok(());
     };
     let test_client = network.client();
 
@@ -179,14 +332,14 @@ fn correct_sorting_of_entities() {
 
     submit_chunked(&test_client, &instructions).expect("Valid");
 
-    let res = test_client
-        .query(FindAssetsDefinitions::new())
-        .with_sorting(Sorting::by_metadata_key(sort_by_metadata_key.clone()))
-        .execute_all()
-        .expect("Valid")
-        .into_iter()
-        .filter(|asset_definition| asset_definitions.contains(asset_definition.id()))
-        .collect::<Vec<_>>();
+    let included_asset_definitions = asset_definitions.iter().cloned().collect::<HashSet<_>>();
+    let expected_asset_definitions = asset_definitions.iter().rev().cloned().collect::<Vec<_>>();
+    let res = wait_for_sorted_asset_definitions(
+        &test_client,
+        Sorting::by_metadata_key(sort_by_metadata_key.clone()),
+        &included_asset_definitions,
+        &expected_asset_definitions,
+    )?;
 
     assert!(
         res.iter()
@@ -225,14 +378,14 @@ fn correct_sorting_of_entities() {
 
     submit_chunked(&test_client, &instructions).expect("Valid");
 
-    let res = test_client
-        .query(FindAccounts::new())
-        .with_sorting(Sorting::by_metadata_key(sort_by_metadata_key.clone()))
-        .execute_all()
-        .expect("Valid")
-        .into_iter()
-        .filter(|account| accounts.contains(account.id()))
-        .collect::<Vec<_>>();
+    let included_accounts = accounts.iter().cloned().collect::<HashSet<_>>();
+    let expected_accounts = accounts.iter().rev().cloned().collect::<Vec<_>>();
+    let res = wait_for_sorted_accounts(
+        &test_client,
+        Sorting::by_metadata_key(sort_by_metadata_key.clone()),
+        &included_accounts,
+        &expected_accounts,
+    )?;
 
     assert!(res.iter().map(Identifiable::id).eq(accounts.iter().rev()));
     assert!(
@@ -266,14 +419,14 @@ fn correct_sorting_of_entities() {
     }
     submit_chunked(&test_client, &instructions).expect("Valid");
 
-    let res = test_client
-        .query(FindDomains::new())
-        .with_sorting(Sorting::by_metadata_key(sort_by_metadata_key.clone()))
-        .execute_all()
-        .expect("Valid")
-        .into_iter()
-        .filter(|domain| domain.id().name().as_ref().starts_with("neverland"))
-        .collect::<Vec<_>>();
+    let included_domains = domains.iter().cloned().collect::<HashSet<_>>();
+    let expected_domains = domains.iter().rev().cloned().collect::<Vec<_>>();
+    let res = wait_for_sorted_domains(
+        &test_client,
+        Sorting::by_metadata_key(sort_by_metadata_key.clone()),
+        &included_domains,
+        &expected_domains,
+    )?;
 
     assert!(res.iter().map(Identifiable::id).eq(domains.iter().rev()));
     assert!(
@@ -303,16 +456,16 @@ fn correct_sorting_of_entities() {
         ensure_domain_registration_lease_for_network(&network, domain_id)
             .expect("should seed lease for underscore sortable domains");
     }
-    let _ = submit_chunked(&test_client, &instructions);
+    submit_chunked(&test_client, &instructions).expect("Valid");
 
-    let res = test_client
-        .query(FindDomains::new())
-        .with_sorting(Sorting::by_metadata_key(sort_by_metadata_key))
-        .execute()
-        .expect("Valid")
-        .filter_map(Result::ok)
-        .filter(|domain| domain.id().name().as_ref().starts_with("sortland"))
-        .collect::<Vec<_>>();
+    let included_domains = domains.iter().cloned().collect::<HashSet<_>>();
+    let expected_domains = vec![domains[1].clone(), domains[0].clone(), domains[2].clone()];
+    let res = wait_for_sorted_domains(
+        &test_client,
+        Sorting::by_metadata_key(sort_by_metadata_key),
+        &included_domains,
+        &expected_domains,
+    )?;
 
     assert_eq!(res[0].id(), &domains[1]);
     assert_eq!(res[1].id(), &domains[0]);
@@ -320,6 +473,8 @@ fn correct_sorting_of_entities() {
     assert_eq!(res[0].metadata(), &metadata_of_domains[1]);
     assert_eq!(res[1].metadata(), &metadata_of_domains[0]);
     assert_eq!(res[2].metadata(), &metadata_of_domains[2]);
+
+    Ok(())
 }
 
 #[test]
@@ -437,17 +592,24 @@ fn sort_only_elements_which_have_sorting_key() -> Result<()> {
 
     submit_chunked(&test_client, &instructions).wrap_err("Failed to register accounts")?;
 
-    let res = test_client
-        .query(FindAccounts::new())
-        .with_sorting(Sorting::by_metadata_key(sort_by_metadata_key))
-        .execute_all()
-        .wrap_err("Failed to submit request")?
-        .into_iter()
-        .filter(|account| accounts_a.contains(account.id()) || accounts_b.contains(account.id()))
+    let included_accounts = accounts_a
+        .iter()
+        .chain(accounts_b.iter())
+        .cloned()
+        .collect::<HashSet<_>>();
+    let accounts = accounts_a
+        .iter()
+        .rev()
+        .chain(accounts_b.iter())
+        .cloned()
         .collect::<Vec<_>>();
-
-    let accounts = accounts_a.iter().rev().chain(accounts_b.iter());
-    assert!(res.iter().map(Identifiable::id).eq(accounts));
+    let _ = wait_for_sorted_accounts(
+        &test_client,
+        Sorting::by_metadata_key(sort_by_metadata_key),
+        &included_accounts,
+        &accounts,
+    )
+    .wrap_err("Failed to observe sorted accounts")?;
 
     Ok(())
 }

@@ -92,7 +92,7 @@ translator: machine-google-reviewed
 
 Харагдах байдал
 - `kotoage fn` нь нийтийн нэвтрэх цэгийг илэрхийлдэг; харагдах байдал нь коген биш диспетчерийн зөвшөөрөлд нөлөөлдөг.
-- Нэмэлт хандалтын зөвлөмж: `#[access(read=..., write=...)]` нь `fn`/`kotoage fn`-ийн өмнө манифест унших/бичих түлхүүрүүдийг нийлүүлэх боломжтой. Хөрвүүлэгч нь зөвлөгөө өгөх зөвлөмжийг автоматаар гаргадаг; Тунгалаг бус хостын дуудлага нь консерватив орлуулагч тэмдэгт (`*`) руу буцаж, тодорхой хандалтын зөвлөмж өгөхгүй бол оношилгооны шинж чанартай байдаг тул хуваарьлагч нар нарийн ширхэгтэй түлхүүрүүдийн динамик урьдчилсан дамжуулалтыг сонгох боломжтой.
+- Access metadata is compiler-owned. Manual `#[access(...)]` attributes are rejected; deployable compilation succeeds only when the compiler can emit complete read/write metadata without wildcard keys.
 
 ## Гэрээний контейнер ба мета өгөгдөл
 
@@ -308,7 +308,7 @@ register_trigger wake {
 - `.take(n)`: эхний `n` оруулгуудыг эхнээс нь давт.
 - `.range(start, end)`: `[start, end)` хагас нээлттэй интервал дахь оруулгуудыг давтах. Семантик нь `start` ба `n = end - start`-тэй тэнцэнэ.Динамик хязгаарын талаархи тэмдэглэл
 - Бичигчилсэн хязгаар: `n`, `start`, `end` зэрэг бүхэл тоон литералууд бүрэн дэмжигдэж, тогтмол тооны давталтаар эмхэтдэг.
-- Шууд утгагүй хязгаар: `kotodama_dynamic_bounds` функцийг `ivm` хайрцагт идэвхжүүлсэн үед хөрвүүлэгч динамик `n`, `start`, `end`-ийг аюулгүй байдлын хувьд хүлээн авдаг. `end >= start`). Бууруулах нь нэмэлт биеийг гүйцэтгэхээс зайлсхийхийн тулд `if (i < n)` шалгалтаар хамгаалагдсан K хүртэлх давталтуудыг ялгаруулдаг (өгөгдмөл K=2). Та K-г `CompilerOptions { dynamic_iter_cap, .. }`-ээр программчлан тааруулж болно.
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - Эмхэтгэхийн өмнө `koto_lint` програмыг ажиллуулж Kotodama хөвөнгийн анхааруулгыг шалгана уу; Үндсэн хөрвүүлэгч нь задлан шинжилж, төрөл шалгасны дараа үргэлж доош буулгах ажлыг үргэлжлүүлдэг.
 - Алдааны кодуудыг [Kotodama Хөрвүүлэгчийн алдааны кодууд](./kotodama_error_codes.md) хэсэгт баримтжуулсан болно; Шуурхай тайлбарыг `koto_compile --explain <code>` ашиглана уу.
 

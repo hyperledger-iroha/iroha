@@ -86,7 +86,7 @@ Top-level items
 
 Visibility
 - `kotoage fn` denotes a public entrypoint; visibility affects dispatcher permissions, not codegen.
-- Optional access hints: `#[access(read=..., write=...)]` can precede `fn`/`kotoage fn` to supply manifest read/write keys. The compiler also emits advisory hints automatically; opaque host calls fall back to conservative wildcard keys (`*`) and surface a diagnostic unless explicit access hints are provided, so schedulers can opt into a dynamic prepass for finer-grained keys.
+- Access metadata is compiler-owned. Manual `#[access(...)]` attributes are rejected; deployable compilation succeeds only when the compiler can emit complete read/write metadata without wildcard keys.
 - Local test attributes: `#[test]`, `#[テスト]`, and `#[test(fixture="name")]` mark local-only unit tests. These functions must be internal, zero-argument, and return no value. They are accepted by the parser in regular `.ko` files and are stripped automatically in production compilation mode.
 
 ## Local Testing
@@ -106,7 +106,6 @@ fn smoke() {
 Runtime-style entrypoint example
 ```ko
 seiyaku Demo {
-  #[access(read="*", write="*")]
   kotoage fn run(count: int) -> int { return count + 1; }
 
   #[test]
@@ -165,7 +164,7 @@ seiyaku Name {
 Semantics
 - `meta { ... }` fields override compiler defaults for the emitted IVM header: `abi_version`, `vector_length` (0 means unset), `max_cycles` (0 means compiler default), `features` toggles header feature bits (ZK tracing, vector announce). The compiler treats `max_cycles: 0` as “use default” and emits the configured non‑zero default to satisfy admission requirements. Unsupported features are ignored with a warning. When `meta {}` is omitted, the compiler emits `abi_version = 1` and uses the option defaults for the remaining header fields.
 - `features: ["zk", "simd"]` (aliases: `"vector"`) explicitly requests the corresponding header bits. Unknown feature strings now produce a parser error instead of being ignored.
-- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Access hints are emitted for literal state paths; dynamic keys fall back to map-level conflict keys. For explicit host-backed reads/writes, use the `state_get/state_set/state_del` helpers plus `map.get_or(...)` / `map.ensure(...)`; these route through Norito TLVs and keep names/field order stable.
+- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Literal state paths emit exact keys, dynamic state-map keys emit map-level conflict keys, and bounded dynamic iteration emits structured dynamic access descriptors. Raw dynamic `state_get/state_set/state_del` paths are rejected for production artifacts unless the compiler can prove a precise state key.
 - State identifiers are reserved; shadowing a `state` name in parameters or `let` bindings is rejected (`E_STATE_SHADOWED`).
 - State map values are not first-class: use the state identifier directly for map operations and iteration. Binding or passing state maps to user-defined functions is rejected (`E_STATE_MAP_ALIAS`).
 - Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
@@ -376,7 +375,7 @@ Bounds helpers
 
 Notes on dynamic bounds
 - Literal bounds: `n`, `start`, and `end` as integer literals are fully supported and compile to a fixed number of iterations.
-- Non-literal bounds: when the `kotodama_dynamic_bounds` feature is enabled in the `ivm` crate, the compiler accepts dynamic `n`, `start`, and `end` expressions and inserts runtime assertions for safety (non-negative, `end >= start`). Lowering emits up to K guarded iterations with `if (i < n)` checks to avoid extra body executions (default K=2). You can tune K programmatically via `CompilerOptions { dynamic_iter_cap, .. }`.
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - Run `koto_lint` to inspect Kotodama lint warnings prior to compilation; the main compiler always proceeds with lowering after parsing and type-checking.
 - Error codes are documented in [Kotodama Compiler Error Codes](./kotodama_error_codes.md); use `koto_compile --explain <code>` for quick explanations.
 
@@ -407,7 +406,7 @@ Pipeline
 2. Semantic analysis resolves names, checks types, and populates symbol tables.
 3. IR lowering to a simple SSA-like form.
 4. Register allocation to IVM GPRs (`r10+` for args/ret per calling convention); spills to stack.
-5. Bytecode emission: mix of IVM-native and RV-compat encodings as allowed; metadata header emitted with `abi_version`, features, vector length, and `max_cycles`.
+5. Bytecode emission: IVM-native wide encoding only; metadata header emitted with `abi_version`, features, vector length, and `max_cycles`.
 
 Mapping highlights
 - Arithmetic and logic map to IVM ALU ops.

@@ -1,13 +1,18 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for transferring assets between accounts.
 
-use integration_tests::sandbox;
-use iroha::data_model::{
-    Registered,
-    account::{Account, AccountId},
-    asset::{Asset, AssetDefinition},
-    isi::{Instruction, InstructionBox},
-    prelude::*,
+use std::time::{Duration, Instant};
+
+use integration_tests::{sandbox, sync::sync_after_submission};
+use iroha::{
+    client::Client,
+    data_model::{
+        Registered,
+        account::{Account, AccountId},
+        asset::{Asset, AssetDefinition},
+        isi::{Instruction, InstructionBox},
+        prelude::*,
+    },
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -35,6 +40,49 @@ fn simulate_transfer_numeric() {
     )
 }
 
+fn wait_for_asset_value(
+    client: &Client,
+    asset_definition_id: &AssetDefinitionId,
+    account_id: &AccountId,
+    expected_value: &Numeric,
+    context: &str,
+) {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_observed = "assets were not queried".to_owned();
+
+    while Instant::now() < deadline {
+        match client.query(FindAssets::new()).execute_all() {
+            Ok(assets) => {
+                let mut matching_values = Vec::new();
+                for asset in assets {
+                    if asset.id().definition() == asset_definition_id
+                        && asset.id().account() == account_id
+                    {
+                        matching_values.push(asset.value().clone());
+                    }
+                }
+                let present = matching_values.iter().any(|value| value == expected_value);
+                last_observed = format!("matching_values={matching_values:?}");
+                if present {
+                    return;
+                }
+            }
+            Err(err) => {
+                last_observed = format!("query failed: {err}");
+            }
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    panic!(
+        "timed out waiting for transferred asset after {context}; expected_value={expected_value:?}; last_observed={last_observed}"
+    );
+}
+
 fn simulate_transfer<T>(
     context: &'static str,
     starting_amount: T,
@@ -48,10 +96,12 @@ fn simulate_transfer<T>(
     Transfer<Asset, T, Account>: Instruction,
     InstructionBox: From<Transfer<Asset, T, Account>>,
 {
-    let Some((network, _rt)) = start_default(context) else {
+    let Some((network, rt)) = start_default(context) else {
         return;
     };
     let iroha = network.client();
+    let mut status = iroha.get_status().expect("failed to read initial status");
+    let mut last_non_empty_height = status.blocks_non_empty;
 
     let (alice_id, mouse_id) = generate_two_ids();
     let create_mouse = create_mouse(mouse_id.clone());
@@ -72,6 +122,15 @@ fn simulate_transfer<T>(
     iroha
         .submit_all_blocking(instructions)
         .expect("Failed to prepare state.");
+    status = sync_after_submission(
+        &network,
+        &rt,
+        &iroha,
+        last_non_empty_height,
+        "prepare transfer asset state",
+    )
+    .expect("failed to synchronize after transfer asset state preparation");
+    last_non_empty_height = status.blocks_non_empty;
 
     //When
     let transfer_asset = transfer_ctr(
@@ -82,17 +141,21 @@ fn simulate_transfer<T>(
     iroha
         .submit_blocking(transfer_asset)
         .expect("Failed to transfer asset.");
-    assert!(
-        iroha
-            .query(FindAssets::new())
-            .execute_all()
-            .unwrap()
-            .into_iter()
-            .any(|asset| {
-                *asset.id().definition() == asset_definition_id
-                    && *asset.value() == amount_to_transfer.clone().into()
-                    && *asset.id().account() == mouse_id
-            })
+    let _status = sync_after_submission(
+        &network,
+        &rt,
+        &iroha,
+        last_non_empty_height,
+        "transfer asset",
+    )
+    .expect("failed to synchronize after asset transfer");
+    let expected_value: Numeric = amount_to_transfer.clone().into();
+    wait_for_asset_value(
+        &iroha,
+        &asset_definition_id,
+        &mouse_id,
+        &expected_value,
+        "asset transfer",
     );
 }
 

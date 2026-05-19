@@ -43,7 +43,7 @@ pub trait QueryExecutor {
         query: SingularQueryBox,
     ) -> Result<SingularQueryOutputBox, Self::Error>;
 
-    /// Starts an iterable query and returns the first batch of results, the remaining number of results and a cursor to continue the query.
+    /// Starts an iterable query and returns the first batch of results, an optional exact remaining count and a cursor to continue the query.
     ///
     /// # Errors
     ///
@@ -52,9 +52,9 @@ pub trait QueryExecutor {
     fn start_query(
         &self,
         query: QueryWithParams,
-    ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error>;
+    ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>;
 
-    /// Continues an iterable query from the given cursor and returns the next batch of results, the remaining number of results and a cursor to continue the query.
+    /// Continues an iterable query from the given cursor and returns the next batch of results, an optional exact remaining count and a cursor to continue the query.
     ///
     /// # Errors
     ///
@@ -62,7 +62,7 @@ pub trait QueryExecutor {
     #[expect(clippy::type_complexity)]
     fn continue_query(
         cursor: Self::Cursor,
-    ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error>;
+    ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>;
 }
 
 /// An error that can occur when constraining the number of results of an iterable query to one.

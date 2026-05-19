@@ -4064,12 +4064,16 @@ async fn handler_account_get(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), &key_hint, enforce).await?;
     }
-    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
-        app.state.as_ref(),
-        &key_hint,
-        &telemetry,
-        routing::ENDPOINT_ACCOUNTS_GET,
-    )?;
+    let (parsed_account_id, canonical_account_id) =
+        match routing::parse_account_path_segment_with_state(
+            app.state.as_ref(),
+            &key_hint,
+            &telemetry,
+            routing::ENDPOINT_ACCOUNTS_GET,
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => return Ok(error_response_with_format(error, format)),
+        };
     let visibility = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -4134,12 +4138,16 @@ async fn handler_account_transactions_query(
             .await?;
     }
 
-    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
-        app.state.as_ref(),
-        &account_id,
-        &tel,
-        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
-    )?;
+    let (parsed_account_id, canonical_account_id) =
+        match routing::parse_account_path_segment_with_state(
+            app.state.as_ref(),
+            &account_id,
+            &tel,
+            routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+        };
     let _ = allowed_asset_definition_id;
     let body = norito::json::to_vec(&payload.0).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
@@ -4210,12 +4218,15 @@ async fn handler_account_assets(
             .await?;
     }
     let (_parsed_account_id, canonical_account_id) =
-        routing::parse_account_path_segment_with_state(
+        match routing::parse_account_path_segment_with_state(
             app.state.as_ref(),
             &key_hint,
             &tel,
             routing::ENDPOINT_ACCOUNTS_ASSETS,
-        )?;
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+        };
     let _caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -4261,12 +4272,16 @@ async fn handler_account_permissions(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), &key_hint, enforce).await?;
     }
-    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
-        app.state.as_ref(),
-        &key_hint,
-        &tel,
-        "/v1/accounts/{account_id}/permissions",
-    )?;
+    let (parsed_account_id, canonical_account_id) =
+        match routing::parse_account_path_segment_with_state(
+            app.state.as_ref(),
+            &key_hint,
+            &tel,
+            "/v1/accounts/{account_id}/permissions",
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+        };
     let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -4335,12 +4350,15 @@ async fn handler_account_assets_query(
     }
     let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
     let (_parsed_account_id, canonical_account_id) =
-        routing::parse_account_path_segment_with_state(
+        match routing::parse_account_path_segment_with_state(
             app.state.as_ref(),
             &key_hint,
             &tel,
             routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
-        )?;
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+        };
     let _caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -4397,12 +4415,16 @@ async fn handler_account_transactions_get(
             .await?;
     }
     let telemetry = app.telemetry.clone();
-    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
-        app.state.as_ref(),
-        &key_hint,
-        &telemetry,
-        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
-    )?;
+    let (parsed_account_id, canonical_account_id) =
+        match routing::parse_account_path_segment_with_state(
+            app.state.as_ref(),
+            &key_hint,
+            &telemetry,
+            routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+        };
     let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -6005,35 +6027,15 @@ fn derive_ram_lfe_request_draft(
     program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
     request: &routing::RamLfeExecuteRequestDto,
 ) -> Result<identifier_resolution::RamLfeExecutionDraft, Error> {
-    match (
-        request.input_hex.as_deref(),
-        request.encrypted_input.as_deref(),
-    ) {
-        (Some(input_hex), None) => {
-            let input = parse_hex_bytes(input_hex, "input_hex")?;
-            resolver
-                .execute(program_policy, &input)
-                .map_err(|err| identifier_internal_error(err.to_string()))
-        }
-        (None, Some(ciphertext_hex)) => {
-            let ciphertext = parse_encrypted_identifier_ciphertext(ciphertext_hex)?;
-            resolver
-                .execute_encrypted(program_policy, &ciphertext)
-                .map_err(|err| match err {
-                    identifier_resolution::IdentifierResolutionError::Fhe(_)
-                    | identifier_resolution::IdentifierResolutionError::InvalidUtf8 => {
-                        identifier_conversion_error(err.to_string())
-                    }
-                    _ => identifier_internal_error(err.to_string()),
-                })
-        }
-        (Some(_), Some(_)) => Err(identifier_conversion_error(
-            "supply exactly one of `input_hex` or `encrypted_input`",
-        )),
-        (None, None) => Err(identifier_conversion_error(
-            "one of `input_hex` or `encrypted_input` is required",
-        )),
-    }
+    let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
+    resolver
+        .execute_encrypted(program_policy, &ciphertext)
+        .map_err(|err| match err {
+            identifier_resolution::IdentifierResolutionError::InvalidUtf8 => {
+                identifier_conversion_error(err.to_string())
+            }
+            _ => identifier_internal_error(err.to_string()),
+        })
 }
 
 #[cfg(feature = "app_api")]
@@ -6043,42 +6045,19 @@ fn derive_identifier_request_draft(
     program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
     request: &routing::IdentifierResolveRequestDto,
 ) -> Result<identifier_resolution::IdentifierResolutionDraft, Error> {
-    match (request.input.as_deref(), request.encrypted_input.as_deref()) {
-        (Some(raw), None) => {
-            let normalized = normalize_identifier_input(policy, raw)?;
-            resolver
-                .derive(policy, program_policy, &normalized)
-                .map_err(|err| identifier_internal_error(err.to_string()))
-        }
-        (None, Some(ciphertext_hex)) => {
-            let ciphertext = parse_encrypted_identifier_ciphertext(ciphertext_hex)?;
-            match program_policy.commitment.backend {
-                iroha_crypto::RamLfeBackend::BfvAffineSha3_256V1
-                | iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1 => resolver
-                    .derive_encrypted(policy, program_policy, &ciphertext)
-                    .map_err(|err| identifier_internal_error(err.to_string())),
-                _ => {
-                    let raw = resolver
-                        .decrypt_input(policy, program_policy, &ciphertext)
-                        .map_err(|err| match err {
-                            identifier_resolution::IdentifierResolutionError::Fhe(_)
-                            | identifier_resolution::IdentifierResolutionError::InvalidUtf8 => {
-                                identifier_conversion_error(err.to_string())
-                            }
-                            _ => identifier_internal_error(err.to_string()),
-                        })?;
-                    let normalized = normalize_identifier_input(policy, &raw)?;
-                    resolver
-                        .derive(policy, program_policy, &normalized)
-                        .map_err(|err| identifier_internal_error(err.to_string()))
-                }
-            }
-        }
-        (Some(_), Some(_)) => Err(identifier_conversion_error(
-            "supply exactly one of `input` or `encrypted_input`",
-        )),
-        (None, None) => Err(identifier_conversion_error(
-            "one of `input` or `encrypted_input` is required",
+    let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
+    match program_policy.commitment.backend {
+        iroha_crypto::RamLfeBackend::BfvAffineSha3_256V1
+        | iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1 => resolver
+            .derive_encrypted(
+                policy,
+                program_policy,
+                &ciphertext,
+                request.output_opening.clone(),
+            )
+            .map_err(|err| identifier_internal_error(err.to_string())),
+        _ => Err(identifier_conversion_error(
+            "identifier encrypted input requires a BFV-backed RAM-LFE program",
         )),
     }
 }
@@ -6104,6 +6083,10 @@ fn ram_lfe_execution_receipt_payload_dto(
         program_digest: payload.program_digest.to_string(),
         backend: payload.backend.as_str().to_owned(),
         verification_mode: ram_lfe_verification_mode_label(payload.verification_mode).to_owned(),
+        input_ciphertext_hash: payload.input_ciphertext_hash.to_string(),
+        output_ciphertext_hash: payload.output_ciphertext_hash.to_string(),
+        parameter_digest: payload.parameter_digest.to_string(),
+        evaluation_key_digest: payload.evaluation_key_digest.to_string(),
         output_hash: payload.output_hash.to_string(),
         associated_data_hash: payload.associated_data_hash.to_string(),
         executed_at_ms: payload.executed_at_ms,
@@ -6152,6 +6135,7 @@ fn identifier_resolution_receipt_payload_dto(
     routing::IdentifierResolutionReceiptPayloadDto {
         policy_id: payload.policy_id.to_string(),
         execution: ram_lfe_execution_receipt_payload_dto(&payload.execution),
+        opening: payload.opening.clone(),
         opaque_id: payload.opaque_id.to_string(),
         receipt_hash: payload.receipt_hash.to_string(),
         uaid: payload.uaid.to_string(),
@@ -6173,6 +6157,7 @@ fn ram_lfe_program_policy_summary_dto(
         owner: program_policy.owner.to_string(),
         active: program_policy.active,
         resolver_public_key: program_policy.resolver_public_key.to_string(),
+        output_opening_public_key: program_policy.output_opening_public_key.to_string(),
         backend: program_policy.commitment.backend.as_str().to_owned(),
         verification_mode: ram_lfe_verification_mode_label(program_policy.verification_mode)
             .to_owned(),
@@ -6212,6 +6197,9 @@ fn identifier_policy_summary_dto(
         resolver_public_key: program_policy
             .map(|policy| policy.resolver_public_key.to_string())
             .unwrap_or_default(),
+        output_opening_public_key: program_policy
+            .map(|policy| policy.output_opening_public_key.to_string())
+            .unwrap_or_default(),
         backend: program_policy
             .map(|policy| policy.commitment.backend.as_str().to_owned())
             .unwrap_or_default(),
@@ -6244,6 +6232,7 @@ fn ram_lfe_execute_response(
         program_id: receipt.payload.program_id.to_string(),
         opaque_hash: draft.opaque_hash.to_string(),
         receipt_hash: draft.receipt_hash.to_string(),
+        output_ciphertext: hex::encode_upper(&draft.output),
         output_hash: draft.output_hash.to_string(),
         associated_data_hash: draft.associated_data_hash.to_string(),
         executed_at_ms: draft.executed_at_ms,
@@ -6651,11 +6640,13 @@ async fn handler_explorer_transactions_list(
         }
     }
     let authority = match authority {
-        Some(raw) => Some(parse_account_id_for_endpoint(
-            &app,
-            &raw,
-            CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY,
-        )?),
+        Some(raw) => {
+            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY)
+            {
+                Ok(account) => Some(account),
+                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+            }
+        }
         None => None,
     };
     let status = match status {
@@ -6705,11 +6696,13 @@ async fn handler_explorer_transactions_latest(
         }
     }
     let authority = match authority {
-        Some(raw) => Some(parse_account_id_for_endpoint(
-            &app,
-            &raw,
-            CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY,
-        )?),
+        Some(raw) => {
+            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY)
+            {
+                Ok(account) => Some(account),
+                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+            }
+        }
         None => None,
     };
     let status = match status {
@@ -6768,19 +6761,22 @@ async fn handler_explorer_instructions_list(
         }
     }
     let authority = match authority {
-        Some(raw) if !raw.trim().is_empty() => Some(parse_account_id_for_endpoint(
-            &app,
-            &raw,
-            CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY,
-        )?),
+        Some(raw) if !raw.trim().is_empty() => {
+            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY)
+            {
+                Ok(account) => Some(account),
+                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+            }
+        }
         _ => None,
     };
     let account = match account {
-        Some(raw) if !raw.trim().is_empty() => Some(parse_account_id_for_endpoint(
-            &app,
-            &raw,
-            CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT,
-        )?),
+        Some(raw) if !raw.trim().is_empty() => {
+            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT) {
+                Ok(account) => Some(account),
+                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+            }
+        }
         _ => None,
     };
     let transaction_hash = match transaction_hash {
@@ -6851,19 +6847,22 @@ async fn handler_explorer_instructions_latest(
         }
     }
     let authority = match authority {
-        Some(raw) if !raw.trim().is_empty() => Some(parse_account_id_for_endpoint(
-            &app,
-            &raw,
-            CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY,
-        )?),
+        Some(raw) if !raw.trim().is_empty() => {
+            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY)
+            {
+                Ok(account) => Some(account),
+                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+            }
+        }
         _ => None,
     };
     let account = match account {
-        Some(raw) if !raw.trim().is_empty() => Some(parse_account_id_for_endpoint(
-            &app,
-            &raw,
-            CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT,
-        )?),
+        Some(raw) if !raw.trim().is_empty() => {
+            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT) {
+                Ok(account) => Some(account),
+                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
+            }
+        }
         _ => None,
     };
     let transaction_hash = match transaction_hash {
@@ -14467,6 +14466,35 @@ fn finish_torii_read_result<T: IntoResponse>(
 }
 
 #[cfg(feature = "app_api")]
+fn finish_torii_read_result_with_format<T: IntoResponse>(
+    result: Result<T, Error>,
+    routing_decision: RoutingDecision,
+    routed_by: &'static str,
+    format: ResponseFormat,
+) -> Response {
+    let mut response = match result {
+        Ok(response) => response.into_response(),
+        Err(error) => error_response_with_format(error, format),
+    };
+    insert_routing_headers(&mut response, routing_decision, routed_by);
+    response
+}
+
+#[cfg(feature = "app_api")]
+fn error_response_with_format(error: Error, format: ResponseFormat) -> Response {
+    let status = error.status_code();
+    let envelope = match error {
+        Error::Query(err) => {
+            ErrorEnvelope::new("query_validation_failed", validation_fail_message(&err))
+        }
+        other => other.into_envelope(),
+    };
+    let mut response = crate::utils::respond_with_format(envelope, format);
+    *response.status_mut() = status;
+    response
+}
+
+#[cfg(feature = "app_api")]
 fn torii_internal_json_error(message: impl Into<String>) -> Response {
     torii_proxy_error_response(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -19037,7 +19065,7 @@ async fn execute_torii_read_request_locally(
                 Ok(params) => params,
                 Err(response) => return response,
             };
-            finish_torii_read_result(
+            finish_torii_read_result_with_format(
                 routing::handle_v1_accounts(
                     app.state.clone(),
                     crate::NoritoQuery(params),
@@ -19046,6 +19074,7 @@ async fn execute_torii_read_request_locally(
                 .await,
                 routing_decision,
                 routed_by,
+                response_format_from_torii_proxy(request.response_format),
             )
         }
         ToriiReadEndpointV1::AccountsQuery => {
@@ -19056,7 +19085,7 @@ async fn execute_torii_read_request_locally(
                 Ok(env) => env,
                 Err(response) => return response,
             };
-            finish_torii_read_result(
+            finish_torii_read_result_with_format(
                 routing::handle_v1_accounts_query(
                     app.state.clone(),
                     crate::utils::extractors::NoritoJson(env),
@@ -19065,6 +19094,7 @@ async fn execute_torii_read_request_locally(
                 .await,
                 routing_decision,
                 routed_by,
+                response_format_from_torii_proxy(request.response_format),
             )
         }
         ToriiReadEndpointV1::AccountsPortfolio => {
@@ -22887,7 +22917,7 @@ async fn handler_kaigi_relay_detail(
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
-    routing::handle_v1_kaigi_relay_detail_with_policy(
+    match routing::handle_v1_kaigi_relay_detail_with_policy(
         app.state.clone(),
         app.telemetry.clone(),
         AxPath(relay_id),
@@ -22895,7 +22925,10 @@ async fn handler_kaigi_relay_detail(
         format,
     )
     .await
-    .map(axum::response::IntoResponse::into_response)
+    {
+        Ok(response) => Ok(response.into_response()),
+        Err(error) => Ok(error_response_with_format(error, format)),
+    }
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -38377,6 +38410,22 @@ fn offline_reject_code_from_validation_fail(
     }
 }
 
+fn validation_fail_message(fail: &iroha_data_model::ValidationFail) -> String {
+    use iroha_data_model::{
+        ValidationFail as V, isi::error::InstructionExecutionError as I,
+        query::error::QueryExecutionFail as Q,
+    };
+
+    match fail {
+        V::QueryFailed(Q::Conversion(message))
+        | V::InstructionFailed(I::Query(Q::Conversion(message))) => message.clone(),
+        V::QueryFailed(query_error) | V::InstructionFailed(I::Query(query_error)) => {
+            query_error.to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
@@ -38401,7 +38450,8 @@ impl IntoResponse for Error {
                     next_min_handle_era: ctx.next_min_handle_era,
                     next_min_sub_nonce: ctx.next_min_sub_nonce,
                 });
-                let mut envelope = ErrorEnvelope::new("query_validation_failed", err.to_string());
+                let mut envelope =
+                    ErrorEnvelope::new("query_validation_failed", validation_fail_message(&err));
                 if !details.is_empty() {
                     envelope = envelope.with_details(details);
                 }
@@ -39367,7 +39417,7 @@ pub(crate) mod tests_runtime_handlers {
         ) -> Result<
             (
                 iroha_data_model::query::QueryOutputBatchBoxTuple,
-                u64,
+                Option<u64>,
                 Option<Self::Cursor>,
             ),
             Self::Error,
@@ -39381,7 +39431,7 @@ pub(crate) mod tests_runtime_handlers {
         ) -> Result<
             (
                 iroha_data_model::query::QueryOutputBatchBoxTuple,
-                u64,
+                Option<u64>,
                 Option<Self::Cursor>,
             ),
             Self::Error,
@@ -55685,7 +55735,7 @@ impl Error {
                     ?err,
                     "Query error reached envelope renderer; expected to be handled earlier"
                 );
-                ErrorEnvelope::new("query_error", err.to_string())
+                ErrorEnvelope::new("query_error", validation_fail_message(&err))
             }
             Self::ApiVersion(err) => ErrorEnvelope::new(err.code(), err.message()),
             Self::AcceptTransaction(err) => {
@@ -56097,11 +56147,12 @@ mod tests {
     use http_body_util::BodyExt as _;
     use iroha_config::parameters::actual;
     use iroha_crypto::{
-        BfvIdentifierPublicParameters, BfvParameters, Hash, KeyPair, RamLfeBackend,
-        RamLfeVerificationMode, SignatureOf, bfv_affine_policy_commitment,
+        BfvEvaluationKeyBundle, BfvIdentifierPublicParameters, BfvParameters, Hash, KeyPair,
+        RamLfeBackend, RamLfeVerificationMode, SignatureOf, bfv_affine_policy_commitment,
         bfv_programmed_policy_commitment_with_program,
         bfv_programmed_public_parameters_with_program, default_bfv_programmed_hidden_program,
         derive_identifier_key_material_from_seed, encrypt_identifier_from_seed,
+        ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
     };
     use iroha_data_model::{
         ChainId, Identifiable, Registrable, ValidationFail,
@@ -56119,7 +56170,9 @@ mod tests {
         },
         permission::Permission,
         proof::{ProofId, ProofRecord, ProofStatus, VerifyingKeyId, VerifyingKeyRecord},
-        ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
+        ram_lfe::{
+            RamLfeOutputOpening, RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramPolicy,
+        },
         transaction::{
             IvmBytecode, IvmProved,
             signed::{TransactionBuilder, TransactionResultInner},
@@ -56275,7 +56328,7 @@ mod tests {
         backend: RamLfeBackend,
     ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
         let program_id = sample_program_id(policy_id);
-        let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
+        let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
             &sample_identifier_bfv_parameters(backend),
             63,
             b"resolver-secret",
@@ -56297,8 +56350,14 @@ mod tests {
             ),
             RamLfeBackend::BfvProgrammedSha3_256V1 => {
                 let hidden_program = default_bfv_programmed_hidden_program();
+                let evaluation_keys = BfvEvaluationKeyBundle {
+                    relinearization_key,
+                    rotation_keys: Vec::new(),
+                    bootstrap_key: None,
+                };
                 let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
                     public_parameters,
+                    evaluation_keys,
                     &hidden_program,
                     RamLfeVerificationMode::Signed,
                     None,
@@ -56339,16 +56398,84 @@ mod tests {
     }
 
     fn sample_identifier_bfv_parameters(backend: RamLfeBackend) -> BfvParameters {
-        BfvParameters {
-            polynomial_degree: 64,
-            ciphertext_modulus: match backend {
-                RamLfeBackend::BfvProgrammedSha3_256V1 => 1_u64 << 52,
-                RamLfeBackend::BfvAffineSha3_256V1 | RamLfeBackend::HkdfSha3_512PrfV1 => {
-                    1_u64 << 40
+        match backend {
+            RamLfeBackend::BfvProgrammedSha3_256V1 => ram_lfe_bfv_parameters_v1(),
+            RamLfeBackend::BfvAffineSha3_256V1 | RamLfeBackend::HkdfSha3_512PrfV1 => {
+                BfvParameters {
+                    polynomial_degree: 64,
+                    ciphertext_modulus: 1_u64 << 40,
+                    plaintext_modulus: 256,
+                    decomposition_base_log: 12,
                 }
-            },
-            plaintext_modulus: 256,
-            decomposition_base_log: 12,
+            }
+        }
+    }
+
+    fn encrypted_identifier_ciphertext(
+        program_policy: &RamLfeProgramPolicy,
+        input: &[u8],
+        seed: &[u8],
+    ) -> iroha_crypto::BfvIdentifierCiphertext {
+        let public_parameters = identifier_resolution::decode_bfv_public_parameters(program_policy)
+            .expect("decode BFV public parameters");
+        encrypt_identifier_from_seed(&public_parameters, input, seed).expect("encrypt identifier")
+    }
+
+    fn encrypted_identifier_hex(
+        program_policy: &RamLfeProgramPolicy,
+        input: &[u8],
+        seed: &[u8],
+    ) -> String {
+        hex::encode(
+            norito::to_bytes(&encrypted_identifier_ciphertext(
+                program_policy,
+                input,
+                seed,
+            ))
+            .expect("encode encrypted identifier"),
+        )
+    }
+
+    fn output_opening_for_ciphertext(
+        resolver: &identifier_resolution::IdentifierResolutionService,
+        program_policy: &RamLfeProgramPolicy,
+        signer: &KeyPair,
+        ciphertext: &iroha_crypto::BfvIdentifierCiphertext,
+    ) -> RamLfeOutputOpening {
+        let execution = resolver
+            .execute_encrypted(program_policy, ciphertext)
+            .expect("execute encrypted identifier input");
+        let payload = RamLfeOutputOpeningPayload {
+            program_id: program_policy.program_id.clone(),
+            input_ciphertext_hash: execution.input_ciphertext_hash,
+            output_ciphertext_hash: execution.output_ciphertext_hash,
+            parameter_digest: execution.parameter_digest,
+            evaluation_key_digest: execution.evaluation_key_digest,
+            opened_output_hash: ram_lfe_output_hash(&execution.output),
+            opened_at_ms: execution.executed_at_ms,
+            expires_at_ms: execution.expires_at_ms,
+        };
+        RamLfeOutputOpening {
+            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            payload,
+        }
+    }
+
+    fn dummy_output_opening_for_access_test() -> RamLfeOutputOpening {
+        let signer = KeyPair::random();
+        let payload = RamLfeOutputOpeningPayload {
+            program_id: "access_test".parse().expect("program id"),
+            input_ciphertext_hash: Hash::new(b"access-test-input"),
+            output_ciphertext_hash: Hash::new(b"access-test-output"),
+            parameter_digest: Hash::new(b"access-test-parameters"),
+            evaluation_key_digest: Hash::new(b"access-test-evaluation-key"),
+            opened_output_hash: Hash::new(b"access-test-opened-output"),
+            opened_at_ms: 0,
+            expires_at_ms: None,
+        };
+        RamLfeOutputOpening {
+            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            payload,
         }
     }
 
@@ -56376,8 +56503,22 @@ mod tests {
     ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
         let program_id = sample_program_id(policy_id);
         let hidden_program = default_bfv_programmed_hidden_program();
+        let (derived, _, relinearization_key) = derive_identifier_key_material_from_seed(
+            &public_parameters.parameters,
+            public_parameters.max_input_bytes,
+            b"resolver-secret",
+            &identifier_resolution::program_id_bytes(&program_id),
+        )
+        .expect("derive programmed evaluation keys");
+        assert_eq!(&derived, public_parameters);
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            bootstrap_key: None,
+        };
         let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
             public_parameters.clone(),
+            evaluation_keys,
             &hidden_program,
             RamLfeVerificationMode::Signed,
             None,
@@ -58227,7 +58368,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
@@ -58271,6 +58412,37 @@ mod tests {
     }
 
     #[cfg(feature = "app_api")]
+    #[test]
+    fn encrypted_only_request_dtos_reject_plaintext_fields() {
+        let ram_lfe_err = norito::json::from_json::<routing::RamLfeExecuteRequestDto>(
+            r#"{"encrypted_input":"00","input_hex":"00"}"#,
+        )
+        .expect_err("RAM-LFE execute request must not accept plaintext input_hex");
+        assert!(
+            ram_lfe_err
+                .to_string()
+                .contains("unknown field `input_hex`"),
+            "unexpected RAM-LFE request error: {ram_lfe_err}"
+        );
+
+        let output_opening = String::from_utf8(
+            norito::json::to_vec(&dummy_output_opening_for_access_test())
+                .expect("encode dummy opening"),
+        )
+        .expect("opening json is utf-8");
+        let identifier_body = format!(
+            r#"{{"policy_id":"phone#retail","encrypted_input":"00","output_opening":{output_opening},"input":"+15551234567"}}"#
+        );
+        let identifier_err =
+            norito::json::from_json::<routing::IdentifierResolveRequestDto>(&identifier_body)
+                .expect_err("identifier request must not accept plaintext input");
+        assert!(
+            identifier_err.to_string().contains("unknown field `input`"),
+            "unexpected identifier request error: {identifier_err}"
+        );
+    }
+
+    #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn ram_lfe_execute_returns_receipt() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
@@ -58284,7 +58456,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
@@ -58304,8 +58476,11 @@ mod tests {
             crate::loopback_connect_info(),
             AxPath(program_policy.program_id.to_string()),
             NoritoJson(routing::RamLfeExecuteRequestDto {
-                input_hex: Some(hex::encode("identifier-input")),
-                encrypted_input: None,
+                encrypted_input: encrypted_identifier_hex(
+                    &program_policy,
+                    b"identifier-input",
+                    b"ram-lfe-execute-route",
+                ),
             }),
         )
         .await
@@ -58353,7 +58528,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
@@ -58367,8 +58542,13 @@ mod tests {
         tx.apply();
         block.commit().expect("commit block");
 
+        let ciphertext = encrypted_identifier_ciphertext(
+            &program_policy,
+            b"receipt-verify-input",
+            b"receipt-verify-route",
+        );
         let draft = resolver
-            .execute(&program_policy, b"receipt-verify-input")
+            .execute_encrypted(&program_policy, &ciphertext)
             .expect("execute program");
         let receipt = resolver
             .issue_execution_receipt(&program_policy, &draft)
@@ -58416,7 +58596,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
@@ -58430,8 +58610,13 @@ mod tests {
         tx.apply();
         block.commit().expect("commit block");
 
+        let ciphertext = encrypted_identifier_ciphertext(
+            &program_policy,
+            b"receipt-verify-input",
+            b"receipt-verify-expired-route",
+        );
         let draft = resolver
-            .execute(&program_policy, b"receipt-verify-input")
+            .execute_encrypted(&program_policy, &ciphertext)
             .expect("execute program");
         let mut receipt = resolver
             .issue_execution_receipt(&program_policy, &draft)
@@ -58489,7 +58674,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
@@ -58562,7 +58747,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
@@ -58606,10 +58791,10 @@ mod tests {
         assert_eq!(profile.profile_version, 1);
         assert_eq!(profile.register_count, 4);
         assert_eq!(profile.memory_lane_count, 32);
-        assert_eq!(profile.ciphertext_mul_per_step, 1);
+        assert_eq!(profile.ciphertext_mul_per_step, 16);
         assert_eq!(
             profile.encrypted_input_mode,
-            iroha_crypto::BfvRamEncryptedInputMode::ResolverCanonicalizedEnvelopeV1
+            iroha_crypto::BfvRamEncryptedInputMode::EncryptedEnvelopeV1
         );
     }
 
@@ -58667,16 +58852,29 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
             .expect("unique app")
             .identifier_resolver = Some(resolver.clone());
 
-        let input = "+15551234567";
+        let encrypted_input = encrypted_identifier_ciphertext(
+            &program_policy,
+            b"+15551234567",
+            b"identifier-resolve-bound-account",
+        );
+        let encrypted_input_hex =
+            hex::encode(norito::to_bytes(&encrypted_input).expect("encode encrypted input"));
+        let output_opening =
+            output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
         let draft = resolver
-            .derive(&policy, &program_policy, input)
+            .derive_encrypted(
+                &policy,
+                &program_policy,
+                &encrypted_input,
+                output_opening.clone(),
+            )
             .expect("derive opaque id");
 
         let receipt = resolver
@@ -58713,8 +58911,8 @@ mod tests {
             crate::loopback_connect_info(),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: policy_id.to_string(),
-                input: Some(" +1 (555) 123-4567 ".to_string()),
-                encrypted_input: None,
+                encrypted_input: encrypted_input_hex,
+                output_opening,
             }),
         )
         .await
@@ -58771,16 +58969,29 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
             .expect("unique app")
             .identifier_resolver = Some(resolver.clone());
 
-        let input = "+15551234567";
+        let encrypted_input = encrypted_identifier_ciphertext(
+            &program_policy,
+            b"+15551234567",
+            b"identifier-resolve-programmed",
+        );
+        let encrypted_input_hex =
+            hex::encode(norito::to_bytes(&encrypted_input).expect("encode encrypted input"));
+        let output_opening =
+            output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
         let draft = resolver
-            .derive(&policy, &program_policy, input)
+            .derive_encrypted(
+                &policy,
+                &program_policy,
+                &encrypted_input,
+                output_opening.clone(),
+            )
             .expect("derive opaque id");
 
         let receipt = resolver
@@ -58817,8 +59028,8 @@ mod tests {
             crate::loopback_connect_info(),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: policy_id.to_string(),
-                input: Some(" +1 (555) 123-4567 ".to_string()),
-                encrypted_input: None,
+                encrypted_input: encrypted_input_hex,
+                output_opening,
             }),
         )
         .await
@@ -58866,7 +59077,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
@@ -58874,8 +59085,27 @@ mod tests {
             .identifier_resolver = Some(resolver.clone());
 
         let input = "ab";
+        let encrypted_input_ciphertext = encrypt_identifier_from_seed(
+            &public_parameters,
+            input.as_bytes(),
+            b"identifier-route-bfv-ciphertext",
+        )
+        .expect("encrypt BFV identifier input");
+        let encrypted_input =
+            hex::encode(norito::to_bytes(&encrypted_input_ciphertext).expect("encode BFV input"));
+        let output_opening = output_opening_for_ciphertext(
+            &resolver,
+            &program_policy,
+            &signer,
+            &encrypted_input_ciphertext,
+        );
         let draft = resolver
-            .derive(&policy, &program_policy, input)
+            .derive_encrypted(
+                &policy,
+                &program_policy,
+                &encrypted_input_ciphertext,
+                output_opening.clone(),
+            )
             .expect("derive opaque id");
         let receipt = resolver
             .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
@@ -58905,26 +59135,14 @@ mod tests {
         tx.apply();
         block.commit().expect("commit block");
 
-        let encrypted_input = hex::encode(
-            norito::to_bytes(
-                &encrypt_identifier_from_seed(
-                    &public_parameters,
-                    input.as_bytes(),
-                    b"identifier-route-bfv-ciphertext",
-                )
-                .expect("encrypt BFV identifier input"),
-            )
-            .expect("encode BFV identifier ciphertext"),
-        );
-
         let response = handler_identifier_resolve(
             State(app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: policy_id.to_string(),
-                input: None,
-                encrypted_input: Some(encrypted_input),
+                encrypted_input,
+                output_opening,
             }),
         )
         .await
@@ -58973,7 +59191,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
@@ -59022,8 +59240,8 @@ mod tests {
             crate::loopback_connect_info(),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: policy_id.to_string(),
-                input: None,
-                encrypted_input: Some(hex::encode(malformed)),
+                encrypted_input: hex::encode(malformed),
+                output_opening: dummy_output_opening_for_access_test(),
             }),
         )
         .await
@@ -59059,8 +59277,8 @@ mod tests {
             crate::loopback_connect_info(),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: "phone#retail".to_owned(),
-                input: Some("+15551234567".to_owned()),
-                encrypted_input: None,
+                encrypted_input: String::new(),
+                output_opening: dummy_output_opening_for_access_test(),
             }),
         )
         .await;
@@ -59091,7 +59309,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
@@ -59110,6 +59328,15 @@ mod tests {
         tx.apply();
         block.commit().expect("commit block");
 
+        let encrypted_input = encrypted_identifier_ciphertext(
+            &program_policy,
+            b"+15551234567",
+            b"identifier-claim-receipt",
+        );
+        let encrypted_input_hex =
+            hex::encode(norito::to_bytes(&encrypted_input).expect("encode encrypted input"));
+        let output_opening =
+            output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
         let response = handler_identifier_claim_receipt(
             State(app.clone()),
             HeaderMap::new(),
@@ -59117,8 +59344,8 @@ mod tests {
             AxPath(authority.to_string()),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: policy_id.to_string(),
-                input: Some(" +1 (555) 123-4567 ".to_string()),
-                encrypted_input: None,
+                encrypted_input: encrypted_input_hex,
+                output_opening: output_opening.clone(),
             }),
         )
         .await
@@ -59133,7 +59360,7 @@ mod tests {
         let dto: routing::IdentifierResolveResponseDto =
             norito::json::from_slice(&body).expect("json decode");
         let expected_draft = resolver
-            .derive(&policy, &program_policy, "+15551234567")
+            .derive_encrypted(&policy, &program_policy, &encrypted_input, output_opening)
             .expect("normalized derive");
         assert_eq!(dto.payload.opaque_id, expected_draft.opaque_id.to_string());
         assert_eq!(
@@ -59166,15 +59393,22 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
-            signer,
+            signer.clone(),
             Some(30_000),
         );
         Arc::get_mut(&mut app)
             .expect("unique app")
             .identifier_resolver = Some(resolver.clone());
 
+        let encrypted_input = encrypted_identifier_ciphertext(
+            &program_policy,
+            b"+15551234567",
+            b"identifier-receipt-lookup",
+        );
+        let output_opening =
+            output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
         let draft = resolver
-            .derive(&policy, &program_policy, "+15551234567")
+            .derive_encrypted(&policy, &program_policy, &encrypted_input, output_opening)
             .expect("derive opaque id");
         let receipt = resolver
             .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
@@ -59248,8 +59482,8 @@ mod tests {
             AxPath("ed0120deadbeef".to_owned()),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: "phone#retail".to_owned(),
-                input: Some("+15551234567".to_owned()),
-                encrypted_input: None,
+                encrypted_input: String::new(),
+                output_opening: dummy_output_opening_for_access_test(),
             }),
         )
         .await;
@@ -61282,6 +61516,20 @@ mod tests {
             app.zk_ivm_prove_slots.available_permits(),
             1,
             "capacity slot should be released after delete cancels a queued job"
+        );
+    }
+
+    #[test]
+    fn query_validation_message_preserves_conversion_source() {
+        let err = iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "AccountId must use a canonical I105 literal".to_owned(),
+            ),
+        );
+
+        assert_eq!(
+            validation_fail_message(&err),
+            "AccountId must use a canonical I105 literal"
         );
     }
 

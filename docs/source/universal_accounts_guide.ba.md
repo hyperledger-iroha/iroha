@@ -106,108 +106,113 @@ UAIDs хәҙер икенсе үҙенсәлек ҡатламы өсөн яко�
 йәки көтөп теләһә ниндәй бәйләнгән-домен яланында иҫәп яҙмалары ғына, сөнки псевдоним йәки
 маршрут домен сегментын йөрөтә.
 
-Ағымдағы Torii маршруттары:
+Current Torii routes:
 
-| Маршрут | Маҡсат |
+| Route | Purpose |
 |-------|---------|
-| `GET /v1/ram-lfe/program-policies` | Әүҙем һәм әүҙем булмаған RAM-LFE программаһы сәйәсәтен, уларҙы йәмәғәт башҡарыу метамағлүмәттәрен, шул иҫәптән өҫтәмә BFV `input_encryption` параметрҙарын һәм программаланған бекэнд `ram_fhe_profile` исемлегенә инә. |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | Ҡабул итә теүәл бер `{ input_hex }` йәки `{ encrypted_input }` һәм ҡайтара штатһыҙ `RamLfeExecutionReceipt` плюс `{ output_hash, receipt_hash }` һайланған программа өсөн. RAM-LFE-ның асыҡ текст сығышын Torii кире ҡайтармай. Ағымдағы Torii эшләү ваҡыты программаланған BFV бэкэнды өсөн квитанциялар сығара. |
-| `POST /v1/ram-lfe/receipts/verify` | Штатһыҙ рәүештә `RamLfeExecutionReceipt`-ты баҫылған сылбырҙағы программа сәйәсәтенә ҡаршы тикшерә һәм теләк буйынса шылтыратыусы биргән `output_hex` квитанцияның `output_hash` менән тап килеүен тикшерә. |
-| `GET /v1/identifier-policies` | Йәшерен функциялы сәйәсәттең әүҙем һәм әүҙем булмаған исемдәр киңлеген, уларҙы асыҡ метамағлүмәттәрҙе, шул иҫәптән өҫтәмә BFV `input_encryption` параметрҙарын, клиент яғынан шифрланған индереү өсөн кәрәкле `normalization` режимын һәм программаланған BF сәйәсәте өсөн `ram_fhe_profile` исемлегенә инә. |
-| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Ҡабул итә теүәл бер `{ input }` йәки `{ encrypted_input }`. Ябай текст `input` сервер яғынан нормалаштырылған; БФВ `encrypted_input` инде баҫылған сәйәсәт режимы буйынса нормалаштырылырға тейеш. Һуңынан ос нөктәһе `opaque:` ручкаһын сығара һәм ҡул ҡуйылған квитанцияны ҡайтара, тип `ClaimIdentifier` сылбырҙа тапшыра ала, шул иҫәптән сеймал `signature_payload_hex` һәм анализланған `signature_payload`. |
-| `POST /v1/identifiers/resolve` | Ҡабул итә теүәл бер `{ input }` йәки `{ encrypted_input }`. Ябай текст `input` сервер яғынан нормалаштырылған; БФВ `encrypted_input` инде баҫылған сәйәсәт режимы буйынса нормалаштырылырға тейеш. Һуңғы нөктә идентификаторҙы `{ opaque_id, receipt_hash, uaid, account_id, signature }`-ҡа хәл итә, ҡасан әүҙем дәғүә бар, шулай уҡ канон ҡул ҡуйылған файҙалы йөктө `{ signature_payload_hex, signature_payload }` тип ҡайтара. |
-| `GET /v1/identifiers/receipts/{receipt_hash}` | Ҡарап өҫкә ныҡлы `IdentifierClaimRecord` бәйле детерминистик ҡабул итеү хеш шулай операторҙар һәм SDKs аудит дәғүә милек йәки диагностика реплей / тап килмәү етешһеҙлектәре сканерлау тулы идентификатор индексы. |
+| `GET /v1/ram-lfe/program-policies` | Lists active and inactive RAM-LFE program policies plus their public execution metadata, including optional BFV `input_encryption` parameters and the programmed-backend `ram_fhe_profile`. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | Accepts `{ encrypted_input }` only and returns the stateless `RamLfeExecutionReceipt`, `{ output_ciphertext, output_hash, receipt_hash }`, and no plaintext output. The current Torii runtime issues receipts for the programmed BFV backend. |
+| `POST /v1/ram-lfe/receipts/verify` | Statelessly validates a `RamLfeExecutionReceipt` against the published on-chain program policy and optionally checks that a caller-supplied encrypted `output_hex` matches the receipt `output_hash`. |
+| `GET /v1/identifier-policies` | Lists active and inactive hidden-function policy namespaces plus their public metadata, including optional BFV `input_encryption` parameters, the required `normalization` mode for encrypted client-side input, and `ram_fhe_profile` for programmed BFV policies. |
+| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Accepts `{ policy_id, encrypted_input, output_opening }`. The BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint derives the `opaque:` handle from the verified external `RamLfeOutputOpening` and returns a signed receipt that `ClaimIdentifier` can submit on-chain. |
+| `POST /v1/identifiers/resolve` | Accepts `{ policy_id, encrypted_input, output_opening }`. The endpoint re-evaluates the encrypted input, verifies the external output opening, derives the `opaque:` handle from the opened output hash, and returns a nested `{ payload, attestation }` receipt when an active claim exists. |
+| `GET /v1/identifiers/receipts/{receipt_hash}` | Looks up the persisted `IdentifierClaimRecord` bound to a deterministic receipt hash so operators and SDKs can audit claim ownership or diagnose replay / mismatch failures without scanning the full identifier index. |
 
-Torii’s процесында башҡарыу ваҡыты аҫтында конфигурацияланған
-`torii.ram_lfe.programs[*]`, ключевой Norito. Идентификатор маршруттары хәҙер
-ҡабаттан ҡулланыу, шул уҡ RAM-LFE эшләү ваҡыты урынына айырым `identifier_resolver`
-конфиг өҫтө.
+Torii's in-process execution runtime is configured under
+`torii.ram_lfe.programs[*]`, keyed by `program_id`. The identifier routes now
+reuse that same RAM-LFE runtime instead of a separate `identifier_resolver`
+config surface.
 
-Ағымдағы SDK ярҙамы:- Мин 18НИ00000122Х тап килә
-  каноникализаторы для `exact`, `lowercase_trimmed`, `phone_e164`,
-  18НИ00000126Х, һәм 18НИ00000127Х.
-- `ToriiClient.listIdentifierPolicies()` сәйәсәт метамағлүмәттәрен исемлеккә индерә, шул иҫәптән BFV
-  индереү-шифрлау метамағлүмәттәр ҡасан сәйәсәт уны баҫтырып сығара, плюс расшифрованный
-  БФВ параметры объекты аша `input_encryption_public_parameters_decoded`.
-  Программаланған сәйәсәт шулай уҡ расшифрованный `ram_fhe_profile` фашлай. Ул ялан - .
-  аңлы рәүештә BFV-scoped: ул янсыҡтарға көтөлгән регистрҙы раҫларға мөмкинлек бирә
-  һан, һыҙат һаны, канонлаштырыу режимы һәм 2019 өсөн минималь шифртексты модуле.
-  программаланған FHE бэкэнд клиент яғынан индереүҙе шифрлау алдынан.
-- I18НИ00000131Х һәм
-  Мин18НИ00000132Х ярҙам
-  JS шылтыратыусылар ҡулланыу баҫылған BFV метамағлүмәттәр һәм төҙөү сәйәсәт-аңлы запрос
-  органдар сәйәсәт-ид һәм нормалаштырыу ҡағиҙәләрен ҡабаттан тормошҡа ашырмай.
-- I18НИ00000133Х һәм
-  Мин18НИ00000134Х хәҙер рөхсәт
-  JS янсыҡтары төҙөү тулы BFV Norito шифртексты конверт локаль рәүештә 2012 йылдан.
-  баҫылған сәйәсәт параметрҙары урынына ташыу алдан төҙөлгән шифртекст hex.
-- 18НИ00000135Х
-  йәшерен идентификаторҙы хәл итә һәм ҡул ҡуйылған квитанцияның файҙалы йөкләмәһен ҡайтара,
-  шул иҫәптән I18НИ00000136Х, I18НИ00000137Х, һәм
-  I18НИ00000138Х.
-- `ТорииКлиент.иссуИдентификаторДәғүә ҡабул итеү(иҫәп яҙмаһыИдентификаторы, { сәйәсәтИдентификаторы, индереү |
-  })` issues the signed receipt needed by `ДәғүәИдентификаторы`.
-- Мин18НИ00000140Х ҡайтарылғанды раҫлай
-  квитанция ҡаршы сәйәсәт хәл итеүсе асҡыс клиент яғында, һәм18НИ00000141Х ала
-  Һуңыраҡ аудит/отладка ағымдары өсөн дәғүә яҙмаһы һаҡланған.
-- `IrohaSwift.ToriiClient` хәҙер `listIdentifierPolicies()`,
-  18НИ00000144Х,
-  18НИ00000145Х,
-  һәм мин18НИ00000146Х, плюс
-  Мин18NI00000147X шул уҡ телефон өсөн/электрон почта/иҫәп яҙмаһы номеры
-  канонлаштырыу режимдары.
-- 18НИ00000148Х һәм
-  18НИ00000149Х /
-  `.encryptedRequest(...)` ярҙамсылары өсөн типлаштырылған Swift запрос өҫтөн тәьмин итә.
-  хәл итеү һәм дәғүә-квитанция шылтыратыуҙар, һәм Swift сәйәсәте хәҙер сығара ала BFV .
-  шифртексты локаль рәүештә `encryptInput(...)` / `encryptedRequest(input:...)` аша.
-- Мин 18НИ00000153Х раҫлай, тип
-  өҫкө кимәлдәге квитанция яландары ҡул ҡуйылған файҙалы йөккә тап килә һәм раҫлай
-  резолютор ҡултамғаһы клиент-яҡтан тапшырыу алдынан.
-- Мин 18NI00000154X Android SDK хәҙер фашлай
-  `listIdentifierPolicies()`, `Идентификаторҙы хәл итеү (сәйәсәт идентификаторы, индереү,
-  18NI00000156XиссуИдентификаторыДәғүә ҡабул итеү (иҫәп яҙмаһы идентификаторы, сәйәсәт идентификаторы,
-  18NI00000157XgetIdentifierClaimByReceiptHash(...)`,
-  плюс `IdentifierNormalization` шул уҡ канонизация ҡағиҙәләре өсөн.
-- 18НИ00000159Х һәм
-  18НИ00000160Х /
-  `.encryptedRequest(...)` ярҙамсылары типтерелгән Android запрос өҫтөн тәьмин итеү,
-  18НИ00000162Х /
-  18НИ00000163Х БФВ шифрлы текст конвертын сығарыу
-  локаль кимәлдә баҫылған сәйәсәт параметрҙарынан.
-  18НИ00000164Х ҡайтарылғанды раҫлай
-  резолютор ҡултамғаһы клиент-яҡ.
+Current SDK support:
 
-Ағымдағы инструкциялар йыйылмаһы:- 18НИ00000165Х
-- 18НИ00000166Х
-- `ClaimIdentifier` (квитанция менән бәйле; сеймал `opaque_id` дәғүәләре кире ҡағыла)
-- 18НИ00000169Х
+- `normalizeIdentifierInput(value, normalization)` matches the Rust
+  canonicalizers for `exact`, `lowercase_trimmed`, `phone_e164`,
+  `email_address`, and `account_number`.
+- `ToriiClient.listIdentifierPolicies()` lists policy metadata, including BFV
+  input-encryption metadata when the policy publishes it, plus a decoded
+  BFV parameter object via `input_encryption_public_parameters_decoded`.
+  Programmed policies also expose the decoded `ram_fhe_profile`. That field is
+  intentionally BFV-scoped: it lets wallets verify the expected register
+  count, lane count, canonicalization mode, and minimum ciphertext modulus for
+  the programmed FHE backend before encrypting client-side input.
+- `getIdentifierBfvPublicParameters(policy)` and
+  `buildIdentifierRequestForPolicy(policy, { encryptedInput | input,
+  encrypt: true, outputOpening })` help JS callers consume published BFV
+  metadata and build policy-aware encrypted request bodies without
+  reimplementing policy-id and normalization rules.
+- `encryptIdentifierInputForPolicy(policy, input, { seedHex? })` and
+  `buildIdentifierRequestForPolicy(policy, { input, encrypt: true,
+  outputOpening })` now let JS wallets construct the full BFV Norito
+  ciphertext envelope locally from published policy parameters instead of
+  shipping prebuilt ciphertext hex.
+- `ToriiClient.resolveIdentifier({ policyId, encryptedInput, outputOpening })`
+  resolves a hidden identifier and returns the signed nested
+  `{ payload, attestation }` receipt.
+- `ToriiClient.issueIdentifierClaimReceipt(accountId, { policyId,
+  encryptedInput, outputOpening })` issues the signed receipt needed by
+  `ClaimIdentifier`.
+- `verifyIdentifierResolutionReceipt(receipt, policy)` verifies the returned
+  receipt against the policy resolver key on the client side, and
+  `ToriiClient.getIdentifierClaimByReceiptHash(receiptHash)` fetches the
+  persisted claim record for later audit/debug flows.
+- `IrohaSwift.ToriiClient` now exposes `listIdentifierPolicies()`,
+  `resolveIdentifier(policyId:encryptedInputHex:outputOpening:)`,
+  `issueIdentifierClaimReceipt(accountId:policyId:encryptedInputHex:outputOpening:)`,
+  and `getIdentifierClaimByReceiptHash(_)`, plus
+  `ToriiIdentifierNormalization` for the same phone/email/account-number
+  canonicalization modes.
+- `ToriiIdentifierLookupRequest` and encrypted request helpers provide the
+  typed Swift request surface for resolve and claim-receipt calls, and Swift
+  policies can now derive the BFV ciphertext locally via `encryptInput(...)`.
+- `ToriiIdentifierResolutionReceipt.verifySignature(using:)` validates that
+  the top-level receipt fields match the signed payload and verifies the
+  resolver signature client-side before submission.
+- `HttpClientTransport` in the Android SDK now exposes
+  `listIdentifierPolicies()`, encrypted-only `resolveIdentifier(...)`,
+  encrypted-only `issueIdentifierClaimReceipt(...)`, and
+  `getIdentifierClaimByReceiptHash(...)`,
+  plus `IdentifierNormalization` for the same canonicalization rules.
+- `IdentifierResolveRequest` and encrypted request helpers provide the typed
+  Android request surface, while `IdentifierPolicySummary.encryptInput(...)`
+  derives the BFV ciphertext envelope locally from published policy
+  parameters.
+  `IdentifierResolutionReceipt.verifySignature(policy)` verifies the returned
+  resolver signature client-side.
 
-Өс бекэнд хәҙер `iroha_crypto::ram_lfe`-та бар:
+Current instruction set:
 
-- тарихи йөкләмә менән бәйле `HKDF-SHA3-512` ПРФ, һәм
-- БФВ-шифрланған идентификаторҙы ҡулланған БФВ-ға ярҙам иткән йәшерен аффин баһалаусы
-  слоттар туранан-тура. Ҡасан мин18НИ00000172Х стандарт менән төҙөлгән
-  `bfv-accel` функцияһы, BFV йөҙөк ҡабатлау теүәл детерминистик ҡуллана
-  CRT-NTT бэкэнд эске; был функцияны өҙөү кире төшә
-  скаляр мәктәп китабы юлы бер үк сығыштар менән, һәм
-- BFV-ярҙамында йәшерен программаланған баһалаусы, был инструкция-двигателдәр сығара
-  Шифрланған регистрҙар һәм шифрлы текст хәтере аша оперативка стилендә башҡарыу эҙе
-  һыҙаттары асыҡ булмаған идентификатор һәм квитанция хеш сығарыу алдынан. Программаланған
-  бекэнд хәҙер аффин юлға ҡарағанда көслөрәк BFV модуле иҙән талап итә, һәм
-  уның йәмәғәт параметрҙары канон өйөмөндә баҫылып сыға, унда
-  RAM-FHE башҡарыу профиле ҡулланыла янсыҡтар һәм тикшергәндәр.
+- `RegisterIdentifierPolicy`
+- `ActivateIdentifierPolicy`
+- `ClaimIdentifier` (receipt-bound; raw `opaque_id` claims are rejected)
+- `RevokeIdentifier`
 
-Бында БФВ 2010 йылда тормошҡа ашырылған Бракерски/Фан-Веркотерен ФХЭ схемаһын аңлата.
-I18НИ00000174Х. Ул шифрланған-башҡарыу механизмы
-аффин һәм программаланған бэкэндтар тарафынан ҡулланыла, тышҡы йәшерен исем түгел
-функция абстракцияһы.Torii сәйәсәт йөкләмәһе буйынса баҫылған бекэнд ҡуллана. Ҡасан BFV бекэнд
-әүҙем, ябай текст запростары нормалаштырыла, һуңынан шифрланған сервер-яҡтан тиклем
-баһалау. БФВ `encrypted_input` аффин фон өсөн запростар баһалана
-туранан-тура һәм инде нормаль булырға тейеш клиент-яҡ; программаланған бекэнд
-шифрланған индереүҙе кире резолютор детерминистик БФВ-ға канонлаштыра
-конверт йәшерен оперативка программаһын башҡарыу алдынан шулай квитанция хештар ҡала
-семантик яҡтан эквивалентлы шифр текстар буйынса тотороҡло.
+Three backends now exist in `iroha_crypto::ram_lfe`:
+
+- the historical commitment-bound `HKDF-SHA3-512` PRF, and
+- a BFV-backed secret affine evaluator that consumes BFV-encrypted identifier
+  slots directly. When `iroha_crypto` is built with the default
+  `bfv-accel` feature, BFV ring multiplication uses an exact deterministic
+  CRT-NTT backend internally; disabling that feature falls back to the
+  scalar schoolbook path with identical outputs, and
+- a BFV-backed secret programmed evaluator that derives an instruction-driven
+  RAM-style execution trace over encrypted registers and ciphertext memory
+  lanes before deriving the opaque identifier and receipt hash. The programmed
+  backend now requires a stronger BFV modulus floor than the affine path, and
+  its public parameters are published in a canonical bundle that includes the
+  RAM-FHE execution profile consumed by wallets and verifiers.
+
+Here BFV means the Brakerski/Fan-Vercauteren FHE scheme implemented in
+`crates/iroha_crypto/src/fhe_bfv.rs`. It is the encrypted-execution mechanism
+used by the affine and programmed backends, not the name of the outer hidden
+function abstraction.
+
+Torii uses the backend published by the policy commitment. For the first
+release, RAM-LFE and hidden-identifier routes are encrypted-only: Torii does
+not accept plaintext inputs, does not hold BFV secret keys, and does not
+decrypt input or output ciphertexts. Identifier claim and resolve requests must
+include an externally signed `RamLfeOutputOpening`; the `opaque:` identifier is
+derived from the verified opened-output hash, not from Torii-side plaintext or
+from the ciphertext hash alone.
 
 ## 2. УАИД-тарҙы сығарыу һәм раҫлау
 

@@ -20,4 +20,5 @@ ivm_abi = { path = "../ivm_abi" }
 norito = { path = "../norito" }
 
 [features]
+default = ["kotodama_dynamic_bounds"]
 kotodama_dynamic_bounds = []

@@ -76,10 +76,11 @@ use iroha_data_model::{
     nexus::{
         AxtEnvelopeRecord, AxtHandleFragment, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry,
         AxtPolicySnapshot, AxtReplayRecord, DataSpaceId, DomainCommittee, DomainEndorsement,
-        DomainEndorsementPolicy, DomainEndorsementRecord, LaneId, LaneRelayEmergencyValidatorSet,
-        LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord,
-        PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
-        UniversalAccountId, VerifiedLaneRelayRecord,
+        DomainEndorsementPolicy, DomainEndorsementRecord, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneId,
+        LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext,
+        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneValidatorRecord,
+        PublicLaneValidatorStatus, UniversalAccountId, VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
+        VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
     oracle::{
@@ -1189,20 +1190,6 @@ impl LaneRelayStore {
         let height = envelope.block_height;
         let key = (lane, envelope.dataspace_id, height);
 
-        if let Some(((_, _, latest_height), _)) = self
-            .entries
-            .range((lane, envelope.dataspace_id, 0)..=(lane, envelope.dataspace_id, u64::MAX))
-            .next_back()
-        {
-            if height < *latest_height {
-                return Err(LaneRelayError::StaleRelay {
-                    lane,
-                    latest_height: *latest_height,
-                    new_height: height,
-                });
-            }
-        }
-
         if let Some(existing) = self.entries.get(&key) {
             if existing.settlement_hash != envelope.settlement_hash
                 || existing.block_header.hash() != envelope.block_header.hash()
@@ -1225,6 +1212,20 @@ impl LaneRelayStore {
                 return Ok(LaneRelayInsert::Duplicate);
             }
             return Err(LaneRelayError::ConflictingRelay { lane, height });
+        }
+
+        if let Some(((_, _, latest_height), _)) = self
+            .entries
+            .range((lane, envelope.dataspace_id, 0)..=(lane, envelope.dataspace_id, u64::MAX))
+            .next_back()
+        {
+            if height < *latest_height {
+                return Err(LaneRelayError::StaleRelay {
+                    lane,
+                    latest_height: *latest_height,
+                    new_height: height,
+                });
+            }
         }
 
         self.entries.insert(key, envelope);
@@ -1266,7 +1267,19 @@ impl LaneRelayStore {
             .range((lane_id, dataspace_id, 0)..=(lane_id, dataspace_id, u64::MAX))
             .rev()
             .map(|(_, envelope)| envelope)
-            .find(|envelope| envelope.qc.is_some() && envelope.has_fastpq_proof_material())
+            .find(|envelope| envelope.is_merge_admissible())
+    }
+
+    /// Return the latest merge-admissible relay for each active lane/dataspace pair.
+    #[must_use]
+    pub fn latest_merge_admissible_relays(&self) -> Vec<&LaneRelayEnvelope> {
+        let mut latest = BTreeMap::new();
+        for envelope in self.entries.values() {
+            if envelope.is_merge_admissible() {
+                latest.insert((envelope.lane_id, envelope.dataspace_id), envelope);
+            }
+        }
+        latest.into_values().collect()
     }
 
     /// Snapshot stored envelopes in deterministic order.
@@ -21355,9 +21368,13 @@ impl State {
             ConsensusMode::Permissioned => crate::sumeragi::consensus::PERMISSIONED_TAG,
             ConsensusMode::Npos => crate::sumeragi::consensus::NPOS_TAG,
         };
+        let expected_lane_mode_tag = envelope.lane_qc_mode_tag(derived_mode_tag);
         let mode_tag = if qc.mode_tag.is_empty() {
-            derived_mode_tag
+            expected_lane_mode_tag.as_str()
         } else {
+            if qc.mode_tag.as_str() != expected_lane_mode_tag.as_str() {
+                return Err(LaneRelayError::AggregateSignatureInvalid);
+            }
             qc.mode_tag.as_str()
         };
         let vote = crate::sumeragi::consensus::Vote {
@@ -21403,10 +21420,10 @@ impl State {
             .map_err(|_| LaneRelayError::InvalidFastpqProof)
     }
 
-    fn verify_lane_relay_fastpq_record(
-        &self,
-        envelope: &LaneRelayEnvelope,
+    fn verify_lane_relay_fastpq_record_fields(
+        record: &VerifiedLaneRelayRecord,
     ) -> core::result::Result<(), LaneRelayError> {
+        let envelope = &record.relay_envelope;
         envelope.verify_fastpq_proof_material()?;
         let Some(material) = envelope.fastpq_proof.as_ref() else {
             return Err(LaneRelayError::MissingFastpqProof);
@@ -21417,7 +21434,26 @@ impl State {
         if manifest_root.iter().all(|byte| *byte == 0) {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
+        if record.relay_ref != envelope.relay_ref()
+            || record.proof_payload_hash != material.proof_digest
+            || record.verified_at_height != material.verified_at_height
+            || record.manifest_root != manifest_root
+            || record.fastpq_binding.source_dsid != envelope.dataspace_id.as_u64()
+            || record.fastpq_binding.verified_effect_type != LANE_RELAY_FASTPQ_EFFECT_TYPE
+        {
+            return Err(LaneRelayError::InvalidFastpqProof);
+        }
+        let expected_claim_digest = lane_relay_fastpq_claim_digest(envelope)?;
+        if record.fastpq_binding.claim_digest != hex::encode(expected_claim_digest.as_ref()) {
+            return Err(LaneRelayError::InvalidFastpqProof);
+        }
+        Ok(())
+    }
 
+    fn verify_lane_relay_fastpq_record(
+        &self,
+        envelope: &LaneRelayEnvelope,
+    ) -> core::result::Result<(), LaneRelayError> {
         let key = Self::verified_lane_relay_state_key(envelope)?;
         let world = self.world.view();
         let payload = world
@@ -21425,16 +21461,75 @@ impl State {
             .get(&key)
             .ok_or(LaneRelayError::InvalidFastpqProof)?;
         let record = Self::decode_verified_lane_relay_record_state(payload)?;
-        if record.relay_envelope != *envelope
-            || record.relay_ref != envelope.relay_ref()
-            || record.proof_payload_hash != material.proof_digest
-            || record.verified_at_height != material.verified_at_height
-            || record.manifest_root != manifest_root
-            || record.fastpq_binding.source_dsid != envelope.dataspace_id.as_u64()
-        {
+        if record.relay_envelope != *envelope {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
-        Ok(())
+        Self::verify_lane_relay_fastpq_record_fields(&record)
+    }
+
+    fn verified_lane_relay_records_from_contract_state(&self) -> Vec<VerifiedLaneRelayRecord> {
+        let world = self.world.view();
+        let mut records = Vec::new();
+        for (key, payload) in world.smart_contract_state().iter() {
+            if !key
+                .to_string()
+                .starts_with(VERIFIED_LANE_RELAY_STATE_KEY_PREFIX)
+            {
+                continue;
+            }
+            match Self::decode_verified_lane_relay_record_state(payload) {
+                Ok(record) => records.push(record),
+                Err(err) => iroha_logger::warn!(
+                    state_key = %key,
+                    error_kind = err.as_label(),
+                    error = %err,
+                    "skipping malformed verified lane relay contract-state record"
+                ),
+            }
+        }
+        records.sort_by_key(|record| {
+            (
+                record.relay_ref.lane_id.as_u32(),
+                record.relay_ref.dataspace_id.as_u64(),
+                record.relay_ref.block_height,
+                record.relay_ref.settlement_hash,
+            )
+        });
+        records
+    }
+
+    fn hydrate_verified_lane_relay_records_from_contract_state(&self) -> usize {
+        let records = self.verified_lane_relay_records_from_contract_state();
+        let mut hydrated = 0;
+        for record in records {
+            if let Err(err) = Self::verify_lane_relay_fastpq_record_fields(&record) {
+                iroha_logger::warn!(
+                    lane_id = %record.relay_ref.lane_id,
+                    dataspace_id = %record.relay_ref.dataspace_id,
+                    height = record.relay_ref.block_height,
+                    error_kind = err.as_label(),
+                    error = %err,
+                    "skipping inconsistent verified lane relay contract-state record"
+                );
+                continue;
+            }
+            match self.record_lane_relay(&record.relay_envelope) {
+                Ok(LaneRelayInsert::Inserted | LaneRelayInsert::Replaced) => {
+                    hydrated += 1;
+                }
+                Ok(LaneRelayInsert::Duplicate) => {}
+                Err(LaneRelayError::StaleRelay { .. }) => {}
+                Err(err) => iroha_logger::warn!(
+                    lane_id = %record.relay_ref.lane_id,
+                    dataspace_id = %record.relay_ref.dataspace_id,
+                    height = record.relay_ref.block_height,
+                    error_kind = err.as_label(),
+                    error = %err,
+                    "failed to hydrate verified lane relay contract-state record"
+                ),
+            }
+        }
+        hydrated
     }
 
     /// Record a lane relay envelope in the in-memory store after validation.
@@ -21586,10 +21681,15 @@ impl State {
         if let Some(error) = self.lane_relays.read().conflicting_existing(envelope) {
             return Err(error);
         }
-        envelope.verify_fastpq_proof_material()?;
-        if nexus
-            .fees
-            .lane_relay_burn_receipts_active_at(envelope.block_height)
+        let fastpq_verified = match envelope.verify_fastpq_proof_material() {
+            Ok(()) => true,
+            Err(LaneRelayError::MissingFastpqProof) => false,
+            Err(err) => return Err(err),
+        };
+        if fastpq_verified
+            && nexus
+                .fees
+                .lane_relay_burn_receipts_active_at(envelope.block_height)
         {
             self.verify_lane_relay_fastpq_record(envelope)?;
         }
@@ -21624,22 +21724,11 @@ impl State {
     pub(crate) fn merge_entry_candidates_from_lane_relays(
         &self,
     ) -> Vec<crate::merge::MergeLedgerCandidate> {
-        let mut lane_keys: Vec<(LaneId, DataSpaceId)> = {
-            let nexus = self.nexus_snapshot();
-            if !nexus.enabled {
-                return Vec::new();
-            }
-            nexus
-                .lane_config
-                .entries()
-                .iter()
-                .map(|entry| (entry.lane_id, entry.dataspace_id))
-                .collect()
-        };
-        lane_keys.sort_by_key(|(lane_id, dataspace_id)| (lane_id.as_u32(), dataspace_id.as_u64()));
-        if lane_keys.is_empty() {
+        let nexus = self.nexus_snapshot();
+        if !nexus.enabled {
             return Vec::new();
         }
+        self.hydrate_verified_lane_relay_records_from_contract_state();
 
         let latest_merge_entry = self.merge_ledger.latest();
         let next_epoch = latest_merge_entry
@@ -21660,61 +21749,51 @@ impl State {
                         .collect()
                 });
 
-        let mut lane_snapshots = Vec::with_capacity(lane_keys.len());
-        let mut advanced = latest_merge_entry.is_none();
+        let mut lane_snapshots = Vec::new();
         let mut max_view = previous_view;
 
         {
             let relays = self.lane_relays.read();
-            for (lane_id, dataspace_id) in &lane_keys {
-                let Some(latest_admissible) =
-                    relays.latest_merge_admissible_for_lane_dataspace(*lane_id, *dataspace_id)
-                else {
-                    return Vec::new();
-                };
-                if latest_admissible.dataspace_id != *dataspace_id {
-                    iroha_logger::warn!(
-                        lane_id = %lane_id,
-                        expected = %dataspace_id,
-                        actual = %latest_admissible.dataspace_id,
-                        height = latest_admissible.block_height,
-                        "skipping merge entry synthesis due to dataspace mismatch"
-                    );
-                    return Vec::new();
+            for latest_admissible in relays.latest_merge_admissible_relays() {
+                let key = (latest_admissible.lane_id, latest_admissible.dataspace_id);
+                if previous_snapshots.get(&key).is_some_and(|previous| {
+                    previous.lane_block_height >= latest_admissible.block_height
+                }) {
+                    continue;
                 }
-
-                let key = (*lane_id, *dataspace_id);
-                let selected_snapshot = match previous_snapshots.get(&key).copied() {
-                    Some(previous)
-                        if previous.lane_block_height >= latest_admissible.block_height =>
-                    {
-                        previous
-                    }
-                    _ => {
-                        advanced = true;
-                        MergeLaneSnapshot {
-                            lane_id: *lane_id,
-                            dataspace_id: *dataspace_id,
-                            lane_block_height: latest_admissible.block_height,
-                            tip_hash: latest_admissible.block_header.hash(),
-                            merge_hint_root: *latest_admissible.settlement_hash,
-                        }
+                let merge_hint_root = match latest_admissible.merge_hint_root() {
+                    Ok(root) => root,
+                    Err(err) => {
+                        iroha_logger::warn!(
+                            lane_id = %latest_admissible.lane_id,
+                            dataspace_id = %latest_admissible.dataspace_id,
+                            height = latest_admissible.block_height,
+                            error_kind = err.as_label(),
+                            error = %err,
+                            "skipping merge entry synthesis for relay without merge hint root"
+                        );
+                        continue;
                     }
                 };
+                let selected_snapshot = MergeLaneSnapshot {
+                    lane_id: latest_admissible.lane_id,
+                    dataspace_id: latest_admissible.dataspace_id,
+                    lane_block_height: latest_admissible.block_height,
+                    tip_hash: latest_admissible.block_header.hash(),
+                    merge_hint_root,
+                };
 
-                let snapshot_view = relays
-                    .get(*lane_id, *dataspace_id, selected_snapshot.lane_block_height)
-                    .map_or(previous_view, |envelope| {
-                        envelope.block_header.view_change_index()
-                    });
+                let snapshot_view = latest_admissible.block_header.view_change_index();
                 max_view = max_view.max(snapshot_view);
                 lane_snapshots.push(selected_snapshot);
             }
         }
 
-        if !advanced {
+        if lane_snapshots.is_empty() {
             return Vec::new();
         }
+        lane_snapshots
+            .sort_by_key(|snapshot| (snapshot.lane_id.as_u32(), snapshot.dataspace_id.as_u64()));
 
         let merge_hint_roots: Vec<Hash> = lane_snapshots
             .iter()
@@ -21876,7 +21955,14 @@ impl State {
                     dataspace_id: snapshot.dataspace_id,
                     block_height: snapshot.lane_block_height,
                 })?;
-            if *envelope.settlement_hash != snapshot.merge_hint_root {
+            let merge_hint_root = envelope.merge_hint_root().map_err(|_| {
+                MergeLedgerCommitError::SettlementHashMismatch {
+                    lane_id: snapshot.lane_id,
+                    dataspace_id: snapshot.dataspace_id,
+                    block_height: snapshot.lane_block_height,
+                }
+            })?;
+            if merge_hint_root != snapshot.merge_hint_root {
                 return Err(MergeLedgerCommitError::SettlementHashMismatch {
                     lane_id: snapshot.lane_id,
                     dataspace_id: snapshot.dataspace_id,
@@ -21892,14 +21978,15 @@ impl State {
                     snapshot.lane_block_height
                 )));
             }
+            let settlement_root = *envelope.settlement_hash;
             let settlement_key = Self::nexus_fee_settlement_marker_key(
                 snapshot.dataspace_id,
                 snapshot.lane_id,
                 snapshot.lane_block_height,
-                &snapshot.merge_hint_root,
+                &settlement_root,
             )?;
             let mut settlement_hash = [0u8; Hash::LENGTH];
-            settlement_hash.copy_from_slice(snapshot.merge_hint_root.as_ref());
+            settlement_hash.copy_from_slice(settlement_root.as_ref());
             let settlement_seen_key = (
                 snapshot.dataspace_id,
                 snapshot.lane_id,
@@ -21914,7 +22001,7 @@ impl State {
                     snapshot.dataspace_id.as_u64(),
                     snapshot.lane_id.as_u32(),
                     snapshot.lane_block_height,
-                    hex::encode(snapshot.merge_hint_root.as_ref())
+                    hex::encode(settlement_root.as_ref())
                 )));
             }
             settlement_markers.push(settlement_key);
@@ -22050,6 +22137,63 @@ impl State {
         Ok(())
     }
 
+    fn validate_merge_lane_snapshots(
+        &self,
+        entry: &MergeLedgerEntry,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let relays = self.lane_relays.read();
+        for snapshot in &entry.lane_snapshots {
+            let envelope = relays
+                .get(
+                    snapshot.lane_id,
+                    snapshot.dataspace_id,
+                    snapshot.lane_block_height,
+                )
+                .ok_or(MergeLedgerCommitError::MissingSettlementRelay {
+                    lane_id: snapshot.lane_id,
+                    dataspace_id: snapshot.dataspace_id,
+                    block_height: snapshot.lane_block_height,
+                })?;
+            if !envelope.is_merge_admissible() {
+                return Err(MergeLedgerCommitError::SettlementHashMismatch {
+                    lane_id: snapshot.lane_id,
+                    dataspace_id: snapshot.dataspace_id,
+                    block_height: snapshot.lane_block_height,
+                });
+            }
+            if envelope.block_header.hash() != snapshot.tip_hash {
+                return Err(MergeLedgerCommitError::SettlementHashMismatch {
+                    lane_id: snapshot.lane_id,
+                    dataspace_id: snapshot.dataspace_id,
+                    block_height: snapshot.lane_block_height,
+                });
+            }
+            let merge_hint_root = envelope.merge_hint_root().map_err(|_| {
+                MergeLedgerCommitError::SettlementHashMismatch {
+                    lane_id: snapshot.lane_id,
+                    dataspace_id: snapshot.dataspace_id,
+                    block_height: snapshot.lane_block_height,
+                }
+            })?;
+            if merge_hint_root != snapshot.merge_hint_root {
+                return Err(MergeLedgerCommitError::SettlementHashMismatch {
+                    lane_id: snapshot.lane_id,
+                    dataspace_id: snapshot.dataspace_id,
+                    block_height: snapshot.lane_block_height,
+                });
+            }
+        }
+        let merge_hint_roots = entry.merge_hint_roots();
+        let expected_global_state_root = crate::merge::reduce_merge_hint_roots(&merge_hint_roots);
+        if expected_global_state_root != entry.global_state_root {
+            return Err(MergeLedgerCommitError::MergeQCDigestMismatch {
+                expected: expected_global_state_root,
+                actual: entry.global_state_root,
+            });
+        }
+        Ok(())
+    }
+
     /// Append a merge-ledger entry to the in-memory cache and persist it via Kura.
     ///
     /// # Errors
@@ -22078,6 +22222,7 @@ impl State {
             prev_key = Some(key);
         }
         self.validate_merge_quorum_certificate(&entry)?;
+        self.validate_merge_lane_snapshots(&entry)?;
         if let Some(latest) = self.merge_ledger.latest()
             && entry.epoch_id <= latest.epoch_id
         {
@@ -26157,6 +26302,7 @@ impl<'state> StateBlock<'state> {
             action.authority(),
             action.executable(),
             (*time_event).into(),
+            0,
             Some(nft_seq_base),
         ) {
             Ok(step) => {
@@ -26168,10 +26314,11 @@ impl<'state> StateBlock<'state> {
                 return (entrypoint, Err(reason));
             }
         }
-        let trigger_sequence = match transaction.execute_data_triggers_dfs(action.authority()) {
-            Ok(sequence) => sequence,
-            err => return (entrypoint, err),
-        };
+        let trigger_sequence =
+            match transaction.execute_data_triggers_dfs_from(action.authority(), 1) {
+                Ok(sequence) => sequence,
+                err => return (entrypoint, err),
+            };
 
         let _ = transaction
             .world
@@ -31376,13 +31523,14 @@ impl StateTransaction<'_, '_> {
             &action_authority,
             &executable,
             event.clone().into(),
+            0,
             None,
         )?;
 
         // Immediately process any data triggers emitted by the executed step so that
         // trigger-chained effects are applied within the same transaction.
         // This complements the outer transaction-level DFS and is harmless if redundant.
-        let _ = self.execute_data_triggers_dfs(event.authority());
+        self.execute_data_triggers_dfs_from(&action_authority, 1)?;
 
         // Decrease repeats and prune depleted triggers.
         self.world.triggers.decrease_repeats([id].into_iter());
@@ -31390,12 +31538,74 @@ impl StateTransaction<'_, '_> {
         Ok(step)
     }
 
+    /// Execute deterministic pipeline triggers, staging their state changes.
+    pub(crate) fn execute_pipeline_triggers(
+        &mut self,
+        events: impl IntoIterator<Item = PipelineEventBox>,
+    ) -> TransactionResultInner {
+        let mut steps = Vec::new();
+        for pipeline_event in events {
+            let matched: Vec<_> = self
+                .world
+                .triggers
+                .match_pipeline_event(&pipeline_event)
+                .map(|(id, _)| id)
+                .collect();
+            for trg_id in matched {
+                let Some(action) = self
+                    .world
+                    .triggers
+                    .pipeline_triggers()
+                    .get(&trg_id)
+                    .cloned()
+                else {
+                    continue;
+                };
+                if !trigger_is_enabled(action.metadata()) || action.repeats.is_depleted() {
+                    continue;
+                }
+                let step_index = u32::try_from(steps.len()).unwrap_or(u32::MAX);
+                let step = self.execute_trigger(
+                    &trg_id,
+                    action.authority(),
+                    action.executable(),
+                    EventBox::Pipeline(pipeline_event.clone()),
+                    step_index,
+                    None,
+                )?;
+                self.world.triggers.decrease_repeats([&trg_id].into_iter());
+                let chained = self.execute_data_triggers_dfs_from(
+                    action.authority(),
+                    step_index.saturating_add(1),
+                )?;
+                steps.push(DataTriggerStep {
+                    id: trg_id,
+                    instructions: step,
+                });
+                steps.extend(chained);
+            }
+        }
+        Ok(steps)
+    }
+
     /// Perform a depth-first traversal of the trigger execution path, staging state changes.
     ///
     /// Returns the trigger sequence on success, or the rejection reason on failure.
     pub(crate) fn execute_data_triggers_dfs(
         &mut self,
+        outer_authority: &AccountId,
+    ) -> TransactionResultInner {
+        self.execute_data_triggers_dfs_from(outer_authority, 0)
+    }
+
+    /// Perform a depth-first traversal of the trigger execution path, staging state changes.
+    ///
+    /// `first_step_index` identifies where this chain starts inside the enclosing trigger
+    /// sequence, so completion events carry stable per-sequence positions.
+    pub(crate) fn execute_data_triggers_dfs_from(
+        &mut self,
         _outer_authority: &AccountId,
+        first_step_index: u32,
     ) -> TransactionResultInner {
         if self.world.triggers.data_triggers().is_empty() {
             // No data triggers registered; drop buffered events to keep memory bounded.
@@ -31451,8 +31661,16 @@ impl StateTransaction<'_, '_> {
                 (action.executable().clone(), action.authority().clone())
             };
 
-            let step =
-                self.execute_trigger(&trg_id, &trigger_authority, &executable, event, None)?;
+            let step_index =
+                first_step_index.saturating_add(u32::try_from(steps.len()).unwrap_or(u32::MAX));
+            let step = self.execute_trigger(
+                &trg_id,
+                &trigger_authority,
+                &executable,
+                event,
+                step_index,
+                None,
+            )?;
 
             let depleted = self.world.triggers.decrease_repeats([&trg_id].into_iter());
             stack.retain(|(_, trg_id, _)| !depleted.contains(trg_id));
@@ -31652,6 +31870,7 @@ impl StateTransaction<'_, '_> {
         authority: &AccountId,
         executable: &ExecutableRef,
         event: EventBox,
+        step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
         let (res, outcome_override) = match executable {
@@ -31929,17 +32148,10 @@ impl StateTransaction<'_, '_> {
                         ?blob_hash,
                         "missing trigger bytecode; dropping trigger"
                     );
-                    if self.world.triggers.remove(id) {
-                        crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
-                            self, id,
-                        );
-                    }
-                    (
-                        Ok(Self::execution_step_from_executable(executable)),
-                        Some(TriggerCompletedOutcome::Failure(
-                            "missing trigger bytecode".to_owned(),
-                        )),
-                    )
+                    let reason = ValidationFail::InternalError(format!(
+                        "missing trigger bytecode for trigger `{id}`"
+                    ));
+                    (Err(reason), None)
                 }
             }
         };
@@ -31960,7 +32172,7 @@ impl StateTransaction<'_, '_> {
                 |_| TriggerCompletedOutcome::Success,
             )
         });
-        let event = TriggerCompletedEvent::new(id.clone(), entrypoint_hash, 0, outcome);
+        let event = TriggerCompletedEvent::new(id.clone(), entrypoint_hash, step_index, outcome);
         self.world.external_event_buf.push(event.into());
 
         res.map_err(Into::into)
@@ -38259,11 +38471,18 @@ mod tests {
 
     fn commit_qc_with_signers(
         header: &BlockHeader,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
         parent_state_root: Hash,
         post_state_root: Hash,
         signers: &[&KeyPair],
         signers_bitmap: Vec<u8>,
     ) -> Qc {
+        let mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(
+            lane_id,
+            dataspace_id,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+        );
         let validator_set: Vec<_> = signers
             .iter()
             .map(|keypair| PeerId::new(keypair.public_key().clone()))
@@ -38278,7 +38497,7 @@ mod tests {
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
             rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            mode_tag: mode_tag.clone(),
             highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
@@ -38304,7 +38523,7 @@ mod tests {
         };
         let preimage = crate::sumeragi::consensus::vote_preimage(
             &super::DEFAULT_TEST_CHAIN_ID,
-            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            mode_tag.as_str(),
             &vote,
         );
         let signatures: Vec<Vec<u8>> = signers
@@ -38370,6 +38589,8 @@ mod tests {
         let post_state_root = Hash::new([0xAB; 4]);
         let qc = commit_qc_with_signers(
             &header,
+            lane_id,
+            DataSpaceId::UNIVERSAL,
             parent_state_root,
             post_state_root,
             signers,
@@ -38422,6 +38643,7 @@ mod tests {
     }
 
     fn sample_verified_lane_relay_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
+        let claim_digest = Hash::new(b"state-test-lane-relay-claim");
         AxtFastpqBinding {
             parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
             source_dsid: dsid.as_u64(),
@@ -38429,10 +38651,10 @@ mod tests {
             source_receipt_id: "state-test-lane-relay-receipt".to_owned(),
             source_tx_commitment: hex::encode(Hash::new(b"state-test-lane-relay-source").as_ref()),
             claim_type: "authorization".to_owned(),
-            claim_digest: hex::encode(Hash::new(b"state-test-lane-relay-claim").as_ref()),
+            claim_digest: hex::encode(claim_digest.as_ref()),
             witness_commitment: hex::encode(Hash::new(b"state-test-lane-relay-witness").as_ref()),
             policy_commitment: hex::encode(Hash::new(b"state-test-lane-relay-policy").as_ref()),
-            verified_effect_type: "lane_relay".to_owned(),
+            verified_effect_type: LANE_RELAY_FASTPQ_EFFECT_TYPE.to_owned(),
             corridor: "state-test-lane-relay".to_owned(),
             verifier_id: "fastpq".to_owned(),
             verifier_version: "v1".to_owned(),
@@ -38448,6 +38670,10 @@ mod tests {
         let manifest_root = envelope
             .manifest_root
             .expect("verified lane relay samples must carry a manifest root");
+        let mut fastpq_binding = sample_verified_lane_relay_binding(envelope.dataspace_id);
+        let claim_digest =
+            lane_relay_fastpq_claim_digest(envelope).expect("lane relay claim digest");
+        fastpq_binding.claim_digest = hex::encode(claim_digest.as_ref());
         let record = VerifiedLaneRelayRecord::new(
             envelope.clone(),
             material.proof_digest,
@@ -38455,7 +38681,7 @@ mod tests {
             Hash::new(b"state-test-lane-relay-inner-proof"),
             material.verified_at_height,
             manifest_root,
-            sample_verified_lane_relay_binding(envelope.dataspace_id),
+            fastpq_binding,
         );
         let key = State::verified_lane_relay_state_key(envelope).expect("state key");
         let json = Json::try_new(record).expect("verified relay record JSON");
@@ -38532,7 +38758,7 @@ mod tests {
     }
 
     #[test]
-    fn record_lane_relay_rejects_missing_fastpq_proof() {
+    fn record_lane_relay_stores_pending_without_fastpq_proof() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -38554,10 +38780,52 @@ mod tests {
         let mut envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap);
         envelope.fastpq_proof = None;
 
-        let err = state
+        let inserted = state
             .record_lane_relay(&envelope)
-            .expect_err("missing FastPQ proof must be rejected");
-        assert!(matches!(err, LaneRelayError::MissingFastpqProof));
+            .expect("missing FastPQ proof stores a pending relay");
+        assert_eq!(inserted, LaneRelayInsert::Inserted);
+        assert_eq!(state.lane_relay_snapshot().len(), 1);
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "pending relays must not be merge-admissible"
+        );
+    }
+
+    #[test]
+    fn lane_relay_store_upgrades_existing_pending_after_newer_height() {
+        let (_, validator_keypair) = bls_account_in("validators");
+        let signers = [&validator_keypair];
+        let signers_bitmap = vec![0b0000_0001];
+        let mut pending_h1 =
+            sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap.clone());
+        pending_h1.fastpq_proof = None;
+        let newer_h2 =
+            sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap.clone());
+        let verified_h1 = sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap);
+        let mut store = LaneRelayStore::default();
+
+        assert_eq!(
+            store
+                .insert(pending_h1.clone())
+                .expect("pending height 1 stored"),
+            LaneRelayInsert::Inserted
+        );
+        assert_eq!(
+            store
+                .insert(newer_h2)
+                .expect("newer height stored after pending"),
+            LaneRelayInsert::Inserted
+        );
+        assert_eq!(
+            store
+                .insert(verified_h1.clone())
+                .expect("existing pending height can be upgraded"),
+            LaneRelayInsert::Replaced
+        );
+        assert_eq!(
+            store.get(LaneId::new(0), DataSpaceId::UNIVERSAL, 1),
+            Some(&verified_h1)
+        );
     }
 
     #[test]
@@ -38632,6 +38900,55 @@ mod tests {
             .record_lane_relay(&envelope)
             .expect("verified relay record should admit relay");
         assert_eq!(inserted, LaneRelayInsert::Inserted);
+    }
+
+    #[test]
+    fn merge_candidates_hydrate_verified_lane_relay_records_from_contract_state() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.fees.settlement_mode =
+                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+            nexus.fees.fee_receipts_activation_height = 2;
+        }
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
+        );
+        configure_commit_topology(&state, 1);
+
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        seed_verified_lane_relay_record(&state, &envelope);
+
+        assert!(state.lane_relay_snapshot().is_empty());
+        let candidates = state.merge_entry_candidates_from_lane_relays();
+
+        assert_eq!(state.lane_relay_snapshot(), vec![envelope.clone()]);
+        assert_eq!(candidates.len(), 1);
+        let snapshot = candidates[0]
+            .lane_snapshots
+            .iter()
+            .find(|snapshot| snapshot.lane_id == LaneId::new(0))
+            .expect("hydrated relay included in merge candidate");
+        assert_eq!(snapshot.dataspace_id, DataSpaceId::UNIVERSAL);
+        assert_eq!(snapshot.lane_block_height, 2);
+        assert_eq!(snapshot.tip_hash, envelope.block_header.hash());
+        assert_eq!(
+            snapshot.merge_hint_root,
+            envelope.merge_hint_root().expect("merge hint root")
+        );
     }
 
     #[test]
@@ -38750,7 +39067,7 @@ mod tests {
             .expect("new relay accepted");
 
         let mut settlement = envelope.settlement_commitment.clone();
-        settlement.total_local_micro = settlement.total_local_micro.saturating_add(1);
+        settlement.receipts[0].source_id = [0xBB; 32];
         let conflicting = LaneRelayEnvelope::new(
             envelope.block_header,
             envelope.qc.clone(),
@@ -38858,6 +39175,36 @@ mod tests {
         let err = state
             .record_lane_relay(&envelope)
             .expect_err("invalid aggregate signature should be rejected");
+        assert!(matches!(err, LaneRelayError::AggregateSignatureInvalid));
+    }
+
+    #[test]
+    fn record_lane_relay_rejects_global_qc_mode_tag() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
+        );
+        configure_commit_topology(&state, 1);
+
+        let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap);
+        if let Some(qc) = envelope.qc.as_mut() {
+            qc.mode_tag = crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned();
+        }
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("global block QC mode tag must not satisfy lane relay QC");
         assert!(matches!(err, LaneRelayError::AggregateSignatureInvalid));
     }
 
@@ -39026,6 +39373,8 @@ mod tests {
         let signers_bitmap = signer_bitmap(&signer_indices, committee.len());
         let qc = commit_qc_with_signers(
             &header,
+            LaneId::new(0),
+            DataSpaceId::UNIVERSAL,
             parent_state_root,
             post_state_root,
             &signer_keys,
@@ -39164,6 +39513,8 @@ mod tests {
         let signers_bitmap = signer_bitmap(&signer_indices, committee.len());
         let qc = commit_qc_with_signers(
             &header,
+            LaneId::new(0),
+            DataSpaceId::UNIVERSAL,
             parent_state_root,
             post_state_root,
             &signer_keys,
@@ -39596,7 +39947,10 @@ mod tests {
         let merge_hint_roots = candidate.merge_hint_roots();
         assert_eq!(candidate.epoch_id, 1);
         assert_eq!(lane_tips.as_slice(), &[envelope.block_header.hash()]);
-        assert_eq!(merge_hint_roots.as_slice(), &[*envelope.settlement_hash]);
+        assert_eq!(
+            merge_hint_roots.as_slice(),
+            &[envelope.merge_hint_root().expect("merge hint root")]
+        );
         assert_eq!(
             candidate.global_state_root,
             crate::merge::reduce_merge_hint_roots(&merge_hint_roots)
@@ -39611,7 +39965,7 @@ mod tests {
     }
 
     #[test]
-    fn record_lane_relay_builds_merge_candidate_once_all_lanes_have_relays() {
+    fn record_lane_relay_builds_merge_candidate_from_active_lanes() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
@@ -39662,9 +40016,15 @@ mod tests {
         let lane1 = sample_lane_relay_envelope(1, LaneId::new(1), &signers, signers_bitmap);
 
         state.record_lane_relay(&lane0).expect("lane0 accepted");
-        assert!(
-            state.merge_entry_candidates_from_lane_relays().is_empty(),
-            "merge candidate requires relays from all lanes"
+        let single_lane_candidates = state.merge_entry_candidates_from_lane_relays();
+        assert_eq!(
+            single_lane_candidates.len(),
+            1,
+            "active-only merge must not wait for configured idle lanes"
+        );
+        assert_eq!(
+            single_lane_candidates[0].lane_tips().as_slice(),
+            &[lane0.block_header.hash()]
         );
 
         state.record_lane_relay(&lane1).expect("lane1 accepted");
@@ -39682,7 +40042,10 @@ mod tests {
         );
         assert_eq!(
             merge_hint_roots.as_slice(),
-            &[*lane0.settlement_hash, *lane1.settlement_hash]
+            &[
+                lane0.merge_hint_root().expect("lane0 merge hint root"),
+                lane1.merge_hint_root().expect("lane1 merge hint root")
+            ]
         );
         assert_eq!(
             candidate.global_state_root,
@@ -39761,7 +40124,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_candidate_carries_forward_unchanged_lane_snapshot() {
+    fn merge_candidate_skips_unchanged_lane_after_previous_merge() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
@@ -39840,20 +40203,25 @@ mod tests {
             .next()
             .expect("rolling merge candidate");
         assert_eq!(second_candidate.epoch_id, 2);
+        assert_eq!(
+            second_candidate.lane_snapshots.len(),
+            1,
+            "active-only merge candidates must include changed lanes only"
+        );
         let lane0_snapshot = second_candidate
             .lane_snapshots
             .iter()
             .find(|snapshot| snapshot.lane_id == LaneId::new(0))
             .expect("lane0 snapshot");
-        let lane1_snapshot = second_candidate
-            .lane_snapshots
-            .iter()
-            .find(|snapshot| snapshot.lane_id == LaneId::new(1))
-            .expect("lane1 snapshot");
         assert_eq!(lane0_snapshot.lane_block_height, 2);
         assert_eq!(lane0_snapshot.tip_hash, lane0_h2.block_header.hash());
-        assert_eq!(lane1_snapshot.lane_block_height, 1);
-        assert_eq!(lane1_snapshot.tip_hash, lane1_h1.block_header.hash());
+        assert!(
+            second_candidate
+                .lane_snapshots
+                .iter()
+                .all(|snapshot| snapshot.lane_id != LaneId::new(1)),
+            "unchanged lane snapshots are already represented by the previous merge entry"
+        );
     }
 
     #[test]
@@ -47577,7 +47945,10 @@ mod tests {
         };
         use iroha_primitives::json::Json;
         use iroha_primitives::numeric::Numeric;
-        use ivm::KotodamaCompiler;
+        use ivm::{
+            KotodamaCompiler,
+            kotodama::compiler::{CompilerMode, CompilerOptions},
+        };
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -47631,9 +48002,12 @@ mod tests {
         "#
         .replace("__ROSE_ASSET_DEFINITION_ID__", &rose_def_id.to_string())
         .replace("__GOLD_ASSET_DEFINITION_ID__", &gold_def_id.to_string());
-        let program = KotodamaCompiler::new()
-            .compile_source(&src)
-            .expect("compile alias transfer contract");
+        let program = KotodamaCompiler::new_with_options(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        })
+        .compile_source(&src)
+        .expect("compile alias transfer contract");
         let bytecode = IvmBytecode::from_compiled(program);
 
         let block1 = new_dummy_block_with_payload(|header| {
@@ -48382,6 +48756,76 @@ mod tests {
         world_block.commit();
         seed_consensus_keys_with_pops(state, &keypairs);
         keypairs
+    }
+
+    fn record_commit_ready_merge_candidate_with_lanes(
+        state: &mut State,
+        count: usize,
+        first_height: u64,
+    ) -> (crate::merge::MergeLedgerCandidate, Vec<KeyPair>) {
+        assert!(count > 0, "test helper requires at least one lane");
+        let lane_count = u32::try_from(count).expect("lane count fits in u32");
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(state, &validator_keypairs);
+
+        let lanes: Vec<LaneConfig> = (0..lane_count)
+            .map(|idx| {
+                if idx == 0 {
+                    LaneConfig::default()
+                } else {
+                    LaneConfig {
+                        id: LaneId::new(idx),
+                        alias: format!("lane-{idx}"),
+                        dataspace_id: DataSpaceId::UNIVERSAL,
+                        ..LaneConfig::default()
+                    }
+                }
+            })
+            .collect();
+        let lane_catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(lane_count).expect("non-zero"),
+            lanes,
+        )
+        .expect("lane catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state.set_nexus(nexus).expect("apply Nexus lane catalog");
+
+        let registry_entries: Vec<_> = (0..lane_count)
+            .map(|idx| {
+                (
+                    LaneId::new(idx),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                )
+            })
+            .collect();
+        install_lane_manifest_registry(state, &registry_entries);
+        let commit_keypairs = configure_commit_topology(state, 1);
+
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        for idx in 0..lane_count {
+            let envelope = sample_lane_relay_envelope(
+                first_height.saturating_add(u64::from(idx)),
+                LaneId::new(idx),
+                &signers,
+                signers_bitmap.clone(),
+            );
+            state
+                .record_lane_relay(&envelope)
+                .expect("commit-ready relay accepted");
+        }
+
+        let candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("merge candidate from recorded relays");
+        (candidate, commit_keypairs)
     }
 
     #[test]
@@ -49217,10 +49661,10 @@ mod tests {
     fn commit_merge_entry_updates_cache() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
+        let mut state = State::new(World::default(), kura, query);
 
-        let keypairs = configure_commit_topology(&state, 1);
-        let candidate = merge_candidate_with_lanes(2, 2);
+        let (candidate, keypairs) =
+            record_commit_ready_merge_candidate_with_lanes(&mut state, 2, 2);
         let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
         let epoch_id = entry.epoch_id;
@@ -49252,10 +49696,10 @@ mod tests {
     fn commit_merge_entry_persists_to_kura() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new(World::default(), Arc::clone(&kura), query);
+        let mut state = State::new(World::default(), Arc::clone(&kura), query);
 
-        let keypairs = configure_commit_topology(&state, 1);
-        let candidate = merge_candidate_with_lanes(9, 3);
+        let (candidate, keypairs) =
+            record_commit_ready_merge_candidate_with_lanes(&mut state, 3, 9);
         let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
         let epoch = entry.epoch_id;
@@ -49272,10 +49716,10 @@ mod tests {
     fn apply_without_execution_refreshes_merge_metadata() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
+        let mut state = State::new(World::default(), kura, query);
 
-        let keypairs = configure_commit_topology(&state, 1);
-        let candidate = merge_candidate_with_lanes(5, 2);
+        let (candidate, keypairs) =
+            record_commit_ready_merge_candidate_with_lanes(&mut state, 2, 5);
         let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
         let stored = state
@@ -49345,16 +49789,17 @@ mod tests {
     fn merge_ledger_cache_reconfigures_capacity() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
+        let mut state = State::new(World::default(), kura, query);
 
-        let keypairs = configure_commit_topology(&state, 1);
         state.set_merge_ledger_cache_capacity(1);
-        let candidate = merge_candidate_with_lanes(3, 1);
+        let (candidate, keypairs) =
+            record_commit_ready_merge_candidate_with_lanes(&mut state, 1, 1);
         let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
             .expect("commit first");
-        let candidate = merge_candidate_with_lanes(4, 1);
+        let (candidate, keypairs) =
+            record_commit_ready_merge_candidate_with_lanes(&mut state, 1, 2);
         let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
@@ -49362,7 +49807,7 @@ mod tests {
 
         let snapshot = state.merge_ledger().snapshot();
         assert_eq!(snapshot.len(), 1);
-        assert_eq!(snapshot[0].epoch_id, 4);
+        assert_eq!(snapshot[0].epoch_id, 2);
 
         state.set_merge_ledger_cache_capacity(0);
         assert_eq!(
@@ -49655,6 +50100,1031 @@ mod tests {
         assert_eq!(flag_val, Some(Json::from(norito::json!("ok"))));
 
         Ok(())
+    }
+
+    #[test]
+    fn deterministic_pipeline_block_approved_trigger_executes() {
+        use iroha_data_model::events::pipeline::{
+            BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "pipeline_block_approved".parse().unwrap();
+        let key: Name = "pipeline_flag".parse().unwrap();
+        let action = Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                ALICE_ID.clone(),
+                key.clone(),
+                Json::from(norito::json!("ok")),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        Register::trigger(Trigger::new(trigger_id.clone(), action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
+            header: block2.as_ref().header(),
+            status: BlockStatus::Approved,
+        })])
+        .expect("pipeline trigger should execute");
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let account = view.world.account(&ALICE_ID).expect("alice account");
+        assert_eq!(
+            account.metadata().get(&key),
+            Some(&Json::from(norito::json!("ok")))
+        );
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_none(),
+            "one-shot pipeline trigger should be pruned"
+        );
+    }
+
+    #[test]
+    fn constrained_pipeline_block_trigger_ignores_wrong_height_approved_event() {
+        use iroha_data_model::events::pipeline::{
+            BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "pipeline_block_height_constrained".parse().unwrap();
+        let key: Name = "pipeline_block_height_constrained".parse().unwrap();
+        let action = Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                ALICE_ID.clone(),
+                key.clone(),
+                Json::from(norito::json!("matched")),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            PipelineEventFilterBox::from(
+                BlockEventFilter::new()
+                    .for_height(NonZeroU64::new(7).unwrap())
+                    .for_status(BlockStatus::Approved),
+            ),
+        );
+        Register::trigger(Trigger::new(trigger_id.clone(), action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
+            header: block2.as_ref().header(),
+            status: BlockStatus::Approved,
+        })])
+        .expect("wrong-height approved event should be ignored");
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let account = view.world.account(&ALICE_ID).expect("alice account");
+        assert!(
+            account.metadata().get(&key).is_none(),
+            "wrong-height approved block event must not execute the trigger"
+        );
+        let trigger = view
+            .world
+            .triggers()
+            .pipeline_triggers()
+            .get(&trigger_id)
+            .expect("unmatched trigger should remain");
+        assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
+    }
+
+    #[test]
+    fn one_shot_pipeline_trigger_executes_once_for_multiple_matching_events() {
+        use iroha_data_model::events::pipeline::{
+            BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "pipeline_one_shot_multi_match".parse().unwrap();
+        let key: Name = "pipeline_one_shot_multi_match".parse().unwrap();
+        let action = Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                ALICE_ID.clone(),
+                key.clone(),
+                Json::from(norito::json!("set-once")),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        Register::trigger(Trigger::new(trigger_id.clone(), action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let block3 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(3).unwrap());
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        let steps = stx
+            .execute_pipeline_triggers([
+                PipelineEventBox::from(BlockEvent {
+                    header: block2.as_ref().header(),
+                    status: BlockStatus::Approved,
+                }),
+                PipelineEventBox::from(BlockEvent {
+                    header: block3.as_ref().header(),
+                    status: BlockStatus::Approved,
+                }),
+            ])
+            .expect("matching approved block events should execute at most once");
+        assert_eq!(
+            steps.len(),
+            1,
+            "one-shot trigger must not execute twice in the same batch"
+        );
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let account = view.world.account(&ALICE_ID).expect("alice account");
+        assert_eq!(
+            account.metadata().get(&key),
+            Some(&Json::from(norito::json!("set-once")))
+        );
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_none(),
+            "one-shot trigger should be pruned after its first matching event"
+        );
+    }
+
+    #[test]
+    fn one_shot_pipeline_transaction_trigger_executes_once_for_duplicate_matching_facts() {
+        use iroha_crypto::{Hash, HashOf};
+        use iroha_data_model::events::pipeline::{
+            PipelineEventBox, TransactionEvent, TransactionEventFilter, TransactionStatus,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "pipeline_tx_one_shot_duplicate".parse().unwrap();
+        let key: Name = "pipeline_tx_one_shot_duplicate".parse().unwrap();
+        let action = Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                ALICE_ID.clone(),
+                key.clone(),
+                Json::from(norito::json!("set-once")),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new().for_status(TransactionStatus::Approved),
+            ),
+        );
+        Register::trigger(Trigger::new(trigger_id.clone(), action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let tx_hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
+        let tx_hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH]));
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        let steps = stx
+            .execute_pipeline_triggers([
+                PipelineEventBox::from(TransactionEvent {
+                    hash: tx_hash_a,
+                    block_height: Some(block2.as_ref().header().height()),
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    status: TransactionStatus::Approved,
+                }),
+                PipelineEventBox::from(TransactionEvent {
+                    hash: tx_hash_b,
+                    block_height: Some(block2.as_ref().header().height()),
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    status: TransactionStatus::Approved,
+                }),
+            ])
+            .expect("duplicate matching approved transaction facts should execute at most once");
+        assert_eq!(
+            steps.len(),
+            1,
+            "one-shot transaction trigger must not execute twice in the same batch"
+        );
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let account = view.world.account(&ALICE_ID).expect("alice account");
+        assert_eq!(
+            account.metadata().get(&key),
+            Some(&Json::from(norito::json!("set-once")))
+        );
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_none(),
+            "one-shot transaction trigger should be pruned after first match"
+        );
+    }
+
+    #[test]
+    fn deterministic_pipeline_transaction_approved_and_rejected_triggers_execute() {
+        use iroha_crypto::{Hash, HashOf};
+        use iroha_data_model::events::pipeline::{
+            PipelineEventBox, TransactionEvent, TransactionEventFilter, TransactionStatus,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let approved_trigger_id: TriggerId = "pipeline_tx_approved".parse().unwrap();
+        let rejected_trigger_id: TriggerId = "pipeline_tx_rejected".parse().unwrap();
+        let approved_key: Name = "pipeline_tx_approved".parse().unwrap();
+        let rejected_key: Name = "pipeline_tx_rejected".parse().unwrap();
+        let rejection =
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::NotPermitted("expected rejection".to_owned()),
+            );
+
+        for (trigger_id, key, status) in [
+            (
+                approved_trigger_id.clone(),
+                approved_key.clone(),
+                TransactionStatus::Approved,
+            ),
+            (
+                rejected_trigger_id.clone(),
+                rejected_key.clone(),
+                TransactionStatus::Rejected(Box::new(rejection.clone())),
+            ),
+        ] {
+            let action = Action::new(
+                vec![InstructionBox::from(SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    key,
+                    Json::from(norito::json!("ok")),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                PipelineEventFilterBox::from(TransactionEventFilter::new().for_status(status)),
+            );
+            Register::trigger(Trigger::new(trigger_id, action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+        }
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let tx_hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+        let tx_hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        stx.execute_pipeline_triggers([
+            PipelineEventBox::from(TransactionEvent {
+                hash: tx_hash_a,
+                block_height: Some(block2.as_ref().header().height()),
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                status: TransactionStatus::Approved,
+            }),
+            PipelineEventBox::from(TransactionEvent {
+                hash: tx_hash_b,
+                block_height: Some(block2.as_ref().header().height()),
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                status: TransactionStatus::Rejected(Box::new(rejection)),
+            }),
+        ])
+        .expect("deterministic transaction pipeline triggers should execute");
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let account = view.world.account(&ALICE_ID).expect("alice account");
+        assert_eq!(
+            account.metadata().get(&approved_key),
+            Some(&Json::from(norito::json!("ok")))
+        );
+        assert_eq!(
+            account.metadata().get(&rejected_key),
+            Some(&Json::from(norito::json!("ok")))
+        );
+        assert!(
+            view.world
+                .triggers()
+                .ids()
+                .get(&approved_trigger_id)
+                .is_none()
+        );
+        assert!(
+            view.world
+                .triggers()
+                .ids()
+                .get(&rejected_trigger_id)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn malformed_enabled_pipeline_trigger_does_not_execute_or_decrement() {
+        use iroha_data_model::events::pipeline::{
+            BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "pipeline_malformed_enabled".parse().unwrap();
+        let key: Name = "must_not_be_set".parse().unwrap();
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
+                .parse::<Name>()
+                .expect("valid metadata key"),
+            Json::from(norito::json!({"bad": true})),
+        );
+        let action = Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                ALICE_ID.clone(),
+                key.clone(),
+                Json::from(norito::json!("unexpected")),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        )
+        .with_metadata(metadata);
+        Register::trigger(Trigger::new(trigger_id.clone(), action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
+            header: block2.as_ref().header(),
+            status: BlockStatus::Approved,
+        })])
+        .expect("malformed enabled metadata should fail closed without erroring");
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let account = view.world.account(&ALICE_ID).expect("alice account");
+        assert!(
+            account.metadata().get(&key).is_none(),
+            "disabled pipeline trigger must not execute"
+        );
+        let trigger = view
+            .world
+            .triggers()
+            .pipeline_triggers()
+            .get(&trigger_id)
+            .expect("disabled trigger should remain registered");
+        assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
+        assert!(
+            view.world
+                .triggers()
+                .active_pipeline_trigger_ids()
+                .get(&trigger_id)
+                .is_none(),
+            "malformed enabled metadata must not appear active"
+        );
+    }
+
+    #[test]
+    fn numeric_zero_enabled_pipeline_trigger_does_not_execute_or_decrement() {
+        use iroha_data_model::events::pipeline::{
+            BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "pipeline_numeric_zero_enabled".parse().unwrap();
+        let key: Name = "pipeline_numeric_zero_enabled".parse().unwrap();
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
+                .parse::<Name>()
+                .expect("valid metadata key"),
+            Json::from(0_u64),
+        );
+        let action = Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                ALICE_ID.clone(),
+                key.clone(),
+                Json::from(norito::json!("unexpected")),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        )
+        .with_metadata(metadata);
+        Register::trigger(Trigger::new(trigger_id.clone(), action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
+            header: block2.as_ref().header(),
+            status: BlockStatus::Approved,
+        })])
+        .expect("numeric zero enabled metadata should disable without erroring");
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let account = view.world.account(&ALICE_ID).expect("alice account");
+        assert!(
+            account.metadata().get(&key).is_none(),
+            "numeric-zero disabled pipeline trigger must not execute"
+        );
+        let trigger = view
+            .world
+            .triggers()
+            .pipeline_triggers()
+            .get(&trigger_id)
+            .expect("disabled trigger should remain registered");
+        assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
+        assert!(
+            view.world
+                .triggers()
+                .active_pipeline_trigger_ids()
+                .get(&trigger_id)
+                .is_none(),
+            "numeric-zero enabled metadata must not appear active"
+        );
+    }
+
+    #[test]
+    fn constrained_pipeline_transaction_trigger_ignores_near_miss_events() {
+        use iroha_crypto::{Hash, HashOf};
+        use iroha_data_model::events::pipeline::{
+            PipelineEventBox, TransactionEvent, TransactionEventFilter, TransactionStatus,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let wanted_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
+        let other_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+        let wanted_height = block1.as_ref().header().height();
+        let trigger_id: TriggerId = "pipeline_tx_constrained".parse().unwrap();
+        let key: Name = "pipeline_tx_constrained".parse().unwrap();
+        let action = Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                ALICE_ID.clone(),
+                key.clone(),
+                Json::from(norito::json!("matched")),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new()
+                    .for_hash(wanted_hash.clone())
+                    .for_block_height(Some(wanted_height))
+                    .for_lane_id(LaneId::SINGLE)
+                    .for_dataspace_id(DataSpaceId::UNIVERSAL)
+                    .for_status(TransactionStatus::Approved),
+            ),
+        );
+        Register::trigger(Trigger::new(trigger_id.clone(), action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        stx.execute_pipeline_triggers([
+            PipelineEventBox::from(TransactionEvent {
+                hash: other_hash,
+                block_height: Some(wanted_height),
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                status: TransactionStatus::Approved,
+            }),
+            PipelineEventBox::from(TransactionEvent {
+                hash: wanted_hash,
+                block_height: Some(block2.as_ref().header().height()),
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                status: TransactionStatus::Approved,
+            }),
+        ])
+        .expect("non-matching deterministic events should be ignored");
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let account = view.world.account(&ALICE_ID).expect("alice account");
+        assert!(
+            account.metadata().get(&key).is_none(),
+            "near-miss transaction events must not execute the trigger"
+        );
+        let trigger = view
+            .world
+            .triggers()
+            .pipeline_triggers()
+            .get(&trigger_id)
+            .expect("unmatched trigger should remain");
+        assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
+    }
+
+    #[test]
+    fn pipeline_trigger_fails_closed_on_missing_bytecode() {
+        use iroha_data_model::{
+            events::pipeline::{BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox},
+            transaction::{Executable, IvmBytecode},
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "missing_bytecode_pipeline".parse().unwrap();
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+        let bytecode = IvmBytecode::from_compiled(assemble_ivm_header(&raw));
+        let blob_hash = HashOf::new(&bytecode);
+        let action = Action::new(
+            Executable::Ivm(bytecode),
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        Register::trigger(Trigger::new(trigger_id.clone(), action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        assert!(
+            state.world.triggers.remove_contract_for_test(blob_hash),
+            "contract entry should be removed for test setup"
+        );
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        let err = stx
+            .execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
+                header: block2.as_ref().header(),
+                status: BlockStatus::Approved,
+            })])
+            .expect_err("missing bytecode should reject pipeline trigger execution");
+        let err_debug = format!("{err:?}");
+        assert!(
+            err_debug.contains("missing trigger bytecode"),
+            "unexpected error: {err_debug}"
+        );
+        drop(stx);
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let trigger = view
+            .world
+            .triggers()
+            .pipeline_triggers()
+            .get(&trigger_id)
+            .expect("failed pipeline trigger should remain for storage repair");
+        assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
+    }
+
+    #[test]
+    fn pipeline_trigger_instruction_failure_rolls_back_and_preserves_repeats() {
+        use iroha_data_model::events::pipeline::{
+            BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "pipeline_direct_failure".parse().unwrap();
+        let missing_account = AccountId::new(KeyPair::random().public_key().clone());
+        let action = Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                missing_account,
+                "missing".parse().unwrap(),
+                Json::from(norito::json!("boom")),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        Register::trigger(Trigger::new(trigger_id.clone(), action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
+            header: block2.as_ref().header(),
+            status: BlockStatus::Approved,
+        })])
+        .expect_err("failing pipeline instruction must reject trigger execution");
+        drop(stx);
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let trigger = view
+            .world
+            .triggers()
+            .pipeline_triggers()
+            .get(&trigger_id)
+            .expect("failed pipeline trigger should remain");
+        assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
+    }
+
+    #[test]
+    fn pipeline_trigger_chained_data_failure_rolls_back_and_preserves_repeats() {
+        use iroha_data_model::events::pipeline::{
+            BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        let asset_def_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "pipeline_rose".parse().unwrap(),
+        );
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
+
+        let data_trigger_id: TriggerId = "pipeline_failing_data_after_mint".parse().unwrap();
+        let missing_account = AccountId::new(KeyPair::random().public_key().clone());
+        let data_action = Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                missing_account,
+                "missing".parse().unwrap(),
+                Json::from(norito::json!("boom")),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            DataEventFilter::Asset(data_pre::AssetEventFilter::new().for_asset(asset_id.clone())),
+        );
+        Register::trigger(Trigger::new(data_trigger_id, data_action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let pipeline_trigger_id: TriggerId = "pipeline_mint_then_failing_data".parse().unwrap();
+        let pipeline_action = Action::new(
+            vec![InstructionBox::from(Mint::asset_numeric(
+                1_u32,
+                asset_id.clone(),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        Register::trigger(Trigger::new(pipeline_trigger_id.clone(), pipeline_action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
+            header: block2.as_ref().header(),
+            status: BlockStatus::Approved,
+        })])
+        .expect_err("chained data trigger failure must reject pipeline execution");
+        drop(stx);
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert!(
+            view.world.asset(&asset_id).is_err(),
+            "pipeline mint must roll back with chained failure"
+        );
+        let repeats = view
+            .world
+            .triggers()
+            .pipeline_triggers()
+            .get(&pipeline_trigger_id)
+            .expect("pipeline trigger should remain")
+            .repeats();
+        assert_eq!(repeats, &Repeats::Exactly(1));
+    }
+
+    #[test]
+    fn by_call_chained_data_trigger_failure_rolls_back_and_preserves_repeats() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        let asset_def_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
+
+        let data_trigger_id: TriggerId = "failing_data_after_call".parse().unwrap();
+        let missing_account = AccountId::new(KeyPair::random().public_key().clone());
+        let data_action = Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                missing_account,
+                "missing".parse().unwrap(),
+                Json::from(norito::json!("boom")),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            DataEventFilter::Asset(data_pre::AssetEventFilter::new().for_asset(asset_id.clone())),
+        );
+        Register::trigger(Trigger::new(data_trigger_id, data_action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let by_call_id: TriggerId = "call_then_failing_data".parse().unwrap();
+        let by_call_action = Action::new(
+            vec![InstructionBox::from(Mint::asset_numeric(
+                1_u32,
+                asset_id.clone(),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            ExecuteTriggerEventFilter::new()
+                .for_trigger(by_call_id.clone())
+                .under_authority(ALICE_ID.clone()),
+        );
+        Register::trigger(Trigger::new(by_call_id.clone(), by_call_action))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut stx = state_block.transaction();
+        let event = ExecuteTriggerEvent {
+            trigger_id: by_call_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        stx.execute_called_trigger(&by_call_id, &event)
+            .expect_err("chained data trigger failure must reject by-call execution");
+        drop(stx);
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert!(
+            view.world.asset(&asset_id).is_err(),
+            "by-call mint must roll back with chained failure"
+        );
+        let repeats = view
+            .world
+            .triggers()
+            .by_call_triggers()
+            .get(&by_call_id)
+            .expect("by-call trigger should remain")
+            .repeats();
+        assert_eq!(repeats, &Repeats::Exactly(1));
     }
 
     #[tokio::test]
@@ -50513,7 +51983,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_called_trigger_skips_missing_bytecode_and_removes_trigger() {
+    fn execute_called_trigger_fails_closed_on_missing_bytecode() {
         use iroha_data_model::{
             events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
             transaction::{Executable, IvmBytecode},
@@ -50574,20 +52044,21 @@ mod tests {
             authority: ALICE_ID.clone(),
             args: Json::default(),
         };
-        let step = stx
+        let err = stx
             .execute_called_trigger(&trigger_id, &event)
-            .expect("missing bytecode should be skipped");
+            .expect_err("missing bytecode should reject trigger execution");
+        let err_debug = format!("{err:?}");
         assert!(
-            step.0.is_empty(),
-            "missing bytecode should not execute any instructions"
+            err_debug.contains("missing trigger bytecode"),
+            "unexpected error: {err_debug}"
         );
-        stx.apply();
+        drop(stx);
         state_block.commit().unwrap();
 
         let view = state.view();
         assert!(
-            view.world.triggers().ids().get(&trigger_id).is_none(),
-            "trigger should be removed after missing bytecode"
+            view.world.triggers().ids().get(&trigger_id).is_some(),
+            "failed execution should not unregister the trigger in the rolled-back transaction"
         );
     }
 
@@ -50752,6 +52223,178 @@ mod tests {
     }
 
     #[test]
+    fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
+        use iroha_data_model::events::execute_trigger::{
+            ExecuteTriggerEvent, ExecuteTriggerEventFilter,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "numeric_zero_by_call".parse().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
+                    .parse::<Name>()
+                    .expect("valid metadata key"),
+                Json::from(0_u64),
+            );
+            let action = Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .with_metadata(metadata);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let err = stx
+            .execute_called_trigger(&trigger_id, &event)
+            .expect_err("numeric-zero enabled trigger should be rejected");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                InstructionExecutionError::Find(FindError::Trigger(id)),
+            )) => assert_eq!(id, trigger_id),
+            other => panic!("unexpected rejection: {other:?}"),
+        }
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let trigger = view
+            .world
+            .triggers()
+            .by_call_triggers()
+            .get(&trigger_id)
+            .expect("disabled trigger should remain registered");
+        assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
+        assert!(
+            view.world
+                .triggers()
+                .active_by_call_trigger_ids()
+                .get(&trigger_id)
+                .is_none(),
+            "numeric-zero enabled trigger must not appear active"
+        );
+    }
+
+    #[test]
+    fn execute_called_trigger_rejects_malformed_enabled_trigger() {
+        use iroha_data_model::events::execute_trigger::{
+            ExecuteTriggerEvent, ExecuteTriggerEventFilter,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "malformed_enabled_by_call".parse().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
+                    .parse::<Name>()
+                    .expect("valid metadata key"),
+                Json::from(norito::json!({"malformed": true})),
+            );
+            let action = Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .with_metadata(metadata);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let err = stx
+            .execute_called_trigger(&trigger_id, &event)
+            .expect_err("malformed enabled metadata should fail closed");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                InstructionExecutionError::Find(FindError::Trigger(id)),
+            )) => assert_eq!(id, trigger_id),
+            other => panic!("unexpected rejection: {other:?}"),
+        }
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let trigger = view
+            .world
+            .triggers()
+            .by_call_triggers()
+            .get(&trigger_id)
+            .expect("disabled trigger should remain registered");
+        assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
+        assert!(
+            view.world
+                .triggers()
+                .active_by_call_trigger_ids()
+                .get(&trigger_id)
+                .is_none(),
+            "malformed enabled trigger must not appear active"
+        );
+    }
+
+    #[test]
     fn execute_data_triggers_dfs_skips_disabled_trigger() {
         use iroha_data_model::prelude::DataEvent;
 
@@ -50829,6 +52472,206 @@ mod tests {
             })
             .unwrap();
         assert!(flag_val.is_none(), "disabled trigger must not mutate state");
+    }
+
+    #[test]
+    fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers() {
+        use iroha_data_model::prelude::DataEvent;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let numeric_trigger_id: TriggerId = "numeric_zero_data_trigger".parse().unwrap();
+        let malformed_trigger_id: TriggerId = "malformed_enabled_data_trigger".parse().unwrap();
+        let numeric_flag: Name = "numeric_data_flag".parse().expect("valid name");
+        let malformed_flag: Name = "malformed_data_flag".parse().expect("valid name");
+        let enabled_key = crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
+            .parse::<Name>()
+            .expect("valid metadata key");
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            for (trigger_id, flag_key, enabled_value) in [
+                (
+                    numeric_trigger_id.clone(),
+                    numeric_flag.clone(),
+                    Json::from(0_u64),
+                ),
+                (
+                    malformed_trigger_id.clone(),
+                    malformed_flag.clone(),
+                    Json::from(norito::json!([true])),
+                ),
+            ] {
+                let mut metadata = Metadata::default();
+                metadata.insert(enabled_key.clone(), enabled_value);
+                let action = Action::new(
+                    vec![InstructionBox::from(SetKeyValue::account(
+                        ALICE_ID.clone(),
+                        flag_key,
+                        Json::from(true),
+                    ))],
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    data_pre::DataEventFilter::Any,
+                )
+                .with_metadata(metadata);
+                Register::trigger(Trigger::new(trigger_id, action))
+                    .execute(&ALICE_ID, &mut stx)
+                    .unwrap();
+            }
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let event = data_pre::DomainEvent::Created(
+            Domain::new(DomainId::try_new("alpha", "universal").unwrap()).build(&ALICE_ID),
+        );
+        stx.world
+            .internal_event_buf
+            .push(Arc::new(DataEvent::Domain(event)));
+
+        let steps = stx
+            .execute_data_triggers_dfs(&ALICE_ID)
+            .expect("disabled data triggers should be skipped");
+        assert!(
+            steps.is_empty(),
+            "numeric-zero and malformed data triggers must not execute"
+        );
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let account = view.world.account(&ALICE_ID).expect("alice account");
+        assert!(
+            account.metadata().get(&numeric_flag).is_none(),
+            "numeric-zero data trigger must not mutate state"
+        );
+        assert!(
+            account.metadata().get(&malformed_flag).is_none(),
+            "malformed-enabled data trigger must not mutate state"
+        );
+        for trigger_id in [&numeric_trigger_id, &malformed_trigger_id] {
+            let trigger = view
+                .world
+                .triggers()
+                .data_triggers()
+                .get(trigger_id)
+                .expect("disabled trigger should remain registered");
+            assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
+            assert!(
+                view.world
+                    .triggers()
+                    .active_data_trigger_ids()
+                    .get(trigger_id)
+                    .is_none(),
+                "disabled data trigger must not appear active"
+            );
+        }
+    }
+
+    #[test]
+    fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
+        use iroha_data_model::prelude::DataEvent;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "depleted_data_trigger".parse().unwrap();
+        let flag_key: Name = "depleted_data_flag".parse().expect("valid name");
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let action = Action::new(
+                vec![InstructionBox::from(SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    flag_key.clone(),
+                    Json::from(true),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                data_pre::DataEventFilter::Any,
+            );
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        {
+            let mut trigger_block = state.world.triggers.block();
+            let mut trigger_tx = trigger_block.transaction();
+            let updated = trigger_tx.inspect_by_id_mut(&trigger_id, |action| {
+                action.set_repeats(Repeats::Exactly(0));
+            });
+            assert!(
+                updated.is_some(),
+                "trigger should be present for depletion setup"
+            );
+            trigger_tx.apply();
+            trigger_block.commit();
+        }
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let event = data_pre::DomainEvent::Created(
+            Domain::new(DomainId::try_new("alpha", "universal").unwrap()).build(&ALICE_ID),
+        );
+        stx.world
+            .internal_event_buf
+            .push(Arc::new(DataEvent::Domain(event)));
+
+        let steps = stx
+            .execute_data_triggers_dfs(&ALICE_ID)
+            .expect("depleted trigger should be pruned without error");
+        assert!(steps.is_empty(), "depleted trigger must not execute");
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_none(),
+            "depleted data trigger should be pruned"
+        );
+        let flag_val = view
+            .world
+            .map_account(&ALICE_ID, |account| {
+                account.value().metadata().get(&flag_key).cloned()
+            })
+            .unwrap();
+        assert!(
+            flag_val.is_none(),
+            "depleted data trigger must not mutate state"
+        );
     }
 
     #[test]
@@ -51031,17 +52874,21 @@ mod tests {
             .internal_event_buf
             .push(Arc::new(DataEvent::Domain(event_b)));
 
-        let steps = stx
+        let err = stx
             .execute_data_triggers_dfs(&ALICE_ID)
-            .expect("missing bytecode should be skipped without panicking");
-        assert_eq!(steps.len(), 1);
-        stx.apply();
+            .expect_err("missing bytecode should reject data-trigger execution");
+        let err_debug = format!("{err:?}");
+        assert!(
+            err_debug.contains("missing trigger bytecode"),
+            "unexpected error: {err_debug}"
+        );
+        drop(stx);
         state_block.commit().unwrap();
 
         let view = state.view();
         assert!(
-            view.world.triggers().ids().get(&trigger_id).is_none(),
-            "trigger should be removed after missing bytecode"
+            view.world.triggers().ids().get(&trigger_id).is_some(),
+            "rolled-back missing-bytecode execution should leave repair/deserialization to prune"
         );
     }
 
@@ -52298,7 +54145,8 @@ mod tests {
                     binding_name: "vault".parse().expect("valid name"),
                     state_key: "/state/private/patient-1".to_string(),
                     encryption: iroha_data_model::soracloud::SoraStateEncryptionV1::FheCiphertext,
-                    payload_bytes: std::num::NonZeroU64::new(128).expect("nonzero"),
+                    payload: b"ciphertext".to_vec(),
+                    payload_bytes: std::num::NonZeroU64::new(10).expect("nonzero"),
                     payload_commitment: Hash::new(b"ciphertext"),
                     last_update_sequence: 4,
                     governance_tx_hash: Hash::new(b"gov"),

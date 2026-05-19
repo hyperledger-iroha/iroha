@@ -30,7 +30,7 @@ use iroha_core::soracloud_runtime::{
     soracloud_hf_generated_source_binding,
 };
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::{Hash, PublicKey, Signature};
+use iroha_crypto::{Hash, PublicKey, Signature, fhe_bfv::BfvEvaluationKeyBundle};
 use iroha_data_model::{
     Encode,
     account::AccountId,
@@ -365,6 +365,8 @@ pub(crate) struct StateMutationRequest {
     pub operation: StateMutationOperation,
     #[norito(default)]
     pub value_size_bytes: Option<u64>,
+    #[norito(default)]
+    pub value_payload_hex: Option<String>,
     pub encryption: SoraStateEncryptionV1,
     pub governance_tx_hash: Hash,
 }
@@ -798,6 +800,7 @@ pub(crate) struct FheJobRunPayload {
     pub job: FheJobSpecV1,
     pub policy: FheExecutionPolicyV1,
     pub param_set: FheParamSetV1,
+    pub evaluation_keys: BfvEvaluationKeyBundle,
     pub governance_tx_hash: Hash,
 }
 
@@ -4480,17 +4483,74 @@ fn verify_state_mutation_signature(
 fn encode_state_mutation_signature_payload(
     payload: &StateMutationRequest,
 ) -> Result<Vec<u8>, SoracloudError> {
+    let (value_size_bytes, payload_commitment) = state_mutation_payload_metadata(payload)?;
     encode_state_mutation_provenance_payload(
         payload.service_name.as_str(),
         payload.binding_name.as_str(),
         payload.key.as_str(),
         state_mutation_operation_label(payload.operation),
-        payload.value_size_bytes,
+        value_size_bytes,
+        payload_commitment,
         payload.encryption,
         payload.governance_tx_hash,
     )
     .map_err(|err| {
         SoracloudError::internal(format!("failed to encode state mutation payload: {err}"))
+    })
+}
+
+fn decode_state_mutation_payload(
+    payload: &StateMutationRequest,
+) -> Result<Option<Vec<u8>>, SoracloudError> {
+    match payload.operation {
+        StateMutationOperation::Upsert => {
+            let Some(payload_hex) = payload.value_payload_hex.as_deref() else {
+                return Err(SoracloudError::bad_request(
+                    "value_payload_hex is required for state upserts",
+                ));
+            };
+            let bytes = hex::decode(payload_hex).map_err(|err| {
+                SoracloudError::bad_request(format!("invalid value_payload_hex: {err}"))
+            })?;
+            if bytes.is_empty() {
+                return Err(SoracloudError::bad_request(
+                    "value_payload_hex must encode a non-empty payload",
+                ));
+            }
+            let actual_size = u64::try_from(bytes.len())
+                .map_err(|_| SoracloudError::bad_request("value_payload_hex is too large"))?;
+            if let Some(declared_size) = payload.value_size_bytes
+                && declared_size != actual_size
+            {
+                return Err(SoracloudError::bad_request(format!(
+                    "value_size_bytes {declared_size} does not match value_payload_hex length {actual_size}",
+                )));
+            }
+            Ok(Some(bytes))
+        }
+        StateMutationOperation::Delete => {
+            if payload.value_size_bytes.is_some() || payload.value_payload_hex.is_some() {
+                return Err(SoracloudError::bad_request(
+                    "delete mutations must not include value_size_bytes or value_payload_hex",
+                ));
+            }
+            Ok(None)
+        }
+    }
+}
+
+fn state_mutation_payload_metadata(
+    payload: &StateMutationRequest,
+) -> Result<(Option<u64>, Option<Hash>), SoracloudError> {
+    Ok(match decode_state_mutation_payload(payload)? {
+        Some(bytes) => (
+            Some(
+                u64::try_from(bytes.len())
+                    .map_err(|_| SoracloudError::bad_request("value_payload_hex is too large"))?,
+            ),
+            Some(Hash::new(&bytes)),
+        ),
+        None => (None, None),
     })
 }
 
@@ -4968,6 +5028,7 @@ fn encode_fhe_job_run_signature_payload(
         payload.job.clone(),
         payload.policy.clone(),
         payload.param_set.clone(),
+        payload.evaluation_keys.clone(),
         payload.governance_tx_hash.clone(),
     )
     .map_err(|err| SoracloudError::internal(format!("failed to encode fhe job payload: {err}")))
@@ -9984,6 +10045,13 @@ pub(crate) async fn handle_state_mutation(
     let binding_label = binding_name.to_string();
     let state_key = request.payload.key.clone();
     let operation = request.payload.operation;
+    let value_payload = match decode_state_mutation_payload(&request.payload) {
+        Ok(payload) => payload,
+        Err(err) => return err.into_response(),
+    };
+    let value_size_bytes = value_payload.as_ref().map(|payload| {
+        u64::try_from(payload.len()).expect("payload length already validated for u64")
+    });
     match submit_confirm_and_respond(
         &app,
         signer,
@@ -9992,7 +10060,8 @@ pub(crate) async fn handle_state_mutation(
             binding_name,
             state_key: request.payload.key,
             operation: state_mutation_operation_to_model(request.payload.operation),
-            value_size_bytes: request.payload.value_size_bytes,
+            value_size_bytes,
+            value_payload,
             encryption: request.payload.encryption,
             governance_tx_hash: request.payload.governance_tx_hash,
             provenance: request.provenance,
@@ -10446,6 +10515,7 @@ pub(crate) async fn handle_fhe_job_run(
             job: request.payload.job,
             policy: request.payload.policy,
             param_set: request.payload.param_set,
+            evaluation_keys: request.payload.evaluation_keys,
             governance_tx_hash: request.payload.governance_tx_hash,
             provenance: request.provenance,
         }),
@@ -13244,6 +13314,16 @@ mod tests {
         ))
     }
 
+    fn fixture_bfv_evaluation_key_bundle() -> BfvEvaluationKeyBundle {
+        BfvEvaluationKeyBundle {
+            relinearization_key: iroha_crypto::fhe_bfv::BfvRelinearizationKey {
+                entries: Vec::new(),
+            },
+            rotation_keys: Vec::new(),
+            bootstrap_key: None,
+        }
+    }
+
     fn fixture_decryption_authority_policy() -> DecryptionAuthorityPolicyV1 {
         load_json(&workspace_fixture(
             "fixtures/soracloud/decryption_authority_policy_v1.json",
@@ -14373,7 +14453,8 @@ mod tests {
                         binding_name: binding_name.clone(),
                         state_key: state_key.clone(),
                         encryption: SoraStateEncryptionV1::FheCiphertext,
-                        payload_bytes: NonZeroU64::new(2_048).expect("nonzero"),
+                        payload: b"ciphertext".to_vec(),
+                        payload_bytes: NonZeroU64::new(10).expect("nonzero"),
                         payload_commitment: Hash::new(b"ciphertext"),
                         last_update_sequence: 1,
                         governance_tx_hash,
@@ -16473,10 +16554,12 @@ mod tests {
             binding_name: "private_state".to_owned(),
             key: "/state/private/records/1".to_owned(),
             operation: StateMutationOperation::Upsert,
-            value_size_bytes: Some(512),
+            value_size_bytes: Some(3),
+            value_payload_hex: Some("010203".to_string()),
             encryption: SoraStateEncryptionV1::ClientCiphertext,
             governance_tx_hash,
         };
+        let payload_commitment = Hash::new([1_u8, 2, 3]);
         let encoded =
             encode_state_mutation_signature_payload(&payload).expect("encode signature payload");
         let expected = norito::to_bytes(&(
@@ -16485,6 +16568,7 @@ mod tests {
             payload.key.as_str(),
             "upsert",
             payload.value_size_bytes,
+            Some(payload_commitment),
             payload.encryption,
             governance_tx_hash,
         ))
@@ -16501,6 +16585,7 @@ mod tests {
             key: "/state/private/records/1".to_owned(),
             operation: StateMutationOperation::Delete,
             value_size_bytes: None,
+            value_payload_hex: None,
             encryption: SoraStateEncryptionV1::ClientCiphertext,
             governance_tx_hash,
         };
@@ -16512,6 +16597,7 @@ mod tests {
             payload.key.as_str(),
             "delete",
             None::<u64>,
+            None::<Hash>,
             payload.encryption,
             governance_tx_hash,
         ))
@@ -16524,6 +16610,7 @@ mod tests {
         let job = fixture_fhe_job_spec();
         let policy = fixture_fhe_execution_policy();
         let param_set = fixture_fhe_param_set();
+        let evaluation_keys = fixture_bfv_evaluation_key_bundle();
         let governance_tx_hash = Hash::new(b"governance");
         let payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
@@ -16531,6 +16618,7 @@ mod tests {
             job: job.clone(),
             policy: policy.clone(),
             param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
             governance_tx_hash: governance_tx_hash.clone(),
         };
         let encoded =
@@ -16541,6 +16629,7 @@ mod tests {
             job,
             policy,
             param_set,
+            evaluation_keys,
             governance_tx_hash,
         ))
         .expect("encode canonical tuple");

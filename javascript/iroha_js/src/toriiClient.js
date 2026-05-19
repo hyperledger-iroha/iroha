@@ -15,7 +15,13 @@ import {
   normalizeOpaqueLiteral,
   normalizeRwaId,
 } from "./normalizers.js";
-import { AccountAddressError } from "./address.js";
+import {
+  AccountAddress,
+  AccountAddressError,
+  ensureCurveIdEnabled,
+  normalizeBytes,
+  validatePublicKeyForCurve,
+} from "./address.js";
 import {
   buildDaIngestRequest,
   deriveDaChunkerHandle,
@@ -33,7 +39,10 @@ import {
 import { buildCanonicalRequestHeaders } from "./canonicalRequest.js";
 import { blake2b256 } from "./blake2b.js";
 import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto.js";
-import { getCurveEntryByPublicKeyMulticodec } from "./curveRegistry.js";
+import {
+  getCurveEntryByPublicKeyMulticodec,
+  publicKeyMulticodecForCurveId,
+} from "./curveRegistry.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 
@@ -2288,7 +2297,7 @@ export class ToriiClient {
   /**
    * Resolve an identifier through a hidden-function policy (`POST /v1/identifiers/resolve`).
    * Returns null when the policy or identifier binding is missing (404).
-   * @param {{policyId: string, input?: string, encryptedInput?: string, signal?: AbortSignal}} options
+   * @param {{policyId: string, encryptedInput: string, outputOpening: Record<string, unknown>, signal?: AbortSignal}} options
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async resolveIdentifier(options) {
@@ -2323,11 +2332,11 @@ export class ToriiClient {
   }
 
   /**
-   * Execute one RAM-LFE program from plaintext or BFV-encrypted input
+   * Execute one RAM-LFE program from BFV-encrypted input
    * (`POST /v1/ram-lfe/programs/{program_id}/execute`).
    * Returns null when the program policy is missing (404).
    * @param {string} programId
-   * @param {{inputHex?: string, encryptedInput?: string, signal?: AbortSignal}} options
+   * @param {{encryptedInput: string, signal?: AbortSignal}} options
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async executeRamLfeProgram(programId, options) {
@@ -2416,7 +2425,7 @@ export class ToriiClient {
    * Issue a signed on-chain claim receipt for an account identifier binding.
    * Returns null when the policy or account is missing (404).
    * @param {string} accountId
-   * @param {{policyId: string, input?: string, encryptedInput?: string, signal?: AbortSignal}} options
+   * @param {{policyId: string, encryptedInput: string, outputOpening: Record<string, unknown>, signal?: AbortSignal}} options
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async issueIdentifierClaimReceipt(accountId, options) {
@@ -19849,52 +19858,57 @@ function buildIdentifierResolveRequest(options, context) {
   const record = ensureRecord(options, `${context} options`);
   assertSupportedOptionKeys(
     record,
-    new Set(["policyId", "input", "encryptedInput"]),
+    new Set(["policyId", "input", "encryptedInput", "outputOpening"]),
     `${context} options`,
   );
   const policyId = requireNonEmptyString(record.policyId, `${context}.policyId`);
-  const hasInput = record.input !== undefined && record.input !== null;
-  const hasEncryptedInput = record.encryptedInput !== undefined && record.encryptedInput !== null;
-  if (hasInput === hasEncryptedInput) {
+  if (record.input !== undefined && record.input !== null) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
-      `${context} options must supply exactly one of input or encryptedInput`,
+      `${context} options are encrypted-only; use encryptedInput`,
       `${context}.input`,
     );
   }
-  const payload = { policy_id: policyId };
-  if (hasInput) {
-    payload.input = requireNonEmptyString(record.input, `${context}.input`);
-  } else {
-    payload.encrypted_input = requireHexString(
-      record.encryptedInput,
+  if (record.encryptedInput === undefined || record.encryptedInput === null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} options must supply encryptedInput`,
       `${context}.encryptedInput`,
     );
   }
-  return payload;
+  if (record.outputOpening === undefined || record.outputOpening === null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} options must supply outputOpening`,
+      `${context}.outputOpening`,
+    );
+  }
+  return {
+    policy_id: policyId,
+    encrypted_input: requireHexString(
+      record.encryptedInput,
+      `${context}.encryptedInput`,
+    ),
+    output_opening: normalizeRamLfeOutputOpening(
+      record.outputOpening,
+      `${context}.outputOpening`,
+    ),
+  };
 }
 
 function buildRamLfeExecuteRequest(options, context) {
   const record = ensureRecord(options, `${context} options`);
   assertSupportedOptionKeys(
     record,
-    new Set(["inputHex", "encryptedInput"]),
+    new Set(["encryptedInput"]),
     `${context} options`,
   );
-  const hasInputHex = record.inputHex !== undefined && record.inputHex !== null;
-  const hasEncryptedInput =
-    record.encryptedInput !== undefined && record.encryptedInput !== null;
-  if (hasInputHex === hasEncryptedInput) {
+  if (record.encryptedInput === undefined || record.encryptedInput === null) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
-      `${context} options must supply exactly one of inputHex or encryptedInput`,
-      `${context}.inputHex`,
+      `${context} options must supply encryptedInput`,
+      `${context}.encryptedInput`,
     );
-  }
-  if (hasInputHex) {
-    return {
-      input_hex: requireHexString(record.inputHex, `${context}.inputHex`),
-    };
   }
   return {
     encrypted_input: requireHexString(
@@ -20515,13 +20529,52 @@ function normalizeIdentifierResolutionPayload(
   const record = ensureRecord(payload ?? {}, context);
   return {
     policy_id: requireNonEmptyString(record.policy_id, `${context}.policy_id`),
+    execution: normalizeIdentifierResolutionExecutionPayload(
+      record.execution,
+      `${context}.execution`,
+    ),
+    opening: normalizeRamLfeOutputOpening(record.opening, `${context}.opening`),
     opaque_id: normalizeOpaqueLiteral(record.opaque_id, `${context}.opaque_id`),
-    receipt_hash: normalizeHex32String(record.receipt_hash, `${context}.receipt_hash`),
+    receipt_hash: normalizeHashLike32(record.receipt_hash, `${context}.receipt_hash`),
     uaid: normalizeUaidLiteral(record.uaid, `${context}.uaid`),
     account_id: ToriiClient._requireAccountId(record.account_id, `${context}.account_id`),
-    resolved_at_ms: ToriiClient._normalizeUnsignedInteger(
-      record.resolved_at_ms,
-      `${context}.resolved_at_ms`,
+  };
+}
+
+function normalizeIdentifierResolutionExecutionPayload(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    program_id: requireNonEmptyString(record.program_id, `${context}.program_id`),
+    program_digest: normalizeHashLike32(record.program_digest, `${context}.program_digest`),
+    backend: requireNonEmptyString(record.backend, `${context}.backend`).toLowerCase(),
+    verification_mode: requireNonEmptyString(
+      record.verification_mode,
+      `${context}.verification_mode`,
+    ).toLowerCase(),
+    input_ciphertext_hash: normalizeHashLike32(
+      record.input_ciphertext_hash,
+      `${context}.input_ciphertext_hash`,
+    ),
+    output_ciphertext_hash: normalizeHashLike32(
+      record.output_ciphertext_hash,
+      `${context}.output_ciphertext_hash`,
+    ),
+    parameter_digest: normalizeHashLike32(
+      record.parameter_digest,
+      `${context}.parameter_digest`,
+    ),
+    evaluation_key_digest: normalizeHashLike32(
+      record.evaluation_key_digest,
+      `${context}.evaluation_key_digest`,
+    ),
+    output_hash: normalizeHashLike32(record.output_hash, `${context}.output_hash`),
+    associated_data_hash: normalizeHashLike32(
+      record.associated_data_hash,
+      `${context}.associated_data_hash`,
+    ),
+    executed_at_ms: ToriiClient._normalizeUnsignedInteger(
+      record.executed_at_ms,
+      `${context}.executed_at_ms`,
       { allowZero: true },
     ),
     expires_at_ms:
@@ -20535,42 +20588,99 @@ function normalizeIdentifierResolutionPayload(
   };
 }
 
+function normalizeRamLfeOutputOpening(opening, context) {
+  const record = ensureRecord(opening ?? {}, context);
+  const payload = ensureRecord(record.payload ?? {}, `${context}.payload`);
+  return {
+    payload: {
+      program_id: requireNonEmptyString(payload.program_id, `${context}.payload.program_id`),
+      input_ciphertext_hash: normalizeHashLike32(
+        payload.input_ciphertext_hash,
+        `${context}.payload.input_ciphertext_hash`,
+      ),
+      output_ciphertext_hash: normalizeHashLike32(
+        payload.output_ciphertext_hash,
+        `${context}.payload.output_ciphertext_hash`,
+      ),
+      parameter_digest: normalizeHashLike32(
+        payload.parameter_digest,
+        `${context}.payload.parameter_digest`,
+      ),
+      evaluation_key_digest: normalizeHashLike32(
+        payload.evaluation_key_digest,
+        `${context}.payload.evaluation_key_digest`,
+      ),
+      opened_output_hash: normalizeHashLike32(
+        payload.opened_output_hash,
+        `${context}.payload.opened_output_hash`,
+      ),
+      opened_at_ms: ToriiClient._normalizeUnsignedInteger(
+        payload.opened_at_ms,
+        `${context}.payload.opened_at_ms`,
+        { allowZero: true },
+      ),
+      expires_at_ms:
+        payload.expires_at_ms === undefined || payload.expires_at_ms === null
+          ? null
+          : ToriiClient._normalizeUnsignedInteger(
+            payload.expires_at_ms,
+            `${context}.payload.expires_at_ms`,
+            { allowZero: true },
+          ),
+    },
+    signature: requireHexString(record.signature, `${context}.signature`).toLowerCase(),
+  };
+}
+
+function normalizeIdentifierReceiptAttestation(attestation, context) {
+  const record = ensureRecord(attestation ?? {}, context);
+  const kind = requireNonEmptyString(record.kind, `${context}.kind`).toLowerCase();
+  if (kind === "signed") {
+    if (record.proof_backend !== undefined || record.proof_b64 !== undefined) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} signed attestation must not include proof fields`,
+        context,
+      );
+    }
+    return {
+      kind,
+      signature: requireHexString(record.signature, `${context}.signature`).toUpperCase(),
+    };
+  }
+  if (kind === "proof") {
+    if (record.signature !== undefined && record.signature !== null) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} proof attestation must not include signature`,
+        context,
+      );
+    }
+    return {
+      kind,
+      proof_backend: requireNonEmptyString(record.proof_backend, `${context}.proof_backend`),
+      proof_b64: requireNonEmptyString(record.proof_b64, `${context}.proof_b64`),
+    };
+  }
+  throw createValidationError(
+    ValidationErrorCode.INVALID_OBJECT,
+    `${context}.kind must be signed or proof`,
+    `${context}.kind`,
+  );
+}
+
 function normalizeIdentifierResolveResponse(
   payload,
   context = "identifier resolve response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
-  const result = {
-    policy_id: requireNonEmptyString(record.policy_id, `${context}.policy_id`),
-    opaque_id: normalizeOpaqueLiteral(record.opaque_id, `${context}.opaque_id`),
-    receipt_hash: normalizeHex32String(record.receipt_hash, `${context}.receipt_hash`),
-    uaid: normalizeUaidLiteral(record.uaid, `${context}.uaid`),
-    account_id: ToriiClient._requireAccountId(record.account_id, `${context}.account_id`),
-    resolved_at_ms: ToriiClient._normalizeUnsignedInteger(
-      record.resolved_at_ms,
-      `${context}.resolved_at_ms`,
-      { allowZero: true },
-    ),
-    expires_at_ms:
-      record.expires_at_ms === undefined || record.expires_at_ms === null
-        ? null
-        : ToriiClient._normalizeUnsignedInteger(
-          record.expires_at_ms,
-          `${context}.expires_at_ms`,
-          { allowZero: true },
-        ),
-    backend: requireNonEmptyString(record.backend, `${context}.backend`),
-    signature: requireHexString(record.signature, `${context}.signature`).toUpperCase(),
-    signature_payload_hex: requireHexString(
-      record.signature_payload_hex,
-      `${context}.signature_payload_hex`,
-    ).toUpperCase(),
-    signature_payload: normalizeIdentifierResolutionPayload(
-      record.signature_payload,
-      `${context}.signature_payload`,
+  return {
+    payload: normalizeIdentifierResolutionPayload(record.payload, `${context}.payload`),
+    attestation: normalizeIdentifierReceiptAttestation(
+      record.attestation,
+      `${context}.attestation`,
     ),
   };
-  return result;
 }
 
 function normalizeIdentifierClaimLookupResponse(
@@ -20609,6 +20719,10 @@ function normalizeRamLfeExecuteResponse(
     program_id: requireNonEmptyString(record.program_id, `${context}.program_id`),
     opaque_hash: requireNonEmptyString(record.opaque_hash, `${context}.opaque_hash`),
     receipt_hash: requireNonEmptyString(record.receipt_hash, `${context}.receipt_hash`),
+    output_ciphertext: requireHexString(
+      record.output_ciphertext,
+      `${context}.output_ciphertext`,
+    ),
     output_hash: requireNonEmptyString(record.output_hash, `${context}.output_hash`),
     associated_data_hash: requireNonEmptyString(
       record.associated_data_hash,
@@ -26246,21 +26360,322 @@ function irohaPrehash(messageBytes) {
   return digest;
 }
 
-function assertIdentifierReceiptPayloadMatchesTopLevel(receipt, context) {
-  const payload = receipt.signature_payload;
-  const mismatches = [
-    ["policy_id", payload.policy_id, receipt.policy_id],
-    ["opaque_id", payload.opaque_id, receipt.opaque_id],
-    ["receipt_hash", payload.receipt_hash, receipt.receipt_hash],
-    ["uaid", payload.uaid, receipt.uaid],
-    ["account_id", payload.account_id, receipt.account_id],
-    ["resolved_at_ms", payload.resolved_at_ms, receipt.resolved_at_ms],
-    ["expires_at_ms", payload.expires_at_ms, receipt.expires_at_ms],
-  ].filter(([, payloadValue, topLevelValue]) => payloadValue !== topLevelValue);
-  if (mismatches.length > 0) {
-    const [field] = mismatches[0];
-    throw new Error(`${context} top-level receipt fields do not match signature_payload.${field}`);
+function identifierCanonicalU32(value) {
+  const buffer = Buffer.allocUnsafe(4);
+  buffer.writeUInt32LE(value, 0);
+  return buffer;
+}
+
+function identifierNormalizeUnsignedBigInt(value, context) {
+  if (typeof value === "bigint") {
+    if (value < 0n) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${context} must be a non-negative integer`,
+        context,
+      );
+    }
+    return value;
   }
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || value < 0 || !Number.isSafeInteger(value)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${context} must be a non-negative safe integer`,
+        context,
+      );
+    }
+    return BigInt(value);
+  }
+  if (typeof value === "string" && /^[0-9]+$/.test(value.trim())) {
+    return BigInt(value.trim());
+  }
+  throw createValidationError(
+    ValidationErrorCode.INVALID_NUMERIC,
+    `${context} must be a non-negative integer`,
+    context,
+  );
+}
+
+function identifierCanonicalU64(value, context) {
+  const bigint = identifierNormalizeUnsignedBigInt(value, context);
+  if (bigint > UINT64_MASK) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context} must fit in u64`,
+      context,
+    );
+  }
+  const buffer = Buffer.allocUnsafe(8);
+  buffer.writeBigUInt64LE(bigint, 0);
+  return buffer;
+}
+
+function identifierCanonicalCompactLength(value) {
+  let remaining = BigInt(value);
+  const bytes = [];
+  while (remaining >= 0x80n) {
+    bytes.push(Number((remaining & 0x7fn) | 0x80n));
+    remaining >>= 7n;
+  }
+  bytes.push(Number(remaining));
+  return Buffer.from(bytes);
+}
+
+function identifierCanonicalSizedField(payload) {
+  const bytes = Buffer.from(payload);
+  return Buffer.concat([identifierCanonicalCompactLength(bytes.length), bytes]);
+}
+
+function identifierCanonicalString(value, context) {
+  return Buffer.concat([
+    identifierCanonicalCompactLength(Buffer.byteLength(requireNonEmptyString(value, context))),
+    Buffer.from(requireNonEmptyString(value, context), "utf8"),
+  ]);
+}
+
+function identifierCanonicalByteVec(bytes) {
+  const payload = Buffer.from(bytes);
+  const parts = [identifierCanonicalU64(payload.length, "byteVec.length")];
+  for (const byte of payload) {
+    parts.push(identifierCanonicalCompactLength(1), Buffer.from([byte]));
+  }
+  return Buffer.concat(parts);
+}
+
+function identifierCanonicalOptionalU64(value, context) {
+  if (value === null || value === undefined) {
+    return Buffer.from([0]);
+  }
+  return Buffer.concat([
+    Buffer.from([1]),
+    identifierCanonicalSizedField(identifierCanonicalU64(value, context)),
+  ]);
+}
+
+function identifierPolicyIdPayload(raw) {
+  const parts = requireNonEmptyString(raw, "payload.policy_id").split("#", 2);
+  if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "payload.policy_id must use kind#rule",
+      "payload.policy_id",
+    );
+  }
+  return Buffer.concat([
+    identifierCanonicalSizedField(identifierCanonicalString(parts[0].trim(), "payload.policy_id.kind")),
+    identifierCanonicalSizedField(identifierCanonicalString(parts[1].trim(), "payload.policy_id.rule")),
+  ]);
+}
+
+function identifierProgramIdPayload(raw) {
+  return identifierCanonicalSizedField(
+    identifierCanonicalString(raw, "payload.execution.program_id"),
+  );
+}
+
+function identifierBackendTag(raw) {
+  switch (requireNonEmptyString(raw, "payload.execution.backend").trim().toLowerCase()) {
+    case "hkdf-sha3-512-prf-v1":
+      return 0;
+    case "bfv-affine-sha3-256-v1":
+      return 1;
+    case "bfv-programmed-sha3-256-v1":
+      return 2;
+    default:
+      throw new Error(`unsupported RAM-LFE backend: ${raw}`);
+  }
+}
+
+function identifierVerificationModeTag(raw) {
+  switch (requireNonEmptyString(raw, "payload.execution.verification_mode").trim().toLowerCase()) {
+    case "signed":
+      return 0;
+    case "proof":
+      return 1;
+    default:
+      throw new Error(`unsupported RAM-LFE verification mode: ${raw}`);
+  }
+}
+
+function identifierHashBytes(raw, field) {
+  return Buffer.from(normalizeHashLike32(raw, field), "hex");
+}
+
+function identifierPrefixedHashBytes(raw, prefix, field) {
+  const literal = requireNonEmptyString(raw, field).trim();
+  const body = literal.toLowerCase().startsWith(prefix) ? literal.slice(prefix.length) : literal;
+  return identifierHashBytes(body, field);
+}
+
+function identifierOpaqueHashPayload(raw, prefix, field) {
+  const hash = identifierPrefixedHashBytes(raw, prefix, field);
+  return Buffer.concat([identifierCanonicalCompactLength(hash.length), hash]);
+}
+
+function publicKeyLiteralFromParts(curve, publicKey, context) {
+  ensureCurveIdEnabled(curve, context);
+  const bytes = Buffer.from(normalizeBytes(publicKey));
+  validatePublicKeyForCurve(curve, bytes, context);
+  const multicodec = publicKeyMulticodecForCurveId(curve);
+  if (multicodec === null) {
+    throw new Error(`${context} uses unsupported public-key curve ${curve}`);
+  }
+  return Buffer.concat([
+    identifierCanonicalCompactLength(multicodec),
+    identifierCanonicalCompactLength(bytes.length),
+    bytes,
+  ]).toString("hex").toUpperCase();
+}
+
+function identifierPublicKeyPayload(controller, context) {
+  return identifierCanonicalString(
+    publicKeyLiteralFromParts(controller.curve, controller.publicKey, context),
+    context,
+  );
+}
+
+function identifierMultisigMemberPayload(member, context) {
+  return Buffer.concat([
+    identifierCanonicalSizedField(
+      identifierCanonicalString(
+        publicKeyLiteralFromParts(member.curve, member.publicKey, `${context}.publicKey`),
+        `${context}.publicKey`,
+      ),
+    ),
+    identifierCanonicalSizedField(identifierCanonicalU16(member.weight, `${context}.weight`)),
+  ]);
+}
+
+function identifierCanonicalU16(value, context) {
+  const integer = Number(identifierNormalizeUnsignedBigInt(value, context));
+  if (!Number.isInteger(integer) || integer < 0 || integer > 0xffff) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context} must fit in u16`,
+      context,
+    );
+  }
+  const buffer = Buffer.allocUnsafe(2);
+  buffer.writeUInt16LE(integer, 0);
+  return buffer;
+}
+
+function identifierNoritoVec(values, encode, context) {
+  const parts = [identifierCanonicalU64(values.length, `${context}.length`)];
+  values.forEach((value, index) => {
+    parts.push(identifierCanonicalSizedField(encode(value, index)));
+  });
+  return Buffer.concat(parts);
+}
+
+function identifierMultisigPolicyPayload(policy, context) {
+  if (!Array.isArray(policy.members) || policy.members.length === 0) {
+    throw new Error(`${context} multisig policy must contain at least one member`);
+  }
+  return Buffer.concat([
+    identifierCanonicalSizedField(identifierCanonicalU8(policy.version, `${context}.version`)),
+    identifierCanonicalSizedField(identifierCanonicalU16(policy.threshold, `${context}.threshold`)),
+    identifierCanonicalSizedField(
+      identifierNoritoVec(
+        policy.members,
+        (member, index) => identifierMultisigMemberPayload(member, `${context}.members[${index}]`),
+        `${context}.members`,
+      ),
+    ),
+  ]);
+}
+
+function identifierCanonicalU8(value, context) {
+  const integer = Number(identifierNormalizeUnsignedBigInt(value, context));
+  if (!Number.isInteger(integer) || integer < 0 || integer > 0xff) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context} must fit in u8`,
+      context,
+    );
+  }
+  return Buffer.from([integer]);
+}
+
+function identifierAccountIdPayload(accountId, context) {
+  const literal = ToriiClient._requireAccountId(accountId, context);
+  const address = AccountAddress.fromI105(literal);
+  const controller = address._controller;
+  if (!controller || typeof controller.tag !== "number") {
+    throw new Error(`${context} could not resolve account controller information`);
+  }
+  switch (controller.tag) {
+    case 0:
+      return Buffer.concat([
+        identifierCanonicalU32(0),
+        identifierCanonicalSizedField(identifierPublicKeyPayload(controller, context)),
+      ]);
+    case 1:
+      return Buffer.concat([
+        identifierCanonicalU32(1),
+        identifierCanonicalSizedField(identifierMultisigPolicyPayload(controller, context)),
+      ]);
+    default:
+      throw new Error(`${context} uses unsupported account controller tag ${controller.tag}`);
+  }
+}
+
+function identifierExecutionPayload(execution) {
+  return Buffer.concat([
+    identifierCanonicalSizedField(identifierProgramIdPayload(execution.program_id)),
+    identifierCanonicalSizedField(identifierHashBytes(execution.program_digest, "payload.execution.program_digest")),
+    identifierCanonicalSizedField(identifierCanonicalU32(identifierBackendTag(execution.backend))),
+    identifierCanonicalSizedField(identifierCanonicalU32(identifierVerificationModeTag(execution.verification_mode))),
+    identifierCanonicalSizedField(identifierHashBytes(execution.input_ciphertext_hash, "payload.execution.input_ciphertext_hash")),
+    identifierCanonicalSizedField(identifierHashBytes(execution.output_ciphertext_hash, "payload.execution.output_ciphertext_hash")),
+    identifierCanonicalSizedField(identifierHashBytes(execution.parameter_digest, "payload.execution.parameter_digest")),
+    identifierCanonicalSizedField(identifierHashBytes(execution.evaluation_key_digest, "payload.execution.evaluation_key_digest")),
+    identifierCanonicalSizedField(identifierHashBytes(execution.output_hash, "payload.execution.output_hash")),
+    identifierCanonicalSizedField(identifierHashBytes(execution.associated_data_hash, "payload.execution.associated_data_hash")),
+    identifierCanonicalSizedField(identifierCanonicalU64(execution.executed_at_ms, "payload.execution.executed_at_ms")),
+    identifierCanonicalSizedField(identifierCanonicalOptionalU64(execution.expires_at_ms, "payload.execution.expires_at_ms")),
+  ]);
+}
+
+function identifierOutputOpeningPayload(openingPayload) {
+  return Buffer.concat([
+    identifierCanonicalSizedField(identifierProgramIdPayload(openingPayload.program_id)),
+    identifierCanonicalSizedField(identifierHashBytes(openingPayload.input_ciphertext_hash, "payload.opening.payload.input_ciphertext_hash")),
+    identifierCanonicalSizedField(identifierHashBytes(openingPayload.output_ciphertext_hash, "payload.opening.payload.output_ciphertext_hash")),
+    identifierCanonicalSizedField(identifierHashBytes(openingPayload.parameter_digest, "payload.opening.payload.parameter_digest")),
+    identifierCanonicalSizedField(identifierHashBytes(openingPayload.evaluation_key_digest, "payload.opening.payload.evaluation_key_digest")),
+    identifierCanonicalSizedField(identifierHashBytes(openingPayload.opened_output_hash, "payload.opening.payload.opened_output_hash")),
+    identifierCanonicalSizedField(identifierCanonicalU64(openingPayload.opened_at_ms, "payload.opening.payload.opened_at_ms")),
+    identifierCanonicalSizedField(identifierCanonicalOptionalU64(openingPayload.expires_at_ms, "payload.opening.payload.expires_at_ms")),
+  ]);
+}
+
+function identifierOutputOpening(opening) {
+  return Buffer.concat([
+    identifierCanonicalSizedField(identifierOutputOpeningPayload(opening.payload)),
+    identifierCanonicalSizedField(
+      identifierCanonicalByteVec(Buffer.from(opening.signature, "hex")),
+    ),
+  ]);
+}
+
+function identifierReceiptPayload(payload) {
+  return Buffer.concat([
+    identifierCanonicalSizedField(identifierPolicyIdPayload(payload.policy_id)),
+    identifierCanonicalSizedField(identifierExecutionPayload(payload.execution)),
+    identifierCanonicalSizedField(identifierOutputOpening(payload.opening)),
+    identifierCanonicalSizedField(identifierOpaqueHashPayload(payload.opaque_id, "opaque:", "payload.opaque_id")),
+    identifierCanonicalSizedField(identifierHashBytes(payload.receipt_hash, "payload.receipt_hash")),
+    identifierCanonicalSizedField(identifierOpaqueHashPayload(payload.uaid, "uaid:", "payload.uaid")),
+    identifierCanonicalSizedField(identifierAccountIdPayload(payload.account_id, "payload.account_id")),
+  ]);
+}
+
+export function encodeIdentifierResolutionReceiptPayload(payload) {
+  return identifierReceiptPayload(
+    normalizeIdentifierResolutionPayload(payload, "encodeIdentifierResolutionReceiptPayload.payload"),
+  );
 }
 
 export function getIdentifierBfvPublicParameters(policySummary) {
@@ -26309,7 +26724,7 @@ export function buildIdentifierRequestForPolicy(policySummary, options = {}) {
   const record = ensureRecord(options, "buildIdentifierRequestForPolicy options");
   assertSupportedOptionKeys(
     record,
-    new Set(["input", "encryptedInput", "encrypt", "seed", "seedHex"]),
+    new Set(["input", "encryptedInput", "encrypt", "seed", "seedHex", "outputOpening"]),
     "buildIdentifierRequestForPolicy options",
   );
   const hasInput = record.input !== undefined && record.input !== null;
@@ -26323,31 +26738,39 @@ export function buildIdentifierRequestForPolicy(policySummary, options = {}) {
       "buildIdentifierRequestForPolicy.input",
     );
   }
+  if (record.outputOpening === undefined || record.outputOpening === null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "buildIdentifierRequestForPolicy options must supply outputOpening",
+      "buildIdentifierRequestForPolicy.outputOpening",
+    );
+  }
   if ((record.seed !== undefined && record.seed !== null) || (record.seedHex !== undefined && record.seedHex !== null)) {
     if (!hasInput || !encrypt) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        "buildIdentifierRequestForPolicy options may only supply seed/seedHex when encrypting plaintext input",
+        "buildIdentifierRequestForPolicy options may only supply seed/seedHex when encrypting client-side input",
         "buildIdentifierRequestForPolicy.seed",
       );
     }
   }
   if (hasInput) {
-    if (encrypt) {
-      return {
-        policyId: normalizedPolicy.policy_id,
-        encryptedInput: encryptIdentifierInputForPolicy(normalizedPolicy, record.input, {
-          seed: record.seed,
-          seedHex: record.seedHex,
-        }),
-      };
+    if (!encrypt) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "buildIdentifierRequestForPolicy options are encrypted-only; set encrypt: true",
+        "buildIdentifierRequestForPolicy.encrypt",
+      );
     }
     return {
       policyId: normalizedPolicy.policy_id,
-      input: normalizeIdentifierInput(
-        record.input,
-        normalizedPolicy.normalization,
-        "buildIdentifierRequestForPolicy.input",
+      encryptedInput: encryptIdentifierInputForPolicy(normalizedPolicy, record.input, {
+        seed: record.seed,
+        seedHex: record.seedHex,
+      }),
+      outputOpening: normalizeRamLfeOutputOpening(
+        record.outputOpening,
+        "buildIdentifierRequestForPolicy.outputOpening",
       ),
     };
   }
@@ -26362,6 +26785,10 @@ export function buildIdentifierRequestForPolicy(policySummary, options = {}) {
       record.encryptedInput,
       "buildIdentifierRequestForPolicy.encryptedInput",
     ),
+    outputOpening: normalizeRamLfeOutputOpening(
+      record.outputOpening,
+      "buildIdentifierRequestForPolicy.outputOpening",
+    ),
   };
 }
 
@@ -26374,18 +26801,17 @@ export function verifyIdentifierResolutionReceipt(receipt, policySummary) {
     policySummary,
     "verifyIdentifierResolutionReceipt.policy",
   );
-  if (normalizedReceipt.policy_id !== normalizedPolicy.policy_id) {
+  if (normalizedReceipt.payload.policy_id !== normalizedPolicy.policy_id) {
     throw new Error(
-      `verifyIdentifierResolutionReceipt: receipt policy ${normalizedReceipt.policy_id} does not match policy ${normalizedPolicy.policy_id}`,
+      `verifyIdentifierResolutionReceipt: receipt policy ${normalizedReceipt.payload.policy_id} does not match policy ${normalizedPolicy.policy_id}`,
     );
   }
-  assertIdentifierReceiptPayloadMatchesTopLevel(
-    normalizedReceipt,
-    "verifyIdentifierResolutionReceipt.receipt",
-  );
-  const signedPayload = Buffer.from(normalizedReceipt.signature_payload_hex, "hex");
+  if (normalizedReceipt.attestation.kind !== "signed") {
+    throw new Error("verifyIdentifierResolutionReceipt: proof attestations require an external verifier");
+  }
+  const signedPayload = identifierReceiptPayload(normalizedReceipt.payload);
   const prehash = irohaPrehash(signedPayload);
-  const signature = Buffer.from(normalizedReceipt.signature, "hex");
+  const signature = Buffer.from(normalizedReceipt.attestation.signature, "hex");
   const verifyingKey = decodeIdentifierReceiptPublicKey(
     normalizedPolicy.resolver_public_key,
     "verifyIdentifierResolutionReceipt.policy.resolver_public_key",

@@ -1,7 +1,6 @@
 // Domain operations sample (Kotodama).
 // Demonstrates domain builtins using pointer constructors and CoreHost bridging.
 seiyaku DomainOps {
-  #[access(read="*", write="*")]
   kotoage fn run() permission(Admin) {
     // Register a new domain by id
     let domain_id = domain!("wonder.universal");

@@ -1110,10 +1110,10 @@ pub enum Terminator {
 
 /// Lower a semantically checked program into IR.
 pub fn lower(program: &TypedProgram) -> Result<Program, String> {
-    lower_with_cap(program, 2)
+    lower_with_cap(program, crate::semantic::DYNAMIC_ITERATION_LIMIT as usize)
 }
 
-/// Lower with a specific dynamic-iteration cap used for feature-gated dynamic bounds.
+/// Lower with the first-release dynamic-iteration cap.
 pub fn lower_with_cap(program: &TypedProgram, dyn_iter_cap: usize) -> Result<Program, String> {
     lower_with_cap_and_test_mode(program, dyn_iter_cap, false)
 }
@@ -1881,10 +1881,39 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             dyn_count: Some(dyn_n),
             dyn_start,
         } => {
-            let base = lower_expr(ctx, map, vars);
-            let base_start_lit: i16 = (*start as i16).max(0);
             // Lower dynamic `n` once
             let n = lower_expr(ctx, dyn_n, vars);
+            if let Some(base_name) = state_map_base_name(map)
+                && let Some(spec) = ctx.state_map_configs.get(&base_name)
+                && matches!(key_codec_for_type(&spec.key), Some(KeyCodec::Int))
+                && let Some(value_codec) = value_codec_for_type(&spec.value)
+            {
+                let start_temp = if let Some(ds) = dyn_start {
+                    lower_expr(ctx, ds, vars)
+                } else {
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const {
+                        dest: t,
+                        value: (*start).min(i64::MAX as usize) as i64,
+                    });
+                    t
+                };
+                lower_state_foreach_int_map_dynamic(
+                    ctx,
+                    key,
+                    value,
+                    body,
+                    start_temp,
+                    n,
+                    &base_name,
+                    value_codec,
+                    vars,
+                );
+                return;
+            }
+
+            let base = lower_expr(ctx, map, vars);
+            let base_start_lit: i16 = (*start as i16).max(0);
             // Guarded unrolling up to cap
             for i in 0..ctx._dyn_iter_cap {
                 // cond = (i < n)
@@ -2189,6 +2218,108 @@ fn lower_state_foreach_int_map(
     let blob = ctx.new_temp();
     ctx.current_instr(Instr::StateGet { dest: blob, path });
     // Skip body when entry is absent (blob == 0).
+    let zero = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: zero,
+        value: 0,
+    });
+    let has_value = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: has_value,
+        op: BinaryOp::Ne,
+        left: blob,
+        right: zero,
+    });
+    let present_bb = ctx.new_label();
+    ctx.finish_current(Terminator::Branch {
+        cond: has_value,
+        then_bb: present_bb,
+        else_bb: step_label,
+    });
+
+    ctx.start_block(present_bb);
+    let value_temp = decode_value_from_norito(ctx, blob, &value_codec);
+    let key_temp = ctx.new_temp();
+    ctx.current_instr(Instr::Copy {
+        dest: key_temp,
+        src: index,
+    });
+    let mut body_vars = vars.clone();
+    body_vars.insert(key.to_string(), key_temp);
+    if let Some(val_name) = value {
+        body_vars.insert(val_name.clone(), value_temp);
+    }
+    ctx.push_loop(step_label, exit_label);
+    lower_block(ctx, body, &mut body_vars);
+    ctx.pop_loop();
+    ctx.finish_current(Terminator::Jump(step_label));
+
+    ctx.start_block(step_label);
+    ctx.current_instr(Instr::Binary {
+        dest: index,
+        op: BinaryOp::Add,
+        left: index,
+        right: one,
+    });
+    ctx.finish_current(Terminator::Jump(loop_label));
+
+    ctx.start_block(exit_label);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_state_foreach_int_map_dynamic(
+    ctx: &mut LowerCtx,
+    key: &str,
+    value: &Option<String>,
+    body: &TypedBlock,
+    start: Temp,
+    count: Temp,
+    base_name: &str,
+    value_codec: ValueCodec,
+    vars: &mut HashMap<String, Temp>,
+) {
+    let index = ctx.new_temp();
+    ctx.current_instr(Instr::Copy {
+        dest: index,
+        src: start,
+    });
+    let limit = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: limit,
+        op: BinaryOp::Add,
+        left: start,
+        right: count,
+    });
+    let one = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: one,
+        value: 1,
+    });
+
+    let loop_label = ctx.new_label();
+    let body_label = ctx.new_label();
+    let step_label = ctx.new_label();
+    let exit_label = ctx.new_label();
+    ctx.finish_current(Terminator::Jump(loop_label));
+
+    ctx.start_block(loop_label);
+    let cond_t = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: cond_t,
+        op: BinaryOp::Lt,
+        left: index,
+        right: limit,
+    });
+    ctx.finish_current(Terminator::Branch {
+        cond: cond_t,
+        then_bb: body_label,
+        else_bb: exit_label,
+    });
+
+    ctx.start_block(body_label);
+    let path = build_state_path(ctx, base_name, index, &KeyCodec::Int);
+    let blob = ctx.new_temp();
+    ctx.current_instr(Instr::StateGet { dest: blob, path });
     let zero = ctx.new_temp();
     ctx.current_instr(Instr::Const {
         dest: zero,
@@ -5334,7 +5465,7 @@ struct LowerCtx {
     state_name_literals: HashMap<String, String>,
     /// Runtime Name roots for `state` helper parameters.
     state_runtime_roots: HashMap<String, Temp>,
-    /// Dynamic iteration cap for feature-gated dynamic bounds.
+    /// Dynamic iteration cap for first-release dynamic bounds.
     _dyn_iter_cap: usize,
     call_renames: HashMap<String, String>,
     function_param_specs: HashMap<String, Vec<TypedParam>>,
@@ -5637,7 +5768,6 @@ mod tests {
     fn test_mode_entrypoint_wrapper_checks_override_state_first() {
         let src = r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> int { return count; }
             }
         "#;
@@ -5683,7 +5813,6 @@ mod tests {
     fn invoke_entrypoint_lowers_to_wrapper_call_with_override_restore() {
         let src = r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> int { return count + 1; }
 
                 #[test]
@@ -5748,7 +5877,6 @@ mod tests {
     fn invoke_entrypoint_tuple_return_uses_wrapper_callmulti() {
         let src = r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> (int, int) { return (count, count + 1); }
 
                 #[test]
@@ -5797,7 +5925,6 @@ mod tests {
     fn invoke_entrypoint_as_lowers_to_test_host_intrinsics() {
         let src = r#"
             seiyaku Demo {
-                #[access(read="*", write="*")]
                 kotoage fn run(count: int) -> int { return count + 1; }
 
                 #[test]

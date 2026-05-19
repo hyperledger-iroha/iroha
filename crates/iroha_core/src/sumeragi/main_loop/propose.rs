@@ -708,8 +708,7 @@ impl Actor {
                     break;
                 }
             }
-            let fetch_cap = NonZeroUsize::new(remaining_budget.min(remaining_slots))
-                .expect("non-zero by construction");
+            let fetch_cap = NonZeroUsize::new(remaining_budget).expect("non-zero by construction");
             let mut fetched = Vec::new();
             self.queue
                 .get_transactions_for_block_with_state(state, fetch_cap, &mut fetched);
@@ -727,17 +726,34 @@ impl Actor {
                 deferred_accumulator.extend(deferred);
             }
 
-            let mut accepted = Vec::with_capacity(fetched.len());
-            for guard in fetched {
-                let release_lane_consumption =
-                    |guard: &crate::queue::TransactionGuard,
-                     lane_consumption: &mut BTreeMap<LaneId, u64>| {
-                        let lane_id = guard.routing().lane_id;
-                        let teu = guard.teu_weight();
-                        if let Some(used) = lane_consumption.get_mut(&lane_id) {
-                            *used = used.saturating_sub(teu);
-                        }
-                    };
+            let fetched_routing: Vec<RoutingDecision> = fetched
+                .iter()
+                .map(crate::queue::TransactionGuard::routing)
+                .collect();
+            let order = interleave_lane_indices_for_slot(&fetched_routing, height, view);
+            let mut fetched_slots: Vec<Option<crate::queue::TransactionGuard>> =
+                fetched.into_iter().map(Some).collect();
+            let mut accepted = Vec::with_capacity(remaining_slots.min(fetched_slots.len()));
+            let release_lane_consumption =
+                |guard: &crate::queue::TransactionGuard,
+                 lane_consumption: &mut BTreeMap<LaneId, u64>| {
+                    let lane_id = guard.routing().lane_id;
+                    let teu = guard.teu_weight();
+                    if let Some(used) = lane_consumption.get_mut(&lane_id) {
+                        *used = used.saturating_sub(teu);
+                    }
+                };
+
+            for idx in order {
+                let Some(guard) = fetched_slots.get_mut(idx).and_then(Option::take) else {
+                    continue;
+                };
+
+                if tx_guards.len().saturating_add(accepted.len()) >= max_in_block.get() {
+                    release_lane_consumption(&guard, &mut lane_consumption);
+                    deferred_accumulator.push((guard.clone_accepted(), guard.routing()));
+                    continue;
+                }
 
                 let is_ivm_heavy =
                     Self::is_ivm_heavy_transaction(guard.as_accepted(), replay_ivm_proved);
@@ -2061,7 +2077,7 @@ impl Actor {
         if transactions.len() > 1 {
             // Lane interleaving is a budget-selection policy only. The default block builder
             // still canonicalizes normal-lane payload order by entrypoint hash for consensus.
-            let order = interleave_lane_indices(&routing_decisions);
+            let order = interleave_lane_indices_for_slot(&routing_decisions, height, view);
 
             if order.iter().enumerate().any(|(idx, &value)| idx != value) {
                 fn reorder_vec<T: Clone>(vec: &mut Vec<T>, order: &[usize]) {

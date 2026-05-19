@@ -39,6 +39,8 @@ use tokio::runtime::Runtime;
 
 const DOMAIN_REGISTRATION_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60);
 const DOMAIN_REGISTRATION_RECOVERY_POLL: Duration = Duration::from_millis(250);
+const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(30);
+const ACCOUNT_VISIBILITY_POLL: Duration = Duration::from_millis(100);
 
 fn start_network(
     builder: NetworkBuilder,
@@ -115,6 +117,43 @@ fn wait_for_domain_visibility(
         })
     } else {
         Ok(false)
+    }
+}
+
+fn find_account(client: &Client, account_id: &AccountId) -> Result<Option<Account>> {
+    Ok(client
+        .query(FindAccounts::new())
+        .execute_all()?
+        .into_iter()
+        .find(|account| account.id() == account_id))
+}
+
+fn wait_for_account_visibility(
+    client: &Client,
+    account_id: &AccountId,
+    context: &str,
+) -> Result<Account> {
+    let deadline = Instant::now() + ACCOUNT_VISIBILITY_TIMEOUT;
+    let mut last_error = None;
+
+    while Instant::now() < deadline {
+        match find_account(client, account_id) {
+            Ok(Some(account)) => return Ok(account),
+            Ok(None) => {}
+            Err(err) => last_error = Some(err),
+        }
+
+        std::thread::sleep(ACCOUNT_VISIBILITY_POLL);
+    }
+
+    if let Some(err) = last_error {
+        Err(err).wrap_err_with(|| {
+            format!("timed out waiting for account `{account_id}` visibility after {context}")
+        })
+    } else {
+        Err(eyre!(
+            "timed out waiting for account `{account_id}` visibility after {context}"
+        ))
     }
 }
 
@@ -930,16 +969,12 @@ fn multisig_register_materializes_missing_signatory_account() -> Result<()> {
             MultisigRegister::with_account(seed_account, domain.clone(), spec).into(),
         )?;
 
-    let fetch_account = |id: &AccountId| {
-        test_client
-            .query(FindAccounts::new())
-            .execute_all()
-            .ok()
-            .and_then(|accounts| accounts.into_iter().find(|account| account.id() == id))
-    };
     let created_via_key: Name = "iroha:created_via".parse().unwrap();
-    let created = fetch_account(&missing_signer.0)
-        .expect("missing signatory account should be created during multisig register");
+    let created = wait_for_account_visibility(
+        &test_client,
+        &missing_signer.0,
+        "multisig register materialization",
+    )?;
     assert_eq!(
         created.metadata().get(&created_via_key),
         Some(&Json::new("multisig")),
@@ -992,12 +1027,11 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account() -
         .expect("non-signatory should register multisig without a separate grant");
 
     let created_via_key: Name = "iroha:created_via".parse().unwrap();
-    let created = test_client
-        .query(FindAccounts::new())
-        .execute_all()?
-        .into_iter()
-        .find(|account| account.id() == &missing_signer.0)
-        .expect("missing signatory account should be created during multisig register");
+    let created = wait_for_account_visibility(
+        &test_client,
+        &missing_signer.0,
+        "non-signatory multisig register materialization",
+    )?;
     assert_eq!(
         created.metadata().get(&created_via_key),
         Some(&Json::new("multisig")),
@@ -1049,12 +1083,11 @@ fn multisig_register_materializes_missing_signatory_account_after_executor_upgra
         )?;
 
     let created_via_key: Name = "iroha:created_via".parse().unwrap();
-    let created = test_client
-        .query(FindAccounts::new())
-        .execute_all()?
-        .into_iter()
-        .find(|account| account.id() == &missing_signer.0)
-        .expect("missing signatory account should be created during multisig register");
+    let created = wait_for_account_visibility(
+        &test_client,
+        &missing_signer.0,
+        "post-upgrade multisig register materialization",
+    )?;
     assert_eq!(
         created.metadata().get(&created_via_key),
         Some(&Json::new("multisig")),
@@ -1112,12 +1145,11 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
         .expect("non-signatory should register multisig without a separate grant");
 
     let created_via_key: Name = "iroha:created_via".parse().unwrap();
-    let created = test_client
-        .query(FindAccounts::new())
-        .execute_all()?
-        .into_iter()
-        .find(|account| account.id() == &missing_signer.0)
-        .expect("missing signatory account should be created during multisig register");
+    let created = wait_for_account_visibility(
+        &test_client,
+        &missing_signer.0,
+        "non-signatory post-upgrade multisig register materialization",
+    )?;
     assert_eq!(
         created.metadata().get(&created_via_key),
         Some(&Json::new("multisig")),
@@ -1162,15 +1194,8 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
     let multisig_account_id = canonical_multisig_account_id(&spec);
 
     let missing_signer = gen_account_in(&domain);
-    let fetch_account = |id: &AccountId| {
-        test_client
-            .query(FindAccounts::new())
-            .execute_all()
-            .ok()
-            .and_then(|accounts| accounts.into_iter().find(|account| account.id() == id))
-    };
     assert!(
-        fetch_account(&missing_signer.0).is_none(),
+        find_account(&test_client, &missing_signer.0)?.is_none(),
         "precondition: missing signatory must not exist"
     );
 
@@ -1180,8 +1205,11 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
         )?;
 
     let created_via_key: Name = "iroha:created_via".parse().unwrap();
-    let created = fetch_account(&missing_signer.0)
-        .expect("missing signatory account should be created by add-signatory");
+    let created = wait_for_account_visibility(
+        &test_client,
+        &missing_signer.0,
+        "multisig add-signatory materialization",
+    )?;
     assert_eq!(
         created.metadata().get(&created_via_key),
         Some(&Json::new("multisig")),
@@ -1229,11 +1257,7 @@ fn multisig_add_signatory_rejected_does_not_materialize_missing_account() -> Res
     let missing_signer = gen_account_in(&domain);
     let ghost_authority = gen_account_in(&domain);
     assert!(
-        test_client
-            .query(FindAccounts::new())
-            .execute_all()?
-            .into_iter()
-            .all(|account| account.id() != &ghost_authority.0),
+        find_account(&test_client, &ghost_authority.0)?.is_none(),
         "precondition: authority account must not exist on ledger"
     );
     let _err = alt_client(ghost_authority, &test_client)
@@ -1242,11 +1266,7 @@ fn multisig_add_signatory_rejected_does_not_materialize_missing_account() -> Res
         )
         .expect_err("missing authority must not add signatory");
 
-    let missing_found = test_client
-        .query(FindAccounts::new())
-        .execute_all()?
-        .into_iter()
-        .any(|account| account.id() == &missing_signer.0);
+    let missing_found = find_account(&test_client, &missing_signer.0)?.is_some();
     assert!(
         !missing_found,
         "rejected add-signatory must not materialize missing accounts"

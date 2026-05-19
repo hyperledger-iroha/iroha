@@ -92,7 +92,7 @@ Scalar အမျိုးအစားများ
 
 မြင်နိုင်စွမ်း
 - `kotoage fn` သည် အများသူငှာ ဝင်ခွင့်အမှတ်ကို ရည်ညွှန်းသည်။ မြင်နိုင်စွမ်းသည် codegen မဟုတ်ဘဲ dispatcher ခွင့်ပြုချက်များကို သက်ရောက်မှုရှိသည်။
-- ရွေးချယ်နိုင်သောဝင်ရောက်ခွင့် အရိပ်အမြွက်များ- `#[access(read=..., write=...)]` သည် `fn`/`kotoage fn` ကို မန်နီးဖက်စ်စာဖတ်ခြင်း/ရေးခြင်းသော့များကို ပံ့ပိုးပေးနိုင်သည်။ compiler သည် အကြံပေး အရိပ်အမြွက်များကို အလိုအလျောက် ထုတ်လွှတ်သည်။ ပွင့်လင်းမြင်သာသောလက်ခံဆောင်ရွက်ပေးသည့်ခေါ်ဆိုမှုများသည် ရှေးရိုးစွဲသော့ကတ်ခလုတ်များ (`*`) သို့ ပြန်ရောက်သွားပြီး တိကျသေချာသောဝင်ရောက်ခွင့်အရိပ်အမြွက်များမပေးမချင်း အဖြေရှာခြင်းတစ်ခုပေါ်နေသောကြောင့် အချိန်ဇယားရေးဆွဲသူများသည် ပိုမိုအသေးစိတ်သော့များအတွက် သွက်လက်စွာကြိုတင်ရွေးချယ်နိုင်မည်ဖြစ်သည်။
+- Access metadata is compiler-owned. Manual `#[access(...)]` attributes are rejected; deployable compilation succeeds only when the compiler can emit complete read/write metadata without wildcard keys.
 
 ## စာချုပ်ကွန်တိန်နာနှင့် မက်တာဒေတာ
 
@@ -308,7 +308,7 @@ Deterministic iteration စည်းမျဉ်းများ
 - `.take(n)`- ပထမဆုံး `n` ကို အစမှ ပြန်စပါ။
 - `.range(start, end)`- တစ်ဝက်ဖွင့်သည့်ကြားကာလ `[start, end)` တွင် ထပ်လောင်းထည့်သွင်းမှုများ။ ဝေါဟာရများသည် `start` နှင့် `n = end - start` နှင့် ညီမျှသည်။ဒိုင်းနမစ်ဘောင်များဆိုင်ရာ မှတ်စုများ
 - ပကတိဘောင်များ- `n`၊ `start`၊ နှင့် `end` တို့ကို ကိန်းပြည့်အက္ခရာများကို အပြည့်အဝထောက်ခံပြီး ပုံသေအကြိမ်အရေအတွက်တစ်ခုသို့ စုစည်းထားသည်။
-- ပကတိမဟုတ်သောဘောင်များ- `kotodama_dynamic_bounds` အင်္ဂါရပ်ကို `ivm` သေတ္တာတွင်ဖွင့်ထားသောအခါ၊ ကွန်ပြူတာသည် သွက်လက်သော `n`၊ `start`၊ နှင့် `end`၊ ဘေးကင်းသောအသုံးအနှုန်းများနှင့် ထည့်သွင်းမှုများအတွက် `end` ကိုလက်ခံသည် `end >= start`)။ အပိုကိုယ်ထည် ကွပ်မျက်ခြင်းကို ရှောင်ရှားရန် `if (i < n)` စစ်ဆေးမှုများဖြင့် K guarded ထပ်လုပ်ခြင်းအထိ နှိမ့်ချခြင်းသည် အပိုကိုယ်ထည်ကို ကွပ်မျက်ခြင်း (မူလ K=2)။ K ကို `CompilerOptions { dynamic_iter_cap, .. }` မှတစ်ဆင့် ပရိုဂရမ်ဖြင့် ချိန်ညှိနိုင်သည်။
+- Non-literal bounds are first-release behavior. The compiler accepts dynamic `n`, `start`, and `end` expressions for durable `state Map<int, V>` iteration, inserts runtime assertions for safety (non-negative, `end >= start`, bounded by the fixed release limit), and emits structured dynamic access metadata. The first-release limit is 64 guarded iterations and is not runtime-configurable.
 - စုဆောင်းခြင်းမပြုမီ Kotodama သံချပ်သတိပေးချက်များကိုစစ်ဆေးရန် `koto_lint` ကိုဖွင့်ပါ။ main compiler သည် parsing နှင့် type-checking ပြီးနောက် နှိမ့်ချခြင်းနှင့်အတူ အမြဲတမ်း ဆက်လက်လုပ်ဆောင်သည်။
 - အမှားကုဒ်များကို [Kotodama Compiler Error Codes](./kotodama_error_codes.md); အမြန်ရှင်းပြချက်များအတွက် `koto_compile --explain <code>` ကိုသုံးပါ။
 
