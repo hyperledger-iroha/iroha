@@ -2132,6 +2132,10 @@ public final class HttpClientTransportTests {
     final IdentifierBfvPublicParameters base = sampleIdentifierBfvPublicParameters();
 
     expectIllegalArgument(
+        () -> sampleIdentifierPolicy(base).encryptInput("abcd", seed),
+        "input longer than max input byte count must be rejected");
+
+    expectIllegalArgument(
         () ->
             sampleIdentifierPolicy(
                     new IdentifierBfvPublicParameters(
@@ -2140,6 +2144,48 @@ public final class HttpClientTransportTests {
                         3))
                 .encryptInput("ab", seed),
         "non-divisible ciphertext modulus must be rejected");
+
+    expectIllegalArgument(
+        () ->
+            sampleIdentifierPolicy(
+                    new IdentifierBfvPublicParameters(
+                        new IdentifierBfvPublicParameters.Parameters(7L, 257L, 16_842_752L, 12),
+                        base.publicKey(),
+                        3))
+                .encryptInput("ab", seed),
+        "non-power-of-two polynomial degree must be rejected");
+
+    expectIllegalArgument(
+        () ->
+            sampleIdentifierPolicy(
+                    new IdentifierBfvPublicParameters(
+                        new IdentifierBfvPublicParameters.Parameters(8L, 257L, 16_842_752L, 17),
+                        base.publicKey(),
+                        3))
+                .encryptInput("ab", seed),
+        "decomposition base outside the supported range must be rejected");
+
+    expectIllegalArgument(
+        () ->
+            sampleIdentifierPolicy(
+                    new IdentifierBfvPublicParameters(
+                        base.parameters(),
+                        new IdentifierBfvPublicParameters.PublicKey(
+                            withoutFirst(base.publicKey().b()),
+                            base.publicKey().a()),
+                        3))
+                .encryptInput("ab", seed),
+        "public-key polynomial length mismatch must be rejected");
+
+    expectIllegalArgument(
+        () ->
+            sampleIdentifierPolicy(
+                    new IdentifierBfvPublicParameters(
+                        base.parameters(),
+                        base.publicKey(),
+                        0))
+                .encryptInput("ab", seed),
+        "zero max input byte count must be rejected");
 
     expectIllegalArgument(
         () ->
@@ -2186,6 +2232,12 @@ public final class HttpClientTransportTests {
             List.of(11_472_226L, 15_791_131L, 10_301_391L, 6_321_610L, 502_045L, 1_948_157L, 5_332_249L, 12_641_494L),
             List.of(3_503_246L, 2_379_264L, 12_091_019L, 30_169L, 15_804_162L, 8_155_629L, 2_418_997L, 3_003_107L)),
         3);
+  }
+
+  private static List<Long> withoutFirst(final List<Long> values) {
+    final ArrayList<Long> truncated = new ArrayList<>(values);
+    truncated.remove(0);
+    return truncated;
   }
 
   private static void expectIllegalArgument(final Runnable action, final String message) {

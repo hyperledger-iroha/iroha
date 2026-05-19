@@ -1661,6 +1661,75 @@ mod tests {
     }
 
     #[test]
+    fn hidden_program_validation_rejects_adversarial_program_shapes() {
+        let cases = [
+            (
+                HiddenRamFheProgram {
+                    version: 2,
+                    register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
+                    memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
+                    instructions: vec![
+                        HiddenRamFheInstruction::LoadConst(0, 1),
+                        HiddenRamFheInstruction::Output(0),
+                    ],
+                },
+                "version",
+            ),
+            (
+                HiddenRamFheProgram {
+                    version: 1,
+                    register_count: BFV_PROGRAM_REGISTER_COUNT_U16 - 1,
+                    memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
+                    instructions: vec![
+                        HiddenRamFheInstruction::LoadConst(0, 1),
+                        HiddenRamFheInstruction::Output(0),
+                    ],
+                },
+                "register_count",
+            ),
+            (
+                HiddenRamFheProgram {
+                    version: 1,
+                    register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
+                    memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16 - 1,
+                    instructions: vec![
+                        HiddenRamFheInstruction::LoadConst(0, 1),
+                        HiddenRamFheInstruction::Output(0),
+                    ],
+                },
+                "memory_lane_count",
+            ),
+            (
+                HiddenRamFheProgram {
+                    version: 1,
+                    register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
+                    memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
+                    instructions: Vec::new(),
+                },
+                "instruction tape",
+            ),
+            (
+                HiddenRamFheProgram {
+                    version: 1,
+                    register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
+                    memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
+                    instructions: vec![HiddenRamFheInstruction::LoadConst(0, 1)],
+                },
+                "at least one output",
+            ),
+        ];
+
+        for (program, expected) in cases {
+            let err = validate_hidden_ram_fhe_program(&program)
+                .expect_err("adversarial hidden-program shape must be rejected");
+            assert!(
+                err.to_string().contains(expected),
+                "expected `{expected}` in {err}"
+            );
+        }
+    }
+
+    #[test]
     fn programmed_public_parameters_reject_tampered_digests() {
         let secret = b"resolver-secret";
         let params = ram_lfe_bfv_parameters_v1();
@@ -1696,6 +1765,85 @@ mod tests {
         )
         .expect_err("tampered evaluation-key digest must be rejected");
         assert!(err.to_string().contains("evaluation-key digest"));
+    }
+
+    #[test]
+    fn programmed_public_parameters_reject_profile_and_verifier_metadata_abuse() {
+        let secret = b"resolver-secret";
+        let params = ram_lfe_bfv_parameters_v1();
+        let associated_data = b"phone#retail";
+        let program = default_bfv_programmed_hidden_program();
+        let (public_parameters, _, relinearization_key) =
+            derive_identifier_key_material_from_seed(&params, 63, secret, associated_data)
+                .expect("derive BFV public parameters");
+        let programmed = bfv_programmed_public_parameters_with_program(
+            public_parameters,
+            BfvEvaluationKeyBundle {
+                relinearization_key,
+                rotation_keys: Vec::new(),
+                bootstrap_key: None,
+            },
+            &program,
+            RamLfeVerificationMode::Signed,
+            None,
+        );
+        let verifier = RamLfeProofVerifierMetadata {
+            proof_backend: "halo2/ram-lfe-v1".to_owned(),
+            circuit_id: "ram-lfe-test".to_owned(),
+            public_inputs_schema_hash: Hash::new(b"schema"),
+            verifying_key_bytes: vec![0xAA],
+        };
+
+        let mut wrong_profile = programmed.clone();
+        wrong_profile.ram_fhe_profile.register_count = wrong_profile
+            .ram_fhe_profile
+            .register_count
+            .saturating_add(1);
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&wrong_profile).expect("encode wrong profile"),
+        )
+        .expect_err("tampered RAM-FHE profile must be rejected");
+        assert!(err.to_string().contains("profile"));
+
+        let mut signed_with_verifier = programmed.clone();
+        signed_with_verifier.proof_verifier = Some(verifier.clone());
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&signed_with_verifier).expect("encode signed verifier abuse"),
+        )
+        .expect_err("signed policies must not publish proof verifier metadata");
+        assert!(err.to_string().contains("signed RAM-LFE"));
+
+        let mut proof_without_verifier = programmed.clone();
+        proof_without_verifier.verification_mode = RamLfeVerificationMode::Proof;
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&proof_without_verifier).expect("encode missing verifier"),
+        )
+        .expect_err("proof policies must publish verifier metadata");
+        assert!(err.to_string().contains("proof-carrying"));
+
+        let mut proof_with_blank_backend = programmed.clone();
+        proof_with_blank_backend.verification_mode = RamLfeVerificationMode::Proof;
+        proof_with_blank_backend.proof_verifier = Some(RamLfeProofVerifierMetadata {
+            proof_backend: "   ".to_owned(),
+            ..verifier.clone()
+        });
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&proof_with_blank_backend).expect("encode blank backend"),
+        )
+        .expect_err("blank proof verifier backend must be rejected");
+        assert!(err.to_string().contains("backend"));
+
+        let mut proof_with_empty_vk = programmed;
+        proof_with_empty_vk.verification_mode = RamLfeVerificationMode::Proof;
+        proof_with_empty_vk.proof_verifier = Some(RamLfeProofVerifierMetadata {
+            verifying_key_bytes: Vec::new(),
+            ..verifier
+        });
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&proof_with_empty_vk).expect("encode empty verifying key"),
+        )
+        .expect_err("empty proof verifier bytes must be rejected");
+        assert!(err.to_string().contains("verifier bytes"));
     }
 
     #[test]

@@ -1654,6 +1654,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn evaluation_key_bundle_rejects_adversarial_key_metadata() {
+        let params = params();
+        let (_, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"bfv-eval-key-adversarial-keygen").expect("keygen");
+        let rotation_key =
+            rotation_key_from_seed(&params, &public_key, 1, b"bfv-eval-key-rotation")
+                .expect("rotation key");
+        let zero_refresh =
+            encrypt_from_seed(&params, &public_key, &[0], b"bfv-eval-key-zero-refresh")
+                .expect("encrypt zero");
+
+        let duplicate_rotation = BfvEvaluationKeyBundle {
+            relinearization_key: relinearization_key.clone(),
+            rotation_keys: vec![rotation_key.clone(), rotation_key.clone()],
+            bootstrap_key: None,
+        };
+        let err = duplicate_rotation
+            .validate(&params)
+            .expect_err("duplicate rotation keys must be rejected");
+        assert!(err.to_string().contains("duplicate rotation key"));
+
+        let zero_step_rotation = BfvEvaluationKeyBundle {
+            relinearization_key: relinearization_key.clone(),
+            rotation_keys: vec![BfvRotationKey {
+                rotation_steps: 0,
+                zero_refresh: zero_refresh.clone(),
+            }],
+            bootstrap_key: None,
+        };
+        let err = zero_step_rotation
+            .validate(&params)
+            .expect_err("zero-step rotation keys must be rejected");
+        assert!(err.to_string().contains("greater than zero"));
+
+        let mut malformed_rotation_key = rotation_key;
+        malformed_rotation_key.zero_refresh.c0.pop();
+        let malformed_rotation = BfvEvaluationKeyBundle {
+            relinearization_key: relinearization_key.clone(),
+            rotation_keys: vec![malformed_rotation_key],
+            bootstrap_key: None,
+        };
+        let err = malformed_rotation
+            .validate(&params)
+            .expect_err("malformed rotation refresh ciphertext must be rejected");
+        assert!(err.to_string().contains("ciphertext c0 length"));
+
+        let blank_bootstrap_key = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            bootstrap_key: Some(BfvBootstrapKey {
+                key_id: "   ".to_owned(),
+                zero_refresh,
+            }),
+        };
+        let err = blank_bootstrap_key
+            .validate(&params)
+            .expect_err("blank bootstrap key ids must be rejected");
+        assert!(err.to_string().contains("bootstrap key id"));
+    }
+
     #[cfg(feature = "bfv-accel")]
     #[test]
     fn sub_mod_prime_handles_large_modulus_without_overflow() {
@@ -1691,6 +1752,62 @@ mod tests {
         let plaintext =
             decrypt_identifier(&public_parameters, &secret_key, &ciphertext).expect("decrypt");
         assert_eq!(plaintext, b"+15551234567");
+    }
+
+    #[test]
+    fn identifier_envelope_decryption_rejects_adversarial_plaintext_metadata() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (public_parameters, secret_key, _) = derive_identifier_key_material_from_seed(
+            &params,
+            3,
+            b"identifier-envelope-negative-seed",
+            b"email#retail",
+        )
+        .expect("derive identifier key material");
+        let mut ciphertext =
+            encrypt_identifier_from_seed(&public_parameters, b"a", b"identifier-envelope-valid")
+                .expect("encrypt identifier");
+
+        let mut declared_too_long = ciphertext.clone();
+        declared_too_long.slots[0] = encrypt_from_seed(
+            &params,
+            &public_parameters.public_key,
+            &[4],
+            b"identifier-envelope-long-len",
+        )
+        .expect("encrypt adversarial length");
+        let err = decrypt_identifier(&public_parameters, &secret_key, &declared_too_long)
+            .expect_err("declared length beyond max_input_bytes must be rejected");
+        assert!(err.to_string().contains("exceeds max_input_bytes"));
+
+        let mut non_zero_trailing = ciphertext.clone();
+        non_zero_trailing.slots[2] = encrypt_from_seed(
+            &params,
+            &public_parameters.public_key,
+            &[1],
+            b"identifier-envelope-trailing",
+        )
+        .expect("encrypt adversarial trailing slot");
+        let err = decrypt_identifier(&public_parameters, &secret_key, &non_zero_trailing)
+            .expect_err("non-zero trailing slots must be rejected");
+        assert!(err.to_string().contains("non-zero trailing slots"));
+
+        let mut byte_out_of_range = ciphertext.clone();
+        byte_out_of_range.slots[1] = encrypt_from_seed(
+            &params,
+            &public_parameters.public_key,
+            &[u64::from(u8::MAX) + 1],
+            b"identifier-envelope-byte-out-of-range",
+        )
+        .expect("encrypt adversarial byte slot");
+        let err = decrypt_identifier(&public_parameters, &secret_key, &byte_out_of_range)
+            .expect_err("byte slots outside u8 must be rejected");
+        assert!(err.to_string().contains("does not fit into u8"));
+
+        ciphertext.slots[0].c1.pop();
+        let err = decrypt_identifier(&public_parameters, &secret_key, &ciphertext)
+            .expect_err("malformed slot ciphertext shape must be rejected");
+        assert!(err.to_string().contains("ciphertext c1 length"));
     }
 
     #[test]
@@ -1823,6 +1940,23 @@ mod tests {
                     .to_owned(),
             ))
         );
+    }
+
+    #[test]
+    fn registered_bfv_parameters_reject_structural_but_unregistered_sets() {
+        let mut params = ram_lfe_bfv_parameters_v1();
+        params.decomposition_base_log = params.decomposition_base_log.saturating_add(1);
+        params
+            .validate()
+            .expect("adversarial parameter set remains structurally valid");
+
+        let err = validate_registered_bfv_parameters(&params)
+            .expect_err("production paths must reject unregistered BFV parameter sets");
+        assert!(err.to_string().contains("not registered"));
+
+        let err = registered_bfv_parameter_digest(&params)
+            .expect_err("unregistered BFV parameter sets must not receive production digests");
+        assert!(err.to_string().contains("not registered"));
     }
 
     fn sample_identifier_parameters() -> BfvParameters {

@@ -11132,6 +11132,99 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_fhe_job_rejects_empty_ciphertext_envelope() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let job = sample_fhe_job(Vec::new());
+        let input = BfvIdentifierCiphertext { slots: Vec::new() };
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("empty FHE ciphertext envelopes must be rejected");
+        assert_invalid_parameter_contains(err, "at least one slot");
+    }
+
+    #[test]
+    fn soracloud_fhe_job_rejects_missing_input_envelopes() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let job = sample_fhe_job(Vec::new());
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[])
+            .expect_err("FHE jobs must reject missing input envelopes");
+        assert_invalid_parameter_contains(err, "at least one input envelope");
+    }
+
+    #[test]
+    fn soracloud_fhe_job_rejects_malformed_ciphertext_slot_coefficients() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let mut lhs = sample_fhe_envelope(b"alice", b"soracloud-fhe-malformed-left");
+        let rhs = sample_fhe_envelope(b"bob", b"soracloud-fhe-malformed-right");
+        lhs.slots[0].c0[0] = params.ciphertext_modulus;
+        let job = sample_fhe_job(Vec::new());
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[lhs, rhs])
+            .expect_err("malformed ciphertext coefficients must be rejected");
+        assert_invalid_parameter_contains(err, "FHE add failed");
+    }
+
+    #[test]
+    fn soracloud_multiply_rejects_malformed_relinearization_key() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        evaluation_keys
+            .relinearization_key
+            .entries
+            .pop()
+            .expect("sample relin key has entries");
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Multiply;
+        job.requested_multiplication_depth = 1;
+        let lhs = sample_fhe_envelope(b"alice", b"soracloud-fhe-bad-relin-left");
+        let rhs = sample_fhe_envelope(b"bob", b"soracloud-fhe-bad-relin-right");
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[lhs, rhs])
+            .expect_err("malformed relinearization keys must be rejected");
+        assert_invalid_parameter_contains(err, "FHE multiply failed");
+    }
+
+    #[test]
+    fn soracloud_rotate_left_rejects_malformed_rotation_refresh_key() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        evaluation_keys.rotation_keys[0].zero_refresh.c1[0] = params.ciphertext_modulus;
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::RotateLeft;
+        job.rotation_steps = 1;
+        let input = sample_fhe_envelope(b"ab", b"soracloud-rotate-malformed-key");
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("malformed rotation refresh keys must be rejected");
+        assert_invalid_parameter_contains(err, "FHE rotate failed");
+    }
+
+    #[test]
+    fn soracloud_bootstrap_rejects_malformed_refresh_key() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample bundle has bootstrap key")
+            .zero_refresh
+            .c0
+            .pop();
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = 1;
+        let input = sample_fhe_envelope(b"abc", b"soracloud-bootstrap-malformed-key");
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("malformed bootstrap refresh keys must be rejected");
+        assert_invalid_parameter_contains(err, "FHE bootstrap failed");
+    }
+
+    #[test]
     fn soracloud_registered_bfv_parameters_reject_digest_mismatch() {
         let mut param_set = sample_fhe_param_set();
         param_set.parameter_digest = Hash::new(b"tampered-bfv-parameters");

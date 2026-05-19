@@ -23,10 +23,16 @@ Completed history lives in `status.md`. This file should only track unfinished w
   vectors still need to cover the full RNS parameter/key bundle and Soracloud
   Bootstrap output shape.
 - Broaden validation from the green focused crypto/data-model/core/Torii/daemon
-  checks into the next full workspace and SDK corridor, including malformed
-  opening signatures, wrong opening verifier keys, parameter/evaluation-key
-  mismatches, and Soracloud Add/Multiply/RotateLeft/Bootstrap multi-input
-  fixtures.
+  checks into the next full workspace and SDK corridor. Focused adversarial
+  tests now cover malformed/truncated ciphertext envelopes, hidden-program
+  shape/overflow rejection, replayed/tampered/future/expired/wrong-verifier
+  openings, receipt-signing/backend mismatch refusal, adversarial BFV public
+  parameters and evaluation-key metadata, unregistered BFV parameter sets,
+  impossible decrypted identifier envelopes, missing/malformed Soracloud
+  evaluation keys, empty/malformed ciphertext slots, malformed relinearization
+  keys, and slot-count/digest mismatches; remaining breadth should emphasize
+  full cross-SDK RNS vectors and Soracloud Add/Multiply/RotateLeft/Bootstrap
+  multi-input fixtures.
 
 ## Kotodama first-release follow-ups
 
