@@ -7054,10 +7054,10 @@ pub mod isi {
         let id = &attachment.vk_ref;
 
         let Some(rec) = state_transaction.world.verifying_keys.get(id) else {
-            return Err(FindError::Permission(Box::new(Permission::new(
-                "VerifyingKeyMissing".into(),
-                iroha_primitives::json::Json::from(format!("{}::{}", id.backend, id.name).as_str()),
-            )))
+            return Err(InstructionExecutionError::InvariantViolation(
+                "proof must reference a registered verifying key reference; inline verifying keys are not supported"
+                    .into(),
+            )
             .into());
         };
         if rec.status != ConfidentialStatus::Active {
@@ -13032,46 +13032,65 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_ok");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4, 5]);
-            let commitment = hash_vk(&vk_box);
+            let ballot_vk_id = VerifyingKeyId::new("halo2/ipa", "vk_ballot_ok");
+            let tally_vk_id = VerifyingKeyId::new("halo2/ipa", "vk_tally_ok");
+            let ballot_vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4, 5]);
+            let tally_vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 4, 3, 2, 1]);
+            let ballot_commitment = hash_vk(&ballot_vk_box);
+            let tally_commitment = hash_vk(&tally_vk_box);
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa/vk-ok",
+                VOTING_BALLOT_CIRCUIT_ID,
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
                 "pallas",
                 [0u8; 32],
-                commitment,
+                ballot_commitment,
             );
             rec.status = ConfidentialStatus::Active;
-            rec.key = Some(vk_box.clone());
-            rec.vk_len =
-                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32");
-            stx.world.verifying_keys.insert(vk_id.clone(), rec);
+            rec.key = Some(ballot_vk_box.clone());
+            rec.vk_len = u32::try_from(ballot_vk_box.bytes.len())
+                .expect("verifying key length fits into u32");
+            stx.world.verifying_keys.insert(ballot_vk_id.clone(), rec);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                VOTING_TALLY_CIRCUIT_ID,
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0u8; 32],
+                tally_commitment,
+            );
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(tally_vk_box.clone());
+            rec.vk_len = u32::try_from(tally_vk_box.bytes.len())
+                .expect("verifying key length fits into u32");
+            stx.world.verifying_keys.insert(tally_vk_id.clone(), rec);
 
             let st = crate::state::ElectionState {
-                vk_ballot: Some(vk_id.clone()),
-                vk_tally: Some(vk_id.clone()),
+                vk_ballot: Some(ballot_vk_id.clone()),
+                vk_tally: Some(tally_vk_id.clone()),
                 ..Default::default()
             };
 
             let proof = ProofBox::new("halo2/ipa".into(), vec![0xaa]);
             let ballot_att =
-                ProofAttachment::new_ref("halo2/ipa".into(), proof.clone(), vk_id.clone());
+                ProofAttachment::new_ref("halo2/ipa".into(), proof.clone(), ballot_vk_id.clone());
             let (ballot_id, ballot_vk, ballot_rec) =
                 resolve_ballot_vk(&st, &ballot_att, &stx).expect("resolve ballot vk");
-            assert_eq!(ballot_id, vk_id);
-            assert_eq!(ballot_vk, vk_box);
-            assert_eq!(ballot_rec.commitment, commitment);
+            assert_eq!(ballot_id, ballot_vk_id);
+            assert_eq!(ballot_vk, ballot_vk_box);
+            assert_eq!(ballot_rec.commitment, ballot_commitment);
 
-            let tally_att = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id.clone());
+            let tally_att =
+                ProofAttachment::new_ref("halo2/ipa".into(), proof, tally_vk_id.clone());
             let (tally_id, tally_vk, tally_rec) =
                 resolve_tally_vk(&st, &tally_att, &stx).expect("resolve tally vk");
-            assert_eq!(tally_id, vk_id);
-            assert_eq!(tally_vk, ballot_vk);
-            assert_eq!(tally_rec.commitment, commitment);
+            assert_eq!(tally_id, tally_vk_id);
+            assert_eq!(tally_vk, tally_vk_box);
+            assert_eq!(tally_rec.commitment, tally_commitment);
         }
 
         #[test]

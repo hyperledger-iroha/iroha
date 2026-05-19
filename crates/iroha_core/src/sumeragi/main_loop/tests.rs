@@ -128,15 +128,18 @@ fn execute_commit_work_on_test_stack(
     genesis_account: AccountId,
     work: commit::CommitWork,
 ) -> (commit::CommitOutcome, commit::CommitStageTimings) {
+    let test_lock_owner = crate::sumeragi::status::current_test_lock_owner_token();
     let join_handle = crate::sumeragi::sumeragi_thread_builder("sumeragi-commit-test-inline")
         .spawn(move || {
-            commit::execute_commit_work(
-                state.as_ref(),
-                kura.as_ref(),
-                &chain_id,
-                &genesis_account,
-                work,
-            )
+            crate::sumeragi::status::with_test_lock_owner(test_lock_owner, || {
+                commit::execute_commit_work(
+                    state.as_ref(),
+                    kura.as_ref(),
+                    &chain_id,
+                    &genesis_account,
+                    work,
+                )
+            })
         })
         .expect("failed to spawn test commit worker thread");
     match join_handle.join() {
@@ -25159,11 +25162,11 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc_impl() {
         allow_signature_index_recovery: false,
         events_sender: actor.events_sender.clone(),
     };
-    let (outcome, timings) = commit::execute_commit_work(
-        actor.state.as_ref(),
-        actor.kura.as_ref(),
-        &actor.common_config.chain,
-        &actor.genesis_account,
+    let (outcome, timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&actor.state),
+        Arc::clone(&actor.kura),
+        actor.common_config.chain.clone(),
+        actor.genesis_account.clone(),
         work,
     );
     let (
@@ -25434,11 +25437,11 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
         allow_signature_index_recovery: false,
         events_sender: actor.events_sender.clone(),
     };
-    let (outcome, timings) = commit::execute_commit_work(
-        actor.state.as_ref(),
-        actor.kura.as_ref(),
-        &actor.common_config.chain,
-        &actor.genesis_account,
+    let (outcome, timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&actor.state),
+        Arc::clone(&actor.kura),
+        actor.common_config.chain.clone(),
+        actor.genesis_account.clone(),
         work,
     );
     result_tx
@@ -25774,11 +25777,11 @@ async fn commit_outcome_kickstarts_next_proposal_and_records_round_gap() {
         allow_signature_index_recovery: false,
         events_sender: actor.events_sender.clone(),
     };
-    let (outcome, timings) = commit::execute_commit_work(
-        actor.state.as_ref(),
-        actor.kura.as_ref(),
-        &actor.common_config.chain,
-        &actor.genesis_account,
+    let (outcome, timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&actor.state),
+        Arc::clone(&actor.kura),
+        actor.common_config.chain.clone(),
+        actor.genesis_account.clone(),
         work,
     );
     assert!(

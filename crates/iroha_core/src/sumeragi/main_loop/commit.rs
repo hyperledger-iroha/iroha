@@ -8554,7 +8554,7 @@ mod tests {
 
     // This suite runs with the default parallel test runner and can be CPU-contended on CI.
     // Use a conservative timeout to avoid flakiness in wake/result channel assertions.
-    const COMMIT_WORKER_TIMEOUT: Duration = Duration::from_secs(60);
+    const COMMIT_WORKER_TIMEOUT: Duration = Duration::from_secs(180);
 
     #[test]
     fn commit_stage_timings_threshold_uses_clear_latency_helpers() {

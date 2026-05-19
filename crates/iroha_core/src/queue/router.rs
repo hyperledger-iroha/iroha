@@ -271,7 +271,7 @@ pub fn evaluate_policy_with_catalog(
             None,
         );
     }
-    let target_dataspace = transaction_dataspace_routing_target(tx, Some(dataspace_catalog), None)?;
+    let target = transaction_dataspace_routing_target_info(tx, Some(dataspace_catalog), None)?;
     let matched_rule = policy
         .rules
         .iter()
@@ -279,7 +279,8 @@ pub fn evaluate_policy_with_catalog(
     resolve_policy_routing_decision(
         policy,
         matched_rule,
-        target_dataspace,
+        target.dataspace_id,
+        target.coordinator_route,
         lane_catalog,
         dataspace_catalog,
     )
@@ -316,9 +317,12 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
             world,
         );
     }
-    let target_dataspace =
-        transaction_dataspace_routing_target_with_world(tx, Some(dataspace_catalog), world)?
-            .or_else(|| authority_dataspace_target_with_world(Some(world), tx));
+    let mut target =
+        transaction_dataspace_routing_target_info_with_world(tx, Some(dataspace_catalog), world)?;
+    if target.dataspace_id.is_none() {
+        target.dataspace_id = authority_dataspace_target_with_world(Some(world), tx);
+        target.coordinator_route = target.dataspace_id == Some(DataSpaceId::UNIVERSAL);
+    }
     let matched_rule = policy
         .rules
         .iter()
@@ -326,7 +330,8 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
     resolve_policy_routing_decision(
         policy,
         matched_rule,
-        target_dataspace,
+        target.dataspace_id,
+        target.coordinator_route,
         lane_catalog,
         dataspace_catalog,
     )
@@ -884,17 +889,38 @@ fn merge_native_target_dataspace(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct TransactionDataspaceTarget {
+    dataspace_id: Option<DataSpaceId>,
+    coordinator_route: bool,
+}
+
 fn merge_transaction_target_dataspace(
-    target_dataspace: &mut Option<DataSpaceId>,
+    target: &mut TransactionDataspaceTarget,
     candidate: Option<DataSpaceId>,
     reject_cross_dataspace: bool,
 ) -> Result<(), RoutingResolveError> {
-    merge_native_target_dataspace(
-        target_dataspace,
-        candidate,
-        reject_cross_dataspace,
-        NativeDataspaceConflict::Transaction,
-    )
+    let Some(candidate) = candidate else {
+        return Ok(());
+    };
+
+    match target.dataspace_id {
+        Some(existing) if existing == candidate => {}
+        Some(existing) => {
+            if reject_cross_dataspace {
+                return Err(native_dataspace_conflict_error(
+                    NativeDataspaceConflict::Transaction,
+                    existing,
+                    candidate,
+                ));
+            }
+            target.dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            target.coordinator_route = true;
+        }
+        None => target.dataspace_id = Some(candidate),
+    }
+
+    Ok(())
 }
 
 fn transaction_dataspace_routing_target(
@@ -902,17 +928,26 @@ fn transaction_dataspace_routing_target(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    transaction_dataspace_routing_target_info(tx, dataspace_catalog, state_view)
+        .map(|target| target.dataspace_id)
+}
+
+fn transaction_dataspace_routing_target_info(
+    tx: &AcceptedTransaction<'_>,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Result<TransactionDataspaceTarget, RoutingResolveError> {
     let Some(executable) = transaction_executable(tx) else {
-        return Ok(None);
+        return Ok(TransactionDataspaceTarget::default());
     };
-    let mut target_dataspace = None;
+    let mut target = TransactionDataspaceTarget::default();
     let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
 
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
                 merge_transaction_target_dataspace(
-                    &mut target_dataspace,
+                    &mut target,
                     instruction_transaction_dataspace_target(
                         &**instruction,
                         dataspace_catalog,
@@ -926,7 +961,7 @@ fn transaction_dataspace_routing_target(
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
                 merge_transaction_target_dataspace(
-                    &mut target_dataspace,
+                    &mut target,
                     instruction_transaction_dataspace_target(
                         &**instruction,
                         dataspace_catalog,
@@ -938,25 +973,25 @@ fn transaction_dataspace_routing_target(
         }
     }
 
-    Ok(target_dataspace)
+    Ok(target)
 }
 
-fn transaction_dataspace_routing_target_with_world<W: WorldReadOnly>(
+fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
     tx: &AcceptedTransaction<'_>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
-) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+) -> Result<TransactionDataspaceTarget, RoutingResolveError> {
     let Some(executable) = transaction_executable(tx) else {
-        return Ok(None);
+        return Ok(TransactionDataspaceTarget::default());
     };
-    let mut target_dataspace = None;
+    let mut target = TransactionDataspaceTarget::default();
     let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
 
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
                 merge_transaction_target_dataspace(
-                    &mut target_dataspace,
+                    &mut target,
                     instruction_transaction_dataspace_target_with_world(
                         &**instruction,
                         dataspace_catalog,
@@ -970,7 +1005,7 @@ fn transaction_dataspace_routing_target_with_world<W: WorldReadOnly>(
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
                 merge_transaction_target_dataspace(
-                    &mut target_dataspace,
+                    &mut target,
                     instruction_transaction_dataspace_target_with_world(
                         &**instruction,
                         dataspace_catalog,
@@ -982,7 +1017,7 @@ fn transaction_dataspace_routing_target_with_world<W: WorldReadOnly>(
         }
     }
 
-    Ok(target_dataspace)
+    Ok(target)
 }
 
 /// Return the concrete dataspace participants of a native AMX candidate.
@@ -2343,10 +2378,11 @@ fn resolve_policy_routing_decision(
     policy: &LaneRoutingPolicy,
     matched_rule: Option<&LaneRoutingRule>,
     target_dataspace: Option<DataSpaceId>,
+    target_is_coordinator_route: bool,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
 ) -> Result<RoutingDecision, RoutingResolveError> {
-    if target_dataspace == Some(DataSpaceId::UNIVERSAL) {
+    if target_is_coordinator_route && target_dataspace == Some(DataSpaceId::UNIVERSAL) {
         return canonical_dataspace_route(DataSpaceId::UNIVERSAL, lane_catalog, dataspace_catalog);
     }
 
@@ -2404,10 +2440,12 @@ pub fn resolve_query_routing_decision(
             .rules
             .iter()
             .find(|rule| query_rule_matches(rule, authority, Some(state_view)));
+        let target_dataspace = account_dataspace_target(Some(state_view.world()), authority);
         return resolve_policy_routing_decision(
             policy,
             matched_rule,
-            account_dataspace_target(Some(state_view.world()), authority),
+            target_dataspace,
+            target_dataspace == Some(DataSpaceId::UNIVERSAL),
             lane_catalog,
             dataspace_catalog,
         );
@@ -2427,10 +2465,12 @@ fn resolve_query_routing_decision_with_world<W: WorldReadOnly>(
         .rules
         .iter()
         .find(|rule| query_rule_matches_with_world(rule, authority, dataspace_catalog, world));
+    let target_dataspace = account_dataspace_target(Some(world), authority);
     resolve_policy_routing_decision(
         policy,
         matched_rule,
-        account_dataspace_target(Some(world), authority),
+        target_dataspace,
+        target_dataspace == Some(DataSpaceId::UNIVERSAL),
         lane_catalog,
         dataspace_catalog,
     )
@@ -3132,8 +3172,11 @@ impl LaneRouter for ConfigLaneRouter {
                 None,
             );
         }
-        let target_dataspace =
-            transaction_dataspace_routing_target(tx, Some(self.dataspace_catalog.as_ref()), None)?;
+        let target = transaction_dataspace_routing_target_info(
+            tx,
+            Some(self.dataspace_catalog.as_ref()),
+            None,
+        )?;
         let matched_rule = self
             .policy
             .rules
@@ -3142,7 +3185,8 @@ impl LaneRouter for ConfigLaneRouter {
         resolve_policy_routing_decision(
             &self.policy,
             matched_rule,
-            target_dataspace,
+            target.dataspace_id,
+            target.coordinator_route,
             self.lane_catalog.as_ref(),
             self.dataspace_catalog.as_ref(),
         )
@@ -3179,12 +3223,15 @@ impl LaneRouter for ConfigLaneRouter {
                 Some(state_view),
             );
         }
-        let target_dataspace = transaction_dataspace_routing_target(
+        let mut target = transaction_dataspace_routing_target_info(
             tx,
             Some(&nexus.dataspace_catalog),
             Some(state_view),
-        )?
-        .or_else(|| authority_dataspace_target(Some(state_view), tx));
+        )?;
+        if target.dataspace_id.is_none() {
+            target.dataspace_id = authority_dataspace_target(Some(state_view), tx);
+            target.coordinator_route = target.dataspace_id == Some(DataSpaceId::UNIVERSAL);
+        }
         let matched_rule = self
             .policy
             .rules
@@ -3193,7 +3240,8 @@ impl LaneRouter for ConfigLaneRouter {
         resolve_policy_routing_decision(
             &self.policy,
             matched_rule,
-            target_dataspace,
+            target.dataspace_id,
+            target.coordinator_route,
             &nexus.lane_catalog,
             &nexus.dataspace_catalog,
         )

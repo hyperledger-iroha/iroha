@@ -21360,10 +21360,7 @@ impl State {
         if public_keys.is_empty() {
             return Err(LaneRelayError::AggregateSignatureInvalid);
         }
-        let (status_mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
         let fallback_mode = if world.sumeragi_npos_parameters().is_some() {
-            ConsensusMode::Npos
-        } else if status_mode_tag == crate::sumeragi::consensus::NPOS_TAG {
             ConsensusMode::Npos
         } else {
             ConsensusMode::Permissioned
@@ -38537,6 +38534,7 @@ mod tests {
         post_state_root: Hash,
         signers: &[&KeyPair],
         signers_bitmap: Vec<u8>,
+        chain_id: &ChainId,
     ) -> Qc {
         let mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(
             lane_id,
@@ -38581,11 +38579,8 @@ mod tests {
             signer: 0,
             bls_sig: Vec::new(),
         };
-        let preimage = crate::sumeragi::consensus::vote_preimage(
-            &super::DEFAULT_TEST_CHAIN_ID,
-            mode_tag.as_str(),
-            &vote,
-        );
+        let preimage =
+            crate::sumeragi::consensus::vote_preimage(chain_id, mode_tag.as_str(), &vote);
         let signatures: Vec<Vec<u8>> = signers
             .iter()
             .map(|keypair| {
@@ -38627,12 +38622,53 @@ mod tests {
         signers: &[&KeyPair],
         signers_bitmap: Vec<u8>,
     ) -> LaneRelayEnvelope {
-        sample_lane_relay_envelope_with_view(height, lane_id, 0, signers, signers_bitmap)
+        sample_lane_relay_envelope_with_chain(
+            height,
+            lane_id,
+            &super::DEFAULT_TEST_CHAIN_ID,
+            signers,
+            signers_bitmap,
+        )
+    }
+
+    fn sample_lane_relay_envelope_with_chain(
+        height: u64,
+        lane_id: LaneId,
+        chain_id: &ChainId,
+        signers: &[&KeyPair],
+        signers_bitmap: Vec<u8>,
+    ) -> LaneRelayEnvelope {
+        sample_lane_relay_envelope_with_chain_and_view(
+            height,
+            lane_id,
+            chain_id,
+            0,
+            signers,
+            signers_bitmap,
+        )
     }
 
     fn sample_lane_relay_envelope_with_view(
         height: u64,
         lane_id: LaneId,
+        view: u64,
+        signers: &[&KeyPair],
+        signers_bitmap: Vec<u8>,
+    ) -> LaneRelayEnvelope {
+        sample_lane_relay_envelope_with_chain_and_view(
+            height,
+            lane_id,
+            &super::DEFAULT_TEST_CHAIN_ID,
+            view,
+            signers,
+            signers_bitmap,
+        )
+    }
+
+    fn sample_lane_relay_envelope_with_chain_and_view(
+        height: u64,
+        lane_id: LaneId,
+        chain_id: &ChainId,
         view: u64,
         signers: &[&KeyPair],
         signers_bitmap: Vec<u8>,
@@ -38655,6 +38691,7 @@ mod tests {
             post_state_root,
             signers,
             signers_bitmap,
+            chain_id,
         );
         let settlement = LaneBlockCommitment {
             block_height: height,
@@ -38930,6 +38967,38 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].block_height, 1);
         assert_eq!(snapshot[0].lane_id, LaneId::new(0));
+    }
+
+    #[test]
+    fn record_lane_relay_ignores_stale_status_mode_tag() {
+        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
+        crate::sumeragi::status::set_mode_tags(crate::sumeragi::consensus::NPOS_TAG, None, None);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
+        );
+        configure_commit_topology(&state, 1);
+
+        let envelope = sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap);
+        let inserted = state
+            .record_lane_relay(&envelope)
+            .expect("stale process status must not change lane QC validation");
+        assert_eq!(inserted, LaneRelayInsert::Inserted);
+
+        crate::sumeragi::status::set_mode_tags("", None, None);
     }
 
     #[test]
@@ -40067,6 +40136,7 @@ mod tests {
             post_state_root,
             &signer_keys,
             signers_bitmap,
+            &state.chain_id,
         );
         let settlement = LaneBlockCommitment {
             block_height: height,
@@ -40207,6 +40277,7 @@ mod tests {
             post_state_root,
             &signer_keys,
             signers_bitmap,
+            &state.chain_id,
         );
         let settlement = LaneBlockCommitment {
             block_height: height,
@@ -49494,12 +49565,14 @@ mod tests {
         install_lane_manifest_registry(state, &registry_entries);
         let commit_keypairs = configure_commit_topology(state, 1);
 
+        let chain_id = state.chain_id.clone();
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         for idx in 0..lane_count {
-            let envelope = sample_lane_relay_envelope(
+            let envelope = sample_lane_relay_envelope_with_chain(
                 first_height.saturating_add(u64::from(idx)),
                 LaneId::new(idx),
+                &chain_id,
                 &signers,
                 signers_bitmap.clone(),
             );

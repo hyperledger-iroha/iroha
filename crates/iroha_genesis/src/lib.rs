@@ -43,7 +43,9 @@ use iroha_data_model::{
         SignedBlock,
         consensus::{ConsensusGenesisParams, NposGenesisParams},
     },
-    confidential::{ConfidentialFeatureDigest, ConfidentialStatus},
+    confidential::{
+        ConfidentialFeatureDigest, ConfidentialStatus, DEFAULT_ZK_CONSENSUS_POLICY_HASH,
+    },
     da::commitment::DaProofPolicyBundle,
     isi::{
         InstructionRegistry, Register, SetParameter, register::RegisterPeerWithPop,
@@ -4667,8 +4669,13 @@ impl RawGenesisTransaction {
             let transaction = builder.sign(genesis_key_pair.private_key());
             transactions.push(transaction);
         }
-        let confidential_digest =
-            ConfidentialFeatureDigest::new(None, None, None, Some(RULES_VERSION), zk_policy_hash);
+        let confidential_digest = ConfidentialFeatureDigest::new(
+            None,
+            None,
+            None,
+            Some(RULES_VERSION),
+            Some(zk_policy_hash.unwrap_or(DEFAULT_ZK_CONSENSUS_POLICY_HASH)),
+        );
         let block = SignedBlock::genesis_with_da_proof_policies(
             transactions,
             genesis_key_pair.private_key(),
