@@ -21,20 +21,16 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{
-    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, gen_account_in, load_sample_ivm,
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, load_sample_ivm,
 };
 
 const TX_TIMEOUT: Duration = Duration::from_secs(60);
 const CONTRACT_GAS_LIMIT: u64 = 100_000;
+const SAMPLE_ASSET_DEFINITION_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
-fn unique_asset_definition_id(test_name: &str) -> AssetDefinitionId {
-    let name: Name = format!("escrow_{}", test_name.replace('-', "_"))
-        .parse()
-        .expect("generated asset definition name must parse");
-    AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").expect("domain id"),
-        name,
-    )
+fn sample_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::parse_address_literal(SAMPLE_ASSET_DEFINITION_LITERAL)
+        .expect("sample asset definition literal must parse")
 }
 
 fn amount_args(amount: u64) -> norito::json::Value {
@@ -43,22 +39,8 @@ fn amount_args(amount: u64) -> norito::json::Value {
     norito::json::Value::Object(map)
 }
 
-fn open_escrow_args(
-    recipient: &AccountId,
-    escrow_id: &AccountId,
-    asset_definition_id: &AssetDefinitionId,
-    target_amount: u64,
-) -> norito::json::Value {
+fn open_escrow_args(target_amount: u64) -> norito::json::Value {
     let mut map = norito::json::Map::new();
-    map.insert("recipient".to_owned(), norito::json!(recipient.to_string()));
-    map.insert(
-        "escrow_account".to_owned(),
-        norito::json!(escrow_id.to_string()),
-    );
-    map.insert(
-        "asset_definition".to_owned(),
-        norito::json!(asset_definition_id.to_string()),
-    );
     map.insert("target_amount".to_owned(), norito::json!(target_amount));
     norito::json::Value::Object(map)
 }
@@ -418,26 +400,57 @@ fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Numeric>> {
     }
 }
 
+fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool> {
+    match client.query_single(FindAccountById::new(account_id.clone())) {
+        Ok(_) => Ok(true),
+        Err(QueryError::Validation(ValidationFail::QueryFailed(
+            QueryExecutionFail::Find(FindError::Account(_)) | QueryExecutionFail::NotFound,
+        ))) => Ok(false),
+        Err(err) => Err(eyre!(err)),
+    }
+}
+
+fn asset_definition_exists(
+    client: &Client,
+    asset_definition_id: &AssetDefinitionId,
+) -> Result<bool> {
+    match client.query_single(FindAssetDefinitionById::new(asset_definition_id.clone())) {
+        Ok(_) => Ok(true),
+        Err(QueryError::Validation(ValidationFail::QueryFailed(
+            QueryExecutionFail::Find(FindError::AssetDefinition(_)) | QueryExecutionFail::NotFound,
+        ))) => Ok(false),
+        Err(err) => Err(eyre!(err)),
+    }
+}
+
 async fn setup_ledger_for_sample(
     client: &Client,
-    escrow_id: &AccountId,
-    escrow_keypair: &KeyPair,
     asset_definition_id: &AssetDefinitionId,
     initial_amount: u32,
 ) -> Result<()> {
-    let instructions: [InstructionBox; 3] = [
-        Register::account(Account::new(escrow_id.clone())).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(asset_definition_id.name().to_string()),
-        )
-        .into(),
+    let mut instructions: Vec<InstructionBox> = Vec::new();
+    if !account_exists(client, &BOB_ID)? {
+        instructions.push(Register::account(Account::new(BOB_ID.clone())).into());
+    }
+    if !account_exists(client, &CARPENTER_ID)? {
+        instructions.push(Register::account(Account::new(CARPENTER_ID.clone())).into());
+    }
+    if !asset_definition_exists(client, asset_definition_id)? {
+        instructions.push(
+            Register::asset_definition(
+                AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name("threshold_escrow_asset".to_owned()),
+            )
+            .into(),
+        );
+    }
+    instructions.push(
         Mint::asset_numeric(
             initial_amount,
             AssetId::new(asset_definition_id.clone(), ALICE_ID.clone()),
         )
         .into(),
-    ];
+    );
     tokio::task::spawn_blocking({
         let client = client.clone();
         move || client.submit_all_blocking(instructions)
@@ -445,11 +458,9 @@ async fn setup_ledger_for_sample(
     .await
     .expect("setup ledger task")?;
 
-    let escrow_asset = AssetId::new(asset_definition_id.clone(), escrow_id.clone());
+    let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     tokio::task::spawn_blocking({
         let client = client.clone();
-        let escrow_id = escrow_id.clone();
-        let escrow_keypair = escrow_keypair.clone();
         move || {
             let grant_transfer = Grant::account_permission(
                 CanTransferAsset {
@@ -457,9 +468,9 @@ async fn setup_ledger_for_sample(
                 },
                 ALICE_ID.clone(),
             );
-            let tx = TransactionBuilder::new(client.chain.clone(), escrow_id)
+            let tx = TransactionBuilder::new(client.chain.clone(), BOB_ID.clone())
                 .with_instructions([grant_transfer])
-                .sign(escrow_keypair.private_key());
+                .sign(BOB_KEYPAIR.private_key());
             client.submit_transaction_blocking(&tx)
         }
     })
@@ -501,16 +512,8 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     network.ensure_blocks(1).await?;
     let client = network.client();
     let http = reqwest::Client::new();
-    let (escrow_id, escrow_keypair) = gen_account_in("wonderland");
-    let asset_definition_id = unique_asset_definition_id("release_flow");
-    setup_ledger_for_sample(
-        &client,
-        &escrow_id,
-        &escrow_keypair,
-        &asset_definition_id,
-        20,
-    )
-    .await?;
+    let asset_definition_id = sample_asset_definition_id();
+    setup_ledger_for_sample(&client, &asset_definition_id, 20).await?;
 
     let contract_address = deploy_threshold_escrow(&client, &http).await?;
 
@@ -521,12 +524,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "open_escrow",
-        Some(open_escrow_args(
-            &BOB_ID,
-            &escrow_id,
-            &asset_definition_id,
-            10,
-        )),
+        Some(open_escrow_args(10)),
         "Applied",
         "open_escrow",
     )
@@ -545,11 +543,11 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     );
     assert_eq!(
         opened_state["recipient_account"],
-        norito::json::Value::from(BOB_ID.to_string())
+        norito::json::Value::from(CARPENTER_ID.to_string())
     );
     assert_eq!(
         opened_state["escrow_account_id"],
-        norito::json::Value::from(escrow_id.to_string())
+        norito::json::Value::from(BOB_ID.to_string())
     );
     assert_eq!(
         opened_state["escrow_asset_definition"],
@@ -587,11 +585,11 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
 
     let alice_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
-    let bob_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    let escrow_asset = AssetId::new(asset_definition_id.clone(), escrow_id.clone());
+    let recipient_asset = AssetId::new(asset_definition_id.clone(), CARPENTER_ID.clone());
+    let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     assert_eq!(asset_value(&client, &alice_asset)?, Some(numeric!(16)));
     assert_eq!(asset_value(&client, &escrow_asset)?, Some(numeric!(4)));
-    assert_eq!(asset_value(&client, &bob_asset)?, None);
+    assert_eq!(asset_value(&client, &recipient_asset)?, None);
 
     let partial_state = contract_state_values(
         &http,
@@ -670,7 +668,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         norito::json::Value::from("4")
     );
     assert_eq!(asset_value(&client, &escrow_asset)?, Some(numeric!(4)));
-    assert_eq!(asset_value(&client, &bob_asset)?, None);
+    assert_eq!(asset_value(&client, &recipient_asset)?, None);
 
     call_contract_expect_status(
         &client,
@@ -739,7 +737,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         norito::json::Value::from(false)
     );
     assert_eq!(asset_value(&client, &alice_asset)?, Some(numeric!(10)));
-    assert_eq!(asset_value(&client, &bob_asset)?, Some(numeric!(10)));
+    assert_eq!(asset_value(&client, &recipient_asset)?, Some(numeric!(10)));
     assert_eq!(asset_value(&client, &escrow_asset)?, None);
 
     call_contract_expect_status(
@@ -785,12 +783,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "open_escrow",
-        Some(open_escrow_args(
-            &BOB_ID,
-            &escrow_id,
-            &asset_definition_id,
-            10,
-        )),
+        Some(open_escrow_args(10)),
         "Rejected",
         "reopen_after_release",
     )
@@ -818,16 +811,8 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     network.ensure_blocks(1).await?;
     let client = network.client();
     let http = reqwest::Client::new();
-    let (escrow_id, escrow_keypair) = gen_account_in("wonderland");
-    let asset_definition_id = unique_asset_definition_id("refund_flow");
-    setup_ledger_for_sample(
-        &client,
-        &escrow_id,
-        &escrow_keypair,
-        &asset_definition_id,
-        20,
-    )
-    .await?;
+    let asset_definition_id = sample_asset_definition_id();
+    setup_ledger_for_sample(&client, &asset_definition_id, 20).await?;
 
     let contract_address = deploy_threshold_escrow(&client, &http).await?;
 
@@ -838,12 +823,7 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "open_escrow",
-        Some(open_escrow_args(
-            &BOB_ID,
-            &escrow_id,
-            &asset_definition_id,
-            9,
-        )),
+        Some(open_escrow_args(9)),
         "Applied",
         "open_escrow",
     )
@@ -862,7 +842,7 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     .await?;
 
     let alice_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
-    let escrow_asset = AssetId::new(asset_definition_id.clone(), escrow_id.clone());
+    let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     assert_eq!(asset_value(&client, &alice_asset)?, Some(numeric!(17)));
     assert_eq!(asset_value(&client, &escrow_asset)?, Some(numeric!(3)));
 
@@ -950,12 +930,7 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "open_escrow",
-        Some(open_escrow_args(
-            &BOB_ID,
-            &escrow_id,
-            &asset_definition_id,
-            9,
-        )),
+        Some(open_escrow_args(9)),
         "Rejected",
         "reopen_after_refund",
     )

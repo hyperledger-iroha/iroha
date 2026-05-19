@@ -68,6 +68,10 @@ class HttpClientTransportTest {
         val seed = ByteArray(32) { it.toByte() }
         val baseParameters = sampleBfvParameters()
 
+        assertFailsWith<IllegalArgumentException> {
+            sampleBfvPolicy(baseParameters).encryptInput("abcd", seed)
+        }
+
         val nonDivisibleModulus = IdentifierBfvPublicParameters(
             IdentifierBfvPublicParameters.Parameters(8L, 257L, 16_842_753L, 12),
             baseParameters.publicKey,
@@ -75,6 +79,45 @@ class HttpClientTransportTest {
         )
         assertFailsWith<IllegalArgumentException> {
             sampleBfvPolicy(nonDivisibleModulus).encryptInput("ab", seed)
+        }
+
+        val nonPowerOfTwoDegree = IdentifierBfvPublicParameters(
+            IdentifierBfvPublicParameters.Parameters(7L, 257L, 16_842_752L, 12),
+            baseParameters.publicKey,
+            3,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            sampleBfvPolicy(nonPowerOfTwoDegree).encryptInput("ab", seed)
+        }
+
+        val invalidDecompositionBase = IdentifierBfvPublicParameters(
+            IdentifierBfvPublicParameters.Parameters(8L, 257L, 16_842_752L, 17),
+            baseParameters.publicKey,
+            3,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            sampleBfvPolicy(invalidDecompositionBase).encryptInput("ab", seed)
+        }
+
+        val truncatedPublicKey = IdentifierBfvPublicParameters(
+            baseParameters.parameters,
+            IdentifierBfvPublicParameters.PublicKey(
+                baseParameters.publicKey.b.drop(1),
+                baseParameters.publicKey.a,
+            ),
+            3,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            sampleBfvPolicy(truncatedPublicKey).encryptInput("ab", seed)
+        }
+
+        val zeroInputLimit = IdentifierBfvPublicParameters(
+            baseParameters.parameters,
+            baseParameters.publicKey,
+            0,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            sampleBfvPolicy(zeroInputLimit).encryptInput("ab", seed)
         }
 
         val oversizedCoefficient = IdentifierBfvPublicParameters(

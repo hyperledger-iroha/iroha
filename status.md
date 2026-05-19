@@ -23,6 +23,13 @@ Last updated: 2026-05-19
   `cargo test -p integration_tests --test core_api threshold_escrow:: -- --nocapture`,
   and the full `cargo test -p integration_tests --test core_api -- --nocapture`
   suite (`171 passed; 0 failed; 4 ignored`).
+- Broad Rust validation is green with `cargo build --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, and the full
+  `cargo test -p integration_tests --test consensus_and_da -- --nocapture`
+  suite (`258 passed; 0 failed; 7 ignored`). The preceding workspace test run
+  had reached `consensus_and_da`; the RAM-LFE receipt, mode-cutover, and
+  fingerprint regressions exposed there are now covered by the passing full
+  `consensus_and_da` binary.
 - Hygiene is green with `cargo fmt --all -- --check` and `git diff --check`.
 
 ## 2026-05-19 First-release FHE/RAM-LFE correctness pass
@@ -120,6 +127,30 @@ Last updated: 2026-05-19
   --lib -- --nocapture` and
   `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_crypto fhe_bfv
   --lib -- --nocapture`.
+- Additional negative/adversarial FHE coverage now exercises static hidden
+  program shape/memory/register/output overflow rejection, tampered BFV digests,
+  tampered RAM-FHE profiles, proof-verifier metadata abuse, truncated
+  ciphertext envelopes, adversarial BFV evaluation-key metadata, unregistered
+  production BFV parameter sets, decrypted identifier envelopes with impossible
+  length/byte/trailing-slot metadata, replayed/tampered/future/expired/
+  wrong-verifier output openings, Torii receipt-signing/backend mismatches,
+  Soracloud missing/malformed evaluation-key material, empty/malformed
+  ciphertext slots, malformed relinearization keys, slot-count mismatches, and
+  SDK-side adversarial BFV public-parameter/input rejection. Focused validation
+  is green with `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p
+  iroha_crypto fhe_bfv --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_crypto ram_lfe
+  --lib -- --nocapture`, `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p
+  iroha_torii identifier_resolution --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_core soracloud
+  --lib -- --nocapture`, `node --test test/toriiClient.identifier.test.js
+  test/toriiClient.ramLfe.test.js`, `npm run lint`,
+  `JAVA_HOME=/tmp/temurin21/Contents/Home ./gradlew :core-jvm:test
+  --console=plain` from `kotlin/`, and
+  `JAVA_HOME=/tmp/temurin21/Contents/Home ANDROID_HOME=~/Library/Android/sdk
+  ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain` from
+  `java/iroha_android/`. Hygiene is green with `cargo fmt --all -- --check`
+  and `git diff --check`.
 
 ## 2026-05-19 Structural hardening validation closeout
 

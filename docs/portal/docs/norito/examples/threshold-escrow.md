@@ -31,7 +31,7 @@ Single-payer escrow that accepts top-ups to an exact target amount, then release
 seiyaku ThresholdEscrow {
   meta { abi_version: 1; }
 
-  const recipient_account_literal: String = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+  const recipient_account_literal: String = "sorauﾛ1PｽNgｿﾘ9ﾏﾕ2ﾕ9ﾄZﾀﾃﾌWwNｸｾヰﾄﾂT3WｺTxｶｵﾎKﾓﾛmｷ4Y6PLN";
   const escrow_account_literal: String = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
   const escrow_asset_definition_literal: String = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 

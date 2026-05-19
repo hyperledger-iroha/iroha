@@ -799,6 +799,16 @@ final class ToriiClientTests: XCTestCase {
         return writer.data
     }
 
+    private func constVecBytes(_ bytes: Data) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeLength(UInt64(bytes.count))
+        for byte in bytes {
+            writer.writeLength(1)
+            writer.writeUInt8(byte)
+        }
+        return writer.data
+    }
+
     private func readCompactLength(_ data: Data, offset: inout Int) throws -> Int {
         var shift = 0
         var result: UInt64 = 0
@@ -875,6 +885,15 @@ final class ToriiClientTests: XCTestCase {
         return canonicalPayload
     }
 
+    private func openingSignaturePayload(in encodedPayload: Data) throws -> Data {
+        let openingFieldRange = try noritoFieldRange(in: encodedPayload, fieldIndex: 2)
+        let openingField = Data(encodedPayload[openingFieldRange])
+        let openingPayload = try noritoFieldPayload(openingField)
+        let signatureFieldRange = try noritoFieldRange(in: openingPayload, fieldIndex: 1)
+        let signatureField = Data(openingPayload[signatureFieldRange])
+        return try noritoFieldPayload(signatureField)
+    }
+
     private func identifierReceiptJSON(
         payload: ToriiIdentifierResolutionPayload,
         signatureHex: String
@@ -891,6 +910,39 @@ final class ToriiClientTests: XCTestCase {
           }
         }
         """
+    }
+
+    private func identifierReceipt(
+        payload: ToriiIdentifierResolutionPayload,
+        signatureHex: String
+    ) throws -> ToriiIdentifierResolutionReceipt {
+        try JSONDecoder().decode(
+            ToriiIdentifierResolutionReceipt.self,
+            from: Data(try identifierReceiptJSON(payload: payload, signatureHex: signatureHex).utf8)
+        )
+    }
+
+    private func identifierPolicy(
+        policyId: String = "phone#retail",
+        owner: String,
+        resolverPublicKey: String,
+        active: Bool = true,
+        backend: String = "bfv-affine-sha3-256-v1"
+    ) -> ToriiIdentifierPolicySummary {
+        ToriiIdentifierPolicySummary(
+            policyId: policyId,
+            owner: owner,
+            active: active,
+            normalization: .phoneE164,
+            resolverPublicKey: resolverPublicKey,
+            backend: backend,
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: nil,
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1547,6 +1599,50 @@ final class ToriiClientTests: XCTestCase {
         )
     }
 
+    func testIdentifierReceiptOpeningSignatureConstVecEncodingUsesLongLengthFraming() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let longSignature = Data((0..<128).map { UInt8($0) })
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1",
+            openingSignatureHex: longSignature.hexUppercased()
+        )
+
+        let signaturePayload = try openingSignaturePayload(
+            in: ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
+        )
+
+        XCTAssertEqual(signaturePayload, constVecBytes(longSignature))
+        XCTAssertNotEqual(signaturePayload, legacyFlatBytesVec(longSignature))
+        XCTAssertEqual(
+            Data(signaturePayload.prefix(6)),
+            Data([0x80, 0x01, 0x01, 0x00, 0x01, 0x01])
+        )
+    }
+
+    func testIdentifierReceiptRejectsMalformedOpeningSignatureHex() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1",
+            openingSignatureHex: "0xGG"
+        )
+
+        XCTAssertThrowsError(try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                XCTFail("expected invalid payload error, got \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("payload.opening.signature"))
+        }
+    }
+
     func testIdentifierReceiptRejectsLegacyFlatOpeningSignatureAttestation() throws {
         let accountId = try canonicalOwnerLiteral()
         let payload = makeSignedIdentifierReceiptPayload(
@@ -1645,6 +1741,265 @@ final class ToriiClientTests: XCTestCase {
 
         XCTAssertEqual(try originalReceipt.verifyAttestation(using: policy), true)
         XCTAssertEqual(try mutatedReceipt.verifyAttestation(using: policy), false)
+    }
+
+    func testIdentifierReceiptRejectsMismatchedPolicySummaryBeforeSignatureVerification() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let receipt = try identifierReceipt(payload: payload, signatureHex: signed.signatureHex)
+        let policy = identifierPolicy(
+            policyId: "email#retail",
+            owner: accountId,
+            resolverPublicKey: signed.resolverPublicKey
+        )
+
+        XCTAssertThrowsError(try receipt.verifyAttestation(using: policy)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                XCTFail("expected invalid payload error, got \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("does not match policy summary"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsWrongResolverPublicKey() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let otherSigned = try signedIdentifierReceiptFixture(payload: payload)
+        let receipt = try identifierReceipt(payload: payload, signatureHex: signed.signatureHex)
+        let validPolicy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: signed.resolverPublicKey
+        )
+        let wrongKeyPolicy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: otherSigned.resolverPublicKey
+        )
+
+        XCTAssertNotEqual(signed.resolverPublicKey, otherSigned.resolverPublicKey)
+        XCTAssertEqual(try receipt.verifyAttestation(using: validPolicy), true)
+        XCTAssertEqual(try receipt.verifyAttestation(using: wrongKeyPolicy), false)
+    }
+
+    func testIdentifierReceiptRejectsMalformedResolverPublicKey() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let receipt = try identifierReceipt(payload: payload, signatureHex: signed.signatureHex)
+        let validPolicy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: signed.resolverPublicKey
+        )
+        let malformedPolicy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: "ed25519:not-hex"
+        )
+
+        XCTAssertEqual(try receipt.verifyAttestation(using: validPolicy), true)
+        XCTAssertThrowsError(try receipt.verifyAttestation(using: malformedPolicy)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                XCTFail("expected invalid payload error, got \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("resolverPublicKey"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsMalformedAttestationSignatureHex() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let receipt = try identifierReceipt(payload: payload, signatureHex: "GG")
+        let policy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: signed.resolverPublicKey
+        )
+
+        XCTAssertThrowsError(try receipt.verifyAttestation(using: policy)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                XCTFail("expected invalid payload error, got \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("attestation.signature"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsProofAttestationVerificationWithResolverKey() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+        let receiptJSON = """
+        {
+          "payload":\(payloadJSON),
+          "attestation":{
+            "kind":"proof",
+            "proof_backend":"ram-lfe-v1",
+            "proof_b64":"AAAA"
+          }
+        }
+        """
+        let receipt = try JSONDecoder().decode(
+            ToriiIdentifierResolutionReceipt.self,
+            from: Data(receiptJSON.utf8)
+        )
+        let policy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: signed.resolverPublicKey
+        )
+
+        XCTAssertThrowsError(try receipt.verifyAttestation(using: policy)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                XCTFail("expected invalid payload error, got \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("Only signed identifier receipt attestations"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsSignedAttestationMissingSignatureDuringDecode() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+        let receiptJSON = """
+        {
+          "payload":\(payloadJSON),
+          "attestation":{
+            "kind":"signed"
+          }
+        }
+        """
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiIdentifierResolutionReceipt.self,
+                from: Data(receiptJSON.utf8)
+            )
+        ) { error in
+            guard case let DecodingError.dataCorrupted(context) = error else {
+                XCTFail("expected dataCorrupted decode error, got \(error)")
+                return
+            }
+            XCTAssertTrue(context.debugDescription.contains("require only signature"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsSignedAttestationWithProofFieldsDuringDecode() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+        let receiptJSON = """
+        {
+          "payload":\(payloadJSON),
+          "attestation":{
+            "kind":"signed",
+            "signature":"\(signed.signatureHex)",
+            "proof_backend":"ram-lfe-v1",
+            "proof_b64":"AAAA"
+          }
+        }
+        """
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiIdentifierResolutionReceipt.self,
+                from: Data(receiptJSON.utf8)
+            )
+        ) { error in
+            guard case let DecodingError.dataCorrupted(context) = error else {
+                XCTFail("expected dataCorrupted decode error, got \(error)")
+                return
+            }
+            XCTAssertTrue(context.debugDescription.contains("require only signature"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsUnknownAttestationKindDuringDecode() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+        let receiptJSON = """
+        {
+          "payload":\(payloadJSON),
+          "attestation":{
+            "kind":"unsigned",
+            "signature":"\(signed.signatureHex)"
+          }
+        }
+        """
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiIdentifierResolutionReceipt.self,
+                from: Data(receiptJSON.utf8)
+            )
+        ) { error in
+            guard case let DecodingError.dataCorrupted(context) = error else {
+                XCTFail("expected dataCorrupted decode error, got \(error)")
+                return
+            }
+            XCTAssertTrue(context.debugDescription.contains("attestation kind"))
+        }
     }
 
     func testIdentifierReceiptCanonicalPayloadMatchesLiveToriiFixtureAndRejectsLegacySignature() throws {

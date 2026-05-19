@@ -325,6 +325,42 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV public parameters"
       })(),
     },
     {
+      name: "non-power-of-two polynomial degree",
+      expected: ValidationError,
+      params: (() => {
+        const params = cloneParameters();
+        params.parameters.polynomial_degree = 63;
+        return params;
+      })(),
+    },
+    {
+      name: "decomposition base outside supported range",
+      expected: ValidationError,
+      params: (() => {
+        const params = cloneParameters();
+        params.parameters.decomposition_base_log = 17;
+        return params;
+      })(),
+    },
+    {
+      name: "public key length mismatch",
+      expected: ValidationError,
+      params: (() => {
+        const params = cloneParameters();
+        params.public_key.b = params.public_key.b.slice(1);
+        return params;
+      })(),
+    },
+    {
+      name: "zero max input byte count",
+      expected: ValidationError,
+      params: (() => {
+        const params = cloneParameters();
+        params.max_input_bytes = 0;
+        return params;
+      })(),
+    },
+    {
       name: "public key coefficient outside modulus",
       expected: ValidationError,
       params: (() => {
@@ -361,6 +397,34 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV public parameters"
       name,
     );
   }
+});
+
+test("encryptIdentifierInputForPolicy rejects adversarial client encryption inputs", () => {
+  const policy = {
+    policy_id: "string#retail",
+    owner: ACCOUNT_ID,
+    active: true,
+    normalization: "exact",
+    resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+    backend: "bfv-affine-sha3-256-v1",
+    input_encryption: "bfv-v1",
+    input_encryption_public_parameters_decoded: BFV_PUBLIC_PARAMETERS,
+  };
+
+  assert.throws(
+    () => encryptIdentifierInputForPolicy(policy, "abcd", { seedHex: BFV_SEED_HEX }),
+    ValidationError,
+    "input longer than max_input_bytes must be rejected before encryption",
+  );
+  assert.throws(
+    () =>
+      encryptIdentifierInputForPolicy(policy, "ab", {
+        seed: Buffer.alloc(32, 1),
+        seedHex: BFV_SEED_HEX,
+      }),
+    ValidationError,
+    "ambiguous deterministic seed inputs must be rejected",
+  );
 });
 
 test("resolveIdentifier accepts encrypted input and returns null for missing bindings", async () => {
