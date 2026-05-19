@@ -9490,8 +9490,10 @@ class ToriiClient:
                 creation_raw,
                 f"{context}.creation_time_ms",
             )
+        if record.get("ok") is not True:
+            raise RuntimeError(f"{context}.ok must be true")
         return MultisigResponse(
-            ok=bool(record.get("ok")),
+            ok=True,
             resolved_multisig_account_id=ToriiClient._normalize_canonical_account_id(
                 record.get("resolved_multisig_account_id"),
                 f"{context}.resolved_multisig_account_id",

@@ -452,6 +452,16 @@ class HttpClientTransportTest {
             ContractJsonParser.parseMultisigResponse(
                 """
                     {
+                      "ok": false,
+                      "resolved_multisig_account_id": "multisig"
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<RuntimeException> {
+            ContractJsonParser.parseMultisigResponse(
+                """
+                    {
                       "ok": true,
                       "resolved_multisig_account_id": "multisig",
                       "submitted": "false"
@@ -477,6 +487,17 @@ class HttpClientTransportTest {
                       "ok": true,
                       "resolved_multisig_account_id": "multisig",
                       "signing_message_b64": "not base64"
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<RuntimeException> {
+            ContractJsonParser.parseMultisigResponse(
+                """
+                    {
+                      "ok": true,
+                      "resolved_multisig_account_id": "multisig",
+                      "signing_message_b64": ""
                     }
                 """.trimIndent().toByteArray(StandardCharsets.UTF_8)
             )

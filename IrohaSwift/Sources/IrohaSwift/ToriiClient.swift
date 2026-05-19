@@ -9440,6 +9440,13 @@ public struct ToriiMultisigContractCallResponse: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         ok = try container.decode(Bool.self, forKey: .ok)
+        guard ok else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .ok,
+                in: container,
+                debugDescription: "ok must be true"
+            )
+        }
         let resolved = try container.decode(String.self, forKey: .resolvedMultisigAccountId)
         resolvedMultisigAccountId = try normalizeToriiAccountIdQueryValue(
             resolved,

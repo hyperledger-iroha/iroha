@@ -2071,6 +2071,14 @@ public final class HttpClientTransportTests {
         () ->
             ContractJsonParser.parseMultisigResponse(
                 ("{"
+                        + "\"ok\":false,"
+                        + "\"resolved_multisig_account_id\":\"multisig\"}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "false ok response must be rejected");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseMultisigResponse(
+                ("{"
                         + "\"ok\":true,"
                         + "\"resolved_multisig_account_id\":\"multisig\","
                         + "\"submitted\":\"false\"}")
@@ -2094,6 +2102,15 @@ public final class HttpClientTransportTests {
                         + "\"signing_message_b64\":\"not base64\"}")
                     .getBytes(StandardCharsets.UTF_8)),
         "malformed signing message must be rejected");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseMultisigResponse(
+                ("{"
+                        + "\"ok\":true,"
+                        + "\"resolved_multisig_account_id\":\"multisig\","
+                        + "\"signing_message_b64\":\"\"}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "empty signing message must be rejected");
     expectRuntimeException(
         () ->
             ContractJsonParser.parseMultisigResponse(

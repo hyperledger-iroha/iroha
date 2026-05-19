@@ -103,8 +103,9 @@ object ContractJsonParser {
     @JvmStatic
     fun parseMultisigResponse(payload: ByteArray): MultisigResponse {
         val root = expectObject(parse(payload, "multisig response"), "multisig response")
+        check(root["ok"] == true) { "multisig response.ok must be true" }
         return MultisigResponse(
-            ok = root["ok"] == true,
+            ok = true,
             resolvedMultisigAccountId = requiredString(root["resolved_multisig_account_id"], "multisig response.resolved_multisig_account_id"),
             submitted = optionalBoolean(root["submitted"], "multisig response.submitted"),
             proposalId = optionalString(root["proposal_id"]),
@@ -180,10 +181,9 @@ object ContractJsonParser {
         return parsed
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun requiredList(value: Any?, path: String): List<Any?> {
         check(value is List<*>) { "$path must be an array" }
-        return value as List<Any?>
+        return value
     }
 
     private fun requiredStringList(value: Any?, path: String): List<String> {
@@ -193,7 +193,9 @@ object ContractJsonParser {
     }
 
     private fun optionalBase64(value: Any?, path: String): String? {
-        val literal = optionalString(value) ?: return null
+        if (value == null) return null
+        val literal = if (value is String) value.trim() else value.toString().trim()
+        check(literal.isNotEmpty()) { "$path must be a non-empty base64 string" }
         val decoded = try {
             Base64.getDecoder().decode(literal)
         } catch (ex: IllegalArgumentException) {

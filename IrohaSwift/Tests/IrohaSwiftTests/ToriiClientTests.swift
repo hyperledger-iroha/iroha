@@ -10145,6 +10145,74 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
+    func testProposeMultisigRejectsFalseOkResponse() {
+        let expectation = expectation(description: "propose multisig false ok response")
+        let instruction = try! ToriiMultisigProposeInstruction(base64: "AQID")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"ok":false,"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
+            signerAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            instructions: [instruction]
+        )
+        makeClient().proposeMultisig(request) { result in
+            switch result {
+            case .success:
+                XCTFail("False ok response should be rejected")
+            case .failure(let error):
+                guard case ToriiClientError.decoding = error else {
+                    return XCTFail("Expected decoding error, got \(error)")
+                }
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testProposeMultisigRejectsEmptySigningMessageResponse() {
+        let expectation = expectation(description: "propose multisig empty signing message")
+        let instruction = try! ToriiMultisigProposeInstruction(base64: "AQID")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"ok":true,"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","signing_message_b64":""}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
+            signerAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            instructions: [instruction]
+        )
+        makeClient().proposeMultisig(request) { result in
+            switch result {
+            case .success:
+                XCTFail("Empty signing message should be rejected")
+            case .failure(let error):
+                guard case ToriiClientError.decoding = error else {
+                    return XCTFail("Expected decoding error, got \(error)")
+                }
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
     func testProposeMultisigRejectsNegativeResponseCreationTime() {
         let expectation = expectation(description: "propose multisig negative creation time")
         let instruction = try! ToriiMultisigProposeInstruction(base64: "AQID")

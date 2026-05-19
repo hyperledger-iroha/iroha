@@ -1642,6 +1642,10 @@ fn canonicalize_hex32_literal(literal: &str, context: &str) -> Result<String> {
 }
 
 fn validate_multisig_response(response: &MultisigResponse) -> Result<()> {
+    if !response.ok {
+        return Err(eyre!("multisig response.ok must be true"));
+    }
+
     for (field, value) in [
         (
             "multisig response.instructions_hash",
@@ -4583,8 +4587,23 @@ mod evidence_http_tests {
             "unexpected error: {err}"
         );
 
+        let false_ok_response = json_response(
+            StatusCode::OK,
+            &format!("{{\"ok\":false,\"resolved_multisig_account_id\":\"{multisig_account_id}\"}}"),
+        );
+        let err = with_mock_http(respond_with(&snapshots, false_ok_response), || {
+            client
+                .post_multisig_propose(&request)
+                .expect_err("false ok response must be rejected")
+        });
+        assert!(
+            err.to_string()
+                .contains("failed to validate multisig propose response"),
+            "unexpected error: {err}"
+        );
+
         let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 3);
+        assert_eq!(store.len(), 4);
     }
 
     #[test]

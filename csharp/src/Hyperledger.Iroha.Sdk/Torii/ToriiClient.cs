@@ -784,16 +784,18 @@ public sealed class ToriiClient : IDisposable
             cancellationToken: cancellationToken);
     }
 
-    public Task<ToriiMultisigResponse> ProposeMultisigAsync(
+    public async Task<ToriiMultisigResponse> ProposeMultisigAsync(
         ToriiMultisigProposeRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        return PostAsync<ToriiMultisigProposeRequest, ToriiMultisigResponse>(
+        var response = await PostAsync<ToriiMultisigProposeRequest, ToriiMultisigResponse>(
             "/v1/multisig/propose",
             request,
             cancellationToken: cancellationToken);
+        ValidateMultisigResponse(response, "multisig response");
+        return response;
     }
 
     public Task<ToriiMultisigContractCallResponse> ApproveMultisigContractCallAsync(
@@ -1416,6 +1418,42 @@ public sealed class ToriiClient : IDisposable
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var value = await JsonSerializer.DeserializeAsync<TResponse>(stream, serializerOptions, cancellationToken);
         return value ?? throw new JsonException($"Torii response for `{response.RequestMessage?.RequestUri}` deserialized to null.");
+    }
+
+    private static void ValidateMultisigResponse(ToriiMultisigResponse response, string context)
+    {
+        if (!response.Ok)
+        {
+            throw new JsonException($"{context}.ok must be true.");
+        }
+
+        ValidateOptionalBase64(response.SigningMessageBase64, $"{context}.signing_message_b64");
+    }
+
+    private static void ValidateOptionalBase64(string? value, string field)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+        {
+            throw new JsonException($"{field} must be a non-empty base64 string.");
+        }
+
+        try
+        {
+            if (Convert.FromBase64String(trimmed).Length == 0)
+            {
+                throw new JsonException($"{field} must not decode to empty bytes.");
+            }
+        }
+        catch (FormatException ex)
+        {
+            throw new JsonException($"{field} must be valid base64.", ex);
+        }
     }
 
     private async Task<ToriiApiException> CreateApiExceptionAsync(

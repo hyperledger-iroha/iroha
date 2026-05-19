@@ -3538,6 +3538,55 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
+    public async Task ProposeMultisigAsyncRejectsFalseOkResponse()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                {
+                  "ok": false,
+                  "resolved_multisig_account_id": "sorauﾛ1Nmultisig"
+                }
+                """),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        await Assert.ThrowsAsync<JsonException>(() =>
+            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
+            {
+                MultisigAccountAlias = "ops@universal",
+                SignerAccountId = "sorauﾛ1Nmultisig",
+                Instructions = ["AQID"],
+            }));
+        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task ProposeMultisigAsyncRejectsEmptySigningMessageResponse()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                {
+                  "ok": true,
+                  "resolved_multisig_account_id": "sorauﾛ1Nmultisig",
+                  "signing_message_b64": ""
+                }
+                """),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        await Assert.ThrowsAsync<JsonException>(() =>
+            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
+            {
+                MultisigAccountAlias = "ops@universal",
+                SignerAccountId = "sorauﾛ1Nmultisig",
+                Instructions = ["AQID"],
+            }));
+        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
     public async Task ProposeMultisigAsyncRejectsNegativeCreationTimeResponse()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)

@@ -681,6 +681,23 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
     session.queue(
         StubResponse(
             payload={
+                "ok": False,
+                "resolved_multisig_account_id": CANONICAL_OWNER,
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+    with pytest.raises(RuntimeError, match="ok"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+        )
+
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
                 "ok": True,
                 "resolved_multisig_account_id": CANONICAL_OWNER,
                 "submitted": "false",
@@ -725,6 +742,24 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
     with pytest.raises(RuntimeError, match="valid base64"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+        )
+
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "resolved_multisig_account_id": CANONICAL_OWNER,
+                "signing_message_b64": "",
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+    with pytest.raises(RuntimeError, match="empty bytes"):
         client.propose_multisig(
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
