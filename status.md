@@ -268,7 +268,10 @@ Last updated: 2026-05-19
   (`2 passed`).
 - Hygiene is green with
   `rustfmt --edition 2024 --check crates/iroha/src/client.rs crates/iroha_core/src/state.rs integration_tests/tests/nexus/autoscale_localnet.rs`,
-  `cargo fmt --all -- --check`, and `git diff --check`.
+  `cargo fmt --all -- --check`, and `git diff --check`. The Rust workspace
+  builds with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo build --workspace`
+  (43m44s; optional CUDA kernels were skipped because `nvcc` is not installed).
 - Kotlin/Java SDK Gradle validation was attempted, but this host has no Java
   runtime visible to `/usr/libexec/java_home` or `./gradlew`.
 

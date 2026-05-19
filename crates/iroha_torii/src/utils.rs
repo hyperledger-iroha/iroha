@@ -73,8 +73,12 @@ pub fn current_response_format() -> ResponseFormat {
 }
 
 impl ResponseFormat {
-    fn prefer(a: Self, b: Self) -> bool {
-        matches!((a, b), (Self::Norito, Self::Json))
+    fn prefer_for_default(a: Self, b: Self, default_format: Self) -> bool {
+        match (a == default_format, b == default_format) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => a == Self::Norito && b == Self::Json,
+        }
     }
 }
 
@@ -84,8 +88,27 @@ impl ResponseFormat {
 /// explicitly forbids both JSON and Norito or contains an invalid q-value.
 #[allow(clippy::result_large_err)] // callers expect to bubble the full HTTP response on negotiation failure
 pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<ResponseFormat, Response> {
+    negotiate_response_format_with_default(accept, ResponseFormat::Norito)
+}
+
+/// Negotiate a response format for REST-style routes that are JSON by default.
+///
+/// Explicit `application/x-norito` requests still receive Norito, but omitted
+/// or wildcard `Accept` headers receive JSON to match ordinary HTTP clients.
+#[allow(clippy::result_large_err)] // callers expect to bubble the full HTTP response on negotiation failure
+pub fn negotiate_json_preferred_response_format(
+    accept: Option<&HeaderValue>,
+) -> Result<ResponseFormat, Response> {
+    negotiate_response_format_with_default(accept, ResponseFormat::Json)
+}
+
+#[allow(clippy::result_large_err)] // callers expect to bubble the full HTTP response on negotiation failure
+fn negotiate_response_format_with_default(
+    accept: Option<&HeaderValue>,
+    default_format: ResponseFormat,
+) -> Result<ResponseFormat, Response> {
     let Some(header) = accept else {
-        return Ok(ResponseFormat::Norito);
+        return Ok(default_format);
     };
 
     let raw = match header.to_str() {
@@ -148,7 +171,7 @@ pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<Respons
         } else if media_type.eq_ignore_ascii_case("application/*")
             || media_type.eq_ignore_ascii_case("*/*")
         {
-            Some(ResponseFormat::Norito)
+            Some(default_format)
         } else if is_json_media_type(media_type) {
             Some(ResponseFormat::Json)
         } else {
@@ -170,9 +193,12 @@ pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<Respons
             Some(current) => {
                 if candidate.quality > current.quality + EPS
                     || ((candidate.quality - current.quality).abs() <= EPS
-                        && (ResponseFormat::prefer(candidate.format, current.format)
-                            || (candidate.format == current.format
-                                && candidate.index < current.index)))
+                        && (ResponseFormat::prefer_for_default(
+                            candidate.format,
+                            current.format,
+                            default_format,
+                        ) || (candidate.format == current.format
+                            && candidate.index < current.index)))
                 {
                     best = Some(candidate);
                 }
@@ -1332,6 +1358,29 @@ pub mod extractors {
         fn negotiate_accept_header_wildcard_defaults_norito() {
             let header = HeaderValue::from_static("*/*");
             let format = super::super::negotiate_response_format(Some(&header)).expect("format");
+            assert_eq!(format, super::super::ResponseFormat::Norito);
+        }
+
+        #[test]
+        fn negotiate_json_preferred_defaults_json() {
+            let format =
+                super::super::negotiate_json_preferred_response_format(None).expect("format");
+            assert_eq!(format, super::super::ResponseFormat::Json);
+        }
+
+        #[test]
+        fn negotiate_json_preferred_wildcard_defaults_json() {
+            let header = HeaderValue::from_static("*/*");
+            let format = super::super::negotiate_json_preferred_response_format(Some(&header))
+                .expect("format");
+            assert_eq!(format, super::super::ResponseFormat::Json);
+        }
+
+        #[test]
+        fn negotiate_json_preferred_preserves_explicit_norito() {
+            let header = HeaderValue::from_static("application/x-norito");
+            let format = super::super::negotiate_json_preferred_response_format(Some(&header))
+                .expect("format");
             assert_eq!(format, super::super::ResponseFormat::Norito);
         }
 

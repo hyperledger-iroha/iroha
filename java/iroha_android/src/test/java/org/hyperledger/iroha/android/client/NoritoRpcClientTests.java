@@ -94,7 +94,7 @@ public final class NoritoRpcClientTests {
       final NoritoRpcRequestOptions options =
           NoritoRpcRequestOptions.builder()
               .method("GET")
-              .accept(null)
+              .accept((String) null)
               .putHeader("X-Telemetry-Key", "sample")
               .putQueryParameter("version", "1")
               .timeout(Duration.ofSeconds(2))
