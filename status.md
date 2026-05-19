@@ -2,6 +2,68 @@
 
 Last updated: 2026-05-19
 
+## 2026-05-19 Final validation pass
+
+- After clearing generated `/tmp/iroha-codex-*` target directories to recover
+  disk space, the release-hardening tree validates with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-current-validate cargo build --workspace`
+  and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-current-validate cargo test --workspace --no-run`.
+- Focused runtime coverage is green for the changed paths:
+  `cargo test -p integration_tests --test core_api multisig::multisig_normal`,
+  `cargo test -p integration_tests --test core_api transfer_domain::domain_owner_transfer`,
+  `cargo test -p integration_tests --test core_api threshold_escrow::`,
+  `cargo test -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::tests::`,
+  and the single-cycle, repeated-cycle, and strict autoscale localnet tests.
+  The full `consensus_and_da` binary is also green (`258 passed; 0 failed; 7
+  ignored`).
+- Focused library coverage is green for queue defaults, the minimal config
+  fixture with `LOG_FORMAT` unset, Norito JSON duplicate-field rejection, Torii
+  encrypted-only RAM-LFE DTO rejection, and `iroha_core` identifier claim
+  binding checks. Hygiene is green with `cargo fmt --all -- --check`,
+  `git diff --check`, and `scripts/check_no_scale.sh`.
+
+## 2026-05-19 Nexus autoscale public-testnet hardening
+
+- Nexus scale-in now requires a complete scale-in sample window, active lanes
+  above `min_lanes`, low p95 utilization, and low p95 latency via
+  `scale_in_latency_ratio`; focused unit coverage includes high-latency
+  rejection, full-window enforcement, cooldown suppression, managed-lane-only
+  retirement, and preserving base lanes `0..2` under the public-testnet
+  profile.
+- The Taira-style public-testnet profile keeps autoscale opt-in with
+  `min_lanes = 3`, `max_lanes = 5`, `target_block_ms = 1000`,
+  `scale_out_latency_ratio = 1.50`, `scale_in_latency_ratio = 1.10`,
+  `scale_out_window_blocks = 48`, `scale_in_window_blocks = 192`,
+  `cooldown_blocks = 128`, and `per_lane_target_tps = 32`.
+- The strict localnet autoscale harness now waits for expanded lane status
+  quorum before contraction and keeps submitting low-load heartbeat
+  transactions during contraction/precheck so scale-in has real low-load
+  samples. The local test profile uses a larger autoscale target window to
+  reflect observed DA/NPoS localnet commit jitter while preserving
+  `scale_in_latency_ratio < scale_out_latency_ratio`.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_core --lib autoscale -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_core --lib lane_lifecycle -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params/iroha-test-network cargo build -p irohad --bin iroha3d`,
+  and the single-cycle, repeated-cycle, and strict localnet autoscale tests in
+  `integration_tests --test nexus_and_streaming` using the freshly built
+  `iroha3d` binary.
+
+## 2026-05-19 Torii queue default headroom
+
+- The realistic 30 TPS soak reached 86.9 minutes before Torii rejected ingress
+  with `PRTRY:QUEUE_FULL` at the inherited default `65,536/65,536` pending
+  queue ceiling; the stall detector did not trip first (`max_no_progress_gap`
+  stayed below the 20s threshold).
+- Torii/consensus pending-transaction defaults now set both the global queue
+  capacity and the per-authority queue capacity to `262,144` (4x the previous
+  `65,536`) so default soak and node configs inherit the wider headroom.
+- Focused validation is green with
+  `env -u LOG_FORMAT cargo test -p iroha_config --lib queue_defaults_allow_four_times_legacy_soak_capacity -- --nocapture`
+  and
+  `env -u LOG_FORMAT cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`.
+
 ## 2026-05-19 Contract manifest pipeline trigger filter fix
 
 - Contract manifest trigger fixtures now register deterministic approved-block
@@ -164,8 +226,18 @@ Last updated: 2026-05-19
   tampered or proof-only identifier receipts. The JVM verifier pass now mirrors
   those receipt-adversarial checks in Kotlin and Java: tampered payloads return
   false, proof-only attestations fail the signature verifier, mismatched policy
-  ids are rejected, and malformed signature hex is rejected. Focused
-  validation is green with `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p
+  ids are rejected, and malformed signature hex is rejected. The latest
+  adversarial pass mutates every signed RAM-LFE receipt/opening security
+  binding, mutates every signed identifier receipt linkage, rejects wrong
+  identifier resolver keys, rejects malformed/proof-smuggled JavaScript
+  attestations, and hardens Norito JSON object parsing so duplicate
+  `encrypted_input` / `policy_id` keys, duplicate `output_opening` objects, and
+  nested output-opening shadow fields are rejected before Torii DTO decoding.
+  The on-chain claim path also rejects validly re-signed output openings whose
+  program id, ciphertext hashes, parameter/evaluation-key digests, opened
+  output hash, opaque id binding, or expiry no longer match the execution
+  receipt. Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p
   iroha_crypto fhe_bfv --lib -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_crypto ram_lfe
   --lib -- --nocapture`, `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p
@@ -191,8 +263,19 @@ Last updated: 2026-05-19
   --console=plain` from `kotlin/`, and
   `JAVA_HOME=/tmp/temurin21/Contents/Home ANDROID_HOME=~/Library/Android/sdk
   ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain` from
-  `java/iroha_android/`. Hygiene is green with `cargo fmt --all -- --check`
-  and `git diff --check`.
+  `java/iroha_android/`. The duplicate-key and expanded binding-mutation pass
+  is green with `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p norito
+  --test json_native --features json -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_torii
+  ram_lfe_encrypted_only_request_dto_tests --lib --features app_api --
+  --nocapture`, `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_core
+  claim_identifier --lib -- --nocapture`, `CARGO_TARGET_DIR=target/codex-fhe-fix
+  cargo test -p iroha_data_model ram_lfe --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_data_model
+  identifier_resolution_receipt --lib -- --nocapture`, `node --test
+  test/toriiClient.identifier.test.js test/toriiClient.ramLfe.test.js`, and
+  `npm run lint`. Hygiene is green with `cargo fmt --all -- --check` and
+  `git diff --check`.
 
 ## 2026-05-19 Structural hardening validation closeout
 

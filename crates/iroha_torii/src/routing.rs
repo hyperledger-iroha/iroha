@@ -3232,6 +3232,24 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         assert!(error.to_string().contains("policy_id"));
 
         let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext-a","encrypted_input":"ciphertext-b","output_opening":{}}"#,
+        )
+        .expect_err("duplicate encrypted inputs must be rejected");
+        assert!(error.to_string().contains("encrypted_input"));
+
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":{},"output_opening":{}}"#,
+        )
+        .expect_err("duplicate output openings must be rejected");
+        assert!(error.to_string().contains("output_opening"));
+
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":{"payload":{"program_id":"p","program_id":"q"},"signature":"00"}}"#,
+        )
+        .expect_err("nested duplicate output-opening fields must be rejected");
+        assert!(error.to_string().contains("program_id"));
+
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
             r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":"not-an-opening"}"#,
         )
         .expect_err("output openings must be structured attestation objects");

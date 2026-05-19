@@ -1,9 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for domain permissions and transfers.
 
-use eyre::Result;
+use std::time::{Duration, Instant};
+
+use eyre::{Result, eyre};
 use integration_tests::sandbox;
-use iroha::{crypto::KeyPair, data_model::prelude::*};
+use iroha::{client::Client, crypto::KeyPair, data_model::prelude::*};
 use iroha_executor_data_model::permission::{
     account::CanUnregisterAccount,
     asset::CanTransferAsset,
@@ -16,11 +18,47 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
 use tokio::runtime::Runtime;
 
+const DOMAIN_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(30);
+const DOMAIN_VISIBILITY_POLL: Duration = Duration::from_millis(100);
+
 fn start_network(
     builder: NetworkBuilder,
     context: &'static str,
 ) -> Result<Option<(sandbox::SerializedNetwork, Runtime)>> {
     sandbox::start_network_blocking_or_skip(builder, context)
+}
+
+fn wait_for_domain_owner(
+    client: &Client,
+    domain_id: &DomainId,
+    expected_owner: &AccountId,
+    context: &str,
+) -> Result<Domain> {
+    let deadline = Instant::now() + DOMAIN_VISIBILITY_TIMEOUT;
+    let mut last_owner = None;
+
+    loop {
+        let domain = client
+            .query(FindDomains::new())
+            .execute_all()?
+            .into_iter()
+            .find(|domain| domain.id() == domain_id);
+
+        if let Some(domain) = domain {
+            if domain.owned_by() == expected_owner {
+                return Ok(domain);
+            }
+            last_owner = Some(domain.owned_by().clone());
+        }
+
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "timed out waiting for domain owner after {context}: expected {expected_owner}, last observed {last_owner:?}"
+            ));
+        }
+
+        std::thread::sleep(DOMAIN_VISIBILITY_POLL);
+    }
 }
 
 #[test]
@@ -427,13 +465,8 @@ fn domain_owner_transfer() -> Result<()> {
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(Register::account(bob))?;
 
-    let domain = test_client
-        .query(FindDomains::new())
-        .execute_all()?
-        .into_iter()
-        .find(|domain| domain.id() == &kingdom_id)
-        .expect("Failed to execute Iroha Query");
-
+    let domain =
+        wait_for_domain_owner(&test_client, &kingdom_id, &alice_id, "domain registration")?;
     assert_eq!(domain.owned_by(), &alice_id);
 
     test_client
@@ -444,12 +477,7 @@ fn domain_owner_transfer() -> Result<()> {
         ))
         .expect("Failed to submit transaction");
 
-    let domain = test_client
-        .query(FindDomains::new())
-        .execute_all()?
-        .into_iter()
-        .find(|domain| domain.id() == &kingdom_id)
-        .expect("Failed to execute Iroha Query");
+    let domain = wait_for_domain_owner(&test_client, &kingdom_id, &bob_id, "domain transfer")?;
     assert_eq!(domain.owned_by(), &bob_id);
 
     Ok(())

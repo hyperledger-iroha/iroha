@@ -1309,6 +1309,141 @@ mod tests {
     }
 
     #[test]
+    fn claim_identifier_rejects_validly_signed_opening_mismatched_to_execution() {
+        let mut state = test_state();
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-opening-mismatch"));
+        seed_domain(&mut state, &domain_id, &owner);
+        seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
+
+        let resolver = KeyPair::random();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
+        let program_policy = sample_program_policy(&owner, &resolver, &program_id);
+        let policy = IdentifierPolicy::new(
+            policy_id.clone(),
+            owner.clone(),
+            IdentifierNormalization::PhoneE164,
+            program_id.clone(),
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
+        RegisterIdentifierPolicy { policy }
+            .execute(&owner, &mut tx)
+            .expect("register policy");
+        ActivateIdentifierPolicy {
+            policy_id: policy_id.clone(),
+        }
+        .execute(&owner, &mut tx)
+        .expect("activate policy");
+
+        let resign = |receipt: &mut IdentifierResolutionReceipt| {
+            receipt.payload.opening.signature =
+                SignatureOf::new(resolver.private_key(), &receipt.payload.opening.payload).into();
+            receipt.attestation = RamLfeReceiptAttestation::Signed(
+                SignatureOf::new(resolver.private_key(), &receipt.payload).into(),
+            );
+        };
+
+        macro_rules! assert_claim_rejected {
+            ($label:literal, |$receipt:ident| $body:block, $expected:literal) => {{
+                let mut $receipt = claim_receipt(
+                    &policy_id,
+                    &program_policy,
+                    &resolver,
+                    uaid,
+                    &owner,
+                    0,
+                    Some(60_000),
+                    $label.as_bytes(),
+                );
+                $body
+                resign(&mut $receipt);
+                let err = ClaimIdentifier {
+                    account: owner.clone(),
+                    receipt: $receipt,
+                }
+                .execute(&owner, &mut tx)
+                .expect_err(concat!("claim must reject ", $label));
+                assert!(
+                    err.to_string().contains($expected),
+                    "unexpected error for {}: {err}",
+                    $label
+                );
+            }};
+        }
+
+        assert_claim_rejected!(
+            "opening program mismatch",
+            |receipt| {
+                receipt.payload.opening.payload.program_id =
+                    "email_retail".parse().expect("valid program id");
+            },
+            "does not match execution program"
+        );
+        assert_claim_rejected!(
+            "opening input hash mismatch",
+            |receipt| {
+                receipt.payload.opening.payload.input_ciphertext_hash =
+                    Hash::new(b"tampered-opening-input");
+            },
+            "input ciphertext hash does not match"
+        );
+        assert_claim_rejected!(
+            "opening output hash mismatch",
+            |receipt| {
+                receipt.payload.opening.payload.output_ciphertext_hash =
+                    Hash::new(b"tampered-opening-output");
+            },
+            "output ciphertext hash does not match"
+        );
+        assert_claim_rejected!(
+            "opening parameter digest mismatch",
+            |receipt| {
+                receipt.payload.opening.payload.parameter_digest =
+                    Hash::new(b"tampered-opening-parameters");
+            },
+            "parameter digest does not match"
+        );
+        assert_claim_rejected!(
+            "opening evaluation-key digest mismatch",
+            |receipt| {
+                receipt.payload.opening.payload.evaluation_key_digest =
+                    Hash::new(b"tampered-opening-evaluation-keys");
+            },
+            "evaluation-key digest does not match"
+        );
+        assert_claim_rejected!(
+            "zero opened output hash",
+            |receipt| {
+                receipt.payload.opening.payload.opened_output_hash =
+                    Hash::prehashed([0; Hash::LENGTH]);
+            },
+            "opening hash must not be zero"
+        );
+        assert_claim_rejected!(
+            "stale opaque id after opened output tamper",
+            |receipt| {
+                receipt.payload.opening.payload.opened_output_hash =
+                    Hash::new(b"tampered-opened-output");
+            },
+            "opaque_id does not match"
+        );
+        assert_claim_rejected!(
+            "opening expiry before opened timestamp",
+            |receipt| {
+                receipt.payload.opening.payload.expires_at_ms =
+                    Some(receipt.payload.opening.payload.opened_at_ms);
+            },
+            "opening expiry must be greater"
+        );
+    }
+
+    #[test]
     fn claim_identifier_rejects_zero_receipt_hash() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");

@@ -2296,7 +2296,9 @@ pub mod json {
                 return Err(Error::ExpectedColon { byte, line, col });
             }
             let value = parse_value_internal(p)?;
-            map.insert(key, value);
+            if map.insert(key.clone(), value).is_some() {
+                return Err(Error::duplicate_field(key));
+            }
             p.skip_ws();
             match p.peek() {
                 Some(b',') => {

@@ -169,6 +169,30 @@ fn map_visitor_manual_defaults() {
     assert!(dup.unwrap_err().to_string().contains("duplicate field"));
 }
 
+#[test]
+fn generic_json_value_rejects_duplicate_object_fields() {
+    let err = json::from_json::<json::Value>(r#"{"encrypted_input":"a","encrypted_input":"b"}"#)
+        .expect_err("generic Value parsing must reject duplicate object fields");
+    assert!(err.to_string().contains("encrypted_input"));
+}
+
+#[test]
+fn generic_json_value_rejects_nested_duplicate_object_fields() {
+    let err = json::from_json::<json::Value>(
+        r#"{"output_opening":{"payload":{"program_id":"p","program_id":"q"}}}"#,
+    )
+    .expect_err("generic Value parsing must reject nested duplicate object fields");
+    assert!(err.to_string().contains("program_id"));
+}
+
+#[test]
+fn generic_json_value_rejects_duplicate_object_fields_inside_arrays() {
+    let err =
+        json::from_json::<json::Value>(r#"[{"policy_id":"policy-a","policy_id":"policy-b"}]"#)
+            .expect_err("generic Value parsing must reject duplicate object fields inside arrays");
+    assert!(err.to_string().contains("policy_id"));
+}
+
 fn parse_numeric_keys(input: &str) -> Result<Vec<(u64, bool)>, json::Error> {
     let mut parser = json::Parser::new(input);
     let mut map = MapVisitor::new(&mut parser)?;

@@ -157,6 +157,45 @@ fn wait_for_account_visibility(
     }
 }
 
+fn wait_for_account_metadata_value(
+    client: &Client,
+    account_id: &AccountId,
+    key: &Name,
+    context: &str,
+) -> Result<Json> {
+    let deadline = Instant::now() + ACCOUNT_VISIBILITY_TIMEOUT;
+    let mut last_error = None;
+    let mut last_seen = None;
+
+    while Instant::now() < deadline {
+        match find_account(client, account_id) {
+            Ok(Some(account)) => {
+                if let Some(value) = account.metadata().get(key).cloned() {
+                    return Ok(value);
+                }
+                last_seen = Some(format!("{:?}", account.metadata()));
+            }
+            Ok(None) => {
+                last_seen = Some("account not found".to_owned());
+            }
+            Err(err) => last_error = Some(err),
+        }
+
+        std::thread::sleep(ACCOUNT_VISIBILITY_POLL);
+    }
+
+    if let Some(err) = last_error {
+        Err(err).wrap_err_with(|| {
+            format!("timed out waiting for account `{account_id}` metadata `{key}` after {context}")
+        })
+    } else {
+        Err(eyre!(
+            "timed out waiting for account `{account_id}` metadata `{key}` after {context}; last seen: {}",
+            last_seen.unwrap_or_else(|| "nothing".to_owned())
+        ))
+    }
+}
+
 fn register_runtime_domain(network: &Network, client: &Client, domain: &DomainId) -> Result<()> {
     let register_domain =
         || submit_register_domain_with_network_lease(network, client, Domain::new(domain.clone()));
@@ -1546,7 +1585,14 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
         .and_then(|account| account.metadata().get(&key).cloned());
     match (&transaction_ttl_ms_opt, &unauthorized_target_opt) {
         (None, None) => {
-            res.unwrap();
+            if res.is_none() {
+                wait_for_account_metadata_value(
+                    &test_client,
+                    &transaction_target,
+                    &key,
+                    "multisig quorum execution",
+                )?;
+            }
         }
         _ => {
             assert!(res.is_none());
