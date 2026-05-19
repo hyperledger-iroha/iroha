@@ -1880,7 +1880,6 @@ private struct ToriiIdentifierBfvValidatedParameters {
     let plaintextModulus: UInt64
     let ciphertextModulus: UInt64
     let maxInputBytes: Int
-    let delta: UInt64
     let publicKeyA: [UInt64]
     let publicKeyB: [UInt64]
 }
@@ -1934,8 +1933,6 @@ private struct ToriiIdentifierBfvDeterministicStream {
 private enum ToriiIdentifierBfvEnvelopeBuilder {
     private static let slotDomain = Data("iroha.sdk.identifier.bfv.slot.v1".utf8)
     private static let uDomain = "iroha.sdk.identifier.bfv.u.v1"
-    private static let e1Domain = "iroha.sdk.identifier.bfv.e1.v1"
-    private static let e2Domain = "iroha.sdk.identifier.bfv.e2.v1"
     private static let schemaName = "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext"
 
     static func encrypt(policy: ToriiIdentifierPolicySummary,
@@ -2020,7 +2017,6 @@ private enum ToriiIdentifierBfvEnvelopeBuilder {
             plaintextModulus: params.plaintextModulus,
             ciphertextModulus: params.ciphertextModulus,
             maxInputBytes: maxInputBytes,
-            delta: params.ciphertextModulus / params.plaintextModulus,
             publicKeyA: publicParameters.publicKey.a,
             publicKeyB: publicParameters.publicKey.b
         )
@@ -2050,16 +2046,10 @@ private enum ToriiIdentifierBfvEnvelopeBuilder {
             params: params,
             stream: ToriiIdentifierBfvDeterministicStream(seed: slotSeed, domain: uDomain)
         )
-        let e1 = sampleSmallPolynomial(
-            params: params,
-            stream: ToriiIdentifierBfvDeterministicStream(seed: slotSeed, domain: e1Domain)
-        )
-        let e2 = sampleSmallPolynomial(
-            params: params,
-            stream: ToriiIdentifierBfvDeterministicStream(seed: slotSeed, domain: e2Domain)
-        )
+        let e1 = Array(repeating: UInt64.zero, count: params.polynomialDegree)
+        let e2 = Array(repeating: UInt64.zero, count: params.polynomialDegree)
         var encoded = Array(repeating: UInt64.zero, count: params.polynomialDegree)
-        encoded[0] = multiplyMod(scalar, params.delta, modulus: params.ciphertextModulus)
+        encoded[0] = scalar % params.plaintextModulus
         return ToriiIdentifierBfvCiphertextSlot(
             c0: addPolynomialMod(
                 lhs: addPolynomialMod(

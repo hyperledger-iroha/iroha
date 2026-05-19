@@ -22,10 +22,6 @@ final class IdentifierBfvEnvelopeBuilder {
       "iroha.sdk.identifier.bfv.slot.v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] U_DOMAIN =
       "iroha.sdk.identifier.bfv.u.v1".getBytes(StandardCharsets.UTF_8);
-  private static final byte[] E1_DOMAIN =
-      "iroha.sdk.identifier.bfv.e1.v1".getBytes(StandardCharsets.UTF_8);
-  private static final byte[] E2_DOMAIN =
-      "iroha.sdk.identifier.bfv.e2.v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] NORITO_MAGIC = {'N', 'R', 'T', '0'};
   private static final long CRC64_POLY = 0xC96C5795D7870F42L;
   private static final long[] CRC64_TABLE = buildCrc64Table();
@@ -118,8 +114,8 @@ final class IdentifierBfvEnvelopeBuilder {
     }
     return new ValidatedParameters(
         polynomialDegree,
+        plaintextModulus,
         ciphertextModulus,
-        ciphertextModulus.divide(plaintextModulus),
         maxInputBytes,
         a,
         b);
@@ -146,12 +142,10 @@ final class IdentifierBfvEnvelopeBuilder {
             littleEndianUInt64(slotIndex & 0xffff_ffffL));
     final BigInteger[] u =
         sampleSmallPolynomial(params, new DeterministicStream(slotSeed, U_DOMAIN));
-    final BigInteger[] e1 =
-        sampleSmallPolynomial(params, new DeterministicStream(slotSeed, E1_DOMAIN));
-    final BigInteger[] e2 =
-        sampleSmallPolynomial(params, new DeterministicStream(slotSeed, E2_DOMAIN));
+    final BigInteger[] e1 = zeroPolynomial(params.polynomialDegree);
+    final BigInteger[] e2 = zeroPolynomial(params.polynomialDegree);
     final BigInteger[] encoded = zeroPolynomial(params.polynomialDegree);
-    encoded[0] = BigInteger.valueOf(scalar).multiply(params.delta).mod(params.ciphertextModulus);
+    encoded[0] = BigInteger.valueOf(scalar).mod(params.plaintextModulus);
     return new CiphertextSlot(
         addPolynomialMod(
             addPolynomialMod(
@@ -369,22 +363,22 @@ final class IdentifierBfvEnvelopeBuilder {
 
   private static final class ValidatedParameters {
     private final int polynomialDegree;
+    private final BigInteger plaintextModulus;
     private final BigInteger ciphertextModulus;
-    private final BigInteger delta;
     private final int maxInputBytes;
     private final BigInteger[] publicKeyA;
     private final BigInteger[] publicKeyB;
 
     private ValidatedParameters(
         final int polynomialDegree,
+        final BigInteger plaintextModulus,
         final BigInteger ciphertextModulus,
-        final BigInteger delta,
         final int maxInputBytes,
         final BigInteger[] publicKeyA,
         final BigInteger[] publicKeyB) {
       this.polynomialDegree = polynomialDegree;
+      this.plaintextModulus = plaintextModulus;
       this.ciphertextModulus = ciphertextModulus;
-      this.delta = delta;
       this.maxInputBytes = maxInputBytes;
       this.publicKeyA = publicKeyA;
       this.publicKeyB = publicKeyB;

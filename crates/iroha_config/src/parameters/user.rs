@@ -17497,6 +17497,8 @@ pub struct ToriiRamLfeProgram {
     pub program_id: String,
     /// Hidden derivation secret encoded as hex.
     pub secret_hex: String,
+    /// Norito-encoded hidden BFV RAM-FHE program encoded as hex.
+    pub hidden_program_hex: String,
     /// Private key used to sign receipts for this program.
     pub signer_private_key: ExposedPrivateKey,
     /// Optional receipt TTL expressed in milliseconds.
@@ -17519,9 +17521,27 @@ impl ToriiRamLfeProgram {
         if secret.is_empty() {
             panic!("torii.ram_lfe.programs[{index}].secret_hex must not be empty");
         }
+        let hidden_program_literal = self.hidden_program_hex.trim().trim_start_matches("0x");
+        let hidden_program_bytes = Vec::from_hex(hidden_program_literal).unwrap_or_else(|err| {
+            panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex: {err}")
+        });
+        if hidden_program_bytes.is_empty() {
+            panic!("torii.ram_lfe.programs[{index}].hidden_program_hex must not be empty");
+        }
+        let archived = norito::from_bytes::<iroha_crypto::HiddenRamFheProgram>(
+            hidden_program_bytes.as_slice(),
+        )
+        .unwrap_or_else(|err| {
+            panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex payload: {err}")
+        });
+        let hidden_program = norito::core::NoritoDeserialize::deserialize(archived);
+        iroha_crypto::validate_hidden_ram_fhe_program(&hidden_program).unwrap_or_else(|err| {
+            panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex program: {err}")
+        });
         actual::ToriiRamLfeProgram {
             program_id,
             secret,
+            hidden_program,
             signer_private_key: self.signer_private_key,
             receipt_ttl: self.receipt_ttl_ms.map(DurationMs::get),
         }

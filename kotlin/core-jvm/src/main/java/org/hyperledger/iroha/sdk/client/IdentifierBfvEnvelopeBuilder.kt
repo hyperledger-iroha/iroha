@@ -13,8 +13,6 @@ internal object IdentifierBfvEnvelopeBuilder {
     private val PRG_DOMAIN = "iroha.sdk.identifier.bfv.prg.v1".toByteArray(StandardCharsets.UTF_8)
     private val SLOT_DOMAIN = "iroha.sdk.identifier.bfv.slot.v1".toByteArray(StandardCharsets.UTF_8)
     private val U_DOMAIN = "iroha.sdk.identifier.bfv.u.v1".toByteArray(StandardCharsets.UTF_8)
-    private val E1_DOMAIN = "iroha.sdk.identifier.bfv.e1.v1".toByteArray(StandardCharsets.UTF_8)
-    private val E2_DOMAIN = "iroha.sdk.identifier.bfv.e2.v1".toByteArray(StandardCharsets.UTF_8)
     private val NORITO_MAGIC = byteArrayOf('N'.code.toByte(), 'R'.code.toByte(), 'T'.code.toByte(), '0'.code.toByte())
     private const val CRC64_POLY = -0x3693a86a2878f0beL // 0xC96C5795D7870F42L
     private val CRC64_TABLE = buildCrc64Table()
@@ -74,7 +72,7 @@ internal object IdentifierBfvEnvelopeBuilder {
                 "BFV public-key coefficient exceeds ciphertextModulus"
             }
         }
-        return ValidatedParameters(polynomialDegree, ciphertextModulus, ciphertextModulus.divide(plaintextModulus), maxInputBytes, a, b)
+        return ValidatedParameters(polynomialDegree, plaintextModulus, ciphertextModulus, maxInputBytes, a, b)
     }
 
     private fun encodeIdentifierScalars(maxInputBytes: Int, inputBytes: ByteArray): List<Long> {
@@ -88,10 +86,10 @@ internal object IdentifierBfvEnvelopeBuilder {
     private fun encryptScalar(params: ValidatedParameters, scalar: Long, seed: ByteArray, slotIndex: Int): CiphertextSlot {
         val slotSeed = sha512(SLOT_DOMAIN, seed, littleEndianUInt64((slotIndex.toLong() and 0xffff_ffffL)))
         val u = sampleSmallPolynomial(params, DeterministicStream(slotSeed, U_DOMAIN))
-        val e1 = sampleSmallPolynomial(params, DeterministicStream(slotSeed, E1_DOMAIN))
-        val e2 = sampleSmallPolynomial(params, DeterministicStream(slotSeed, E2_DOMAIN))
+        val e1 = zeroPolynomial(params.polynomialDegree)
+        val e2 = zeroPolynomial(params.polynomialDegree)
         val encoded = zeroPolynomial(params.polynomialDegree)
-        encoded[0] = BigInteger.valueOf(scalar).multiply(params.delta).mod(params.ciphertextModulus)
+        encoded[0] = BigInteger.valueOf(scalar).mod(params.plaintextModulus)
         return CiphertextSlot(
             addPolynomialMod(addPolynomialMod(multiplyPolynomialMod(params, params.publicKeyB, u), e1, params.ciphertextModulus), encoded, params.ciphertextModulus),
             addPolynomialMod(multiplyPolynomialMod(params, params.publicKeyA, u), e2, params.ciphertextModulus)
@@ -260,8 +258,8 @@ internal object IdentifierBfvEnvelopeBuilder {
 
     private class ValidatedParameters(
         val polynomialDegree: Int,
+        val plaintextModulus: BigInteger,
         val ciphertextModulus: BigInteger,
-        val delta: BigInteger,
         val maxInputBytes: Int,
         val publicKeyA: Array<BigInteger>,
         val publicKeyB: Array<BigInteger>

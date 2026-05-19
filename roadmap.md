@@ -6,14 +6,17 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## FHE/RAM-LFE first-release follow-ups
 
-- Replace the current deterministic in-repo BFV evaluator with the full
-  BFV-RNS engine planned for release: RNS modulus chains, real relinearization,
-  packed-slot Galois-key switching, and full BFV bootstrapping. The current pass
-  makes Torii/Soracloud consume and persist real ciphertext envelopes; Soracloud
-  RotateLeft now requires public rotation-key refresh material for the outer
-  ciphertext-slot envelope, and Bootstrap applies a validated public
-  encrypted-zero refresh key. Those refresh paths are still not a complete
-  BFV-RNS bootstrap or packed-polynomial Galois-switching circuit.
+- Replace the current deterministic exact plaintext-lift BFV-shaped evaluator
+  with the full BFV-RNS engine planned for release: bounded RLWE noise, RNS
+  modulus chains, real relinearization, packed-slot Galois-key switching, and
+  full BFV bootstrapping. The current pass makes Torii/Soracloud consume and
+  persist real ciphertext envelopes, evaluates `SelectEqZero` correctly over
+  all byte values in the `F_257` RAM-LFE profile, and keeps evaluators
+  secret-key free. Soracloud RotateLeft now requires public rotation-key
+  refresh material for the outer ciphertext-slot envelope, and Bootstrap
+  applies a validated public encrypted-zero refresh key. Those refresh paths
+  are still not a complete BFV-RNS bootstrap or packed-polynomial
+  Galois-switching circuit.
 - Broaden the cross-SDK deterministic BFV-RNS vector corridor: Kotlin, Java,
   Swift, and JavaScript now require `RamLfeOutputOpening` on identifier
   claim/resolve helpers and their focused suites are green, but shared release

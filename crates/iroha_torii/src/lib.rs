@@ -35894,6 +35894,7 @@ impl Torii {
                 service.register_program_runtime(
                     program_cfg.program_id.clone(),
                     program_cfg.secret.clone(),
+                    program_cfg.hidden_program.clone(),
                     signer,
                     program_cfg
                         .receipt_ttl
@@ -40546,6 +40547,7 @@ pub(crate) mod tests_runtime_handlers {
             programs: vec![iroha_config::parameters::actual::ToriiRamLfeProgram {
                 program_id: "phone_retail".parse().expect("program id"),
                 secret: vec![0x01, 0x02, 0x03, 0x04],
+                hidden_program: iroha_crypto::default_bfv_programmed_hidden_program(),
                 signer_private_key: iroha_crypto::ExposedPrivateKey(signer.private_key().clone()),
                 receipt_ttl: Some(Duration::from_secs(30)),
             }],
@@ -58368,6 +58370,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -58456,6 +58459,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -58528,6 +58532,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -58596,6 +58601,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -58674,6 +58680,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -58747,6 +58754,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -58852,6 +58860,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -58969,6 +58978,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -59077,6 +59087,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -59191,6 +59202,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -59309,6 +59321,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -59393,6 +59406,7 @@ mod tests {
         resolver.register_program_runtime(
             program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );

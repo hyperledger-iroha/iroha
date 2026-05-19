@@ -696,7 +696,7 @@ mod tests {
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
-        block::consensus::LaneBlockCommitment,
+        block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         events::execute_trigger::ExecuteTriggerEventFilter,
         isi::error::{InstructionExecutionError, InvalidParameterError},
         nexus::{
@@ -1734,6 +1734,52 @@ mod tests {
     }
 
     #[test]
+    async fn register_verified_lane_relay_rejects_zero_like_fastpq_digest() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-zero-like-fastpq-digest",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest: iroha_crypto::Hash::prehashed([0; iroha_crypto::Hash::LENGTH]),
+            verified_at_height: state_transaction.block_height(),
+        }));
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("zero-like FastPQ digest must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("FASTPQ binding failed verification")
+        ));
+        Ok(())
+    }
+
+    #[test]
     async fn register_verified_lane_relay_rejects_envelope_block_height_mismatch() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -1832,6 +1878,55 @@ mod tests {
     }
 
     #[test]
+    async fn register_verified_lane_relay_rejects_settlement_dataspace_mismatch() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-settlement-dsid-mismatch",
+            state_transaction.block_height() + 10,
+        );
+        let mut envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        envelope.settlement_commitment.dataspace_id = DataSpaceId::new(11);
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("settlement dataspace mismatch must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("lane relay envelope failed verification")
+                && message.contains("settlement")
+        ));
+        Ok(())
+    }
+
+    #[test]
     async fn register_verified_lane_relay_rejects_settlement_hash_mismatch() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -1872,6 +1967,65 @@ mod tests {
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("settlement hash mismatch must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("lane relay envelope failed verification")
+                && message.contains("settlement")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_settlement_totals_mismatch() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-settlement-totals-mismatch",
+            state_transaction.block_height() + 10,
+        );
+        let mut envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        envelope
+            .settlement_commitment
+            .receipts
+            .push(LaneSettlementReceipt {
+                source_id: [0xA5; 32],
+                local_amount_micro: 1,
+                xor_due_micro: 1,
+                xor_after_haircut_micro: 1,
+                xor_variance_micro: 0,
+                timestamp_ms: 1_700_000_001_000,
+            });
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("settlement totals mismatch must be rejected");
         assert!(matches!(
             err,
             InstructionExecutionError::InvalidParameter(

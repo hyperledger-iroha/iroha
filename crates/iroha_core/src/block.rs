@@ -18604,6 +18604,170 @@ mod tests {
     }
 
     #[test]
+    fn block_validation_sealed_only_entrypoint_executes_only_block_pipeline_trigger() {
+        let chain_id = ChainId::from("sealed-only-pipeline-triggers");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([domain], [account], []);
+        let block_key = Name::from_str("sealed_only_block_pipeline_trigger").expect("metadata key");
+        let tx_key = Name::from_str("sealed_only_tx_pipeline_trigger").expect("metadata key");
+        let dummy_signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+            .sign(keypair.private_key());
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sealed_only_block_approved",
+            block_key.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sealed_only_dummy_tx_approved",
+            tx_key.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new()
+                    .for_hash(dummy_signed.hash())
+                    .for_status(TransactionStatus::Approved),
+            ),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        let metadata_key = Name::from_str("sealed_only_commitment_marker").expect("metadata key");
+        let (commitment_entrypoint, _reveal_entrypoint) =
+            sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key);
+        let accepted_commitment =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let block = BlockBuilder::new(vec![accepted_commitment])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+
+        let valid_block = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        assert!(
+            valid_block
+                .as_ref()
+                .entrypoint_results()
+                .all(|(_, _, result)| result.0.is_ok()),
+            "sealed-only block should validate successfully"
+        );
+        let (block_value, tx_value) = state_block
+            .world
+            .map_account(&authority, |account| {
+                (
+                    account.value().metadata().get(&block_key).cloned(),
+                    account.value().metadata().get(&tx_key).cloned(),
+                )
+            })
+            .expect("authority account exists");
+        assert_eq!(block_value, Some(Json::new("ok")));
+        assert_eq!(
+            tx_value, None,
+            "sealed-only entrypoints must not synthesize transaction pipeline events"
+        );
+    }
+
+    #[test]
+    fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline_trigger() {
+        let chain_id = ChainId::from("sequential-rejected-pipeline-trigger");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([domain], [account], []);
+        let block_key =
+            Name::from_str("sequential_rejected_block_pipeline_trigger").expect("metadata key");
+        let rejected_key =
+            Name::from_str("sequential_rejected_tx_pipeline_trigger").expect("metadata key");
+        let approved_key =
+            Name::from_str("sequential_wrong_approved_tx_pipeline_trigger").expect("metadata key");
+        let external_signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_instructions([Unregister::domain(
+                DomainId::try_new("missing-domain", "universal").expect("valid domain id"),
+            )])
+            .sign(keypair.private_key());
+        let external_hash = external_signed.hash();
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sequential_rejected_block_approved",
+            block_key.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sequential_external_rejected",
+            rejected_key.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new()
+                    .for_hash(external_hash)
+                    .for_status(TransactionStatus::Rejected(Box::new(
+                        TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+                    ))),
+            ),
+        );
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sequential_external_wrong_approved",
+            approved_key.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new()
+                    .for_hash(external_hash)
+                    .for_status(TransactionStatus::Approved),
+            ),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        let metadata_key =
+            Name::from_str("sequential_rejected_commitment_marker").expect("metadata key");
+        let (commitment_entrypoint, _reveal_entrypoint) =
+            sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key);
+        let accepted_external = AcceptedTransaction::new_unchecked(Cow::Owned(external_signed));
+        let accepted_commitment =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let block = BlockBuilder::new(vec![accepted_external, accepted_commitment])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+
+        let valid_block = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results: Vec<_> = valid_block.as_ref().entrypoint_results().collect();
+        assert!(
+            results.iter().any(|(_, _, result)| result.0.is_err()),
+            "mixed sequential block should record the failing external transaction"
+        );
+        let (block_value, rejected_value, approved_value) = state_block
+            .world
+            .map_account(&authority, |account| {
+                (
+                    account.value().metadata().get(&block_key).cloned(),
+                    account.value().metadata().get(&rejected_key).cloned(),
+                    account.value().metadata().get(&approved_key).cloned(),
+                )
+            })
+            .expect("authority account exists");
+        assert_eq!(block_value, Some(Json::new("ok")));
+        assert_eq!(rejected_value, Some(Json::new("ok")));
+        assert_eq!(
+            approved_value, None,
+            "rejected transaction must not match approved transaction filters"
+        );
+    }
+
+    #[test]
     fn block_pipeline_executes_sealed_reveal_and_records_entrypoint_hash() {
         let chain_id = ChainId::from("sealed-block-pipeline");
         let (authority, keypair) = gen_account_in("wonderland");

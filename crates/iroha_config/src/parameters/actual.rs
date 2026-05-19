@@ -6458,6 +6458,8 @@ pub struct ToriiRamLfeProgram {
     pub program_id: iroha_data_model::ram_lfe::RamLfeProgramId,
     /// Hidden derivation secret committed by the on-chain program policy.
     pub secret: Vec<u8>,
+    /// Hidden BFV RAM-FHE program executed by this runtime entry.
+    pub hidden_program: iroha_crypto::HiddenRamFheProgram,
     /// Private key used to sign receipts for this program.
     pub signer_private_key: ExposedPrivateKey,
     /// Optional receipt TTL enforced by the runtime.

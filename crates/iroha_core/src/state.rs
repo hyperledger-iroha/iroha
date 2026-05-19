@@ -39086,6 +39086,86 @@ mod tests {
     }
 
     #[test]
+    fn record_lane_relay_lane_relay_burn_rejects_malformed_verified_state() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let key = State::verified_lane_relay_state_key(&envelope).expect("state key");
+
+        insert_smart_contract_state_payload(&state, key, vec![0xFF, 0x00, 0xFE]);
+
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("malformed canonical verified state must reject burn relay");
+        assert!(matches!(err, LaneRelayError::InvalidFastpqProof));
+        assert!(state.lane_relay_snapshot().is_empty());
+    }
+
+    #[test]
+    fn record_lane_relay_lane_relay_burn_rejects_verified_state_for_different_envelope() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let envelope =
+            sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap.clone())
+                .with_manifest_root(Some([0x44; 32]));
+        let other_envelope =
+            sample_lane_relay_envelope(3, LaneId::new(0), &signers, signers_bitmap)
+                .with_manifest_root(Some([0x44; 32]));
+        let other_record = sample_verified_lane_relay_record(&other_envelope);
+        let key = State::verified_lane_relay_state_key(&envelope).expect("state key");
+
+        insert_verified_lane_relay_record_state(&state, key, &other_record);
+
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("canonical key containing another relay record must be rejected");
+        assert!(matches!(err, LaneRelayError::InvalidFastpqProof));
+        assert!(state.lane_relay_snapshot().is_empty());
+    }
+
+    #[test]
+    fn record_lane_relay_lane_relay_burn_rejects_corrupted_verified_state_fields() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let mut record = sample_verified_lane_relay_record(&envelope);
+        record.proof_payload_hash = Hash::new(b"direct-record-corrupted-proof-hash");
+        let key = State::verified_lane_relay_state_key(&envelope).expect("state key");
+
+        insert_verified_lane_relay_record_state(&state, key, &record);
+
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("corrupted canonical verified state must be rejected");
+        assert!(matches!(err, LaneRelayError::InvalidFastpqProof));
+        assert!(state.lane_relay_snapshot().is_empty());
+    }
+
+    #[test]
+    fn record_lane_relay_lane_relay_burn_does_not_accept_noncanonical_verified_state() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let record = sample_verified_lane_relay_record(&envelope);
+        let key = noncanonical_verified_lane_relay_state_key("direct_record_bypass");
+
+        insert_verified_lane_relay_record_state(&state, key, &record);
+
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("noncanonical verified state must not satisfy burn relay admission");
+        assert!(matches!(err, LaneRelayError::InvalidFastpqProof));
+        assert!(state.lane_relay_snapshot().is_empty());
+    }
+
+    #[test]
     fn merge_candidates_hydrate_verified_lane_relay_records_from_contract_state() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();

@@ -34,6 +34,8 @@ const BLOCK_TIME_MS: u64 = 500;
 const STATUS_POLL_LIMIT: usize = 30;
 const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v1";
 const MODE_POLL_DELAY: Duration = Duration::from_millis(200);
+const POST_CUTOVER_HEIGHT_TIMEOUT: Duration = Duration::from_secs(300);
+const POST_CUTOVER_SUBMIT_INTERVAL: Duration = Duration::from_secs(1);
 
 fn staged_npos_params() -> SumeragiNposParameters {
     SumeragiNposParameters {
@@ -312,19 +314,28 @@ async fn advance_primary_to_height(
     target_height: u64,
     log_prefix: &str,
 ) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    let deadline = tokio::time::Instant::now() + POST_CUTOVER_HEIGHT_TIMEOUT;
+    let mut last_submit = None::<(u64, tokio::time::Instant)>;
     loop {
         let status = client.get_status()?;
         if status.blocks >= target_height {
             return Ok(());
         }
-        let next = status.blocks.saturating_add(1);
-        client.submit(Log::new(Level::INFO, format!("{log_prefix} {next}")))?;
+        let now = tokio::time::Instant::now();
         ensure!(
-            tokio::time::Instant::now() < deadline,
-            "primary client never reached target height {target_height}"
+            now < deadline,
+            "primary client never reached target height {target_height} within {POST_CUTOVER_HEIGHT_TIMEOUT:?}; last status={status:?}"
         );
-        sleep(Duration::from_millis(200)).await;
+
+        let next = status.blocks.saturating_add(1);
+        let should_submit = last_submit.is_none_or(|(height, submitted_at)| {
+            height != next || now.duration_since(submitted_at) >= POST_CUTOVER_SUBMIT_INTERVAL
+        });
+        if should_submit {
+            client.submit(Log::new(Level::INFO, format!("{log_prefix} {next}")))?;
+            last_submit = Some((next, now));
+        }
+        sleep(MODE_POLL_DELAY).await;
     }
 }
 
