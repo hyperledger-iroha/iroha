@@ -117,6 +117,14 @@ fn assert_cuda_disabled_surface_behaves() {
         ivm::poseidon2_cuda(7, 9).is_none(),
         "poseidon2_cuda should return None when CUDA is disabled"
     );
+    assert!(
+        ivm::poseidon2_cuda_many(&[(7, 9)]).is_none(),
+        "poseidon2_cuda_many should fail closed for non-empty batches when CUDA is disabled"
+    );
+    assert!(
+        ivm::poseidon6_cuda_many(&[[1, 2, 3, 4, 5, 6]]).is_none(),
+        "poseidon6_cuda_many should fail closed for non-empty batches when CUDA is disabled"
+    );
 
     let state = [0x42u8; 16];
     let rk = [0x24u8; 16];
@@ -275,6 +283,9 @@ fn assert_cuda_disabled_surface_behaves() {
     assert!(ivm::bn254_add_cuda(bn254_lhs, bn254_rhs).is_none());
     assert!(ivm::bn254_sub_cuda(bn254_lhs, bn254_rhs).is_none());
     assert!(ivm::bn254_mul_cuda(bn254_lhs, bn254_rhs).is_none());
+    assert!(ivm::bn254_add_batch_cuda(&[bn254_lhs], &[bn254_rhs]).is_none());
+    assert!(ivm::bn254_sub_batch_cuda(&[bn254_lhs], &[bn254_rhs]).is_none());
+    assert!(ivm::bn254_mul_batch_cuda(&[bn254_lhs], &[bn254_rhs]).is_none());
 
     let msg = b"cuda disable regression";
     let sig = [0u8; 64];

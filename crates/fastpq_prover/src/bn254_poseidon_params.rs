@@ -16,6 +16,7 @@ pub(crate) struct Bn254PoseidonWidth3Params {
     /// MDS matrix, flattened as `[row][column][limb]`.
     pub(crate) mds: Box<[u64]>,
     /// Total round count.
+    #[cfg(target_os = "macos")]
     pub(crate) round_count: u32,
 }
 
@@ -45,6 +46,7 @@ pub(crate) fn bn254_poseidon_width3_params() -> &'static Bn254PoseidonWidth3Para
         Bn254PoseidonWidth3Params {
             round_constants: round_constants.into_boxed_slice(),
             mds: mds.into_boxed_slice(),
+            #[cfg(target_os = "macos")]
             round_count: u32::try_from(params.round_constants.len())
                 .expect("Poseidon round count must fit into u32"),
         }

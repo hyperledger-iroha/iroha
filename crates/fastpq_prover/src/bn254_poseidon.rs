@@ -394,7 +394,7 @@ mod tests {
         crate::backend::current_gpu_backend() == Some(crate::backend::GpuBackend::Metal)
     }
 
-    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    #[cfg(feature = "fastpq-gpu")]
     fn generated_word_batch(batch_count: usize) -> (Vec<u64>, Vec<Bn254PoseidonBatchSlice>) {
         let mut words = Vec::new();
         let mut slices = Vec::with_capacity(batch_count);
@@ -505,6 +505,13 @@ mod tests {
     }
 
     #[test]
+    fn compact_slice_chunk_rejects_overflowing_ranges() {
+        let words = [1, 2, 3];
+        let slices = [Bn254PoseidonBatchSlice::new(usize::MAX, 1)];
+        assert!(compact_bn254_poseidon_slice_chunk(&words, &slices).is_none());
+    }
+
+    #[test]
     fn direct_gpu_batch_limit_covers_izanami_block_shape() {
         const {
             assert!(
@@ -512,6 +519,55 @@ mod tests {
                 "4096-transfer blocks should submit as one GPU batch"
             );
         };
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn public_gpu_bn254_poseidon_word_batch_matches_cpu_self_test_cases() {
+        if crate::backend::current_gpu_backend().is_none() {
+            return;
+        }
+        let (words, slices) = bn254_poseidon_self_test_batch();
+        let actual = try_hash_bn254_poseidon_word_batches(&words, &slices)
+            .expect("GPU BN254 Poseidon word batch should run");
+        let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn public_gpu_bn254_poseidon_word_batches_match_cpu_large_shapes() {
+        if crate::backend::current_gpu_backend().is_none() {
+            return;
+        }
+        for batch_count in [64, 128, 512, 1_024] {
+            let (words, slices) = generated_word_batch(batch_count);
+            let actual = try_hash_bn254_poseidon_word_batches(&words, &slices)
+                .expect("GPU BN254 Poseidon word batch should run");
+            let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
+            assert_eq!(
+                actual, expected,
+                "GPU BN254 Poseidon mismatch for batch_count={batch_count}"
+            );
+        }
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn public_gpu_bn254_poseidon_repeated_word_batches_are_stable() {
+        if crate::backend::current_gpu_backend().is_none() {
+            return;
+        }
+        let (words, slices) = generated_word_batch(512);
+        let expected = expected_bn254_poseidon_word_hashes(&words, &slices);
+        for iteration in 0..8 {
+            let actual = try_hash_bn254_poseidon_word_batches(&words, &slices)
+                .expect("repeated GPU BN254 Poseidon word batch should run");
+            assert_eq!(
+                actual, expected,
+                "GPU BN254 Poseidon output drifted on iteration {iteration}"
+            );
+        }
     }
 
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]

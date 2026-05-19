@@ -2,6 +2,187 @@
 
 Last updated: 2026-05-19
 
+## 2026-05-19 IVM CUDA vector boundary adversarial hardening
+
+- Hardened the CUDA vector helper entry points so zero-length `f32`, `u32`, and
+  `u64` vector batches short-circuit as deterministic empty outputs before CUDA
+  backend probing, matching the existing no-op behavior of other CUDA batch
+  helpers.
+- Added negative boundary coverage proving empty/mismatched vector inputs are
+  handled without device work: empty pairs return empty outputs, while
+  empty-vs-nonempty adversarial length pairs fail closed.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-ivm-cuda-vector-boundary RUST_TEST_THREADS=1 IVM_CUDA_GENCODE=arch=compute_86,code=sm_86 cargo test -p ivm --features cuda --test cuda_extra cuda_empty_vector_boundaries_short_circuit_without_device_work -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-cuda-vector-boundary RUST_TEST_THREADS=1 IVM_CUDA_GENCODE=arch=compute_86,code=sm_86 cargo test -p ivm --features cuda --test cuda_extra -- --nocapture`,
+  `cargo fmt --all -- --check`, and `git diff --check`.
+
+## 2026-05-19 IVM CUDA env/config adversarial gates
+
+- Extended the CUDA env/config regression tests with a guard that restores
+  `IVM_DISABLE_CUDA`, `IVM_FORCE_CUDA_SELFTEST_FAIL`, acceleration config, and
+  CUDA backend status after each case.
+- Added negative coverage proving malformed or adversarially present
+  `IVM_DISABLE_CUDA` values keep adaptive VM policy fail-closed, explicit
+  config disable marks CUDA unavailable before manager init, config re-enable
+  clears disable diagnostics, and forced backend disable/self-test failure
+  reports deterministic status without requiring a physical GPU.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-ivm-cuda-env RUST_TEST_THREADS=1 IVM_CUDA_GENCODE=arch=compute_86,code=sm_86 cargo test -p ivm --features cuda --test cuda_env -- --nocapture`,
+  `cargo fmt --all -- --check`, and `git diff --check`.
+
+## 2026-05-19 Pipeline CUDA key-bucket adversarial sorting
+
+- Added `iroha_core` pipeline GPU-sort adversarial coverage for access triplets
+  with `u32::MAX` keys, `usize::MAX` transaction indices, and extreme flag
+  bytes. Direct GPU-sort failure now has test coverage proving caller input is
+  preserved for deterministic CPU retry.
+- Added GPU-or-CPU fallback coverage proving unencodable transaction indices
+  cannot be truncated into CUDA sort keys and instead force canonical CPU
+  ordering across extreme key/index/flag combinations.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-core-cuda-adversarial RUST_TEST_THREADS=1 cargo test -p iroha_core pipeline::gpu::tests -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-core-cuda-adversarial RUST_TEST_THREADS=1 IVM_CUDA_GENCODE=arch=compute_86,code=sm_86 cargo test -p iroha_core --features cuda pipeline::gpu::tests -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-core-cuda-adversarial IVM_CUDA_GENCODE=arch=compute_86,code=sm_86 cargo clippy -p iroha_core --features cuda --lib --no-deps -- -D warnings`.
+
+## 2026-05-19 Poseidon CUDA bench adversarial reporting
+
+- Hardened the `poseidon-cuda-bench` timing path so a CUDA first-call parity
+  mismatch fails closed in the report: timing, ops/sec, speedup, and total CUDA
+  operations are left empty/zero instead of benchmarking a mismatched backend.
+- Added xtask adversarial coverage for tampered CUDA Poseidon output,
+  length-short CUDA output, and a CUDA backend that disappears after a valid
+  parity probe. The mismatch tests assert that the timing closure is never
+  invoked after invalid first-call output.
+- Updated the benchmark docs to state that parity-mismatched CUDA outputs are
+  reported as failed evidence rather than throughput evidence.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-xtask-cuda-adversarial RUST_TEST_THREADS=1 cargo test -p xtask cuda_measure -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-xtask-cuda-adversarial RUST_TEST_THREADS=1 cargo test -p xtask poseidon_bench::tests -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-xtask-cuda-adversarial cargo clippy -p xtask --all-targets --no-deps -- -D warnings`.
+
+## 2026-05-19 IVM CUDA adversarial test hardening
+
+- Added IVM CUDA public-helper negative coverage for mismatched vector,
+  bit-operation, BN254 batch, and Ed25519 batch input lengths. The bitonic sort
+  mismatch case now also asserts that rejected calls leave caller buffers
+  unchanged.
+- Added CUDA boundary coverage for zero-length and singleton inputs that should
+  short-circuit deterministically without device work, including bitonic sort,
+  SHA-256 leaves/pair reduction, Poseidon batch helpers, AES batch helpers, and
+  Ed25519 batch verification.
+- Added Ed25519 CUDA adversarial coverage for public-key bytes that must never
+  verify successfully and for tampered batch challenge-scalar metadata that the
+  CUDA batch verifier must reject while accepting the untouched row.
+- Extended the CUDA disable-on-mismatch acceptance suite so non-empty
+  Poseidon2/Poseidon6 batch helpers and BN254 batch helpers fail closed when
+  CUDA is disabled by forced self-test failure or configuration.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-ivm-cuda-adversarial RUST_TEST_THREADS=1 IVM_CUDA_GENCODE=arch=compute_86,code=sm_86 cargo test -p ivm --features cuda --test cuda_extra -- --nocapture` and
+  `CARGO_TARGET_DIR=target/codex-ivm-cuda-adversarial RUST_TEST_THREADS=1 IVM_CUDA_GENCODE=arch=compute_86,code=sm_86 cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture`.
+  A strict focused clippy attempt without `--no-deps` is still blocked by
+  existing `iroha_crypto/src/sm.rs` dead-code warnings, and the same IVM command
+  with `--no-deps` reaches pre-existing CUDA-feature clippy findings in the IVM
+  implementation rather than the new test code.
+
+## 2026-05-19 Norito CUDA helper adversarial hardening
+
+- Added CUDA zstd helper C-ABI negative coverage for null pointers even with
+  zero lengths, rejected decode paths preserving caller output buffers and
+  capacity values, and truncated standard zstd frames failing closed without
+  writing partial output.
+- Added JSON Stage-1 CUDA helper coverage for sequence-planner null control
+  pointers, unknown layout rejection, too-small sequence span capacity reporting
+  the required count without writing partial spans, descending fixed-offset
+  tables failing closed on the CUDA path, and unavailable-helper empty-input
+  behavior.
+- Removed needless explicit returns in the JSON Stage-1 CUDA FFI wrappers so the
+  helper crate passes strict clippy with the CUDA feature enabled.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-cuda-adversarial GPUZSTD_CUDA_REQUIRE=1 RUST_TEST_THREADS=1 cargo test -p gpuzstd_cuda -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-cuda-adversarial-jsonstage1 JSONSTAGE1_CUDA_REQUIRE=1 RUST_TEST_THREADS=1 cargo test -p jsonstage1_cuda --features cuda-kernel -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-cuda-adversarial RUST_TEST_THREADS=1 cargo test -p jsonstage1_cuda --no-default-features -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-cuda-adversarial cargo clippy -p gpuzstd_cuda -p jsonstage1_cuda --all-targets -- -D warnings`.
+
+## 2026-05-19 FASTPQ CUDA adversarial test hardening
+
+- Added negative FASTPQ CUDA wrapper coverage for overflowing BN254 Poseidon
+  word-batch slices, partial Poseidon state buffers, malformed column counts,
+  truncated flattened payloads, short output buffers, mismatched block counts,
+  and short fused leaf+parent output buffers. These cases now fail in the Rust
+  wrapper before any CUDA dispatch.
+- Added trace-layer adversarial coverage for mismatched Poseidon domain/column
+  metadata, out-of-range and overflowing GPU batch windows, and truncated or
+  tampered Merkle-pair GPU outputs. The CPU parity sampler rejects those outputs
+  before they can be accepted as accelerated Merkle parents.
+- Added FASTPQ CUDA suite validation for impossible rows, iterations, and
+  column counts, colliding raw/wrapped output paths, and non-finite active
+  latency thresholds while leaving unused `--no-wrap` thresholds inert.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda FASTPQ_GPU=gpu RUST_TEST_THREADS=1 cargo test -p fastpq_prover --lib --features fastpq-gpu fastpq_cuda::tests -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda FASTPQ_GPU=gpu RUST_TEST_THREADS=1 cargo test -p fastpq_prover --lib --features fastpq-gpu poseidon_column_batch -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda FASTPQ_GPU=gpu RUST_TEST_THREADS=1 cargo test -p fastpq_prover --lib --features fastpq-gpu trace_merkle_pair_parity_sample_rejects_truncated_or_tampered_gpu_output -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda-bn254 RUST_TEST_THREADS=1 cargo test -p fastpq_prover --lib --features fastpq-gpu compact_slice_chunk -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda RUST_TEST_THREADS=1 cargo test -p xtask cuda_suite -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda FASTPQ_GPU=gpu cargo clippy -p fastpq_prover --all-targets --features fastpq-gpu -- -D warnings`, and
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda cargo clippy -p xtask --all-targets --no-deps -- -D warnings`.
+  A full xtask clippy attempt without `--no-deps` still reaches existing
+  `iroha_primitives/src/erasure/rs16.rs` AVX2 clippy failures unrelated to this
+  CUDA test hardening.
+
+## 2026-05-19 FASTPQ CUDA roadmap closure
+
+- CUDA runtime evidence was captured on `DESKTOP-R9RFED4` under WSL2 Ubuntu
+  24.04.4 / Linux `6.6.114.1-microsoft-standard-WSL2`, with an Intel
+  i7-11800H host CPU and an NVIDIA GeForce RTX 3080 Laptop GPU
+  (`16 GiB`, compute capability `8.6`). `nvidia-smi` reported driver
+  `527.56` and CUDA `12.0`; `nvcc --version` reported CUDA toolkit
+  `12.0.140`. The FASTPQ static CUDA build used the current selected arch flag
+  `-arch=sm_80`.
+- `fastpq_cuda_bench` now captures `poseidon_merkle_pairs` in addition to
+  FFT/IFFT/LDE, Poseidon column hashing, and BN254 Poseidon word batches.
+  `fastpq-cuda-suite`, dashboard helpers, stage aggregation scripts, and the
+  benchmark docs accept the new `poseidon_merkle_pairs` and
+  `bn254_poseidon_words` focused-operation filters.
+- A follow-up roadmap audit removed stale CUDA-host and accelerator-validation
+  follow-up wording from earlier FASTPQ planning notes. `roadmap.md` now leaves
+  no CUDA-specific FASTPQ proof, parity, benchmark, or release-comparison task
+  open.
+- FASTPQ CUDA parity is green for generic Poseidon GPU filters, BN254 Poseidon
+  word-batch filters, trace Merkle parent-pair parity filters, low-level fused
+  first-level Poseidon coverage, CUDA FFT/LDE wrappers, and fail-closed
+  telemetry counters. The accepted Merkle-pair path recorded a GPU batch with
+  zero fallbacks in focused coverage.
+- Release CPU/GPU proof parity is green:
+  `v1_artifact_balanced_cpu_gpu_parity` produced CPU and CUDA proofs matching
+  the canonical V1 fixture.
+- Release benchmark capture:
+  `dist/fastpq_cuda_bench_20260519.json` with `rows=20000`, `padded_rows=32768`,
+  `iterations=3`, `warmups=1`, `column_count=16`, `FASTPQ_GPU=gpu`,
+  `gpu_backend=cuda`, and no BN254 warnings. Mean timings were FFT
+  `cpu=3.483ms` / `cuda=117.733ms`, IFFT `cpu=3.554ms` / `cuda=131.261ms`,
+  LDE `cpu=29.284ms` / `cuda=1034.580ms`, Poseidon columns `cpu=756.419ms` /
+  `cuda=3032.520ms`, Poseidon Merkle pairs `cpu=121.938ms` /
+  `cuda=1.830ms` (`66.633x`), and BN254 Poseidon words `cpu=1185.570ms` /
+  `cuda=102.367ms` (`11.582x`). CPU remains the authoritative fallback for the
+  transfer-heavy FFT/IFFT/LDE and Poseidon-column shapes where this host's CUDA
+  path is slower.
+- Focused validation is green with
+  `cargo fmt --all`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda RUST_TEST_THREADS=1 cargo test -p fastpq_prover --bin fastpq_cuda_bench --features fastpq-gpu -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda FASTPQ_GPU=gpu RUST_TEST_THREADS=1 cargo test -p fastpq_prover --lib --features fastpq-gpu cuda -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda FASTPQ_GPU=gpu RUST_TEST_THREADS=1 cargo test -p fastpq_prover --lib --features fastpq-gpu poseidon_gpu -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda FASTPQ_GPU=gpu RUST_TEST_THREADS=1 cargo test -p fastpq_prover --lib --features fastpq-gpu public_gpu -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda RUST_TEST_THREADS=1 cargo test -p iroha_telemetry records_fastpq_gpu_disable_and_parity_metrics --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda-release FASTPQ_GPU=gpu RUST_TEST_THREADS=1 cargo test -p fastpq_prover --test backend_regression --features fastpq-gpu --release v1_artifact_balanced_cpu_gpu_parity -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda-release FASTPQ_GPU=gpu RUST_TEST_THREADS=1 cargo run -p fastpq_prover --bin fastpq_cuda_bench --release --features fastpq-gpu -- --rows 20000 --iterations 3 --warmups 1 --column-count 16 --require-gpu --device "NVIDIA GeForce RTX 3080 Laptop GPU cc8.6 driver 527.56 CUDA 12.0.140 FASTPQ -arch=sm_80" --output dist/fastpq_cuda_bench_20260519.json --notes "CUDA roadmap closure on WSL2; selected FASTPQ CUDA arch flag -arch=sm_80"`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda FASTPQ_GPU=gpu cargo clippy -p fastpq_prover --all-targets --features fastpq-gpu -- -D warnings`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda cargo test -p xtask cuda_operation_filter_accepts_poseidon_merkle_and_bn254_aliases -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fastpq-cuda cargo test -p xtask parse_fastpq_cuda_suite_operation_updates_default_artifact_names -- --nocapture`,
+  `python3 -m py_compile scripts/fastpq/aggregate_stage_timings.py scripts/fastpq/launch_geometry_sweep.py scripts/fastpq/update_dashboard_panel.py scripts/fastpq/metal_capture_summary.py`,
+  `cargo fmt --all -- --check`, and `git diff --check`. `pytest` is not
+  installed on this host, so the focused script tests could not be run through
+  pytest here.
+
 ## 2026-05-19 Final validation pass
 
 - After clearing generated `/tmp/iroha-codex-*` target directories to recover
@@ -3640,8 +3821,8 @@ Last updated: 2026-05-19
   parent-pair accelerator off for the process and fall back to scalar hashing.
 - The high-level fused column API now returns leaves from the parity-proven
   column-batch kernel and first-level parents from the guarded pair-batch path.
-  The older low-level Metal/CUDA fused parent kernels remain parked with TODOs
-  until they have hardware parity evidence.
+  The older low-level Metal/CUDA fused parent kernels remain parked until a
+  fresh throughput gate justifies production hot-path promotion.
 - Metal Poseidon dispatch now waits each staged batch before
   submitting the next one. This avoids a command-semaphore cycle seen when
   many proof tests simultaneously held one queued Poseidon ticket and blocked

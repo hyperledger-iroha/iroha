@@ -24,7 +24,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("reports", nargs="+", help="Paths to fastpq_metal_bench JSON reports")
     parser.add_argument(
         "--operation",
-        choices=["fft", "ifft", "lde", "poseidon_hash_columns"],
+        choices=[
+            "fft",
+            "ifft",
+            "lde",
+            "poseidon_hash_columns",
+            "poseidon_merkle_pairs",
+            "bn254_poseidon_words",
+        ],
         default=None,
         help="Filter by operation (default: include all operations)",
     )

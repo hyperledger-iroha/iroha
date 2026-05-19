@@ -364,6 +364,20 @@ mod tests {
     }
 
     #[test]
+    fn ffi_rejects_null_pointers_even_for_zero_length_buffers() {
+        let mut out = [0u8; 8];
+        let mut out_len = out.len();
+
+        let rc =
+            unsafe { gpu_zstd_compress(std::ptr::null(), 0, 1, out.as_mut_ptr(), &mut out_len) };
+        assert_eq!(rc, RC_INVALID);
+
+        let rc =
+            unsafe { gpu_zstd_decompress(std::ptr::null(), 0, out.as_mut_ptr(), &mut out_len) };
+        assert_eq!(rc, RC_INVALID);
+    }
+
+    #[test]
     fn ffi_reports_no_space_before_cuda_work_for_zero_capacity() {
         let payload = b"gpuzstd ffi boundary";
         let mut out = [0u8; 1];
@@ -390,6 +404,39 @@ mod tests {
             )
         };
         assert_eq!(rc, RC_NO_SPACE);
+    }
+
+    #[test]
+    fn rejected_decode_paths_preserve_output_buffer_and_capacity() {
+        let payload = b"gpuzstd cuda payload";
+        let encoded = zstd::encode_all(Cursor::new(payload), 1).expect("cpu encode");
+        let mut out = [0xA5u8; 4];
+        let mut out_len = out.len();
+        let rc = unsafe {
+            gpu_zstd_decompress(
+                encoded.as_ptr(),
+                encoded.len(),
+                out.as_mut_ptr(),
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, RC_NO_SPACE);
+        assert_eq!(out_len, out.len());
+        assert_eq!(out, [0xA5u8; 4]);
+
+        let invalid = [0u8, 1, 2, 3, 4, 5];
+        let mut out_len = out.len();
+        let rc = unsafe {
+            gpu_zstd_decompress(
+                invalid.as_ptr(),
+                invalid.len(),
+                out.as_mut_ptr(),
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, RC_ZSTD);
+        assert_eq!(out_len, out.len());
+        assert_eq!(out, [0xA5u8; 4]);
     }
 
     #[test]
@@ -550,6 +597,28 @@ mod tests {
             )
         };
         assert_eq!(rc, RC_ZSTD);
+    }
+
+    #[test]
+    fn gpu_decode_rejects_truncated_standard_frames() {
+        let payload = b"gpuzstd truncated standard frame payload";
+        let encoded = zstd::encode_all(Cursor::new(payload), 1).expect("cpu encode");
+        for cut in [1usize, 4, encoded.len() - 1] {
+            let truncated = &encoded[..cut];
+            let mut out = [0x5Au8; 64];
+            let mut out_len = out.len();
+            let rc = unsafe {
+                gpu_zstd_decompress(
+                    truncated.as_ptr(),
+                    truncated.len(),
+                    out.as_mut_ptr(),
+                    &mut out_len,
+                )
+            };
+            assert_eq!(rc, RC_ZSTD, "truncated frame length {cut} accepted");
+            assert_eq!(out_len, out.len());
+            assert_eq!(out, [0x5Au8; 64]);
+        }
     }
 
     #[test]

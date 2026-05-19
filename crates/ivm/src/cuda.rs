@@ -1262,6 +1262,9 @@ mod imp {
         if a.len() != b.len() {
             return None;
         }
+        if a.is_empty() {
+            return Some(Vec::new());
+        }
         let len = a.len();
         let task_id = cuda_task_id(TASK_VECTOR_F32, &[len as u64]);
         with_cuda_task_scope(task_id, || {
@@ -1496,6 +1499,12 @@ mod imp {
     }
 
     pub fn vadd32_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
+        if a.len() != b.len() {
+            return None;
+        }
+        if a.is_empty() {
+            return Some(Vec::new());
+        }
         let task_id = cuda_task_id(TASK_VECTOR_U32, [a.len() as u64, 0].as_slice());
         with_cuda_task_scope(task_id, || {
             if !ensure_cuda_selftest() {
@@ -1506,6 +1515,12 @@ mod imp {
     }
 
     pub fn vand_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
+        if a.len() != b.len() {
+            return None;
+        }
+        if a.is_empty() {
+            return Some(Vec::new());
+        }
         let task_id = cuda_task_id(TASK_VECTOR_U32, [a.len() as u64, 1].as_slice());
         with_cuda_task_scope(task_id, || {
             if !ensure_cuda_selftest() {
@@ -1516,6 +1531,12 @@ mod imp {
     }
 
     pub fn vxor_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
+        if a.len() != b.len() {
+            return None;
+        }
+        if a.is_empty() {
+            return Some(Vec::new());
+        }
         let task_id = cuda_task_id(TASK_VECTOR_U32, [a.len() as u64, 2].as_slice());
         with_cuda_task_scope(task_id, || {
             if !ensure_cuda_selftest() {
@@ -1526,6 +1547,12 @@ mod imp {
     }
 
     pub fn vor_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
+        if a.len() != b.len() {
+            return None;
+        }
+        if a.is_empty() {
+            return Some(Vec::new());
+        }
         let task_id = cuda_task_id(TASK_VECTOR_U32, [a.len() as u64, 3].as_slice());
         with_cuda_task_scope(task_id, || {
             if !ensure_cuda_selftest() {
@@ -1536,6 +1563,12 @@ mod imp {
     }
 
     pub fn vadd64_cuda(a: &[u64], b: &[u64]) -> Option<Vec<u64>> {
+        if a.len() != b.len() {
+            return None;
+        }
+        if a.is_empty() {
+            return Some(Vec::new());
+        }
         let task_id = cuda_task_id(TASK_VECTOR_U64, &[a.len() as u64]);
         with_cuda_task_scope(task_id, || {
             if !ensure_cuda_selftest() {

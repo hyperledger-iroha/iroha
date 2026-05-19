@@ -211,7 +211,9 @@ mod native {
     fn map_cuda(code: i32) -> Result<()> {
         match code {
             0 => Ok(()),
-            other => Err(CudaBackendError::Cuda { code: other as u32 }),
+            other => Err(CudaBackendError::Cuda {
+                code: other.cast_unsigned(),
+            }),
         }
     }
 
@@ -241,7 +243,7 @@ mod native {
                 column_count,
                 log_size,
                 root,
-                &mut handle,
+                &raw mut handle,
             )
         };
         map_cuda(code)?;
@@ -262,7 +264,7 @@ mod native {
                 column_count,
                 log_size,
                 root,
-                &mut handle,
+                &raw mut handle,
             )
         };
         map_cuda(code)?;
@@ -289,7 +291,7 @@ mod native {
                 lde_root,
                 coset,
                 out.as_mut_ptr(),
-                &mut handle,
+                &raw mut handle,
             )
         };
         map_cuda(code)?;
@@ -412,7 +414,9 @@ mod native {
         map_cuda(code)
     }
 
-    // TODO: Re-enable callers after fused CUDA parent parity has hardware evidence.
+    // The low-level fused leaf+parent kernel stays available for parity tests;
+    // production callers use the scalar-equivalent column plus Merkle-pair path
+    // until a fresh throughput gate justifies hot-path promotion.
     #[allow(dead_code)]
     pub(super) fn poseidon_hash_columns_fused(
         payloads: &[u64],
@@ -581,7 +585,8 @@ mod native {
     }
 
     #[cfg(feature = "fastpq-gpu")]
-    // TODO: Re-enable callers after fused CUDA parent parity has hardware evidence.
+    // The low-level fused leaf+parent kernel stays parked in non-CUDA builds too;
+    // production callers use the scalar-equivalent column plus Merkle-pair path.
     #[allow(dead_code)]
     pub(super) fn poseidon_hash_columns_fused(
         _payloads: &[u64],
@@ -1020,11 +1025,14 @@ pub(crate) fn fastpq_bn254_poseidon_hash_words(
 mod tests {
     use iroha_zkp_halo2::Bn254Scalar;
 
-    #[cfg(feature = "fastpq-gpu")]
-    use super::validate_poseidon_states;
     use super::{
         CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde, fastpq_fft, fastpq_lde, usize_to_u32,
         validate_bn254_dense, validate_dense,
+    };
+    #[cfg(feature = "fastpq-gpu")]
+    use super::{
+        fastpq_poseidon_hash_columns, fastpq_poseidon_hash_columns_fused, fastpq_poseidon_permute,
+        validate_poseidon_states,
     };
     use crate::bn254::{
         BN254_LIMBS, canonical_to_scalars, cpu_fft, cpu_lde, sample_columns, sample_coset,
@@ -1116,6 +1124,143 @@ mod tests {
         )
         .expect_err("out-of-bounds slice rejected");
         assert!(matches!(err, CudaBackendError::InvalidInput(_)));
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn bn254_poseidon_words_rejects_overflowing_slice_before_backend_call() {
+        let err = super::fastpq_bn254_poseidon_hash_words(
+            &[],
+            &[crate::bn254_poseidon::Bn254PoseidonBatchSlice::new(
+                usize::MAX,
+                1,
+            )],
+        )
+        .expect_err("overflowing slice rejected");
+        assert_eq!(
+            err,
+            CudaBackendError::InvalidInput("BN254 Poseidon slice range overflows")
+        );
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn poseidon_permute_rejects_partial_state_before_backend_call() {
+        let mut empty = [];
+        fastpq_poseidon_permute(&mut empty).expect("empty Poseidon batch is a no-op");
+
+        let mut partial = [1u64, 2, 3, 4, 5];
+        let err = fastpq_poseidon_permute(&mut partial).expect_err("partial state rejected");
+        assert_eq!(
+            err,
+            CudaBackendError::ShapeMismatch {
+                expected: 6,
+                got: 5,
+            }
+        );
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn poseidon_column_cuda_wrapper_rejects_adversarial_metadata_before_backend_call() {
+        let domains = ["fastpq:v1:trace:column:a", "fastpq:v1:trace:column:b"];
+        let columns = vec![vec![1u64, 2], vec![3u64, 4]];
+        let batch = crate::trace::PoseidonColumnBatch::from_domains_and_columns(&domains, &columns)
+            .expect("valid batch");
+        let payloads = batch.payloads();
+        let slices = batch.offsets();
+        let mut out = vec![0u64; batch.columns() * 3];
+
+        let err = fastpq_poseidon_hash_columns(
+            payloads,
+            slices,
+            batch.columns() + 1,
+            batch.block_count(),
+            &mut out,
+        )
+        .expect_err("column count mismatch rejected");
+        assert_eq!(
+            err,
+            CudaBackendError::ShapeMismatch {
+                expected: usize_to_u32(batch.columns() + 1),
+                got: usize_to_u32(batch.columns()),
+            }
+        );
+
+        let err = fastpq_poseidon_hash_columns(
+            &payloads[..payloads.len() - 1],
+            slices,
+            batch.columns(),
+            batch.block_count(),
+            &mut out,
+        )
+        .expect_err("truncated payload rejected");
+        assert_eq!(
+            err,
+            CudaBackendError::ShapeMismatch {
+                expected: usize_to_u32(payloads.len()),
+                got: usize_to_u32(payloads.len() - 1),
+            }
+        );
+
+        let mut short_out = vec![0u64; batch.columns() * 3 - 1];
+        let err = fastpq_poseidon_hash_columns(
+            payloads,
+            slices,
+            batch.columns(),
+            batch.block_count(),
+            &mut short_out,
+        )
+        .expect_err("short output rejected");
+        assert_eq!(
+            err,
+            CudaBackendError::ShapeMismatch {
+                expected: usize_to_u32(batch.columns() * 3),
+                got: usize_to_u32(batch.columns() * 3 - 1),
+            }
+        );
+
+        let err = fastpq_poseidon_hash_columns(
+            payloads,
+            slices,
+            batch.columns(),
+            batch.block_count() + 1,
+            &mut out,
+        )
+        .expect_err("block count mismatch rejected");
+        assert_eq!(
+            err,
+            CudaBackendError::ShapeMismatch {
+                expected: usize_to_u32((batch.block_count() + 1) * 2),
+                got: usize_to_u32(batch.padded_len()),
+            }
+        );
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn fused_poseidon_cuda_wrapper_rejects_short_parent_output_before_backend_call() {
+        let domains = ["fastpq:v1:trace:column:a", "fastpq:v1:trace:column:b"];
+        let columns = vec![vec![1u64, 2], vec![3u64, 4]];
+        let batch = crate::trace::PoseidonColumnBatch::from_domains_and_columns(&domains, &columns)
+            .expect("valid batch");
+        let expected_hashes = batch.columns() + batch.columns().div_ceil(2);
+        let mut short_out = vec![0u64; expected_hashes - 1];
+        let err = fastpq_poseidon_hash_columns_fused(
+            batch.payloads(),
+            batch.offsets(),
+            batch.columns(),
+            batch.block_count(),
+            &mut short_out,
+        )
+        .expect_err("short fused output rejected");
+        assert_eq!(
+            err,
+            CudaBackendError::ShapeMismatch {
+                expected: usize_to_u32(expected_hashes),
+                got: usize_to_u32(expected_hashes - 1),
+            }
+        );
     }
 
     #[test]
