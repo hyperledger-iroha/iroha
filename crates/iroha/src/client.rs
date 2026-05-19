@@ -11446,7 +11446,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_runtime_abi_active_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/runtime/abi/active");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get runtime ABI active: {} {}",
@@ -11505,6 +11508,7 @@ impl Client {
         let resp = self
             .default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
             .body(body)
             .build()?
             .send()?;
@@ -11524,7 +11528,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_runtime_abi_hash_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/runtime/abi/hash");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get runtime ABI hash: {} {}",
