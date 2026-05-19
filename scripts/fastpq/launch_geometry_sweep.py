@@ -162,7 +162,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--operation",
-        choices=["fft", "ifft", "lde", "poseidon_hash_columns", "all"],
+        choices=[
+            "fft",
+            "ifft",
+            "lde",
+            "poseidon_hash_columns",
+            "poseidon_merkle_pairs",
+            "bn254_poseidon_words",
+            "all",
+        ],
         default="all",
         help="Limit the benchmark to a specific operation (default: all).",
     )

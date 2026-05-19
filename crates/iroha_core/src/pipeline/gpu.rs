@@ -157,4 +157,81 @@ mod tests {
             assert_eq!(triplets.first().unwrap().key, 3);
         }
     }
+
+    #[test]
+    fn gpu_sort_failure_preserves_adversarial_inputs_for_cpu_retry() {
+        let mut triplets = vec![
+            AccessTriplet {
+                key: u32::MAX,
+                tx_index: usize::MAX,
+                flag: u8::MAX,
+            },
+            AccessTriplet {
+                key: 0,
+                tx_index: 0,
+                flag: 1,
+            },
+            AccessTriplet {
+                key: u32::MAX,
+                tx_index: u32::MAX as usize,
+                flag: 0,
+            },
+        ];
+        let original = triplets.clone();
+
+        assert!(
+            sort_triplets_gpu(&mut triplets).is_err(),
+            "direct GPU sort should reject unsupported or unencodable adversarial inputs"
+        );
+        assert_eq!(
+            triplets, original,
+            "failed GPU sort must leave caller input intact for deterministic CPU retry"
+        );
+    }
+
+    #[test]
+    fn gpu_or_cpu_sort_orders_extreme_values_after_gpu_rejection() {
+        let mut triplets = vec![
+            AccessTriplet {
+                key: u32::MAX,
+                tx_index: usize::MAX,
+                flag: u8::MAX,
+            },
+            AccessTriplet {
+                key: 42,
+                tx_index: 7,
+                flag: 1,
+            },
+            AccessTriplet {
+                key: 0,
+                tx_index: usize::MAX,
+                flag: 0,
+            },
+            AccessTriplet {
+                key: 42,
+                tx_index: 7,
+                flag: 0,
+            },
+            AccessTriplet {
+                key: u32::MAX,
+                tx_index: u32::MAX as usize,
+                flag: u8::MAX - 1,
+            },
+        ];
+        let mut reference = triplets.clone();
+        reference.sort_by(|a, b| {
+            a.key
+                .cmp(&b.key)
+                .then_with(|| a.tx_index.cmp(&b.tx_index))
+                .then_with(|| a.flag.cmp(&b.flag))
+        });
+
+        let used_gpu = sort_triplets_gpu_or_cpu(&mut triplets);
+
+        assert!(
+            !used_gpu,
+            "usize::MAX transaction indices must force CPU fallback instead of truncated CUDA keys"
+        );
+        assert_eq!(triplets, reference);
+    }
 }

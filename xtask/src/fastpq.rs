@@ -666,6 +666,8 @@ pub enum StageKind {
     Ifft,
     Lde,
     Poseidon,
+    PoseidonMerklePairs,
+    Bn254PoseidonWords,
 }
 
 impl StageKind {
@@ -675,6 +677,10 @@ impl StageKind {
             "ifft" => Some(Self::Ifft),
             "lde" => Some(Self::Lde),
             "poseidon" | "poseidon_hash_columns" | "poseidon-hash" => Some(Self::Poseidon),
+            "poseidon_merkle_pairs" | "poseidon-merkle-pairs" | "merkle-pairs" => {
+                Some(Self::PoseidonMerklePairs)
+            }
+            "bn254_poseidon_words" | "bn254-poseidon-words" => Some(Self::Bn254PoseidonWords),
             _ => None,
         }
     }
@@ -700,6 +706,16 @@ impl StageKind {
                 label: "poseidon",
                 operation: "poseidon_hash_columns",
                 dir: "poseidon",
+            },
+            StageKind::PoseidonMerklePairs => StageSpec {
+                label: "poseidon_merkle_pairs",
+                operation: "poseidon_merkle_pairs",
+                dir: "poseidon_merkle_pairs",
+            },
+            StageKind::Bn254PoseidonWords => StageSpec {
+                label: "bn254_poseidon_words",
+                operation: "bn254_poseidon_words",
+                dir: "bn254_poseidon_words",
             },
         }
     }
@@ -1074,7 +1090,43 @@ impl CudaSuiteOptions {
     }
 }
 
+fn validate_cuda_suite_options(options: &CudaSuiteOptions) -> Result<()> {
+    ensure!(options.rows > 0, "fastpq-cuda-suite requires --rows > 0");
+    ensure!(
+        options.iterations > 0,
+        "fastpq-cuda-suite requires --iterations > 0"
+    );
+    ensure!(
+        options.column_count > 0,
+        "fastpq-cuda-suite requires --columns > 0"
+    );
+    ensure!(
+        options.rows.checked_next_power_of_two().is_some(),
+        "fastpq-cuda-suite --rows exceeds supported range"
+    );
+    if options.wrap_output {
+        ensure!(
+            options.output != options.raw_output,
+            "fastpq-cuda-suite requires distinct --output and --raw-output when wrapping"
+        );
+    }
+    if options.wrap_output && options.requires_lde_threshold() {
+        ensure!(
+            options.require_lde_mean_ms.is_finite() && options.require_lde_mean_ms >= 0.0,
+            "fastpq-cuda-suite requires finite non-negative --require-lde-mean-ms"
+        );
+    }
+    if options.wrap_output && options.requires_poseidon_threshold() {
+        ensure!(
+            options.require_poseidon_mean_ms.is_finite() && options.require_poseidon_mean_ms >= 0.0,
+            "fastpq-cuda-suite requires finite non-negative --require-poseidon-mean-ms"
+        );
+    }
+    Ok(())
+}
+
 pub fn run_cuda_suite(options: &CudaSuiteOptions) -> Result<CudaSuiteResult> {
+    validate_cuda_suite_options(options)?;
     fs::create_dir_all(
         options
             .output
@@ -1190,6 +1242,7 @@ fn run_command(plan: &mut CommandPlan) -> Result<()> {
 }
 
 fn build_cuda_bench_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
+    validate_cuda_suite_options(options)?;
     let mut args = vec![
         "run".to_owned(),
         "--release".to_owned(),
@@ -1250,6 +1303,7 @@ fn build_cuda_bench_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
 }
 
 fn build_wrap_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
+    validate_cuda_suite_options(options)?;
     let mut args = vec![display_path(&options.wrapper)];
     if options.requires_lde_threshold() {
         args.push("--require-lde-mean-ms".to_owned());
@@ -1749,6 +1803,127 @@ mod tests {
             output.contains("artifacts/fastpq_benchmarks/fastpq_cuda_bench_poseidon_hash_columns_"),
             "unexpected filtered output path: {output}"
         );
+    }
+
+    #[test]
+    fn cuda_operation_filter_accepts_poseidon_merkle_and_bn254_aliases() {
+        assert_eq!(
+            StageKind::from_str("poseidon_merkle_pairs"),
+            Some(StageKind::PoseidonMerklePairs)
+        );
+        assert_eq!(
+            StageKind::from_str("merkle-pairs"),
+            Some(StageKind::PoseidonMerklePairs)
+        );
+        assert_eq!(
+            StageKind::from_str("bn254-poseidon-words"),
+            Some(StageKind::Bn254PoseidonWords)
+        );
+        assert_eq!(
+            StageKind::PoseidonMerklePairs.cuda_operation(),
+            "poseidon_merkle_pairs"
+        );
+        assert_eq!(
+            StageKind::Bn254PoseidonWords.cuda_operation(),
+            "bn254_poseidon_words"
+        );
+    }
+
+    #[test]
+    fn cuda_suite_rejects_zero_dimensions_before_planning() {
+        let temp = TempDir::new().expect("tempdir");
+        for (field, mut options) in [
+            (
+                "rows",
+                CudaSuiteOptions {
+                    rows: 0,
+                    output: temp.path().join("rows-wrapped.json"),
+                    raw_output: temp.path().join("rows-raw.json"),
+                    ..CudaSuiteOptions::default()
+                },
+            ),
+            (
+                "iterations",
+                CudaSuiteOptions {
+                    iterations: 0,
+                    output: temp.path().join("iterations-wrapped.json"),
+                    raw_output: temp.path().join("iterations-raw.json"),
+                    ..CudaSuiteOptions::default()
+                },
+            ),
+            (
+                "columns",
+                CudaSuiteOptions {
+                    column_count: 0,
+                    output: temp.path().join("columns-wrapped.json"),
+                    raw_output: temp.path().join("columns-raw.json"),
+                    ..CudaSuiteOptions::default()
+                },
+            ),
+        ] {
+            options.wrap_output = false;
+            let message = match build_cuda_bench_command(&options) {
+                Ok(_) => panic!("invalid {field} accepted by CUDA suite planner"),
+                Err(error) => error.to_string(),
+            };
+            assert!(
+                message.contains(field),
+                "error should identify invalid {field}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn cuda_suite_rejects_output_collision_when_wrapping() {
+        let temp = TempDir::new().expect("tempdir");
+        let same = temp.path().join("cuda.json");
+        let options = CudaSuiteOptions {
+            output: same.clone(),
+            raw_output: same,
+            dry_run: true,
+            ..CudaSuiteOptions::default()
+        };
+        let message = match run_cuda_suite(&options) {
+            Ok(_) => panic!("colliding CUDA suite outputs were accepted"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            message.contains("distinct --output and --raw-output"),
+            "unexpected collision error: {message}"
+        );
+    }
+
+    #[test]
+    fn cuda_suite_rejects_nonfinite_active_thresholds() {
+        let temp = TempDir::new().expect("tempdir");
+        let options = CudaSuiteOptions {
+            output: temp.path().join("wrapped.json"),
+            raw_output: temp.path().join("raw.json"),
+            require_poseidon_mean_ms: f64::NAN,
+            dry_run: true,
+            ..CudaSuiteOptions::default()
+        };
+        let message = match run_cuda_suite(&options) {
+            Ok(_) => panic!("NaN CUDA Poseidon threshold was accepted"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            message.contains("finite non-negative --require-poseidon-mean-ms"),
+            "unexpected threshold error: {message}"
+        );
+    }
+
+    #[test]
+    fn cuda_suite_ignores_thresholds_when_wrapping_is_disabled() {
+        let temp = TempDir::new().expect("tempdir");
+        let options = CudaSuiteOptions {
+            output: temp.path().join("wrapped.json"),
+            raw_output: temp.path().join("raw.json"),
+            require_poseidon_mean_ms: f64::NAN,
+            wrap_output: false,
+            ..CudaSuiteOptions::default()
+        };
+        build_cuda_bench_command(&options).expect("unused threshold should not block no-wrap run");
     }
 
     #[test]

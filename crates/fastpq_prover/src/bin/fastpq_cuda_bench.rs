@@ -42,6 +42,8 @@ const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 const BN254_LIMBS: usize = 4;
 #[cfg(feature = "fastpq-gpu")]
 const POSEIDON_COLUMN_DOMAIN_PREFIX: &str = "fastpq:v1:trace:column:";
+#[cfg(feature = "fastpq-gpu")]
+const POSEIDON_TRACE_NODE_DOMAIN: &str = "fastpq:v1:trace:node";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationFilter {
@@ -68,6 +70,7 @@ enum BenchOperation {
     Ifft,
     Lde,
     Poseidon,
+    PoseidonMerklePairs,
     Bn254PoseidonWords,
 }
 
@@ -78,6 +81,7 @@ impl BenchOperation {
             Self::Ifft => "ifft",
             Self::Lde => "lde",
             Self::Poseidon => "poseidon_hash_columns",
+            Self::PoseidonMerklePairs => "poseidon_merkle_pairs",
             Self::Bn254PoseidonWords => "bn254_poseidon_words",
         }
     }
@@ -93,6 +97,9 @@ fn parse_operation_filter(raw: &str) -> Result<OperationFilter, String> {
         "lde" => Ok(OperationFilter::Only(BenchOperation::Lde)),
         "poseidon_hash_columns" | "poseidon-hash" | "poseidon" => {
             Ok(OperationFilter::Only(BenchOperation::Poseidon))
+        }
+        "poseidon_merkle_pairs" | "poseidon-merkle-pairs" | "merkle-pairs" => {
+            Ok(OperationFilter::Only(BenchOperation::PoseidonMerklePairs))
         }
         "bn254_poseidon_words" | "bn254-poseidon-words" => {
             Ok(OperationFilter::Only(BenchOperation::Bn254PoseidonWords))
@@ -141,7 +148,7 @@ struct Config {
     /// Fail if the GPU backend is unavailable.
     #[arg(long)]
     require_gpu: bool,
-    /// Restrict the benchmark to a single operation (`fft`, `ifft`, `lde`, `poseidon_hash_columns`, `bn254_poseidon_words`, or `all`).
+    /// Restrict the benchmark to a single operation (`fft`, `ifft`, `lde`, `poseidon_hash_columns`, `poseidon_merkle_pairs`, `bn254_poseidon_words`, or `all`).
     #[arg(long, default_value = "all", value_parser = parse_operation_filter)]
     operation: OperationFilter,
 }
@@ -584,6 +591,14 @@ fn collect_operations(
         entries.push(collect_poseidon_entry(config, columns, probe));
     }
 
+    #[cfg(feature = "fastpq-gpu")]
+    if config
+        .operation
+        .includes(BenchOperation::PoseidonMerklePairs)
+    {
+        entries.push(collect_poseidon_merkle_pairs_entry(config, probe));
+    }
+
     if config
         .operation
         .includes(BenchOperation::Bn254PoseidonWords)
@@ -638,6 +653,44 @@ fn collect_poseidon_entry(
         config.column_count,
         &poseidon.cpu,
         poseidon.gpu.as_ref(),
+    )
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn collect_poseidon_merkle_pairs_entry(config: &Config, probe: &ExecutionProbe) -> OperationEntry {
+    let pairs = generate_merkle_pairs(config.rows);
+    let pair_columns = merkle_pair_columns(&pairs);
+    let cpu = measure_map(
+        &pair_columns,
+        config.warmups,
+        config.iterations,
+        |columns| hash_merkle_pairs_cpu(columns).expect("cpu Merkle pair batch shape"),
+    );
+    let gpu = if probe.gpu_available {
+        measure_map_optional(
+            &pair_columns,
+            config.warmups,
+            config.iterations,
+            |columns| {
+                let pairs = columns_to_merkle_pairs(columns);
+                let batch = PoseidonColumnBatch::from_domain_and_pairs(
+                    POSEIDON_TRACE_NODE_DOMAIN.as_bytes(),
+                    &pairs,
+                )
+                .expect("gpu Merkle pair batch shape");
+                hash_columns_gpu_batch(&batch)
+            },
+        )
+    } else {
+        None
+    };
+    operation_entry(
+        BenchOperation::PoseidonMerklePairs.as_str(),
+        4,
+        1,
+        pairs.len(),
+        &cpu,
+        gpu.as_ref(),
     )
 }
 
@@ -712,6 +765,47 @@ fn generate_bn254_poseidon_word_batch(rows: usize) -> Bn254PoseidonWordBatch {
         slices.push(Bn254PoseidonBatchSlice::new(offset, len));
     }
     Bn254PoseidonWordBatch { words, slices }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn generate_merkle_pairs(pair_count: usize) -> Vec<[u64; 2]> {
+    (0..pair_count)
+        .map(|index| {
+            let left = (index as u64)
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                .wrapping_add(0xd1b5_4a32_d192_ed03)
+                % GOLDILOCKS_MODULUS;
+            let right = (index as u64)
+                .wrapping_mul(0x94d0_49bb_1331_11eb)
+                .rotate_left(17)
+                .wrapping_add(0x2545_f491_4f6c_dd1d)
+                % GOLDILOCKS_MODULUS;
+            [left, right]
+        })
+        .collect()
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn merkle_pair_columns(pairs: &[[u64; 2]]) -> Vec<Vec<u64>> {
+    pairs.iter().map(|pair| pair.to_vec()).collect()
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn columns_to_merkle_pairs(columns: &[Vec<u64>]) -> Vec<[u64; 2]> {
+    columns
+        .iter()
+        .map(|column| {
+            let left = *column.first().expect("Merkle pair column has left value");
+            let right = *column.get(1).expect("Merkle pair column has right value");
+            [left, right]
+        })
+        .collect()
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn hash_merkle_pairs_cpu(columns: &[Vec<u64>]) -> Option<Vec<u64>> {
+    let domains = vec![POSEIDON_TRACE_NODE_DOMAIN; columns.len()];
+    hash_columns_cpu_batch_inputs(&domains, columns)
 }
 
 fn hash_bn254_poseidon_words_cpu(
@@ -1487,7 +1581,7 @@ mod tests {
         };
         let operations = collect_operations(&planner, &config, padded, eval_len, &columns, &probe);
         #[cfg(feature = "fastpq-gpu")]
-        assert_eq!(operations.len(), 5);
+        assert_eq!(operations.len(), 6);
         #[cfg(not(feature = "fastpq-gpu"))]
         assert_eq!(operations.len(), 4);
         assert_eq!(operations[0].operation, "fft");
@@ -1499,6 +1593,9 @@ mod tests {
         {
             assert_eq!(operations[3].operation, "poseidon_hash_columns");
             assert_eq!(operations[3].output_len, 1);
+            assert_eq!(operations[4].operation, "poseidon_merkle_pairs");
+            assert_eq!(operations[4].input_len, 4);
+            assert_eq!(operations[4].output_len, 1);
         }
         assert_eq!(
             operations.last().expect("bn254 words op").operation,
@@ -1512,6 +1609,18 @@ mod tests {
         let domains = poseidon_domains(3);
         assert_eq!(domains[0], "fastpq:v1:trace:column:bench0");
         assert_eq!(domains[2], "fastpq:v1:trace:column:bench2");
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn merkle_pair_generation_is_deterministic_and_cpu_hashable() {
+        let first = generate_merkle_pairs(4);
+        let second = generate_merkle_pairs(4);
+        assert_eq!(first, second);
+        let columns = merkle_pair_columns(&first);
+        assert_eq!(columns_to_merkle_pairs(&columns), first);
+        let hashes = hash_merkle_pairs_cpu(&columns).expect("Merkle pair columns hash");
+        assert_eq!(hashes.len(), first.len());
     }
 
     #[test]
@@ -1528,6 +1637,14 @@ mod tests {
         assert_eq!(
             parse_operation_filter("poseidon-hash").unwrap(),
             OperationFilter::Only(BenchOperation::Poseidon)
+        );
+        assert_eq!(
+            parse_operation_filter("poseidon_merkle_pairs").unwrap(),
+            OperationFilter::Only(BenchOperation::PoseidonMerklePairs)
+        );
+        assert_eq!(
+            parse_operation_filter("merkle-pairs").unwrap(),
+            OperationFilter::Only(BenchOperation::PoseidonMerklePairs)
         );
         assert_eq!(
             parse_operation_filter("bn254_poseidon_words").unwrap(),
