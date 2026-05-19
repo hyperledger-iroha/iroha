@@ -15,6 +15,8 @@ OP_LABELS: Mapping[str, str] = {
     "ifft": "IFFT",
     "lde": "LDE",
     "poseidon_hash_columns": "Poseidon",
+    "poseidon_merkle_pairs": "Poseidon Merkle pairs",
+    "bn254_poseidon_words": "BN254 Poseidon words",
 }
 
 

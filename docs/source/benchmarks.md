@@ -73,9 +73,10 @@ cargo xtask poseidon-cuda-bench --json-out benchmarks/poseidon/poseidon_cuda_lat
 
 which seeds deterministic Poseidon2/6 batches, records CUDA health/disable reasons, checks
 parity against the scalar path, and emits ops/sec + speedup summaries alongside the Metal
-runtime status (feature flag, availability, last error). CPU-only hosts still write the scalar
-reference and note the missing accelerator, so CI can publish artefacts even without a GPU
-runner.
+runtime status (feature flag, availability, last error). CUDA outputs that fail scalar parity
+are reported as mismatches without timing or speedup fields, so invalid accelerator output
+cannot be mistaken for throughput evidence. CPU-only hosts still write the scalar reference
+and note the missing accelerator, so CI can publish artefacts even without a GPU runner.
 
 ## FASTPQ Metal benchmark (Apple Silicon)
 
@@ -128,13 +129,14 @@ Stage 7 captures stay reproducible across GPU runners. Add `--sign-output` and
 plan/paths without executing the bench.
 
 With `fastpq-gpu` enabled, the raw CUDA bench now records `fft`, `ifft`, `lde`,
-and `poseidon_hash_columns` operations. Each entry includes explicit
+`poseidon_hash_columns`, `poseidon_merkle_pairs`, and `bn254_poseidon_words`
+operations. Each entry includes explicit
 `input_len`/`output_len`, `input_bytes`/`output_bytes`, and
 `estimated_gpu_transfer_bytes` fields, and the wrapper preserves those fields
 in the signed bundle so lab captures can separate copy-dominated workloads from
 kernel-dominated ones before digging into lower-level profiler output. Use
-`--operation <fft|ifft|lde|poseidon_hash_columns|all>` when you need a focused
-capture for a single CUDA stage; both the raw bench and
+`--operation <fft|ifft|lde|poseidon_hash_columns|poseidon_merkle_pairs|bn254_poseidon_words|all>`
+when you need a focused capture for a single CUDA stage; both the raw bench and
 `cargo xtask fastpq-cuda-suite` now forward that selector, and the suite only
 passes `--require-lde-mean-ms` / `--require-poseidon-mean-ms` to the wrapper
 when the chosen operation actually includes those metrics. When you keep the

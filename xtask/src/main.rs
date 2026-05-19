@@ -6171,7 +6171,7 @@ where
                         } else {
                             Some(fastpq::StageKind::from_str(&value).ok_or_else(|| {
                                 format!(
-                                    "invalid --operation `{value}`: expected fft, ifft, lde, poseidon_hash_columns, poseidon, poseidon-hash, or all"
+                                    "invalid --operation `{value}`: expected fft, ifft, lde, poseidon_hash_columns, poseidon_merkle_pairs, bn254_poseidon_words, or all"
                                 )
                             })?)
                         };
@@ -12244,7 +12244,7 @@ fn print_usage() {
         "    Run the Metal bench across selected stages, capture optional traces, and emit per-stage summaries for local profiling."
     );
     eprintln!(
-        "  cargo xtask fastpq-cuda-suite [--rows <count>] [--warmups <count>] [--iterations <count>] [--columns <count>] [--operation <fft|ifft|lde|poseidon_hash_columns|all>] [--output <path>] [--raw-output <path>] [--row-usage <path>] [--label key=value]... [--device <label>] [--notes <text>] [--require-gpu] [--sign-output] [--gpg-key <id>] [--accel-instance <label>] [--accel-state-json <path>] [--accel-state-prom <path>] [--no-wrap] [--dry-run]"
+        "  cargo xtask fastpq-cuda-suite [--rows <count>] [--warmups <count>] [--iterations <count>] [--columns <count>] [--operation <fft|ifft|lde|poseidon_hash_columns|poseidon_merkle_pairs|bn254_poseidon_words|all>] [--output <path>] [--raw-output <path>] [--row-usage <path>] [--label key=value]... [--device <label>] [--notes <text>] [--require-gpu] [--sign-output] [--gpg-key <id>] [--accel-instance <label>] [--accel-state-json <path>] [--accel-state-prom <path>] [--no-wrap] [--dry-run]"
     );
     eprintln!(
         "    Drive the CUDA bench harness, optionally wrap/sign the bundle with row-usage/acceleration-state metadata, and record a plan JSON so GPU runners produce reproducible Stage7 evidence. Filtered runs only enforce wrap thresholds for the selected operation."

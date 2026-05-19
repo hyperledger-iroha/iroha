@@ -516,6 +516,16 @@ where
     parity = parity_check(expected, &outputs);
     if !parity.ok {
         note.get_or_insert_with(|| "CUDA parity mismatch".to_string());
+        return CudaSample {
+            available,
+            disabled,
+            total_ops: 0,
+            elapsed_ms: None,
+            ops_per_sec: None,
+            speedup_vs_scalar: None,
+            parity,
+            note,
+        };
     }
 
     let total_ops = batch_len * iterations as usize;
@@ -653,6 +663,95 @@ mod tests {
             allow_overwrite: true,
         };
         assert!(run_poseidon_bench(opts).is_err());
+    }
+
+    #[test]
+    fn cuda_measure_fails_closed_on_tampered_first_call_output() {
+        let scalar = PerfSample {
+            total_ops: 3,
+            elapsed_ms: 1.0,
+            ops_per_sec: 3_000.0,
+        };
+        let expected = [10u64, 20, 30];
+        let sample = measure_cuda_backend(
+            expected.len(),
+            2,
+            &scalar,
+            Some(vec![10, 99, 30]),
+            || -> Option<Vec<u64>> {
+                panic!("mismatched CUDA output must not be timed");
+            },
+            &expected,
+        );
+
+        assert_eq!(sample.total_ops, 0);
+        assert_eq!(sample.elapsed_ms, None);
+        assert_eq!(sample.ops_per_sec, None);
+        assert_eq!(sample.speedup_vs_scalar, None);
+        assert_eq!(sample.note.as_deref(), Some("CUDA parity mismatch"));
+        assert!(sample.parity.checked);
+        assert!(!sample.parity.ok);
+        assert_eq!(sample.parity.mismatch_index, Some(1));
+        assert_eq!(sample.parity.expected, Some(20));
+        assert_eq!(sample.parity.actual, Some(99));
+    }
+
+    #[test]
+    fn cuda_measure_fails_closed_on_short_first_call_output() {
+        let scalar = PerfSample {
+            total_ops: 3,
+            elapsed_ms: 1.0,
+            ops_per_sec: 3_000.0,
+        };
+        let expected = [10u64, 20, 30];
+        let sample = measure_cuda_backend(
+            expected.len(),
+            2,
+            &scalar,
+            Some(vec![10, 20]),
+            || -> Option<Vec<u64>> {
+                panic!("length-mismatched CUDA output must not be timed");
+            },
+            &expected,
+        );
+
+        assert_eq!(sample.total_ops, 0);
+        assert_eq!(sample.elapsed_ms, None);
+        assert_eq!(sample.note.as_deref(), Some("CUDA parity mismatch"));
+        assert!(sample.parity.checked);
+        assert!(!sample.parity.ok);
+        assert_eq!(sample.parity.mismatch_index, Some(0));
+        assert_eq!(sample.parity.expected, None);
+        assert_eq!(sample.parity.actual, None);
+    }
+
+    #[test]
+    fn cuda_measure_records_backend_disappearing_after_valid_probe() {
+        let scalar = PerfSample {
+            total_ops: 3,
+            elapsed_ms: 1.0,
+            ops_per_sec: 3_000.0,
+        };
+        let expected = [10u64, 20, 30];
+        let sample = measure_cuda_backend(
+            expected.len(),
+            2,
+            &scalar,
+            Some(expected.to_vec()),
+            || None::<Vec<u64>>,
+            &expected,
+        );
+
+        assert_eq!(sample.total_ops, expected.len() * 2);
+        assert_eq!(sample.elapsed_ms, None);
+        assert_eq!(sample.ops_per_sec, None);
+        assert_eq!(sample.speedup_vs_scalar, None);
+        assert_eq!(
+            sample.note.as_deref(),
+            Some("CUDA backend disabled during timing run")
+        );
+        assert!(sample.parity.checked);
+        assert!(sample.parity.ok);
     }
 
     #[test]

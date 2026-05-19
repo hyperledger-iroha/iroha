@@ -144,41 +144,14 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## FASTPQ GPU acceleration follow-ups
 
-- Keep the conservative one-state Metal Poseidon dispatch until vectorized
-  multi-state column and Merkle-pair batches have real parity evidence. CUDA
-  parent-pair parity still needs real-host validation before enabling a guarded
-  accelerator there. Keep the scalar fallback active until each backend's
-  preflight passes.
-- Runtime Poseidon parity gates now fail closed: column hashing disables the GPU
-  path after dispatch/self-test/count/parity mismatches, and Merkle parent-pair
-  hashing disables its GPU path after sampled CPU parity mismatch. Prometheus
-  telemetry now records accelerator disable counters and sampled parity-failure
-  counters. Metal proof is green on Apple M1 Ultra for the conservative
-  dispatch, high-level Poseidon GPU gates, first-level fused gate, and BN254
-  word-batch gate. Dashboard and alert wiring for the disable/parity counters
-  is now in place; remaining work is CUDA hardware proof.
-- On a CUDA host, capture the hardware inventory (`nvidia-smi`, CUDA toolkit
-  version, driver version, compute capability, and selected gencode), then run
-  the required FASTPQ CUDA parity corridor with `FASTPQ_GPU=gpu` and the
-  appropriate CUDA arch flags. At minimum, cover generic Poseidon GPU filters,
-  BN254 Poseidon word-batch filters, trace Merkle parent-pair parity filters,
-  and the fail-closed telemetry counters. Record exact commands, host details,
-  and pass/fail output in `status.md`.
-- On the same CUDA host, run a release-mode FASTPQ prover comparison with CPU
-  scalar as the reference and CUDA enabled only after preflight passes. Capture
-  a bench/profile sample for `poseidon_merkle_pairs`, confirm no sampled parity
-  failures or accelerator-disable alerts fire during the accepted run, and keep
-  scalar CPU as the authoritative fallback for every mismatch or dispatch
-  error.
-- If CUDA parity fails, leave the CUDA path fail-closed, file the failing vector
-  shape in `status.md`, and add a focused regression before attempting to
-  re-enable larger CUDA batches. Do not treat macOS Metal evidence, CUDA
-  compile-only evidence, or manifest/table checks as CUDA runtime proof.
-- Rebuild the parked low-level Poseidon fused column+parent kernels with real
-  Metal and CUDA parity proof before putting them back on the hot path. The
-  acceptance run needs scalar-equivalent leaf/parent vectors, a bench sample
-  for `poseidon_merkle_pairs`, and a fresh Izanami gate/profile showing the
-  general prover Poseidon lane mutex is no longer the dominant app leaf.
+- Evaluate whether to promote the low-level Poseidon fused column+parent kernel
+  from parity-only coverage to the production hot path. CUDA and Metal parity
+  evidence for the current high-level column + Merkle-pair GPU path is now
+  recorded in `status.md`; acceptance for a low-level hot-path promotion still
+  requires a fresh Izanami gate/profile showing a real throughput improvement
+  over that high-level path, with scalar CPU remaining the authoritative
+  fallback for every mismatch or dispatch error. No CUDA-specific FASTPQ proof,
+  parity, benchmark, or release-comparison task remains open here.
 
 ## Sumeragi vNext consensus replacement
 
@@ -851,14 +824,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
     finalization, the final `fastpq-gpu` 120s release gate accepted all
     `2,400,000` offered submissions and reached `36,986` strict-approved
     transactions, and the delayed load-window sampled peer stacks have no
-    scalar `poseidon3_permute` or CPU FASTPQ fallback. Keep CUDA runtime
-    parity/perf validation as a separate CUDA-host follow-up; macOS
-    compile/manifest coverage is not CUDA hardware evidence.
+    scalar `poseidon3_permute` or CPU FASTPQ fallback. CUDA hardware closure
+    evidence was captured later on 2026-05-19 and is recorded in `status.md`.
   - The 2026-05-05 hardware-backed FASTPQ Metal parity rerun on macOS is green
     after repairing Goldilocks FFT/LDE, BN254 LDE, and Poseidon Metal/CPU
-    mismatches. Keep CUDA runtime parity/performance validation as a separate
-    CUDA-host follow-up; this Apple Metal evidence does not prove CUDA backend
-    parity.
+    mismatches. CUDA hardware closure evidence was captured later on
+    2026-05-19 and is recorded in `status.md`.
   - The next throughput slice should target the post-GPU peer CPU stack:
     Ed25519/Curve25519 public-key parse and verification, Norito
     transaction/transfer serialization and decode, transaction metadata
@@ -1083,11 +1054,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
     inbound versioned signed payload bytes.
   - The first FASTPQ BN254 Metal Poseidon batch path is implemented behind the
     existing `fastpq-gpu` feature and existing FASTPQ execution/poseidon modes.
-    Apple Metal toolchain validation was run on 2026-05-05 and found FASTPQ
-    Metal parity failures in FFT/LDE/Poseidon paths. Remaining work is to fix
-    those mismatches, rerun the Metal parity tests to green, then compare a 30s
-    sampled 20k profile and a 120s gate with `--fastpq-poseidon-mode gpu`
-    against the latest scalar release artifacts.
+    Later Metal and CUDA parity/performance closure evidence is recorded in
+    `status.md`; this historical slice no longer carries open GPU validation
+    work.
   - Carry the Norito sequence span planner through the remaining acceleration
     corridor: replace the length-prefixed helper's serial device parser with a
     tuned prefix-scan/chunked planner if profiling shows it is on the hot path,
@@ -1166,9 +1135,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
     transaction admission material, and a sampled 30s profile plus clean 120s
     gate on a profiler-equipped host after the next scalar admission-decode
     pass.
-  - Keep the FASTPQ BN254 Metal path validation separate from scalar profiling:
-    after installing the Apple Metal toolchain, run the Metal parity tests and a
-    `fastpq-gpu` 30s/120s comparison with `--fastpq-poseidon-mode gpu`.
+  - The FASTPQ BN254 Metal validation was completed in later accelerator
+    closure passes recorded in `status.md`; keep new profiling here focused on
+    the remaining scalar admission/decode and Ed25519 authority costs.
   - Keep an Ed25519 parsed-public-key/signature verification cache or a
     deterministic batch corridor for the Torii/direct-ingress single-key
     Ed25519 authority path as the next crypto follow-up after the

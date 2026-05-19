@@ -1465,22 +1465,23 @@ fn disable_poseidon_column_gpu_with_warning(
         );
     }
     notify_poseidon_gpu_event_observer("poseidon_columns", "disabled", reason, Some(backend));
-    match error {
-        Some(error) => tracing::warn!(
+    if let Some(error) = error {
+        tracing::warn!(
             target: "fastpq::poseidon",
             backend = ?backend,
             operation,
             item_count,
             %error,
             "gpu Poseidon column accelerator disabled; falling back to deterministic CPU hashing"
-        ),
-        None => tracing::warn!(
+        );
+    } else {
+        tracing::warn!(
             target: "fastpq::poseidon",
             backend = ?backend,
             operation,
             item_count,
             "gpu Poseidon column accelerator disabled after CPU parity mismatch"
-        ),
+        );
     }
 }
 
@@ -2134,8 +2135,8 @@ fn disable_poseidon_merkle_gpu_with_warning(
             reason_label,
             Some(backend),
         );
-        match error {
-            Some(error) => tracing::warn!(
+        if let Some(error) = error {
+            tracing::warn!(
                 target: "fastpq::poseidon",
                 backend = ?backend,
                 pair_count,
@@ -2143,15 +2144,16 @@ fn disable_poseidon_merkle_gpu_with_warning(
                 reason,
                 %error,
                 "gpu trace Merkle Poseidon pair accelerator disabled; falling back to scalar hashing"
-            ),
-            None => tracing::warn!(
+            );
+        } else {
+            tracing::warn!(
                 target: "fastpq::poseidon",
                 backend = ?backend,
                 pair_count,
                 min_pairs = POSEIDON_MERKLE_GPU_MIN_PAIRS,
                 reason,
                 "gpu trace Merkle Poseidon pair accelerator disabled; falling back to scalar hashing"
-            ),
+            );
         }
     }
 }
@@ -2382,6 +2384,17 @@ mod tests {
 
     #[cfg(feature = "fastpq-gpu")]
     #[test]
+    fn poseidon_column_batch_rejects_mismatched_domain_and_column_counts() {
+        let domains = vec!["fastpq:v1:trace:column:a"];
+        let columns = vec![vec![1u64, 2, 3], vec![4u64, 5, 6]];
+        assert!(
+            PoseidonColumnBatch::from_domains_and_columns(&domains, &columns).is_none(),
+            "GPU batch construction must reject mismatched metadata before dispatch"
+        );
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
     fn poseidon_column_batch_flattens_merkle_pairs() {
         let pairs = vec![[1u64, 2u64], [3u64, 4u64], [5u64, 6u64]];
         let batch =
@@ -2401,6 +2414,22 @@ mod tests {
             assert_eq!(region[3], 1);
             assert!(region[4..].iter().all(|value| *value == 0));
         }
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn poseidon_column_batch_window_rejects_out_of_range_and_overflow() {
+        let domains = vec![
+            "fastpq:v1:trace:column:a",
+            "fastpq:v1:trace:column:b",
+            "fastpq:v1:trace:column:c",
+        ];
+        let columns = vec![vec![1u64, 2], vec![3u64, 4], vec![5u64, 6]];
+        let batch =
+            PoseidonColumnBatch::from_domains_and_columns(&domains, &columns).expect("batch");
+        assert!(batch.column_window(domains.len(), 1).is_none());
+        assert!(batch.column_window(1, usize::MAX).is_none());
+        assert!(batch.rebased_slices(1, usize::MAX).is_none());
     }
 
     #[cfg(feature = "fastpq-gpu")]
@@ -2508,6 +2537,27 @@ mod tests {
             .expect("pair batch");
         let actual = gpu::poseidon_hash_columns(&batch, backend::GpuBackend::Metal)
             .expect("Metal Poseidon Merkle pair batch should run");
+        let expected = hash_trace_merkle_pairs_cpu(&pairs);
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn public_gpu_poseidon_merkle_pair_batch_matches_cpu_self_test_cases() {
+        let Some(backend) = backend::current_gpu_backend() else {
+            eprintln!("skipping GPU Poseidon Merkle pair parity test; backend unavailable");
+            return;
+        };
+        let pairs = [
+            [0u64, 0u64],
+            [1u64, 2u64],
+            [GOLDILOCKS_MODULUS - 1, 42u64],
+            [0xd1b5_4a32_d192_ed03, 0x9e37_79b9_7f4a_7c15],
+        ];
+        let batch = PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN, &pairs)
+            .expect("pair batch");
+        let actual = gpu::poseidon_hash_columns(&batch, backend)
+            .expect("GPU Poseidon pair batch should run");
         let expected = hash_trace_merkle_pairs_cpu(&pairs);
         assert_eq!(actual, expected);
     }
@@ -2672,6 +2722,29 @@ mod tests {
 
     #[cfg(feature = "fastpq-gpu")]
     #[test]
+    fn trace_merkle_pair_parity_sample_rejects_truncated_or_tampered_gpu_output() {
+        let pairs = [
+            [0u64, 0u64],
+            [1u64, 2u64],
+            [GOLDILOCKS_MODULUS - 1, 42u64],
+            [0xd1b5_4a32_d192_ed03, 0x9e37_79b9_7f4a_7c15],
+        ];
+        let expected = hash_trace_merkle_pairs_cpu(&pairs);
+        assert!(
+            !trace_merkle_pair_gpu_matches_cpu_sample(&pairs, &expected[..expected.len() - 1]),
+            "truncated GPU output must fail CPU parity sampling"
+        );
+
+        let mut tampered = expected;
+        tampered[2] = tampered[2].wrapping_add(1) % GOLDILOCKS_MODULUS;
+        assert!(
+            !trace_merkle_pair_gpu_matches_cpu_sample(&pairs, &tampered),
+            "tampered GPU output must fail CPU parity sampling"
+        );
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
     fn poseidon_gpu_event_observer_records_disable_events() {
         use std::sync::{
             Arc,
@@ -2719,6 +2792,37 @@ mod tests {
         assert_eq!(
             stats.merkle_pair_max_pairs,
             u32::try_from(pair_count).expect("test pair count fits u32")
+        );
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn public_gpu_trace_merkle_pair_path_records_gpu_batch_when_backend_available() {
+        if backend::current_gpu_backend().is_none() {
+            eprintln!("skipping GPU Poseidon Merkle pair path test; backend unavailable");
+            return;
+        }
+        enable_poseidon_pipeline_stats(true);
+        let pair_count = POSEIDON_MERKLE_GPU_MIN_PAIRS;
+        let pairs = (0..pair_count)
+            .map(|value| {
+                let left = (value as u64).wrapping_mul(0xd1b5_4a32_d192_ed03) % GOLDILOCKS_MODULUS;
+                let right = (value as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) % GOLDILOCKS_MODULUS;
+                [left, right]
+            })
+            .collect::<Vec<_>>();
+        let expected = hash_trace_merkle_pairs_cpu(&pairs);
+        let actual = hash_trace_merkle_pairs_with_mode(&pairs, backend::ExecutionMode::Gpu);
+        assert_eq!(actual, expected);
+        let stats = take_poseidon_pipeline_stats().expect("stats enabled");
+        enable_poseidon_pipeline_stats(false);
+        assert!(
+            stats.merkle_pair_gpu_batches > 0,
+            "GPU Merkle pair path should record a GPU batch: {stats:?}"
+        );
+        assert_eq!(
+            stats.merkle_pair_fallbacks, 0,
+            "GPU Merkle pair path should not fall back when parity passes"
         );
     }
 
