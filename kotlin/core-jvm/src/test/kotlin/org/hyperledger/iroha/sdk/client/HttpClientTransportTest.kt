@@ -6,6 +6,7 @@ import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.Signature
 import java.util.Base64
+import java.util.Optional
 import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -19,6 +20,8 @@ import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
+import org.hyperledger.iroha.sdk.norito.NoritoAdapters
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
@@ -1114,6 +1117,73 @@ class HttpClientTransportTest {
             HttpErrorMessageExtractor.extractRejectCode(emptyMap(), "x-iroha-reject-code", body),
         )
         assertEquals("transaction queue is at capacity", HttpErrorMessageExtractor.extractMessage(body))
+    }
+
+    @Test
+    fun noritoErrorEnvelopeDetailsProvideRejectCode() {
+        val body = encodeErrorEnvelope("queue_full", "transaction queue is at capacity", "TX_QUEUE_FULL")
+
+        assertEquals(
+            "TX_QUEUE_FULL",
+            HttpErrorMessageExtractor.extractRejectCode(emptyMap(), "x-iroha-reject-code", body),
+        )
+        assertEquals("transaction queue is at capacity", HttpErrorMessageExtractor.extractMessage(body))
+    }
+
+    @Test
+    fun submitTransactionJsonUsesJsonIngressWithConfiguredAccept() {
+        val executor = StubResponseExecutor(202, ByteArray(0))
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://127.0.0.1:8080"))
+                .setWireFormatPreference(WireFormatPreference.JSON_PREFERRED)
+                .build(),
+        )
+        val body = """{"version":1,"content":{}}""".toByteArray(StandardCharsets.UTF_8)
+
+        val response = transport.submitTransactionJson(body).join()
+
+        assertEquals(202, response.statusCode)
+        val request = executor.lastRequest
+        assertEquals("POST", request.method)
+        assertEquals("https://127.0.0.1:8080/v1/pipeline/transactions", request.uri.toString())
+        assertEquals("application/json", request.headers["Content-Type"]?.first())
+        assertEquals(WireFormatPreference.JSON_PREFERRED.acceptHeader(), request.headers["Accept"]?.first())
+        assertTrue(body.contentEquals(request.body))
+    }
+
+    private fun encodeErrorEnvelope(code: String, message: String, rejectCode: String): ByteArray {
+        val optionalString = NoritoAdapters.option(NoritoAdapters.stringAdapter())
+        val detailsAdapter = NoritoAdapters.struct(
+            listOf(
+                NoritoAdapters.field("reject_code", optionalString),
+                NoritoAdapters.field("queue", optionalString),
+                NoritoAdapters.field("retry_after_seconds", NoritoAdapters.option(NoritoAdapters.uint(64))),
+                NoritoAdapters.field("endpoint", optionalString),
+                NoritoAdapters.field("axt", optionalString),
+            )
+        )
+        val envelopeAdapter = NoritoAdapters.struct(
+            listOf(
+                NoritoAdapters.field("code", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field("message", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field("details", NoritoAdapters.option(detailsAdapter)),
+            )
+        )
+        val details = linkedMapOf<String, Any>(
+            "reject_code" to Optional.of(rejectCode),
+            "queue" to Optional.empty<String>(),
+            "retry_after_seconds" to Optional.empty<Long>(),
+            "endpoint" to Optional.empty<String>(),
+            "axt" to Optional.empty<String>(),
+        )
+        val envelope = linkedMapOf<String, Any>(
+            "code" to code,
+            "message" to message,
+            "details" to Optional.of(details),
+        )
+        return NoritoCodec.encode(envelope as Any, "iroha_torii_shared::ErrorEnvelope", envelopeAdapter)
     }
 
     private fun readBody(request: TransportRequest): String =

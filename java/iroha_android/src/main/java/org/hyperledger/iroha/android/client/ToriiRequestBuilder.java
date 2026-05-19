@@ -22,7 +22,8 @@ final class ToriiRequestBuilder {
       final URI baseUri,
       final SignedTransaction transaction,
       final Duration timeout,
-      final Map<String, String> extraHeaders) {
+      final Map<String, String> extraHeaders,
+      final String acceptHeader) {
     Objects.requireNonNull(baseUri, "baseUri");
     Objects.requireNonNull(transaction, "transaction");
     final URI target = resolve(baseUri, SUBMIT_PATH);
@@ -39,18 +40,35 @@ final class ToriiRequestBuilder {
             .setUri(target)
             .setMethod("POST")
             .addHeader("Content-Type", "application/x-norito")
-            .addHeader("Accept", "application/x-norito, application/json")
+            .addHeader("Accept", acceptHeader)
             .setBody(norito);
     applyHeaders(builder, extraHeaders);
     applyTimeout(builder, timeout);
     return builder.build();
   }
 
+  static TransportRequest buildSubmitJsonRequest(
+      final URI baseUri,
+      final byte[] encodedVersionedTransactionJson,
+      final Duration timeout,
+      final Map<String, String> extraHeaders,
+      final String acceptHeader) {
+    return buildJsonIngressRequest(
+        baseUri,
+        SUBMIT_PATH,
+        encodedVersionedTransactionJson,
+        timeout,
+        extraHeaders,
+        acceptHeader,
+        "encodedVersionedTransactionJson");
+  }
+
   static TransportRequest buildSubmitEntrypointRequest(
       final URI baseUri,
       final byte[] encodedVersionedEntrypoint,
       final Duration timeout,
-      final Map<String, String> extraHeaders) {
+      final Map<String, String> extraHeaders,
+      final String acceptHeader) {
     Objects.requireNonNull(baseUri, "baseUri");
     Objects.requireNonNull(encodedVersionedEntrypoint, "encodedVersionedEntrypoint");
     if (encodedVersionedEntrypoint.length == 0) {
@@ -66,11 +84,27 @@ final class ToriiRequestBuilder {
             .setUri(target)
             .setMethod("POST")
             .addHeader("Content-Type", "application/x-norito")
-            .addHeader("Accept", "application/x-norito, application/json")
+            .addHeader("Accept", acceptHeader)
             .setBody(body);
     applyHeaders(builder, extraHeaders);
     applyTimeout(builder, timeout);
     return builder.build();
+  }
+
+  static TransportRequest buildSubmitEntrypointJsonRequest(
+      final URI baseUri,
+      final byte[] encodedVersionedEntrypointJson,
+      final Duration timeout,
+      final Map<String, String> extraHeaders,
+      final String acceptHeader) {
+    return buildJsonIngressRequest(
+        baseUri,
+        SUBMIT_ENTRYPOINT_PATH,
+        encodedVersionedEntrypointJson,
+        timeout,
+        extraHeaders,
+        acceptHeader,
+        "encodedVersionedEntrypointJson");
   }
 
   static TransportRequest buildStatusRequest(
@@ -89,6 +123,35 @@ final class ToriiRequestBuilder {
         "HttpClientTransport", baseUri, target, extraHeaders, null);
     final TransportRequest.Builder builder =
         TransportRequest.builder().setUri(target).setMethod("GET").addHeader("Accept", "application/json");
+    applyHeaders(builder, extraHeaders);
+    applyTimeout(builder, timeout);
+    return builder.build();
+  }
+
+  private static TransportRequest buildJsonIngressRequest(
+      final URI baseUri,
+      final String path,
+      final byte[] bodyBytes,
+      final Duration timeout,
+      final Map<String, String> extraHeaders,
+      final String acceptHeader,
+      final String bodyName) {
+    Objects.requireNonNull(baseUri, "baseUri");
+    Objects.requireNonNull(bodyBytes, bodyName);
+    if (bodyBytes.length == 0) {
+      throw new IllegalArgumentException(bodyName + " must not be empty");
+    }
+    final URI target = resolve(baseUri, path);
+    final byte[] body = Arrays.copyOf(bodyBytes, bodyBytes.length);
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport", baseUri, target, extraHeaders, body);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Accept", acceptHeader)
+            .setBody(body);
     applyHeaders(builder, extraHeaders);
     applyTimeout(builder, timeout);
     return builder.build();

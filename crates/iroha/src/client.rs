@@ -108,6 +108,8 @@ use crate::{
 // (No query imports needed here)
 
 const APPLICATION_JSON: &str = "application/json";
+const ACCEPT_NORITO_PREFERRED: &str = "application/x-norito, application/json;q=0.8";
+const ACCEPT_JSON_PREFERRED: &str = "application/json, application/x-norito;q=0.8";
 const SORAFS_STORAGE_PIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const HEADER_API_VERSION: &str = iroha_torii_shared::HEADER_API_VERSION;
 const HEADER_ACCOUNT: &str = "x-iroha-account";
@@ -121,6 +123,31 @@ const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
+
+/// Preferred response wire format for Torii endpoints that support negotiation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WireFormatPreference {
+    /// Prefer canonical Norito responses and accept JSON fallback.
+    #[default]
+    NoritoPreferred,
+    /// Prefer JSON responses and accept Norito fallback.
+    JsonPreferred,
+    /// Accept only Norito responses.
+    NoritoOnly,
+    /// Accept only JSON responses.
+    JsonOnly,
+}
+
+impl WireFormatPreference {
+    pub(crate) fn accept_header(self) -> &'static str {
+        match self {
+            Self::NoritoPreferred => ACCEPT_NORITO_PREFERRED,
+            Self::JsonPreferred => ACCEPT_JSON_PREFERRED,
+            Self::NoritoOnly => APPLICATION_NORITO,
+            Self::JsonOnly => APPLICATION_JSON,
+        }
+    }
+}
 
 fn sorafs_pin_register_gas_asset_id() -> Option<String> {
     [
@@ -4299,6 +4326,22 @@ mod evidence_http_tests {
         }
     }
 
+    pub(super) fn assert_single_accept_header(snapshot: &RequestSnapshot, expected: &str) {
+        let accept_headers: Vec<_> = snapshot
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
+            .collect();
+        assert_eq!(
+            accept_headers.len(),
+            1,
+            "expected a single Accept header on {}: {:?}",
+            snapshot.url.path(),
+            snapshot.headers
+        );
+        assert_eq!(accept_headers[0].1, expected);
+    }
+
     #[test]
     fn post_account_resolve_builds_request() {
         let client = client_with_base_url(base_url());
@@ -6414,6 +6457,25 @@ fn decode_norito_error_body(response: &Response<Vec<u8>>) -> Option<String> {
     None
 }
 
+fn decode_json_error_body(response: &Response<Vec<u8>>) -> Option<String> {
+    let is_json = response
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|ct| {
+            let media_type = ct.split(';').next().map(str::trim).unwrap_or_default();
+            media_type.eq_ignore_ascii_case(APPLICATION_JSON)
+                || media_type.eq_ignore_ascii_case("text/json")
+                || media_type.to_ascii_lowercase().ends_with("+json")
+        });
+    if !is_json {
+        return None;
+    }
+    norito::json::from_slice::<ErrorEnvelope>(response.body())
+        .ok()
+        .map(|envelope| format_error_envelope(&envelope))
+}
+
 fn format_error_envelope(envelope: &ErrorEnvelope) -> String {
     let mut message = format!("{}: {}", envelope.code(), envelope.message());
     let Some(details) = envelope.details.as_ref() else {
@@ -6507,13 +6569,19 @@ impl ResponseReport {
         let route_suffix = Self::route_diagnostics_suffix(response);
         let msg = msg.as_ref();
 
-        if let Ok(body) = std::str::from_utf8(response.body()) {
+        if let Some(body) = decode_norito_error_body(response) {
             return Ok(Self(eyre!(
                 "{msg}; status: {status}{reject_suffix}{route_suffix}; response body: {body}"
             )));
         }
 
-        if let Some(body) = decode_norito_error_body(response) {
+        if let Some(body) = decode_json_error_body(response) {
+            return Ok(Self(eyre!(
+                "{msg}; status: {status}{reject_suffix}{route_suffix}; response body: {body}"
+            )));
+        }
+
+        if let Ok(body) = std::str::from_utf8(response.body()) {
             return Ok(Self(eyre!(
                 "{msg}; status: {status}{reject_suffix}{route_suffix}; response body: {body}"
             )));
@@ -6737,6 +6805,8 @@ pub struct Client {
     pub rollout_phase: SorafsRolloutPhase,
     /// Cached Torii compatibility state for queries and transaction submissions.
     pub data_model_compatibility: Arc<Mutex<DataModelCompatibility>>,
+    /// Default response wire-format preference for negotiated Torii endpoints.
+    pub wire_format_preference: WireFormatPreference,
 }
 
 /// A signed transaction prepared for repeated or high-throughput submission.
@@ -6791,6 +6861,7 @@ impl fmt::Debug for Client {
             )
             .field("rollout_phase", &self.rollout_phase.label())
             .field("data_model_compatibility", &"<cached>")
+            .field("wire_format_preference", &self.wire_format_preference)
             .finish()
     }
 }
@@ -6861,7 +6932,20 @@ impl Client {
             default_anonymity_policy: sorafs_anonymity_policy,
             rollout_phase: sorafs_rollout_phase,
             data_model_compatibility,
+            wire_format_preference: WireFormatPreference::default(),
         }
+    }
+
+    /// Set the default response wire-format preference for negotiated Torii endpoints.
+    pub fn set_wire_format_preference(&mut self, preference: WireFormatPreference) {
+        self.wire_format_preference = preference;
+    }
+
+    /// Return a clone of this client with a different wire-format preference.
+    #[must_use]
+    pub fn with_wire_format_preference(mut self, preference: WireFormatPreference) -> Self {
+        self.set_wire_format_preference(preference);
+        self
     }
 
     /// Configure the key pair used to sign operator-only endpoint requests.
@@ -6875,7 +6959,7 @@ impl Client {
         // Many endpoints negotiate JSON vs Norito based on `Accept`. A default `Accept:
         // application/json` would be appended alongside a later `Accept: application/x-norito`,
         // and some servers/frameworks only observe the first header value. Callers set `Accept`
-        // explicitly when needed; otherwise Torii defaults to JSON.
+        // explicitly when needed; otherwise modern Torii defaults to Norito.
         let mut builder = DefaultRequestBuilder::new(method, url).headers(&self.headers);
         if self.torii_request_timeout != Duration::ZERO {
             builder = builder.timeout(self.torii_request_timeout);
@@ -7513,7 +7597,8 @@ impl Client {
         let mut request = async_http_client()
             .post(join_torii_url(&self.torii_url, torii_uri::TRANSACTION))
             .timeout(self.torii_request_timeout)
-            .header("Content-Type", APPLICATION_NORITO);
+            .header("Content-Type", APPLICATION_NORITO)
+            .header("Accept", self.wire_format_preference.accept_header());
         for (name, value) in self.transaction_headers_without_content_type() {
             request = request.header(name, value);
         }
@@ -7561,6 +7646,7 @@ impl Client {
             ))
             .timeout(self.torii_request_timeout)
             .header("Content-Type", APPLICATION_NORITO)
+            .header("Accept", self.wire_format_preference.accept_header())
             .header("Prefer", "return=minimal");
         for (name, value) in self.transaction_headers_without_content_type() {
             request = request.header(name, value);
@@ -8245,6 +8331,7 @@ impl Client {
         )
         .headers(self.transaction_headers_without_content_type())
         .header("Content-Type", APPLICATION_NORITO)
+        .header("Accept", self.wire_format_preference.accept_header())
         .body(payload.as_bytes().to_vec())
     }
 
@@ -8494,8 +8581,10 @@ impl Client {
         if self.torii_request_timeout != Duration::ZERO {
             builder = builder.timeout(self.torii_request_timeout);
         }
-        let resp =
-            self.send_builder(builder.header(http::header::ACCEPT, "application/x-norito"))?;
+        let resp = self.send_builder(builder.header(
+            http::header::ACCEPT,
+            self.wire_format_preference.accept_header(),
+        ))?;
         match decode_status_response(&resp) {
             Ok(status) => Ok(status),
             Err(first_err) => {
@@ -11461,7 +11550,7 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
+                .header(http::header::ACCEPT, APPLICATION_JSON),
         )?;
         if resp.status() == StatusCode::TOO_MANY_REQUESTS {
             let retry_after = resp
@@ -11492,7 +11581,10 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(Some(norito::json::from_slice(resp.body())?))
+        Ok(Some(
+            norito::json::from_slice(resp.body())
+                .wrap_err("failed to decode node capabilities JSON")?,
+        ))
     }
 
     /// GET `/v1/node/capabilities`
@@ -11503,7 +11595,7 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
+                .header(http::header::ACCEPT, APPLICATION_JSON),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -11512,7 +11604,7 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(norito::json::from_slice(resp.body())?)
+        norito::json::from_slice(resp.body()).wrap_err("failed to decode node capabilities JSON")
     }
 
     /// GET `/v1/sccp/capabilities`.
@@ -14601,8 +14693,8 @@ mod tests {
     use super::{
         default_alias_policy,
         evidence_http_tests::{
-            SnapshotStore, base_url, client_with_base_url, json_response, respond_with,
-            with_mock_http, with_mock_sorafs_fetch,
+            SnapshotStore, assert_single_accept_header, base_url, client_with_base_url,
+            json_response, respond_with, with_mock_http, with_mock_sorafs_fetch,
         },
         *,
     };
@@ -16811,6 +16903,11 @@ mod tests {
             2,
             "expected node capabilities + transaction requests"
         );
+        let capabilities_snapshot = store_guard
+            .iter()
+            .find(|snapshot| snapshot.url.path() == "/v1/node/capabilities")
+            .expect("capabilities snapshot captured");
+        assert_single_accept_header(capabilities_snapshot, APPLICATION_JSON);
         let snapshot = store_guard
             .iter()
             .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
@@ -16838,6 +16935,32 @@ mod tests {
             TransactionEntrypoint::decode_all_versioned(&snapshot.body).is_err(),
             "public /transaction requests must not use internal TransactionEntrypoint envelopes"
         );
+    }
+
+    #[test]
+    fn get_node_capabilities_json_requests_json_accept() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &compatible_capabilities_body());
+
+        with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            let capabilities = client
+                .get_node_capabilities_json()
+                .expect("node capabilities should decode");
+            assert_eq!(
+                parse_required_u64(
+                    capabilities.get("data_model_version"),
+                    "node capabilities data_model_version"
+                )
+                .expect("data model version field"),
+                u64::from(DATA_MODEL_VERSION)
+            );
+        });
+
+        let store_guard = store.lock().expect("snapshot lock");
+        assert_eq!(store_guard.len(), 1);
+        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+        assert_single_accept_header(&store_guard[0], APPLICATION_JSON);
     }
 
     #[test]

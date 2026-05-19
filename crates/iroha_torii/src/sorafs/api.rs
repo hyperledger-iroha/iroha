@@ -2308,8 +2308,9 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
         Err(err) => return err.into_response(),
     };
 
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|hdr| &hdr.0)) {
-        Ok(fmt) => fmt,
+    let format = match crate::utils::negotiate_json_only_response(accept.as_ref().map(|hdr| &hdr.0))
+    {
+        Ok(()) => crate::utils::ResponseFormat::Json,
         Err(err) => return err.into_response(),
     };
 
@@ -2416,8 +2417,9 @@ pub(crate) async fn handle_get_sorafs_pin_manifest(
         return feature_disabled("sorafs pin registry API is not enabled on this node");
     }
 
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|hdr| &hdr.0)) {
-        Ok(fmt) => fmt,
+    let format = match crate::utils::negotiate_json_only_response(accept.as_ref().map(|hdr| &hdr.0))
+    {
+        Ok(()) => crate::utils::ResponseFormat::Json,
         Err(err) => return err.into_response(),
     };
 
@@ -2617,8 +2619,9 @@ pub(crate) async fn handle_get_sorafs_aliases(
         Err(err) => return err.into_response(),
     };
 
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|hdr| &hdr.0)) {
-        Ok(fmt) => fmt,
+    let format = match crate::utils::negotiate_json_only_response(accept.as_ref().map(|hdr| &hdr.0))
+    {
+        Ok(()) => crate::utils::ResponseFormat::Json,
         Err(err) => return err.into_response(),
     };
 
@@ -2713,8 +2716,9 @@ pub(crate) async fn handle_get_sorafs_replication_orders(
         Err(err) => return err.into_response(),
     };
 
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|hdr| &hdr.0)) {
-        Ok(fmt) => fmt,
+    let format = match crate::utils::negotiate_json_only_response(accept.as_ref().map(|hdr| &hdr.0))
+    {
+        Ok(()) => crate::utils::ResponseFormat::Json,
         Err(err) => return err.into_response(),
     };
 

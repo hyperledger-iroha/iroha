@@ -16,6 +16,19 @@ interface IrohaClient {
     fun submitTransaction(transaction: SignedTransaction): CompletableFuture<ClientResponse>
 
     /**
+     * Submits a version-tagged SignedTransaction encoded as canonical Norito JSON.
+     *
+     * This helper is for callers that already have the direct Torii JSON ingress envelope.
+     */
+    fun submitTransactionJson(encodedVersionedTransactionJson: ByteArray): CompletableFuture<ClientResponse> {
+        val future = CompletableFuture<ClientResponse>()
+        future.completeExceptionally(
+            UnsupportedOperationException("submitTransactionJson not supported")
+        )
+        return future
+    }
+
+    /**
      * Submits an already versioned Norito transaction entrypoint to the node.
      *
      * This is intended for sealed commitment/reveal entrypoints and other non-legacy transaction
@@ -25,6 +38,17 @@ interface IrohaClient {
         val future = CompletableFuture<ClientResponse>()
         future.completeExceptionally(
             UnsupportedOperationException("submitTransactionEntrypoint not supported")
+        )
+        return future
+    }
+
+    /**
+     * Submits a version-tagged TransactionEntrypoint encoded as canonical Norito JSON.
+     */
+    fun submitTransactionEntrypointJson(encodedVersionedEntrypointJson: ByteArray): CompletableFuture<ClientResponse> {
+        val future = CompletableFuture<ClientResponse>()
+        future.completeExceptionally(
+            UnsupportedOperationException("submitTransactionEntrypointJson not supported")
         )
         return future
     }

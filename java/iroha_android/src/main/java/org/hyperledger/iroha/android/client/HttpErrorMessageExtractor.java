@@ -2,20 +2,60 @@ package org.hyperledger.iroha.android.client;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoEncoder;
+import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.TypeAdapter;
 
 /** Helpers for extracting stable HTTP error details from Torii responses. */
 final class HttpErrorMessageExtractor {
 
   private static final int MAX_MESSAGE_LENGTH = 512;
+  private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
+  private static final TypeAdapter<ErrorDetailsSummary> DETAILS_ADAPTER =
+      new TypeAdapter<ErrorDetailsSummary>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final ErrorDetailsSummary value) {
+          throw new UnsupportedOperationException("error detail encoding is not supported");
+        }
+
+        @Override
+        public ErrorDetailsSummary decode(final NoritoDecoder decoder) {
+          final String rejectCode = decodeRejectCodeField(decoder);
+          if (decoder.remaining() > 0) {
+            decoder.readBytes(decoder.remaining());
+          }
+          return new ErrorDetailsSummary(rejectCode);
+        }
+      };
+  private static final TypeAdapter<Object> ERROR_ENVELOPE_ADAPTER =
+      NoritoAdapters.struct(
+          Arrays.asList(
+              NoritoAdapters.field("code", STRING_ADAPTER),
+              NoritoAdapters.field("message", STRING_ADAPTER),
+              NoritoAdapters.field("details", NoritoAdapters.option(DETAILS_ADAPTER))),
+          fields -> {
+            final Optional<?> details = (Optional<?>) fields.get("details");
+            final ErrorDetailsSummary summary =
+                details.isPresent() ? (ErrorDetailsSummary) details.get() : null;
+            return new ErrorEnvelopeSummary(
+                (String) fields.get("code"),
+                (String) fields.get("message"),
+                summary == null ? null : summary.rejectCode);
+          });
 
   private HttpErrorMessageExtractor() {}
 
   static String extractRejectCode(
       final Map<String, List<String>> headers, final String headerName) {
-    if (headers == null || headers.isEmpty() || headerName == null || headerName.isBlank()) {
+    if (headers == null || headers.isEmpty() || headerName == null || headerName.trim().isEmpty()) {
       return null;
     }
 
@@ -41,6 +81,10 @@ final class HttpErrorMessageExtractor {
     if (body == null || body.length == 0) {
       return null;
     }
+    final ErrorEnvelopeSummary norito = decodeNoritoErrorEnvelope(body);
+    if (norito != null && norito.rejectCode != null) {
+      return norito.rejectCode;
+    }
     final String text = new String(body, StandardCharsets.UTF_8).trim();
     if (text.isEmpty()) {
       return null;
@@ -55,6 +99,10 @@ final class HttpErrorMessageExtractor {
   static String extractMessage(final byte[] body) {
     if (body == null || body.length == 0) {
       return null;
+    }
+    final ErrorEnvelopeSummary norito = decodeNoritoErrorEnvelope(body);
+    if (norito != null) {
+      return truncate(norito.message);
     }
     final String text = new String(body, StandardCharsets.UTF_8).trim();
     if (text.isEmpty()) {
@@ -76,6 +124,58 @@ final class HttpErrorMessageExtractor {
     }
 
     return truncate(text);
+  }
+
+  private static ErrorEnvelopeSummary decodeNoritoErrorEnvelope(final byte[] body) {
+    if (!hasNoritoMagic(body)) {
+      return null;
+    }
+    try {
+      return (ErrorEnvelopeSummary) NoritoCodec.decode(body, ERROR_ENVELOPE_ADAPTER, null);
+    } catch (final RuntimeException ignored) {
+      return null;
+    }
+  }
+
+  private static boolean hasNoritoMagic(final byte[] body) {
+    return body.length >= 4 && body[0] == 'N' && body[1] == 'R' && body[2] == 'T' && body[3] == '0';
+  }
+
+  private static String decodeRejectCodeField(final NoritoDecoder decoder) {
+    final TypeAdapter<Optional<String>> optionalString = NoritoAdapters.option(STRING_ADAPTER);
+    if ((decoder.flags() & NoritoHeader.PACKED_STRUCT) != 0
+        && (decoder.flags() & NoritoHeader.FIELD_BITSET) != 0) {
+      final int fieldCount = 5;
+      final byte[] bitsetData = decoder.readBytes((fieldCount + 7) / 8);
+      int bitset = 0;
+      for (int i = 0; i < bitsetData.length; i++) {
+        bitset |= (bitsetData[i] & 0xFF) << (i * 8);
+      }
+      final List<Integer> encodedSizes = new ArrayList<>(fieldCount);
+      for (int i = 0; i < fieldCount; i++) {
+        if ((bitset & (1 << i)) != 0) {
+          final long size = decoder.readVarint();
+          if (size > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Packed field too large");
+          }
+          encodedSizes.add((int) size);
+        } else {
+          encodedSizes.add(null);
+        }
+      }
+      final Integer firstSize = encodedSizes.get(0);
+      if (firstSize != null) {
+        final NoritoDecoder child =
+            new NoritoDecoder(decoder.readBytes(firstSize), decoder.flags(), decoder.flagsHint());
+        final Optional<String> value = optionalString.decode(child);
+        if (child.remaining() != 0) {
+          throw new IllegalArgumentException("Packed reject_code field did not consume all bytes");
+        }
+        return value.orElse(null);
+      }
+      return optionalString.decode(decoder).orElse(null);
+    }
+    return optionalString.decode(decoder).orElse(null);
   }
 
   private static String extractStructuredMessage(final Object value) {
@@ -285,10 +385,31 @@ final class HttpErrorMessageExtractor {
       return null;
     }
     for (final String value : values) {
-      if (value != null && !value.isBlank()) {
+      if (value != null && !value.trim().isEmpty()) {
         return value.trim();
       }
     }
     return null;
+  }
+
+  private static final class ErrorEnvelopeSummary {
+    private final String code;
+    private final String message;
+    private final String rejectCode;
+
+    private ErrorEnvelopeSummary(
+        final String code, final String message, final String rejectCode) {
+      this.code = code;
+      this.message = message;
+      this.rejectCode = rejectCode;
+    }
+  }
+
+  private static final class ErrorDetailsSummary {
+    private final String rejectCode;
+
+    private ErrorDetailsSummary(final String rejectCode) {
+      this.rejectCode = rejectCode;
+    }
   }
 }

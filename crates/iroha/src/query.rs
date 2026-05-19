@@ -37,6 +37,7 @@ struct ClientQueryRequestHead {
     account_id: AccountId,
     key_pair: KeyPair,
     request_timeout: Duration,
+    accept_header: &'static str,
 }
 
 impl ClientQueryRequestHead {
@@ -55,7 +56,7 @@ impl ClientQueryRequestHead {
         .header("Content-Type", APPLICATION_NORITO)
         // Prefer canonical Norito responses to avoid JSON decoding drift between
         // client/server versions.
-        .header("Accept", APPLICATION_NORITO)
+        .header("Accept", self.accept_header)
         .timeout(self.request_timeout)
         .body(body)
     }
@@ -404,6 +405,7 @@ mod tests {
             account_id: iroha_test_samples::ALICE_ID.clone(),
             key_pair: KeyPair::random(),
             request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            accept_header: APPLICATION_NORITO,
         };
         let req = head
             .assemble(QueryRequest::Singular(
@@ -479,7 +481,7 @@ impl Client {
             )
             .headers(self.headers.clone())
             .header("Content-Type", APPLICATION_NORITO)
-            .header("Accept", APPLICATION_NORITO)
+            .header("Accept", self.wire_format_preference.accept_header())
             .timeout(self.torii_request_timeout)
             .body(body.to_owned()))
         };
@@ -498,6 +500,7 @@ impl Client {
             account_id: self.account.clone(),
             key_pair: self.key_pair.clone(),
             request_timeout: self.torii_request_timeout,
+            accept_header: self.wire_format_preference.accept_header(),
         }
     }
 
@@ -766,6 +769,7 @@ mod query_errors_handling {
             account_id,
             key_pair,
             request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            accept_header: APPLICATION_NORITO,
         };
         let cursor = ForwardCursor {
             query: "cursor".into(),
@@ -780,7 +784,7 @@ mod query_errors_handling {
         with_mock_http(
             move |snapshot| {
                 observed_clone.store(true, Ordering::Relaxed);
-                assert_accept_header(&snapshot);
+                assert_accept_header(&snapshot, APPLICATION_NORITO);
                 Ok(ok_empty_response())
             },
             move || {
@@ -816,6 +820,7 @@ mod query_errors_handling {
             default_anonymity_policy: AnonymityPolicy::GuardPq,
             rollout_phase: SorafsRolloutPhase::Default,
             data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Compatible)),
+            wire_format_preference: crate::client::WireFormatPreference::default(),
         };
 
         let encoded_response = norito::to_bytes(&QueryResponse::Iterable(QueryOutput {
@@ -831,7 +836,10 @@ mod query_errors_handling {
         with_mock_http(
             move |snapshot| {
                 observed_clone.store(true, Ordering::Relaxed);
-                assert_accept_header(&snapshot);
+                assert_accept_header(
+                    &snapshot,
+                    crate::client::WireFormatPreference::default().accept_header(),
+                );
                 Ok(Response::builder()
                     .status(HttpStatusCode::OK)
                     .header("content-type", APPLICATION_NORITO)
@@ -868,6 +876,7 @@ mod query_errors_handling {
             default_anonymity_policy: AnonymityPolicy::GuardPq,
             rollout_phase: SorafsRolloutPhase::Default,
             data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
+            wire_format_preference: crate::client::WireFormatPreference::default(),
         };
         let query_seen = Arc::new(AtomicBool::new(false));
         let query_seen_clone = Arc::clone(&query_seen);
@@ -928,7 +937,7 @@ mod query_errors_handling {
             .expect("response")
     }
 
-    fn assert_accept_header(snapshot: &RequestSnapshot) {
+    fn assert_accept_header(snapshot: &RequestSnapshot, expected: &str) {
         let header = snapshot
             .headers
             .iter()
@@ -936,8 +945,8 @@ mod query_errors_handling {
             .map(|(_, value)| value.as_str());
         assert_eq!(
             header,
-            Some(APPLICATION_NORITO),
-            "request must declare Accept: application/x-norito; got {:?}",
+            Some(expected),
+            "request must declare expected Accept header; got {:?}",
             snapshot.headers
         );
     }

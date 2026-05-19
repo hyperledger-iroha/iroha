@@ -65,6 +65,7 @@ public final class HttpClientTransportTests {
 
   public static void main(final String[] args) throws Exception {
     submitBuildsToriiRequest();
+    submitTransactionJsonBuildsJsonIngressRequest();
     submitPropagatesExecutorFailure();
     submitSkipsRetryWhenNetworkRetriesDisabled();
     submitRetriesOnServerError();
@@ -153,7 +154,7 @@ public final class HttpClientTransportTests {
         : "Content-Type header must be Norito";
     final List<String> acceptHeaders = request.headers().get("Accept");
     assert acceptHeaders != null
-        && acceptHeaders.contains("application/x-norito, application/json")
+        && acceptHeaders.contains(WireFormatPreference.NORITO_PREFERRED.acceptHeader())
         : "Accept header must include Norito";
     assert request.uri().toString().equals("https://127.0.0.1:8080/v1/pipeline/transactions")
         : "Submit endpoint must target Torii pipeline route";
@@ -169,6 +170,30 @@ public final class HttpClientTransportTests {
     assert observer.requestCount.get() == 1 : "Observer must see request";
     assert observer.responseCount.get() == 1 : "Observer must see response";
     assert observer.failureCount.get() == 0 : "Observer must not see failure";
+  }
+
+  private static void submitTransactionJsonBuildsJsonIngressRequest() {
+    final CapturingExecutor executor = new CapturingExecutor();
+    final ClientConfig config =
+        ClientConfig.builder()
+            .setBaseUri(URI.create("https://127.0.0.1:8080"))
+            .setWireFormatPreference(WireFormatPreference.JSON_PREFERRED)
+            .build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+    final byte[] body = "{\"version\":1,\"content\":{}}".getBytes(StandardCharsets.UTF_8);
+
+    final ClientResponse response = transport.submitTransactionJson(body).join();
+
+    assert response.statusCode() == 202 : "Expected JSON submit to be accepted";
+    final TransportRequest request = executor.lastRequest;
+    assert "POST".equals(request.method()) : "JSON submit must use POST";
+    assert request.uri().toString().equals("https://127.0.0.1:8080/v1/pipeline/transactions")
+        : "JSON submit endpoint must target Torii pipeline route";
+    assert request.headers().get("Content-Type").contains("application/json")
+        : "JSON submit Content-Type must be application/json";
+    assert request.headers().get("Accept").contains(WireFormatPreference.JSON_PREFERRED.acceptHeader())
+        : "JSON submit Accept header must use configured wire preference";
+    assert java.util.Arrays.equals(body, request.body()) : "JSON submit body must be preserved";
   }
 
   private static void submitPropagatesExecutorFailure() {

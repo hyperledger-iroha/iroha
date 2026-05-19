@@ -189,6 +189,77 @@ pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<Respons
     })
 }
 
+/// Validate `Accept` for JSON-only dynamic endpoints.
+///
+/// Dynamic `norito::json::Value` payloads do not have a stable Norito schema,
+/// so JSON-only routes accept omitted, wildcard, and JSON `Accept` values, but
+/// reject clients that explicitly ask for Norito without accepting JSON.
+#[allow(clippy::result_large_err)] // callers bubble the full HTTP response on negotiation failure
+pub fn negotiate_json_only_response(accept: Option<&HeaderValue>) -> Result<(), Response> {
+    let Some(header) = accept else {
+        return Ok(());
+    };
+
+    let raw = match header.to_str() {
+        Ok(h) => h,
+        Err(_) => {
+            return Err((
+                StatusCode::NOT_ACCEPTABLE,
+                "invalid Accept header encoding; supported: application/json",
+            )
+                .into_response());
+        }
+    };
+
+    for entry in raw.split(',') {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed.split(';');
+        let media_type = parts.next().unwrap().trim();
+        let mut quality = 1.0_f32;
+        for param in parts {
+            let p = param.trim();
+            let p_lower = p.to_ascii_lowercase();
+            if let Some(rest) = p_lower.strip_prefix("q=") {
+                let parsed = rest.parse::<f32>().map_err(|_| {
+                    (
+                        StatusCode::NOT_ACCEPTABLE,
+                        "invalid q-value in Accept header",
+                    )
+                        .into_response()
+                })?;
+                if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
+                    return Err((
+                        StatusCode::NOT_ACCEPTABLE,
+                        "invalid q-value in Accept header",
+                    )
+                        .into_response());
+                }
+                quality = parsed;
+            }
+        }
+
+        if quality <= 0.0 {
+            continue;
+        }
+
+        if is_json_media_type(media_type)
+            || media_type.eq_ignore_ascii_case("application/*")
+            || media_type.eq_ignore_ascii_case("*/*")
+        {
+            return Ok(());
+        }
+    }
+
+    Err((
+        StatusCode::NOT_ACCEPTABLE,
+        "requested content type is not acceptable for this endpoint; supported: application/json",
+    )
+        .into_response())
+}
+
 /// Encode a response payload using the negotiated format.
 pub fn respond_with_format<T>(value: T, format: ResponseFormat) -> Response
 where
@@ -243,25 +314,19 @@ where
     }
 }
 
-fn respond_value_as_norito(value: Value) -> Response {
-    let json = match norito::json::to_string(&value) {
-        Ok(payload) => payload,
-        Err(err) => {
-            iroha_logger::error!(?err, "failed to serialise response payload");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to serialise response",
-            )
-                .into_response();
-        }
-    };
-    let mut bytes = Vec::new();
-    match norito::core::to_bytes_in(&json, &mut bytes) {
-        Ok(()) => Response::builder()
-            .status(StatusCode::OK)
-            .header(CONTENT_TYPE, HeaderValue::from_static(NORITO_MIME_TYPE))
+/// Encode a dynamically constructed Norito JSON value as JSON.
+pub fn respond_json_value(value: Value) -> Response {
+    respond_json_value_with_status(StatusCode::OK, value)
+}
+
+/// Encode a dynamically constructed Norito JSON value as JSON with an HTTP status.
+pub fn respond_json_value_with_status(status: StatusCode, value: Value) -> Response {
+    match norito::json::to_vec(&value) {
+        Ok(bytes) => Response::builder()
+            .status(status)
+            .header(CONTENT_TYPE, HeaderValue::from_static(JSON_MIME_TYPE))
             .body(axum::body::Body::from(bytes))
-            .expect("build Norito response"),
+            .expect("build JSON response"),
         Err(err) => {
             iroha_logger::error!(?err, "failed to serialise response payload");
             (
@@ -273,26 +338,12 @@ fn respond_value_as_norito(value: Value) -> Response {
     }
 }
 
-/// Encode a dynamically constructed Norito JSON value using the negotiated format.
-pub fn respond_value_with_format(value: Value, format: ResponseFormat) -> Response {
-    match format {
-        ResponseFormat::Norito => respond_value_as_norito(value),
-        ResponseFormat::Json => match norito::json::to_vec(&value) {
-            Ok(bytes) => Response::builder()
-                .status(StatusCode::OK)
-                .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
-                .body(axum::body::Body::from(bytes))
-                .expect("build JSON response"),
-            Err(err) => {
-                iroha_logger::error!(?err, "failed to serialise response payload");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to serialise response",
-                )
-                    .into_response()
-            }
-        },
-    }
+/// Encode a dynamically constructed Norito JSON value.
+///
+/// Dynamic values do not carry a stable Norito schema, so they remain JSON-only.
+/// Use [`respond_with_format`] for typed DTOs that support both JSON and Norito.
+pub fn respond_value_with_format(value: Value, _format: ResponseFormat) -> Response {
+    respond_json_value(value)
 }
 
 #[cfg(test)]
@@ -346,20 +397,15 @@ mod response_format_tests {
     }
 
     #[tokio::test]
-    async fn respond_value_with_format_frames_json_as_norito() {
+    async fn respond_value_with_format_keeps_dynamic_payloads_json_only() {
         let value = json::Value::from(7_u64);
         let (parts, body) = respond_value_with_format(value, ResponseFormat::Norito).into_parts();
         assert_eq!(
             parts.headers.get(CONTENT_TYPE),
-            Some(&HeaderValue::from_static(NORITO_MIME_TYPE))
+            Some(&HeaderValue::from_static(JSON_MIME_TYPE))
         );
-        let bytes = body
-            .collect()
-            .await
-            .expect("collect Norito body")
-            .to_bytes();
-        let decoded: String = norito::decode_from_bytes(&bytes).expect("decode Norito string");
-        let parsed: json::Value = json::from_str(&decoded).expect("parse JSON payload");
+        let bytes = body.collect().await.expect("collect JSON body").to_bytes();
+        let parsed: json::Value = json::from_slice(&bytes).expect("decode JSON payload");
         assert_eq!(parsed, json::Value::from(7_u64));
     }
 }
@@ -380,16 +426,15 @@ impl<T: NoritoSerialize + Send> IntoResponse for NoritoBody<T> {
     }
 }
 
-/// Structure to reply using the Norito content type while serializing a JSON value.
+/// Structure to reply with a dynamically constructed JSON value.
 ///
-/// The payload is encoded as a Norito-framed UTF-8 JSON string to keep
-/// `application/x-norito` responses headered and deterministic.
+/// Prefer typed DTOs plus [`NoritoBody`] or [`JsonBody`] for dual-format routes.
 #[derive(Debug)]
-pub struct NoritoJsonBody(pub Value);
+pub struct JsonValueBody(pub Value);
 
-impl IntoResponse for NoritoJsonBody {
+impl IntoResponse for JsonValueBody {
     fn into_response(self) -> Response {
-        respond_value_as_norito(self.0)
+        respond_json_value(self.0)
     }
 }
 
@@ -1271,10 +1316,23 @@ pub mod extractors {
         }
 
         #[test]
-        fn negotiate_accept_header_defaults_json() {
+        fn negotiate_accept_header_honors_json() {
             let header = HeaderValue::from_static("application/json");
             let format = super::super::negotiate_response_format(Some(&header)).expect("format");
             assert_eq!(format, super::super::ResponseFormat::Json);
+        }
+
+        #[test]
+        fn negotiate_accept_header_defaults_norito() {
+            let format = super::super::negotiate_response_format(None).expect("format");
+            assert_eq!(format, super::super::ResponseFormat::Norito);
+        }
+
+        #[test]
+        fn negotiate_accept_header_wildcard_defaults_norito() {
+            let header = HeaderValue::from_static("*/*");
+            let format = super::super::negotiate_response_format(Some(&header)).expect("format");
+            assert_eq!(format, super::super::ResponseFormat::Norito);
         }
 
         #[test]
@@ -1295,6 +1353,22 @@ pub mod extractors {
         fn negotiate_rejects_invalid_q_value() {
             let header = HeaderValue::from_static("application/json;q=2");
             let err = super::super::negotiate_response_format(Some(&header)).unwrap_err();
+            assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
+        }
+
+        #[test]
+        fn negotiate_json_only_accepts_missing_json_and_wildcard() {
+            assert!(super::super::negotiate_json_only_response(None).is_ok());
+            let json = HeaderValue::from_static("application/json");
+            assert!(super::super::negotiate_json_only_response(Some(&json)).is_ok());
+            let wildcard = HeaderValue::from_static("*/*");
+            assert!(super::super::negotiate_json_only_response(Some(&wildcard)).is_ok());
+        }
+
+        #[test]
+        fn negotiate_json_only_rejects_norito_only() {
+            let header = HeaderValue::from_static("application/x-norito");
+            let err = super::super::negotiate_json_only_response(Some(&header)).unwrap_err();
             assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
         }
 

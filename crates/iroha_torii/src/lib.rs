@@ -22557,8 +22557,8 @@ async fn handler_soracloud_status(
     }
 
     let format =
-        match crate::utils::negotiate_response_format(accept.as_ref().map(|value| &value.0)) {
-            Ok(format) => format,
+        match crate::utils::negotiate_json_only_response(accept.as_ref().map(|value| &value.0)) {
+            Ok(()) => ResponseFormat::Json,
             Err(response) => return Ok(response),
         };
 
