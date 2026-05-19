@@ -1484,8 +1484,8 @@ fn minimal_config_snapshot() {
                 terminal_colors: false,
             },
             queue: Queue {
-                capacity: 65536,
-                capacity_per_user: 65536,
+                capacity: 262144,
+                capacity_per_user: 262144,
                 transaction_time_to_live: 86400s,
                 expired_cull_interval: 1s,
                 expired_cull_batch: 256,

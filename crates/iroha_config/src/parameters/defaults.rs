@@ -276,9 +276,9 @@ pub mod queue {
     use super::*;
 
     /// Maximum number of transactions the global queue holds concurrently.
-    pub const CAPACITY: NonZeroUsize = nonzero!(2_usize.pow(16));
+    pub const CAPACITY: NonZeroUsize = nonzero!(4_usize * 2_usize.pow(16));
     /// Maximum number of transactions accepted per authority (prevents flooding).
-    pub const CAPACITY_PER_USER: NonZeroUsize = nonzero!(2_usize.pow(16));
+    pub const CAPACITY_PER_USER: NonZeroUsize = nonzero!(4_usize * 2_usize.pow(16));
     /// Time-to-live for queued transactions before automatic eviction.
     pub const TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(24 * 60 * 60);
     /// Minimum interval between expired-transaction sweeps.
@@ -3815,7 +3815,7 @@ pub mod settlement {
 
 #[cfg(test)]
 mod tests {
-    use super::{governance, torii};
+    use super::{governance, queue, torii};
 
     #[test]
     fn jdg_signature_schemes_includes_simple_threshold() {
@@ -3838,5 +3838,11 @@ mod tests {
         );
         assert_eq!(torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN, Some(16));
         assert_eq!(torii::SORACLOUD_MUTATION_MAX_INFLIGHT.get(), 64);
+    }
+
+    #[test]
+    fn queue_defaults_allow_four_times_legacy_soak_capacity() {
+        assert_eq!(queue::CAPACITY.get(), 262_144);
+        assert_eq!(queue::CAPACITY_PER_USER.get(), queue::CAPACITY.get());
     }
 }

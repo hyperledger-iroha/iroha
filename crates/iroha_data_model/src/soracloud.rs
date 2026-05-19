@@ -12816,6 +12816,23 @@ mod tests {
         }
     }
 
+    fn assert_fhe_job_invalid_field(
+        label: &str,
+        mutate: impl FnOnce(&mut FheJobSpecV1),
+        expected_field: &'static str,
+    ) {
+        let mut job = sample_fhe_job_spec();
+        mutate(&mut job);
+        let error = job.validate().expect_err(label);
+        assert!(
+            matches!(
+                &error,
+                SoracloudManifestError::InvalidField { field, .. } if *field == expected_field
+            ),
+            "expected `{expected_field}` invalid-field error for {label}, got {error:?}"
+        );
+    }
+
     fn sample_decryption_authority_policy() -> DecryptionAuthorityPolicyV1 {
         DecryptionAuthorityPolicyV1 {
             schema_version: DECRYPTION_AUTHORITY_POLICY_VERSION_V1,
@@ -14818,115 +14835,64 @@ mod tests {
 
     #[test]
     fn fhe_job_spec_validate_rejects_adversarial_operation_shapes() {
-        let mut add_single_input = sample_fhe_job_spec();
-        add_single_input.inputs.pop();
-        let error = add_single_input
-            .validate()
-            .expect_err("add jobs require at least two inputs");
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "inputs",
-                ..
-            }
-        ));
-
-        let mut add_with_depth = sample_fhe_job_spec();
-        add_with_depth.requested_multiplication_depth = 1;
-        let error = add_with_depth
-            .validate()
-            .expect_err("add jobs cannot smuggle multiplication depth");
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "requested_multiplication_depth",
-                ..
-            }
-        ));
-
-        let mut multiply_zero_depth = sample_fhe_job_spec();
-        multiply_zero_depth.operation = FheJobOperationV1::Multiply;
-        let error = multiply_zero_depth
-            .validate()
-            .expect_err("multiply jobs require non-zero depth");
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "requested_multiplication_depth",
-                ..
-            }
-        ));
-
-        let mut multiply_with_rotation = sample_fhe_job_spec();
-        multiply_with_rotation.operation = FheJobOperationV1::Multiply;
-        multiply_with_rotation.requested_multiplication_depth = 1;
-        multiply_with_rotation.rotation_steps = 1;
-        let error = multiply_with_rotation
-            .validate()
-            .expect_err("multiply jobs cannot request rotations");
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "operation",
-                ..
-            }
-        ));
-
-        let mut rotate_multiple_inputs = sample_fhe_job_spec();
-        rotate_multiple_inputs.operation = FheJobOperationV1::RotateLeft;
-        rotate_multiple_inputs.rotation_steps = 1;
-        let error = rotate_multiple_inputs
-            .validate()
-            .expect_err("rotate jobs require exactly one input");
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "inputs",
-                ..
-            }
-        ));
-
-        let mut rotate_zero_steps = sample_fhe_job_spec();
-        rotate_zero_steps.operation = FheJobOperationV1::RotateLeft;
-        rotate_zero_steps.inputs.truncate(1);
-        let error = rotate_zero_steps
-            .validate()
-            .expect_err("rotate jobs require non-zero rotation steps");
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "rotation_steps",
-                ..
-            }
-        ));
-
-        let mut bootstrap_multiple_inputs = sample_fhe_job_spec();
-        bootstrap_multiple_inputs.operation = FheJobOperationV1::Bootstrap;
-        bootstrap_multiple_inputs.bootstrap_count = 1;
-        let error = bootstrap_multiple_inputs
-            .validate()
-            .expect_err("bootstrap jobs require exactly one input");
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "inputs",
-                ..
-            }
-        ));
-
-        let mut bootstrap_zero_count = sample_fhe_job_spec();
-        bootstrap_zero_count.operation = FheJobOperationV1::Bootstrap;
-        bootstrap_zero_count.inputs.truncate(1);
-        let error = bootstrap_zero_count
-            .validate()
-            .expect_err("bootstrap jobs require non-zero bootstrap count");
-        assert!(matches!(
-            error,
-            SoracloudManifestError::InvalidField {
-                field: "bootstrap_count",
-                ..
-            }
-        ));
+        assert_fhe_job_invalid_field(
+            "add jobs require at least two inputs",
+            |job| {
+                job.inputs.pop();
+            },
+            "inputs",
+        );
+        assert_fhe_job_invalid_field(
+            "add jobs cannot smuggle multiplication depth",
+            |job| job.requested_multiplication_depth = 1,
+            "requested_multiplication_depth",
+        );
+        assert_fhe_job_invalid_field(
+            "multiply jobs require non-zero depth",
+            |job| job.operation = FheJobOperationV1::Multiply,
+            "requested_multiplication_depth",
+        );
+        assert_fhe_job_invalid_field(
+            "multiply jobs cannot request rotations",
+            |job| {
+                job.operation = FheJobOperationV1::Multiply;
+                job.requested_multiplication_depth = 1;
+                job.rotation_steps = 1;
+            },
+            "operation",
+        );
+        assert_fhe_job_invalid_field(
+            "rotate jobs require exactly one input",
+            |job| {
+                job.operation = FheJobOperationV1::RotateLeft;
+                job.rotation_steps = 1;
+            },
+            "inputs",
+        );
+        assert_fhe_job_invalid_field(
+            "rotate jobs require non-zero rotation steps",
+            |job| {
+                job.operation = FheJobOperationV1::RotateLeft;
+                job.inputs.truncate(1);
+            },
+            "rotation_steps",
+        );
+        assert_fhe_job_invalid_field(
+            "bootstrap jobs require exactly one input",
+            |job| {
+                job.operation = FheJobOperationV1::Bootstrap;
+                job.bootstrap_count = 1;
+            },
+            "inputs",
+        );
+        assert_fhe_job_invalid_field(
+            "bootstrap jobs require non-zero bootstrap count",
+            |job| {
+                job.operation = FheJobOperationV1::Bootstrap;
+                job.inputs.truncate(1);
+            },
+            "bootstrap_count",
+        );
     }
 
     #[test]

@@ -25,6 +25,8 @@ use iroha_test_samples::{
 };
 
 const TX_TIMEOUT: Duration = Duration::from_secs(60);
+const CONTRACT_CALL_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
+const CONTRACT_CALL_ADMISSION_POLL: Duration = Duration::from_millis(250);
 const CONTRACT_GAS_LIMIT: u64 = 100_000;
 const SAMPLE_ASSET_DEFINITION_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
@@ -192,30 +194,17 @@ async fn call_contract_expect_status(
     expected_status: &str,
     stage: &str,
 ) -> Result<()> {
-    let response = tokio::task::spawn_blocking({
-        let client = client.clone();
-        let authority = authority.clone();
-        let private_key = private_key.clone();
-        let contract_address = contract_address.clone();
-        let entrypoint = entrypoint.to_owned();
-        move || {
-            client.post_contract_call_json(
-                &authority,
-                Some(&private_key),
-                Some(&contract_address),
-                None,
-                Some(entrypoint.as_str()),
-                payload.as_ref(),
-                None,
-                None,
-                None,
-                CONTRACT_GAS_LIMIT,
-            )
-        }
-    })
-    .await
-    .expect("contract call task")?;
-
+    let response = submit_contract_call_json(
+        client,
+        http,
+        authority,
+        private_key,
+        contract_address,
+        entrypoint,
+        payload.as_ref(),
+        stage,
+    )
+    .await?;
     let tx_hash_hex = response
         .get("tx_hash_hex")
         .and_then(norito::json::Value::as_str)
@@ -231,6 +220,63 @@ async fn call_contract_expect_status(
         ));
     }
     Ok(())
+}
+
+async fn submit_contract_call_json(
+    client: &Client,
+    http: &reqwest::Client,
+    authority: &AccountId,
+    private_key: &iroha_crypto::PrivateKey,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    entrypoint: &str,
+    payload: Option<&norito::json::Value>,
+    stage: &str,
+) -> Result<norito::json::Value> {
+    let url = client.torii_url.join("v1/contracts/call")?;
+    let deadline = Instant::now() + CONTRACT_CALL_ADMISSION_TIMEOUT;
+
+    loop {
+        let mut body = norito::json::Map::new();
+        body.insert("authority".into(), authority.to_string().into());
+        body.insert(
+            "private_key".into(),
+            norito::json::to_value(&iroha_data_model::prelude::ExposedPrivateKey(
+                private_key.clone(),
+            ))?,
+        );
+        body.insert(
+            "contract_address".into(),
+            norito::json::to_value(contract_address)?,
+        );
+        body.insert("entrypoint".into(), entrypoint.into());
+        if let Some(payload) = payload {
+            body.insert("payload".into(), payload.clone());
+        }
+        body.insert("gas_limit".into(), CONTRACT_GAS_LIMIT.into());
+
+        let response = http
+            .post(url.clone())
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .body(norito::json::to_vec(&norito::json::Value::Object(body))?)
+            .send()
+            .await?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if status.is_success() {
+            return norito::json::from_str(&text).map_err(|err| {
+                eyre!("{stage}: decode contract call response: {err}; body={text}")
+            });
+        }
+
+        let last_response = format!("{status}: {text}");
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "{stage}: contract call admission did not succeed before timeout; last response {last_response}",
+            ));
+        }
+        tokio::time::sleep(CONTRACT_CALL_ADMISSION_POLL).await;
+    }
 }
 
 async fn contract_state_values(

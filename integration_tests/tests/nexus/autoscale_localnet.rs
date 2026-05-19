@@ -45,7 +45,7 @@ const EXPANSION_POST_STORAGE_TOP_UP_TX_COUNT: usize = 64;
 const AUTOSCALE_COOLDOWN_CLEARANCE_BLOCK_DELTA: u64 = 2;
 const AUTOSCALE_COOLDOWN_CLEARANCE_TIMEOUT: Duration = Duration::from_secs(45);
 const CONTRACTION_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
-const STRICT_CONTRACTION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
+const STRICT_CONTRACTION_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
 const SCALE_OUT_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 const STRICT_SCALE_OUT_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 const SCALE_IN_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -80,7 +80,7 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
                 .write(["nexus", "autoscale", "enabled"], true)
                 .write(["nexus", "autoscale", "min_lanes"], 1_i64)
                 .write(["nexus", "autoscale", "max_lanes"], 2_i64)
-                .write(["nexus", "autoscale", "target_block_ms"], 3000_i64)
+                .write(["nexus", "autoscale", "target_block_ms"], 30000_i64)
                 .write(["nexus", "autoscale", "scale_out_latency_ratio"], 0.12_f64)
                 .write(["nexus", "autoscale", "scale_in_latency_ratio"], 0.11_f64)
                 .write(
@@ -2358,10 +2358,11 @@ fn run_expand_contract_cycle(
     load_tx_count: usize,
 ) -> Result<ExpandContractCycleOutcome> {
     let pre_contraction_context = format!("autoscale contraction pre-check cycle {cycle_index}");
+    let pre_contraction_heartbeat_client = peer_client_with_timeout(network.peer());
     wait_for_contracted_lanes(
         network,
-        None,
-        "",
+        Some(&pre_contraction_heartbeat_client),
+        &format!("autoscale-precheck-heartbeat-cycle-{cycle_index}"),
         quorum_required,
         SCALE_IN_WAIT_TIMEOUT,
         &pre_contraction_context,
@@ -2501,8 +2502,7 @@ fn run_expand_contract_cycle(
         );
     }
 
-    let contraction_heartbeat_client =
-        (!require_scale_in_transition_this_cycle).then(|| peer_client_with_timeout(network.peer()));
+    let contraction_heartbeat_client = peer_client_with_timeout(network.peer());
     let contraction_heartbeat_interval = if require_scale_in_transition_this_cycle {
         STRICT_CONTRACTION_HEARTBEAT_INTERVAL
     } else {
@@ -2513,7 +2513,7 @@ fn run_expand_contract_cycle(
     let contraction_prefix = format!("autoscale-heartbeat-cycle-{cycle_index}");
     wait_for_contracted_lanes(
         network,
-        contraction_heartbeat_client.as_ref(),
+        Some(&contraction_heartbeat_client),
         &contraction_prefix,
         quorum_required,
         SCALE_IN_WAIT_TIMEOUT,
