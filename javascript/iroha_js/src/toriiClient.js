@@ -19622,8 +19622,15 @@ function normalizeMultisigContractCallResponse(
   context = "multisig contract call response",
 ) {
   const record = ensureRecord(payload, context);
+  if (record.ok !== true) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.ok must be true`,
+      `${context}.ok`,
+    );
+  }
   return {
-    ok: Boolean(record.ok),
+    ok: true,
     resolved_multisig_account_id: ToriiClient._normalizeAccountId(
       record.resolved_multisig_account_id,
       `${context}.resolved_multisig_account_id`,

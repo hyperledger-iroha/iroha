@@ -394,6 +394,128 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun proposeMultisigRejectsAdversarialRequestShapes() {
+        val instruction = byteArrayOf(1)
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    multisigAccountId = "aid:multisig",
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
+                )
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
+                )
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
+                    signatureB64 = "not base64",
+                )
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
+                    publicKeyHex = "aa",
+                )
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
+                    creationTimeMs = -1,
+                )
+            )
+        }
+    }
+
+    @Test
+    fun multisigResponseParserRejectsMalformedFields() {
+        assertFailsWith<RuntimeException> {
+            ContractJsonParser.parseMultisigResponse(
+                """
+                    {
+                      "ok": false,
+                      "resolved_multisig_account_id": "multisig"
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<RuntimeException> {
+            ContractJsonParser.parseMultisigResponse(
+                """
+                    {
+                      "ok": true,
+                      "resolved_multisig_account_id": "multisig",
+                      "submitted": "false"
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<RuntimeException> {
+            ContractJsonParser.parseMultisigResponse(
+                """
+                    {
+                      "ok": true,
+                      "resolved_multisig_account_id": "multisig",
+                      "instructions_hash": "aa"
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<RuntimeException> {
+            ContractJsonParser.parseMultisigResponse(
+                """
+                    {
+                      "ok": true,
+                      "resolved_multisig_account_id": "multisig",
+                      "signing_message_b64": "not base64"
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<RuntimeException> {
+            ContractJsonParser.parseMultisigResponse(
+                """
+                    {
+                      "ok": true,
+                      "resolved_multisig_account_id": "multisig",
+                      "signing_message_b64": ""
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<RuntimeException> {
+            ContractJsonParser.parseMultisigResponse(
+                """
+                    {
+                      "ok": true,
+                      "resolved_multisig_account_id": "multisig",
+                      "creation_time_ms": -1
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+    }
+
+    @Test
     fun callContractRejectsAmbiguousSelector() {
         val transport = HttpClientTransport.withExecutor(
             executor = CapturingExecutor(),

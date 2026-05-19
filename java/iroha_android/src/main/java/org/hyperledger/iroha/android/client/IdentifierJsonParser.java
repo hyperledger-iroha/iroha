@@ -23,6 +23,12 @@ public final class IdentifierJsonParser {
       items.add(
           new IdentifierPolicySummary(
               requiredString(item.get("policy_id"), "identifier policy list.items[" + i + "].policy_id"),
+              optionalString(item.get("program_id")) == null
+                  ? requiredString(item.get("policy_id"), "identifier policy list.items[" + i + "].policy_id")
+                      .replace('#', '_')
+                  : requiredString(
+                      item.get("program_id"),
+                      "identifier policy list.items[" + i + "].program_id"),
               requiredString(item.get("owner"), "identifier policy list.items[" + i + "].owner"),
               Boolean.TRUE.equals(item.get("active")),
               IdentifierNormalization.fromWireValue(
@@ -32,6 +38,13 @@ public final class IdentifierJsonParser {
               requiredString(
                   item.get("resolver_public_key"),
                   "identifier policy list.items[" + i + "].resolver_public_key"),
+              optionalString(item.get("output_opening_public_key")) == null
+                  ? requiredString(
+                      item.get("resolver_public_key"),
+                      "identifier policy list.items[" + i + "].resolver_public_key")
+                  : requiredString(
+                      item.get("output_opening_public_key"),
+                      "identifier policy list.items[" + i + "].output_opening_public_key"),
               requiredString(item.get("backend"), "identifier policy list.items[" + i + "].backend"),
               optionalString(item.get("input_encryption")),
               optionalString(item.get("input_encryption_public_parameters")),
@@ -299,7 +312,7 @@ public final class IdentifierJsonParser {
             : null);
   }
 
-  private static RamLfeOutputOpening parseOutputOpening(
+  static RamLfeOutputOpening parseOutputOpening(
       final Map<String, Object> root, final String context) {
     final Map<String, Object> payload = expectObject(root.get("payload"), context + ".payload");
     return new RamLfeOutputOpening(

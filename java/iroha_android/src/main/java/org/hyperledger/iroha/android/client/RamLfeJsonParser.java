@@ -31,6 +31,13 @@ public final class RamLfeJsonParser {
               requiredString(
                   item.get("resolver_public_key"),
                   "ram-lfe program policy list.items[" + i + "].resolver_public_key"),
+              optionalString(item.get("output_opening_public_key")) == null
+                  ? requiredString(
+                      item.get("resolver_public_key"),
+                      "ram-lfe program policy list.items[" + i + "].resolver_public_key")
+                  : requiredString(
+                      item.get("output_opening_public_key"),
+                      "ram-lfe program policy list.items[" + i + "].output_opening_public_key"),
               requiredString(
                   item.get("backend"), "ram-lfe program policy list.items[" + i + "].backend"),
               normalizedMode(
@@ -73,6 +80,10 @@ public final class RamLfeJsonParser {
         requiredString(root.get("program_id"), "ram-lfe execute response.program_id"),
         requiredString(root.get("opaque_hash"), "ram-lfe execute response.opaque_hash"),
         requiredString(root.get("receipt_hash"), "ram-lfe execute response.receipt_hash"),
+        canonicalizeHex(
+            requiredString(
+                root.get("output_ciphertext"), "ram-lfe execute response.output_ciphertext"),
+            "ram-lfe execute response.output_ciphertext"),
         requiredString(root.get("output_hash"), "ram-lfe execute response.output_hash"),
         requiredString(
             root.get("associated_data_hash"), "ram-lfe execute response.associated_data_hash"),
@@ -84,7 +95,10 @@ public final class RamLfeJsonParser {
         normalizedMode(
             requiredString(
                 root.get("verification_mode"), "ram-lfe execute response.verification_mode")),
-        expectObject(root.get("receipt"), "ram-lfe execute response.receipt"));
+        expectObject(root.get("receipt"), "ram-lfe execute response.receipt"),
+        IdentifierJsonParser.parseOutputOpening(
+            expectObject(root.get("output_opening"), "ram-lfe execute response.output_opening"),
+            "ram-lfe execute response.output_opening"));
   }
 
   public static RamLfeReceiptVerifyResponse parseReceiptVerifyResponse(final byte[] payload) {

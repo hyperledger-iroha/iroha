@@ -1668,6 +1668,42 @@ fn canonicalize_hex32_literal(literal: &str, context: &str) -> Result<String> {
     Ok(trimmed.to_ascii_lowercase())
 }
 
+fn validate_multisig_response(response: &MultisigResponse) -> Result<()> {
+    if !response.ok {
+        return Err(eyre!("multisig response.ok must be true"));
+    }
+
+    for (field, value) in [
+        (
+            "multisig response.instructions_hash",
+            &response.instructions_hash,
+        ),
+        ("multisig response.tx_hash_hex", &response.tx_hash_hex),
+        (
+            "multisig response.executed_tx_hash_hex",
+            &response.executed_tx_hash_hex,
+        ),
+    ] {
+        if let Some(value) = value {
+            canonicalize_hex32_literal(value, field)?;
+        }
+    }
+
+    if let Some(value) = &response.signing_message_b64 {
+        let literal = value.trim();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(literal)
+            .map_err(|err| eyre!("multisig response.signing_message_b64 must be base64: {err}"))?;
+        if decoded.is_empty() {
+            return Err(eyre!(
+                "multisig response.signing_message_b64 must not decode to empty bytes"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn require_string<'a>(value: Option<&'a JsonValue>, context: &str) -> Result<&'a str> {
     match value {
         Some(JsonValue::String(text)) => Ok(text),
@@ -4370,10 +4406,11 @@ mod evidence_http_tests {
         let signer_account_id = AccountId::new(KeyPair::random().public_key().clone());
         let instruction: dm::InstructionBox =
             dm::Log::new(dm::Level::INFO, "hello multisig".to_owned()).into();
+        let proposal_id = "a".repeat(64);
         let response = json_response(
             StatusCode::OK,
             &format!(
-                "{{\"ok\":true,\"resolved_multisig_account_id\":\"{multisig_account_id}\",\"submitted\":false,\"proposal_id\":\"proposal\",\"instructions_hash\":\"proposal\",\"tx_hash_hex\":null,\"executed_tx_hash_hex\":null,\"creation_time_ms\":123,\"signing_message_b64\":\"AQ==\"}}"
+                "{{\"ok\":true,\"resolved_multisig_account_id\":\"{multisig_account_id}\",\"submitted\":false,\"proposal_id\":\"{proposal_id}\",\"instructions_hash\":\"{proposal_id}\",\"tx_hash_hex\":null,\"executed_tx_hash_hex\":null,\"creation_time_ms\":123,\"signing_message_b64\":\"AQ==\"}}"
             ),
         );
         let request = MultisigProposeRequest {
@@ -4432,6 +4469,168 @@ mod evidence_http_tests {
                     && value == APPLICATION_JSON),
             "Accept header missing"
         );
+    }
+
+    #[test]
+    fn post_multisig_propose_propagates_server_rejection() {
+        use iroha_data_model::prelude as dm;
+
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let multisig_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let signer_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let request = MultisigProposeRequest {
+            multisig_account_id: Some(multisig_account_id),
+            multisig_account_alias: None,
+            signer_account_id,
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(123),
+            fee_sponsor: None,
+            instructions: vec![dm::Log::new(dm::Level::INFO, "reject me".to_owned()).into()],
+        };
+        let response = json_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{\"error\":\"malformed native instruction frame\"}",
+        );
+
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client
+                .post_multisig_propose(&request)
+                .expect_err("server rejection must be surfaced")
+        });
+
+        let message = err.to_string();
+        assert!(
+            message.contains("failed to propose multisig instruction batch"),
+            "unexpected error: {message}"
+        );
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn post_multisig_propose_rejects_malformed_success_response() {
+        use iroha_data_model::prelude as dm;
+
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let multisig_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let signer_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let request = MultisigProposeRequest {
+            multisig_account_id: Some(multisig_account_id),
+            multisig_account_alias: None,
+            signer_account_id,
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(123),
+            fee_sponsor: None,
+            instructions: vec![dm::Log::new(dm::Level::INFO, "bad response".to_owned()).into()],
+        };
+        let response = json_response(StatusCode::OK, "{\"ok\":true}");
+
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client
+                .post_multisig_propose(&request)
+                .expect_err("malformed success response must be rejected")
+        });
+
+        let message = err.to_string();
+        assert!(
+            message.contains("failed to decode multisig propose response"),
+            "unexpected error: {message}"
+        );
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn post_multisig_propose_rejects_malformed_response_metadata() {
+        use iroha_data_model::prelude as dm;
+
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let multisig_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let signer_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let request = MultisigProposeRequest {
+            multisig_account_id: Some(multisig_account_id.clone()),
+            multisig_account_alias: None,
+            signer_account_id,
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(123),
+            fee_sponsor: None,
+            instructions: vec![dm::Log::new(dm::Level::INFO, "bad metadata".to_owned()).into()],
+        };
+        let bad_hash_response = json_response(
+            StatusCode::OK,
+            &format!(
+                "{{\"ok\":true,\"resolved_multisig_account_id\":\"{multisig_account_id}\",\"instructions_hash\":\"aa\"}}"
+            ),
+        );
+
+        let err = with_mock_http(respond_with(&snapshots, bad_hash_response), || {
+            client
+                .post_multisig_propose(&request)
+                .expect_err("short response hash must be rejected")
+        });
+        assert!(
+            err.to_string()
+                .contains("failed to validate multisig propose response"),
+            "unexpected error: {err}"
+        );
+
+        let bad_signing_response = json_response(
+            StatusCode::OK,
+            &format!(
+                "{{\"ok\":true,\"resolved_multisig_account_id\":\"{multisig_account_id}\",\"signing_message_b64\":\"not base64\"}}"
+            ),
+        );
+        let err = with_mock_http(respond_with(&snapshots, bad_signing_response), || {
+            client
+                .post_multisig_propose(&request)
+                .expect_err("bad signing message must be rejected")
+        });
+        assert!(
+            err.to_string()
+                .contains("failed to validate multisig propose response"),
+            "unexpected error: {err}"
+        );
+
+        let empty_signing_response = json_response(
+            StatusCode::OK,
+            &format!(
+                "{{\"ok\":true,\"resolved_multisig_account_id\":\"{multisig_account_id}\",\"signing_message_b64\":\"\"}}"
+            ),
+        );
+        let err = with_mock_http(respond_with(&snapshots, empty_signing_response), || {
+            client
+                .post_multisig_propose(&request)
+                .expect_err("empty signing message must be rejected")
+        });
+        assert!(
+            err.to_string()
+                .contains("failed to validate multisig propose response"),
+            "unexpected error: {err}"
+        );
+
+        let false_ok_response = json_response(
+            StatusCode::OK,
+            &format!("{{\"ok\":false,\"resolved_multisig_account_id\":\"{multisig_account_id}\"}}"),
+        );
+        let err = with_mock_http(respond_with(&snapshots, false_ok_response), || {
+            client
+                .post_multisig_propose(&request)
+                .expect_err("false ok response must be rejected")
+        });
+        assert!(
+            err.to_string()
+                .contains("failed to validate multisig propose response"),
+            "unexpected error: {err}"
+        );
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 4);
     }
 
     #[test]
@@ -8716,8 +8915,11 @@ impl Client {
             .unwrap_or_else(core::convert::identity)
             .into());
         }
-        norito::json::from_slice(response.body())
-            .map_err(|err| eyre!("failed to decode multisig propose response: {err}"))
+        let decoded = norito::json::from_slice(response.body())
+            .map_err(|err| eyre!("failed to decode multisig propose response: {err}"))?;
+        validate_multisig_response(&decoded)
+            .wrap_err("failed to validate multisig propose response")?;
+        Ok(decoded)
     }
 
     /// Convenience: signed POST `/v1/multisig/approvals/list_for_authority` for the caller authority.

@@ -3480,6 +3480,138 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
+    public void EncodeInstructionBoxBase64RejectsMissingAuthority()
+    {
+        var instruction = TransactionInstruction.ExecuteTrigger("daily-close");
+
+        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBoxBase64(""));
+        Assert.Throws<ArgumentNullException>(() => instruction.EncodeInstructionBoxBase64(null!));
+    }
+
+    [Fact]
+    public async Task ProposeMultisigAsyncPropagatesToriiRejection()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
+        {
+            Content = new StringContent("""{"error":"malformed native instruction frame"}"""),
+            ReasonPhrase = "Unprocessable Entity",
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var ex = await Assert.ThrowsAsync<ToriiApiException>(() =>
+            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
+            {
+                MultisigAccountAlias = "ops@universal",
+                SignerAccountId = "sorauﾛ1Nmultisig",
+                Instructions = ["AQID"],
+            }));
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, ex.StatusCode);
+        var responseBody = Assert.IsType<string>(ex.ResponseBody);
+        Assert.Contains("malformed native instruction frame", responseBody);
+        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task ProposeMultisigAsyncRejectsMalformedSuccessResponse()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                {
+                  "ok": true,
+                  "resolved_multisig_account_id": "sorauﾛ1Nmultisig",
+                  "instructions_hash": {}
+                }
+                """),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        await Assert.ThrowsAsync<JsonException>(() =>
+            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
+            {
+                MultisigAccountAlias = "ops@universal",
+                SignerAccountId = "sorauﾛ1Nmultisig",
+                Instructions = ["AQID"],
+            }));
+        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task ProposeMultisigAsyncRejectsFalseOkResponse()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                {
+                  "ok": false,
+                  "resolved_multisig_account_id": "sorauﾛ1Nmultisig"
+                }
+                """),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        await Assert.ThrowsAsync<JsonException>(() =>
+            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
+            {
+                MultisigAccountAlias = "ops@universal",
+                SignerAccountId = "sorauﾛ1Nmultisig",
+                Instructions = ["AQID"],
+            }));
+        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task ProposeMultisigAsyncRejectsEmptySigningMessageResponse()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                {
+                  "ok": true,
+                  "resolved_multisig_account_id": "sorauﾛ1Nmultisig",
+                  "signing_message_b64": ""
+                }
+                """),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        await Assert.ThrowsAsync<JsonException>(() =>
+            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
+            {
+                MultisigAccountAlias = "ops@universal",
+                SignerAccountId = "sorauﾛ1Nmultisig",
+                Instructions = ["AQID"],
+            }));
+        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task ProposeMultisigAsyncRejectsNegativeCreationTimeResponse()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                {
+                  "ok": true,
+                  "resolved_multisig_account_id": "sorauﾛ1Nmultisig",
+                  "creation_time_ms": -1
+                }
+                """),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        await Assert.ThrowsAsync<JsonException>(() =>
+            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
+            {
+                MultisigAccountAlias = "ops@universal",
+                SignerAccountId = "sorauﾛ1Nmultisig",
+                Instructions = ["AQID"],
+            }));
+        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
     public async Task ApproveMultisigContractCallAsyncDeserializesScaffoldResponse()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)

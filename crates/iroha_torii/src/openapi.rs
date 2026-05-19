@@ -8818,7 +8818,8 @@ fn openapi_schemas() -> Map {
                 "executed_at_ms",
                 "backend",
                 "verification_mode",
-                "receipt"
+                "receipt",
+                "output_opening"
             ],
             "additionalProperties": false,
             "properties": {
@@ -8866,6 +8867,10 @@ fn openapi_schemas() -> Map {
                 },
                 "receipt": {
                     "$ref": "#/components/schemas/RamLfeExecutionReceipt"
+                },
+                "output_opening": {
+                    "$ref": "#/components/schemas/RamLfeOutputOpening",
+                    "description": "Signed opening over the encrypted output hash. Clients reuse this with the same encrypted input when resolving or claiming identifiers."
                 }
             }
         }),
@@ -8940,12 +8945,16 @@ fn openapi_schemas() -> Map {
         "IdentifierPolicySummary".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["policy_id", "owner", "active", "normalization", "resolver_public_key", "output_opening_public_key", "backend"],
+            "required": ["policy_id", "program_id", "owner", "active", "normalization", "resolver_public_key", "output_opening_public_key", "backend"],
             "additionalProperties": false,
             "properties": {
                 "policy_id": {
                     "type": "string",
                     "description": "Identifier policy namespace literal (`<kind>#<business_rule>`)."
+                },
+                "program_id": {
+                    "type": "string",
+                    "description": "RAM-LFE program policy used by this identifier policy."
                 },
                 "owner": {
                     "type": "string",

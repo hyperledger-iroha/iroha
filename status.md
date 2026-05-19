@@ -11907,10 +11907,46 @@ Last updated: 2026-05-19
     inherited Torii helper surface
   - JavaScript `ToriiClient.proposeMultisig` and
     `buildMultisigProposeRequest`
+- Added focused negative/adversarial coverage for malformed native Norito
+  instruction frames inside mixed batches, server-side multisig-propose
+  rejection propagation, empty instruction batches, ambiguous or missing
+  selectors, invalid detached signatures/public keys, negative creation
+  timestamps, and SDK helper misuse across Rust, Swift, Kotlin, Java Android,
+  Python, JavaScript, and C# tests.
+- A second adversarial pass now covers incomplete detached-signature field
+  pairs at the Torii handler boundary and malformed success responses across
+  Rust, Swift, Kotlin, Java Android, Python, JavaScript, and C# parser/client
+  tests, including invalid `submitted`, `instructions_hash`, and
+  `signing_message_b64` fields.
+- A third adversarial pass now rejects `private_key` server-side signing on the
+  generic `/v1/multisig/propose` handler, validates Rust client response
+  hash/base64 metadata, and makes Kotlin/Java Android multisig response parsers
+  fail closed on negative `creation_time_ms`; Swift, Python, JavaScript, and
+  C# tests cover the same negative timestamp response shape.
+- A fourth adversarial pass now covers malformed detached submit credentials at
+  the Torii handler boundary (`public_key_hex` and `signature_b64`) and rejects
+  empty-but-valid base64 `signing_message_b64` values in the Rust client
+  response validator.
+- A fifth adversarial pass now rejects unknown JSON instruction object shapes,
+  valid-but-mismatched detached public keys, and present-but-empty
+  `signing_message_b64` values across Swift, Kotlin/JVM, Java Android, Python,
+  and JavaScript tests. Kotlin/JVM and Java Android response parsing now treats
+  an empty optional base64 field as malformed instead of silently collapsing it
+  to an absent field. The Torii focused compile corridor also now matches the
+  current `JsonOrNoritoVersioned` handler signature, and
+  `TransactionEntrypoint` relies on its manual Norito JSON implementation
+  instead of a stale derive.
+- A sixth adversarial pass now rejects `ok: false` multisig success envelopes
+  across Rust, Swift, Kotlin/JVM, Java Android, Python, JavaScript, and C#
+  client/parser tests. Torii handler coverage now also rejects blank detached
+  signature credentials, valid-base64 but forged detached signatures, negative
+  JSON scalar fields, and `null` instruction entries before proposal material
+  is accepted.
 - Focused validation passed:
+  - `cargo fmt --all`
   - `cargo test -p iroha_torii --lib multisig_propose_documents_native_norito_request_body -- --nocapture`
-  - `cargo test -p iroha_torii --lib multisig_generic_propose_json --features app_api -- --nocapture`
-  - `cargo test -p iroha --lib post_multisig_propose_encodes_instruction_boxes_as_native_norito_json -- --nocapture`
+  - `cargo test -p iroha_torii --lib multisig_generic_propose --features app_api -- --nocapture`
+  - `cargo test -p iroha --lib post_multisig_propose -- --nocapture`
   - `swift test --filter ToriiClientTests/testProposeMultisig`
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
@@ -11919,6 +11955,7 @@ Last updated: 2026-05-19
   - `node --test --test-name-pattern "proposeMultisig" test/toriiClient.test.js`
   - `python3 -m compileall python/iroha_torii_client`
   - `python3 -m compileall python/iroha_python/src/iroha_python python/iroha_python/tests/test_address_format.py`
+  - `git diff --check`
 - Python focused validation could not run because the local Python 3.14
   environment does not have `pytest` installed (`No module named pytest`).
 - C# focused validation could not run because this environment does not have

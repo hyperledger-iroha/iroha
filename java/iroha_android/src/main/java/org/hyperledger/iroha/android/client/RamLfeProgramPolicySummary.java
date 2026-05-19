@@ -8,6 +8,7 @@ public final class RamLfeProgramPolicySummary {
   private final String owner;
   private final boolean active;
   private final String resolverPublicKey;
+  private final String outputOpeningPublicKey;
   private final String backend;
   private final String verificationMode;
   private final String inputEncryption;
@@ -32,6 +33,7 @@ public final class RamLfeProgramPolicySummary {
         owner,
         active,
         resolverPublicKey,
+        resolverPublicKey,
         backend,
         verificationMode,
         inputEncryption,
@@ -46,6 +48,7 @@ public final class RamLfeProgramPolicySummary {
       final String owner,
       final boolean active,
       final String resolverPublicKey,
+      final String outputOpeningPublicKey,
       final String backend,
       final String verificationMode,
       final String inputEncryption,
@@ -57,6 +60,8 @@ public final class RamLfeProgramPolicySummary {
     this.owner = Objects.requireNonNull(owner, "owner");
     this.active = active;
     this.resolverPublicKey = Objects.requireNonNull(resolverPublicKey, "resolverPublicKey");
+    this.outputOpeningPublicKey =
+        Objects.requireNonNull(outputOpeningPublicKey, "outputOpeningPublicKey");
     this.backend = Objects.requireNonNull(backend, "backend");
     this.verificationMode = Objects.requireNonNull(verificationMode, "verificationMode");
     this.inputEncryption = inputEncryption;
@@ -80,6 +85,10 @@ public final class RamLfeProgramPolicySummary {
 
   public String resolverPublicKey() {
     return resolverPublicKey;
+  }
+
+  public String outputOpeningPublicKey() {
+    return outputOpeningPublicKey;
   }
 
   public String backend() {
