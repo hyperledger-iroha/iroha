@@ -13,7 +13,7 @@ use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey};
 use iroha_data_model::{
     account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
     asset::{AssetDefinitionId, AssetId},
-    domain::DomainId,
+    domain::{Domain, DomainId},
     isi::{Grant, GrantBox, Mint, MintBox, Register, RegisterBox, SetKeyValue},
     kaigi::{KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration},
     name::Name,
@@ -171,6 +171,17 @@ fn relay_feedback(
     }
 }
 
+fn manifest_registers_domain(manifest: &RawGenesisTransaction, domain: &DomainId) -> bool {
+    manifest.instructions().any(|instruction| {
+        let Some(RegisterBox::Domain(register_domain)) =
+            instruction.as_any().downcast_ref::<RegisterBox>()
+        else {
+            return false;
+        };
+        &register_domain.object().id == domain
+    })
+}
+
 fn parse_bootstrap_authority(args: &Args) -> Result<Option<BootstrapAuthority>> {
     match (
         args.bootstrap_authority_account.as_deref(),
@@ -207,7 +218,11 @@ fn append_kaigi_overlay(
     reported_at_ms: u64,
     notes: &str,
 ) -> Result<RawGenesisTransaction> {
+    let needs_relay_domain_registration = !manifest_registers_domain(&manifest, relay_domain);
     let mut builder = manifest.into_builder().next_transaction();
+    if needs_relay_domain_registration {
+        builder = builder.append_instruction(Register::domain(Domain::new(relay_domain.clone())));
+    }
     for relay in relay_specs {
         let registration = relay_registration(relay);
         builder = builder.append_instruction(SetKeyValue::domain(
@@ -245,12 +260,19 @@ fn append_bootstrap_authority_overlay(
     let authority_fee_asset =
         AssetId::new(authority.fee_asset_id.clone(), authority.account_id.clone());
     let mut has_account_registration = false;
+    let mut has_linked_domain_registration = false;
     let mut existing_fee_funding = Numeric::zero();
     let mut has_manage_soracloud = false;
     let mut has_manage_alias = false;
     let mut has_publish_manifest = false;
 
     for instruction in manifest.instructions() {
+        if let Some(RegisterBox::Domain(register_domain)) =
+            instruction.as_any().downcast_ref::<RegisterBox>()
+            && &register_domain.object().id == &authority.linked_domain
+        {
+            has_linked_domain_registration = true;
+        }
         if let Some(RegisterBox::Account(register_account)) =
             instruction.as_any().downcast_ref::<RegisterBox>()
             && register_account.object().id == authority.account_id
@@ -284,6 +306,11 @@ fn append_bootstrap_authority_overlay(
     }
 
     let mut builder = manifest.into_builder().next_transaction();
+    if !has_linked_domain_registration {
+        builder = builder.append_instruction(Register::domain(Domain::new(
+            authority.linked_domain.clone(),
+        )));
+    }
     if !has_account_registration {
         builder = builder.append_instruction(Register::account(authority_account));
     }
@@ -547,6 +574,69 @@ mod tests {
     }
 
     #[test]
+    fn kaigi_overlay_registers_missing_relay_domain_before_metadata() {
+        let manifest = GenesisBuilder::new_without_executor(
+            "iroha:test:kaigi-relay-domain".parse().expect("chain id"),
+            PathBuf::from("."),
+        )
+        .build_raw()
+        .with_chain_discriminant(369);
+        let _chain_discriminant = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
+        let relay_domain = DomainId::try_new("nexus", "universal").expect("relay domain");
+        let call_id = KaigiId::new(
+            DomainId::try_new("wonderland", "universal").expect("call domain"),
+            Name::from_str("taira-relay-bootstrap").expect("call name"),
+        );
+        let host = AccountId::new(
+            PublicKey::from_str(
+                "ea0130B4A704CBEADF686CAECDAF705102C9902CFED8B71016906F6D724D0BB7F04DE540F29585B7FB8B46962FB70D0AD97249",
+            )
+            .expect("host public key"),
+        );
+        let relay_specs = vec![RelaySpec {
+            public_key: PublicKey::from_str(
+                "ea0130B99B89AD5D2F51D17AB69D32BC3A44C2CC5FF65E28590022B972148AD4DF00712FEC4EFF5BC6B3AEF33ABCF18F5CAD5B",
+            )
+            .expect("relay public key"),
+            hpke_public_key_b64: "K4NiAXqV5L1V3aD+/9NItPlFhEtm3qD4Q4K/1M8jewQ=".to_string(),
+            bandwidth_class: 3,
+        }];
+
+        let overlaid = append_kaigi_overlay(
+            manifest,
+            &relay_domain,
+            &host,
+            &call_id,
+            &relay_specs,
+            1_890_864_000_000,
+            "Seeded in Taira local genesis",
+        )
+        .expect("append relay overlay");
+        let register_index = overlaid
+            .instructions()
+            .position(|instruction| {
+                matches!(
+                    instruction.as_any().downcast_ref::<RegisterBox>(),
+                    Some(RegisterBox::Domain(register)) if &register.object().id == &relay_domain
+                )
+            })
+            .expect("relay domain registration");
+        let metadata_index = overlaid
+            .instructions()
+            .position(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::SetKeyValueBox>()
+                    .is_some()
+            })
+            .expect("relay metadata set");
+        assert!(
+            register_index < metadata_index,
+            "relay domain must be registered before relay metadata is written"
+        );
+    }
+
+    #[test]
     fn bootstrap_authority_overlay_keeps_canonical_taira_literals() {
         let manifest = GenesisBuilder::new_without_executor(
             "iroha:test:bootstrap-taira".parse().expect("chain id"),
@@ -575,8 +665,8 @@ mod tests {
         );
         assert_eq!(
             overlaid.instructions().count(),
-            5,
-            "overlay should append register/mint/grant bootstrap instructions"
+            6,
+            "overlay should append domain/register/mint/grant bootstrap instructions"
         );
     }
 
@@ -615,6 +705,7 @@ mod tests {
         let seeded = manifest
             .into_builder()
             .next_transaction()
+            .append_instruction(Register::domain(Domain::new(bootstrap.linked_domain.clone())))
             .append_instruction(Register::account(Account::new(
                 bootstrap.account_id.clone(),
             )))
@@ -680,6 +771,7 @@ mod tests {
         let seeded = manifest
             .into_builder()
             .next_transaction()
+            .append_instruction(Register::domain(Domain::new(bootstrap.linked_domain.clone())))
             .append_instruction(Register::account(Account::new(
                 bootstrap.account_id.clone(),
             )))
