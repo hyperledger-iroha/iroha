@@ -1755,8 +1755,42 @@ final class ToriiClientTests: XCTestCase {
         let mutatedPayload = makeSignedIdentifierReceiptPayload(
             accountId: accountId,
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
-            receiptHash: String(repeating: "22", count: 31) + "24",
+            receiptHash: String(repeating: "22", count: 31) + "25",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: originalPayload)
+        let policy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: signed.resolverPublicKey
+        )
+        let originalReceipt = try identifierReceipt(
+            payload: originalPayload,
+            signatureHex: signed.signatureHex
+        )
+        let mutatedReceipt = try identifierReceipt(
+            payload: mutatedPayload,
+            signatureHex: signed.signatureHex
+        )
+
+        XCTAssertEqual(try originalReceipt.verifyAttestation(using: policy), true)
+        XCTAssertEqual(try mutatedReceipt.verifyAttestation(using: policy), false)
+    }
+
+    func testIdentifierReceiptRejectsUaidMutationAfterSigning() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let originalPayload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let mutatedPayload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))37",
             backend: "bfv-affine-sha3-256-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: originalPayload)

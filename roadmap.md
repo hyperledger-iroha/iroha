@@ -28,11 +28,16 @@ Completed history lives in `status.md`. This file should only track unfinished w
   shape/overflow rejection, replayed/tampered/future/expired/wrong-verifier
   openings, receipt-signing/backend mismatch refusal, adversarial BFV public
   parameters and evaluation-key metadata, unregistered BFV parameter sets,
-  impossible decrypted identifier envelopes, missing/malformed Soracloud
-  evaluation keys, empty/malformed ciphertext slots, malformed relinearization
-  keys, and slot-count/digest mismatches; remaining breadth should emphasize
-  full cross-SDK RNS vectors and Soracloud Add/Multiply/RotateLeft/Bootstrap
-  multi-input fixtures.
+  impossible decrypted identifier envelopes, FHE governance lifecycle/linkage
+  abuse, operation-shape and budget-smuggling jobs, encrypted-only Torii DTO
+  rejection, receipt/opening signature-binding tampering, proof-only receipt
+  attestations passed to Rust/JavaScript/JVM SDK signature verifiers,
+  mismatched receipt policy ids, missing/malformed Soracloud evaluation keys,
+  empty/malformed ciphertext slots, malformed relinearization keys, malformed
+  SDK ciphertext hex, plaintext-only policy misuse, and slot-count/digest
+  mismatches;
+  remaining breadth should emphasize full cross-SDK RNS vectors and Soracloud
+  Add/Multiply/RotateLeft/Bootstrap multi-input fixtures.
 
 ## Kotodama first-release follow-ups
 

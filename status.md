@@ -136,14 +136,41 @@ Last updated: 2026-05-19
   wrong-verifier output openings, Torii receipt-signing/backend mismatches,
   Soracloud missing/malformed evaluation-key material, empty/malformed
   ciphertext slots, malformed relinearization keys, slot-count mismatches, and
-  SDK-side adversarial BFV public-parameter/input rejection. Focused validation
-  is green with `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p
+  SDK-side adversarial BFV public-parameter/input rejection. A further
+  negative pass now covers Soracloud FHE governance parameter lifecycle/linkage
+  abuse, job operation-shape smuggling, policy budget overflows,
+  encrypted-only Torii DTO rejection for legacy plaintext fields and missing
+  output openings, and Kotlin/Java SDK rejection for malformed RAM-LFE or
+  identifier ciphertext hex plus plaintext-only policy misuse. A follow-up
+  receipt-binding pass now covers RAM-LFE execution receipts and output
+  openings signed by the wrong key, proof attestations passed to signature
+  verification, post-signature ciphertext/opened-output tampering, typed
+  identifier receipt payload tampering, and JavaScript SDK rejection of
+  tampered or proof-only identifier receipts. The JVM verifier pass now mirrors
+  those receipt-adversarial checks in Kotlin and Java: tampered payloads return
+  false, proof-only attestations fail the signature verifier, mismatched policy
+  ids are rejected, and malformed signature hex is rejected. Focused
+  validation is green with `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p
   iroha_crypto fhe_bfv --lib -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_crypto ram_lfe
   --lib -- --nocapture`, `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p
   iroha_torii identifier_resolution --lib -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_core soracloud
   --lib -- --nocapture`, `node --test test/toriiClient.identifier.test.js
+  test/toriiClient.ramLfe.test.js`, `npm run lint`,
+  `JAVA_HOME=/tmp/temurin21/Contents/Home ./gradlew :core-jvm:test
+  --console=plain` from `kotlin/`, and
+  `JAVA_HOME=/tmp/temurin21/Contents/Home ANDROID_HOME=~/Library/Android/sdk
+  ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain` from
+  `java/iroha_android/`. The latest focused additions are also green with
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_data_model fhe_
+  --lib -- --nocapture` and `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test
+  -p iroha_torii ram_lfe_encrypted_only_request_dto_tests --lib --
+  --nocapture`. The latest receipt-binding additions are green with
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_data_model
+  ram_lfe --lib -- --nocapture`, `CARGO_TARGET_DIR=target/codex-fhe-fix cargo
+  test -p iroha_data_model identifier_resolution_receipt --lib --
+  --nocapture`, `node --test test/toriiClient.identifier.test.js
   test/toriiClient.ramLfe.test.js`, `npm run lint`,
   `JAVA_HOME=/tmp/temurin21/Contents/Home ./gradlew :core-jvm:test
   --console=plain` from `kotlin/`, and
