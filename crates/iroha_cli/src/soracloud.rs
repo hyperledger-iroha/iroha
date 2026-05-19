@@ -99,7 +99,7 @@ use sha2::{Digest as _, Sha256};
 use sorafs_car::{CarBuildPlan, CarChunk, CarWriter};
 use sorafs_manifest::{
     ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder,
-    ManifestV1, PinPolicy, StorageClass as ManifestStorageClass, chunker_registry,
+    ManifestV1, MetadataEntry, PinPolicy, StorageClass as ManifestStorageClass, chunker_registry,
 };
 use tiny_keccak::{Hasher as _, Sha3};
 
@@ -8949,6 +8949,15 @@ fn attach_sorafs_release_governance(
     mut manifest: ManifestV1,
     key_pair: &KeyPair,
 ) -> Result<ManifestV1> {
+    let release_nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .to_string();
+    manifest.metadata.push(MetadataEntry {
+        key: "soracloud.release_nonce_unix_nanos".to_owned(),
+        value: release_nonce,
+    });
     let (_unsigned_manifest_bytes, unsigned_manifest_digest) =
         encode_sorafs_manifest_for_storage(&manifest)?;
     let (_, signer_bytes) = key_pair.public_key().to_bytes();
@@ -9020,6 +9029,39 @@ fn register_sorafs_pin_manifest_and_wait(
         .post_sorafs_pin_register_with_manifest_digest(args, *manifest_digest.as_bytes())
         .wrap_err_with(|| format!("failed to register {description} manifest"))?;
     wait_for_sorafs_pin_manifest(client, manifest_digest_hex, description, timeout_secs)
+}
+
+fn storage_pin_missing_paid_record_is_retryable(
+    status: iroha::http::StatusCode,
+    body: &[u8],
+) -> bool {
+    status == iroha::http::StatusCode::PAYMENT_REQUIRED
+        && String::from_utf8_lossy(body).contains("has no paid pin registry record")
+}
+
+fn post_sorafs_storage_pin_after_paid_registration(
+    client: &Client,
+    manifest_bytes: &[u8],
+    payload: &[u8],
+    files: Option<&[iroha::client::SorafsStorageFileEntry<'_>]>,
+    description: &str,
+    timeout_secs: u64,
+) -> Result<iroha::http::Response<Vec<u8>>> {
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let deadline = Instant::now() + timeout;
+    loop {
+        let response = client
+            .post_sorafs_storage_pin(manifest_bytes, payload, files)
+            .wrap_err_with(|| format!("failed to upload {description} bundle into SoraFS storage"))?;
+        if !storage_pin_missing_paid_record_is_retryable(response.status(), response.body()) {
+            return Ok(response);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Ok(response);
+        }
+        std::thread::sleep((deadline - now).min(Duration::from_secs(2)));
+    }
 }
 
 fn publish_public_service_discovery(
@@ -9165,9 +9207,14 @@ fn publish_public_service_discovery(
             size: entry.size,
         })
         .collect::<Vec<_>>();
-    let storage_response = client
-        .post_sorafs_storage_pin(&manifest_bytes, &payload, Some(&borrowed_files))
-        .wrap_err("failed to upload public discovery bundle into SoraFS storage")?;
+    let storage_response = post_sorafs_storage_pin_after_paid_registration(
+        &client,
+        &manifest_bytes,
+        &payload,
+        Some(&borrowed_files),
+        "public discovery",
+        timeout_secs,
+    )?;
     let status = storage_response.status();
     let body = storage_response.body().to_vec();
     let already_stored = storage_pin_conflict_is_already_stored(status, &body);
@@ -9410,9 +9457,14 @@ fn publish_app_static_site(
             size: entry.size,
         })
         .collect::<Vec<_>>();
-    let storage_response = client
-        .post_sorafs_storage_pin(&manifest_bytes, &payload, Some(&borrowed_files))
-        .wrap_err("failed to upload app static site bundle into SoraFS storage")?;
+    let storage_response = post_sorafs_storage_pin_after_paid_registration(
+        &client,
+        &manifest_bytes,
+        &payload,
+        Some(&borrowed_files),
+        "app static site",
+        timeout_secs,
+    )?;
     let status = storage_response.status();
     let body = storage_response.body().to_vec();
     let already_stored = storage_pin_conflict_is_already_stored(status, &body);
@@ -9550,9 +9602,14 @@ fn publish_sorafs_directory_artifact(
             size: entry.size,
         })
         .collect::<Vec<_>>();
-    let storage_response = client
-        .post_sorafs_storage_pin(&manifest_bytes, &payload, Some(&borrowed_files))
-        .wrap_err_with(|| format!("failed to upload {description} bundle into SoraFS storage"))?;
+    let storage_response = post_sorafs_storage_pin_after_paid_registration(
+        &client,
+        &manifest_bytes,
+        &payload,
+        Some(&borrowed_files),
+        description,
+        timeout_secs,
+    )?;
     let status = storage_response.status();
     let body = storage_response.body().to_vec();
     let already_stored = storage_pin_conflict_is_already_stored(status, &body);
@@ -9649,26 +9706,33 @@ fn publish_sorafs_file_artifact(
     client_config.account = authority.clone();
     client_config.key_pair = key_pair.clone();
     let client = Client::new(client_config);
-    client
-        .post_sorafs_pin_register_with_manifest_digest(
-            iroha::client::SorafsPinRegisterArgs {
-                authority,
-                private_key: key_pair.private_key(),
-                manifest: &manifest,
-                chunk_digest_sha3_256,
-                submitted_epoch: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                alias: None,
-                successor_of: None,
-            },
-            *manifest_digest.as_bytes(),
-        )
-        .wrap_err_with(|| format!("failed to register {description} manifest"))?;
-    let storage_response = client
-        .post_sorafs_storage_pin(&manifest_bytes, &payload, None)
-        .wrap_err_with(|| format!("failed to upload {description} bundle into SoraFS storage"))?;
+    register_sorafs_pin_manifest_and_wait(
+        &client,
+        iroha::client::SorafsPinRegisterArgs {
+            authority,
+            private_key: key_pair.private_key(),
+            manifest: &manifest,
+            chunk_digest_sha3_256,
+            submitted_epoch: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            alias: None,
+            successor_of: None,
+        },
+        manifest_digest,
+        &manifest_digest_hex,
+        description,
+        timeout_secs,
+    )?;
+    let storage_response = post_sorafs_storage_pin_after_paid_registration(
+        &client,
+        &manifest_bytes,
+        &payload,
+        None,
+        description,
+        timeout_secs,
+    )?;
     let status = storage_response.status();
     let body = storage_response.body().to_vec();
     let already_stored = storage_pin_conflict_is_already_stored(status, &body);
@@ -9876,7 +9940,7 @@ fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
     let mut hasher = Sha3::v256();
     for chunk in chunks {
         hasher.update(&chunk.offset.to_le_bytes());
-        hasher.update(&chunk.length.to_le_bytes());
+        hasher.update(&u64::from(chunk.length).to_le_bytes());
         hasher.update(&chunk.digest);
     }
     let mut digest = [0u8; 32];
@@ -11946,7 +12010,22 @@ fn submit_soracloud_draft_transaction(
 }
 
 fn soracloud_submission_metadata() -> Metadata {
-    Metadata::default()
+    let mut metadata = Metadata::default();
+    if let Some(gas_asset_id) = soracloud_submission_gas_asset_id() {
+        let gas_asset_key = "gas_asset_id"
+            .parse::<Name>()
+            .expect("static metadata key `gas_asset_id`");
+        metadata.insert(gas_asset_key, Json::new(gas_asset_id));
+    }
+    metadata
+}
+
+fn soracloud_submission_gas_asset_id() -> Option<String> {
+    ["IROHA_SORACLOUD_GAS_ASSET_ID", "IROHA_GAS_ASSET_ID"]
+        .into_iter()
+        .find_map(|name| env::var(name).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn extract_json_field(payload: &json::Value, field: &str) -> Result<Option<json::Value>> {
@@ -20040,6 +20119,22 @@ mod tests {
         assert!(!storage_pin_conflict_is_already_stored(
             iroha::http::StatusCode::CONFLICT,
             br#"{"error":"different conflict"}"#,
+        ));
+    }
+
+    #[test]
+    fn storage_pin_missing_paid_record_helper_is_narrow() {
+        assert!(storage_pin_missing_paid_record_is_retryable(
+            iroha::http::StatusCode::PAYMENT_REQUIRED,
+            br#"{"error":"manifest abc has no paid pin registry record"}"#,
+        ));
+        assert!(!storage_pin_missing_paid_record_is_retryable(
+            iroha::http::StatusCode::PAYMENT_REQUIRED,
+            br#"{"error":"manifest abc is not approved for pinning"}"#,
+        ));
+        assert!(!storage_pin_missing_paid_record_is_retryable(
+            iroha::http::StatusCode::CONFLICT,
+            br#"{"error":"manifest abc has no paid pin registry record"}"#,
         ));
     }
 
