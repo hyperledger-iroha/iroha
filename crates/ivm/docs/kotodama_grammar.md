@@ -118,7 +118,7 @@ TriggerFilter = "time" ("pre_commit" | "schedule" "(" Number [ "," Number ] ")")
               | "execute" "trigger" (Ident | String)
               | "data" "any"
               | "data" DataFamily DataEventKind DataMatcherBlock
-              | "pipeline" ("transaction" | "block" | "merge" | "witness") ;
+              | "pipeline" ("transaction" [ "approved" ] | "block" [ "approved" ]) ;
 DataFamily = "peer"
            | "domain"
            | "account"
@@ -160,6 +160,7 @@ register_trigger cbuae_aed_to_pkr_asset_added {
 Notes:
 - `asset` data filters may combine both `asset` and `asset_definition` matchers; both apply with logical AND semantics.
 - `configuration` and `executor` filters currently expose event-kind selection only and do not accept matcher fields.
+- Pipeline trigger declarations are limited to the deterministic replay surface used by contract activation: approved block events and approved transaction events. `on pipeline block;` and `on pipeline transaction;` are accepted as shorthand for the corresponding `approved` filters.
 - The DSL covers the core ledger data families above. Specialized product-specific event families still use the lower-level filter APIs when needed.
 
 Accepted data event kinds by family:

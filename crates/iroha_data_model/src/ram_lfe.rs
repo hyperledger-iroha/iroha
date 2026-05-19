@@ -312,10 +312,8 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn signed_receipt_verifies_only_signed_attestation() {
-        let signer = KeyPair::random();
-        let payload = RamLfeExecutionReceiptPayload {
+    fn receipt_payload() -> RamLfeExecutionReceiptPayload {
+        RamLfeExecutionReceiptPayload {
             program_id: "email_retail".parse().expect("valid program id"),
             program_digest: Hash::new(b"program"),
             backend: RamLfeBackend::BfvProgrammedSha3_256V1,
@@ -328,17 +326,197 @@ mod tests {
             associated_data_hash: Hash::new(b"associated-data"),
             executed_at_ms: 1_777_777_777_000,
             expires_at_ms: Some(1_777_777_877_000),
-        };
-        let signature = SignatureOf::new(signer.private_key(), &payload);
-        let receipt = RamLfeExecutionReceipt {
+        }
+    }
+
+    fn signed_receipt(
+        signer: &KeyPair,
+        payload: RamLfeExecutionReceiptPayload,
+    ) -> RamLfeExecutionReceipt {
+        RamLfeExecutionReceipt {
+            attestation: RamLfeReceiptAttestation::Signed(
+                SignatureOf::new(signer.private_key(), &payload).into(),
+            ),
             payload,
-            attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
-                signature.payload(),
-            )),
-        };
+        }
+    }
+
+    fn opening_payload() -> RamLfeOutputOpeningPayload {
+        RamLfeOutputOpeningPayload {
+            program_id: "email_retail".parse().expect("valid program id"),
+            input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+            output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+            parameter_digest: Hash::new(b"parameters"),
+            evaluation_key_digest: Hash::new(b"evaluation-keys"),
+            opened_output_hash: Hash::new(b"opened-output"),
+            opened_at_ms: 1_777_777_777_001,
+            expires_at_ms: Some(1_777_777_877_000),
+        }
+    }
+
+    fn signed_opening(
+        signer: &KeyPair,
+        payload: RamLfeOutputOpeningPayload,
+    ) -> RamLfeOutputOpening {
+        RamLfeOutputOpening {
+            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            payload,
+        }
+    }
+
+    #[test]
+    fn signed_receipt_verifies_only_signed_attestation() {
+        let signer = KeyPair::random();
+        let receipt = signed_receipt(&signer, receipt_payload());
 
         receipt
             .verify_signature(signer.public_key())
             .expect("signed attestation should verify");
+    }
+
+    #[test]
+    fn signed_receipt_rejects_wrong_key_and_proof_attestation() {
+        let signer = KeyPair::random();
+        let wrong_signer = KeyPair::random();
+        let payload = receipt_payload();
+        let receipt = signed_receipt(&signer, payload.clone());
+
+        receipt
+            .verify_signature(wrong_signer.public_key())
+            .expect_err("receipt signatures must reject unrelated verifier keys");
+
+        let proof_receipt = RamLfeExecutionReceipt {
+            payload,
+            attestation: RamLfeReceiptAttestation::Proof(crate::proof::ProofBox::new(
+                "halo2/ipa".into(),
+                vec![1, 2, 3],
+            )),
+        };
+        proof_receipt
+            .verify_signature(signer.public_key())
+            .expect_err("signature verification must reject proof attestations");
+    }
+
+    #[test]
+    fn signed_receipt_rejects_tampered_ciphertext_binding() {
+        let signer = KeyPair::random();
+        let mut receipt = signed_receipt(&signer, receipt_payload());
+        receipt.payload.output_ciphertext_hash = Hash::new(b"tampered-output-ciphertext");
+
+        receipt
+            .verify_signature(signer.public_key())
+            .expect_err("mutating ciphertext-bound receipt fields must invalidate signature");
+    }
+
+    #[test]
+    fn signed_receipt_rejects_mutation_of_security_bindings() {
+        macro_rules! assert_rejected {
+            ($label:literal, |$payload:ident| $body:block) => {{
+                let signer = KeyPair::random();
+                let mut receipt = signed_receipt(&signer, receipt_payload());
+                let $payload = &mut receipt.payload;
+                $body
+                assert!(
+                    receipt.verify_signature(signer.public_key()).is_err(),
+                    "mutating {} must invalidate receipt signature",
+                    $label
+                );
+            }};
+        }
+
+        assert_rejected!("program_id", |payload| {
+            payload.program_id = "email_other".parse().expect("valid program id");
+        });
+        assert_rejected!("program_digest", |payload| {
+            payload.program_digest = Hash::new(b"tampered-program");
+        });
+        assert_rejected!("backend", |payload| {
+            payload.backend = RamLfeBackend::BfvAffineSha3_256V1;
+        });
+        assert_rejected!("verification_mode", |payload| {
+            payload.verification_mode = RamLfeVerificationMode::Proof;
+        });
+        assert_rejected!("input_ciphertext_hash", |payload| {
+            payload.input_ciphertext_hash = Hash::new(b"tampered-input");
+        });
+        assert_rejected!("output_ciphertext_hash", |payload| {
+            payload.output_ciphertext_hash = Hash::new(b"tampered-output");
+        });
+        assert_rejected!("parameter_digest", |payload| {
+            payload.parameter_digest = Hash::new(b"tampered-parameters");
+        });
+        assert_rejected!("evaluation_key_digest", |payload| {
+            payload.evaluation_key_digest = Hash::new(b"tampered-eval-keys");
+        });
+        assert_rejected!("output_hash", |payload| {
+            payload.output_hash = Hash::new(b"tampered-output-hash");
+        });
+        assert_rejected!("associated_data_hash", |payload| {
+            payload.associated_data_hash = Hash::new(b"tampered-associated-data");
+        });
+        assert_rejected!("executed_at_ms", |payload| {
+            payload.executed_at_ms += 1;
+        });
+        assert_rejected!("expires_at_ms", |payload| {
+            payload.expires_at_ms = None;
+        });
+    }
+
+    #[test]
+    fn output_opening_rejects_wrong_key_and_tampered_payload() {
+        let signer = KeyPair::random();
+        let wrong_signer = KeyPair::random();
+        let mut opening = signed_opening(&signer, opening_payload());
+
+        opening
+            .verify_signature(wrong_signer.public_key())
+            .expect_err("output openings must reject unrelated verifier keys");
+
+        opening.payload.opened_output_hash = Hash::new(b"tampered-opened-output");
+        opening
+            .verify_signature(signer.public_key())
+            .expect_err("mutating opened output binding must invalidate opening signature");
+    }
+
+    #[test]
+    fn output_opening_rejects_mutation_of_security_bindings() {
+        macro_rules! assert_rejected {
+            ($label:literal, |$payload:ident| $body:block) => {{
+                let signer = KeyPair::random();
+                let mut opening = signed_opening(&signer, opening_payload());
+                let $payload = &mut opening.payload;
+                $body
+                assert!(
+                    opening.verify_signature(signer.public_key()).is_err(),
+                    "mutating {} must invalidate opening signature",
+                    $label
+                );
+            }};
+        }
+
+        assert_rejected!("program_id", |payload| {
+            payload.program_id = "email_other".parse().expect("valid program id");
+        });
+        assert_rejected!("input_ciphertext_hash", |payload| {
+            payload.input_ciphertext_hash = Hash::new(b"tampered-input");
+        });
+        assert_rejected!("output_ciphertext_hash", |payload| {
+            payload.output_ciphertext_hash = Hash::new(b"tampered-output");
+        });
+        assert_rejected!("parameter_digest", |payload| {
+            payload.parameter_digest = Hash::new(b"tampered-parameters");
+        });
+        assert_rejected!("evaluation_key_digest", |payload| {
+            payload.evaluation_key_digest = Hash::new(b"tampered-eval-keys");
+        });
+        assert_rejected!("opened_output_hash", |payload| {
+            payload.opened_output_hash = Hash::new(b"tampered-opened-output");
+        });
+        assert_rejected!("opened_at_ms", |payload| {
+            payload.opened_at_ms += 1;
+        });
+        assert_rejected!("expires_at_ms", |payload| {
+            payload.expires_at_ms = None;
+        });
     }
 }

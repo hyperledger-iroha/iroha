@@ -15,7 +15,7 @@ use iroha_data_model::{
         DataEventFilter,
         prelude::{AssetEventFilter, AssetEventSet},
     },
-    events::pipeline::{BlockEventFilter, PipelineEventFilterBox},
+    events::pipeline::{BlockEventFilter, BlockStatus, PipelineEventFilterBox},
     events::time::{ExecutionTime, TimeEventFilter},
     isi::smart_contract_code::{
         ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
@@ -314,9 +314,9 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     let pipeline_trigger = TriggerDescriptor {
         id: pipeline_trigger_id.clone(),
         repeats: Repeats::Indefinitely,
-        filter: EventFilterBox::Pipeline(
-            PipelineEventFilterBox::Block(BlockEventFilter::default()),
-        ),
+        filter: EventFilterBox::Pipeline(PipelineEventFilterBox::Block(
+            BlockEventFilter::new().for_status(BlockStatus::Approved),
+        )),
         authority: None,
         metadata: pipeline_metadata,
         callback: TriggerCallback {
@@ -391,7 +391,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
         .expect("pipeline trigger registered");
     assert_eq!(
         pipeline_action.filter,
-        PipelineEventFilterBox::Block(BlockEventFilter::default())
+        PipelineEventFilterBox::Block(BlockEventFilter::new().for_status(BlockStatus::Approved))
     );
     assert_contract_trigger_metadata(
         &pipeline_action.metadata,
@@ -470,7 +470,7 @@ seiyaku Test {{
   }}
   register_trigger block_seen {{
     call run;
-    on pipeline block;
+    on pipeline block approved;
     metadata {{
       tag: "pipeline";
     }}
@@ -543,7 +543,7 @@ seiyaku Test {{
         .expect("pipeline trigger registered");
     assert_eq!(
         pipeline_action.filter,
-        PipelineEventFilterBox::Block(BlockEventFilter::default())
+        PipelineEventFilterBox::Block(BlockEventFilter::new().for_status(BlockStatus::Approved))
     );
     assert_eq!(pipeline_action.authority, authority);
     assert_contract_trigger_metadata(

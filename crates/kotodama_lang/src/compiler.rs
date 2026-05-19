@@ -3359,7 +3359,7 @@ seiyaku Test {
     fn manifest_trigger_decl_lowers_pipeline_filter() {
         use iroha_data_model::events::{
             EventFilterBox,
-            pipeline::{BlockEventFilter, PipelineEventFilterBox},
+            pipeline::{BlockEventFilter, BlockStatus, PipelineEventFilterBox},
         };
 
         let src = r#"
@@ -3367,7 +3367,7 @@ seiyaku Test {
   kotoage fn run() {}
   register_trigger block_wake {
     call run;
-    on pipeline block;
+    on pipeline block approved;
   }
 }
 "#;
@@ -3383,7 +3383,9 @@ seiyaku Test {
         assert_eq!(run.triggers.len(), 1);
         assert_eq!(
             run.triggers[0].filter,
-            EventFilterBox::Pipeline(PipelineEventFilterBox::Block(BlockEventFilter::default(),))
+            EventFilterBox::Pipeline(PipelineEventFilterBox::Block(
+                BlockEventFilter::new().for_status(BlockStatus::Approved),
+            ))
         );
     }
 

@@ -290,6 +290,69 @@ test("resolveIdentifier requires encrypted input and output opening", async () =
   );
 });
 
+test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", () => {
+  const signedReceipt = signedReceiptFixture();
+  const policy = {
+    policy_id: POLICY_ID,
+    owner: ACCOUNT_ID,
+    active: true,
+    normalization: "phone_e164",
+    resolver_public_key: signedReceipt.resolver_public_key,
+    backend: "bfv-programmed-sha3-256-v1",
+  };
+
+  assert.equal(verifyIdentifierResolutionReceipt(signedReceipt, policy), true);
+
+  const tampered = JSON.parse(JSON.stringify(signedReceipt));
+  tampered.payload.execution.output_ciphertext_hash = "67".repeat(32);
+  assert.equal(verifyIdentifierResolutionReceipt(tampered, policy), false);
+
+  assert.equal(
+    verifyIdentifierResolutionReceipt(signedReceipt, {
+      ...policy,
+      resolver_public_key: "ed25519:ed0120" + "45".repeat(32),
+    }),
+    false,
+  );
+
+  const malformedSignature = JSON.parse(JSON.stringify(signedReceipt));
+  malformedSignature.attestation.signature = "GG";
+  assert.throws(
+    () => verifyIdentifierResolutionReceipt(malformedSignature, policy),
+    /attestation\.signature/,
+  );
+
+  const signedWithProofFields = JSON.parse(JSON.stringify(signedReceipt));
+  signedWithProofFields.attestation.proof_backend = "halo2/ipa";
+  signedWithProofFields.attestation.proof_b64 = "AQID";
+  assert.throws(
+    () => verifyIdentifierResolutionReceipt(signedWithProofFields, policy),
+    /signed attestation must not include proof fields/,
+  );
+
+  const proofAttestation = {
+    payload: signedReceipt.payload,
+    attestation: {
+      kind: "proof",
+      proof_backend: "halo2/ipa",
+      proof_b64: "AQID",
+    },
+  };
+  assert.throws(
+    () => verifyIdentifierResolutionReceipt(proofAttestation, policy),
+    /proof attestations require an external verifier/,
+  );
+
+  assert.throws(
+    () =>
+      verifyIdentifierResolutionReceipt(signedReceipt, {
+        ...policy,
+        policy_id: "email#retail",
+      }),
+    /does not match policy/,
+  );
+});
+
 test("encryptIdentifierInputForPolicy builds deterministic BFV Norito envelopes", () => {
   const policy = {
     policy_id: "string#retail",

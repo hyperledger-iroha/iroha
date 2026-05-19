@@ -257,10 +257,8 @@ pub struct TriggerDataMatcher {
 /// Pipeline trigger filter variants.
 #[derive(Debug, PartialEq, Clone)]
 pub enum TriggerPipelineFilter {
-    Transaction,
-    Block,
-    Merge,
-    Witness,
+    TransactionApproved,
+    BlockApproved,
 }
 
 /// Time trigger filter variants.

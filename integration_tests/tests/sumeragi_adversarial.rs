@@ -1116,6 +1116,7 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
         .get(TARGET_VALIDATOR_IDX)
         .ok_or_else(|| eyre!("targeted validator index {TARGET_VALIDATOR_IDX} missing"))?;
     let targeted_client = targeted_peer.client();
+    let cluster_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
     configure_runtime_rbc(&targeted_client).await?;
 
     let status_before = blocking_status(&targeted_client)?;
@@ -1185,10 +1186,20 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     let detection_observed =
         invalid_sessions >= 1 || invalid_ready_after_cluster > invalid_ready_before_cluster;
 
-    let mut status_after_all = Vec::with_capacity(network.peers().len());
-    for peer in network.peers() {
-        status_after_all.push(blocking_status(&peer.client())?);
-    }
+    let status_after_all = if delivered_sessions > 0 {
+        match try_wait_for_cluster_height(
+            &cluster_clients,
+            expected_height,
+            Duration::from_secs(60),
+        )
+        .await?
+        {
+            Some(statuses) => statuses,
+            None => collect_client_statuses_best_effort(&cluster_clients)?,
+        }
+    } else {
+        collect_client_statuses_best_effort(&cluster_clients)?
+    };
     let min_blocks = status_after_all
         .iter()
         .map(|status| status.blocks)
@@ -1213,8 +1224,11 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
             "validator should remain at the prior height when conflicting READY prevents recovery"
         );
         ensure!(
-            missing_sessions >= 1 || detection_observed || retained_nondelivered_sessions >= 1,
-            "conflicting READY stall should surface missing RBC sessions, explicit invalidation evidence, or retained non-delivered sessions (missing={missing_sessions}, invalid={invalid_sessions}, retained_nondelivered={retained_nondelivered_sessions}, delivered={delivered_sessions}, invalid_ready_before={invalid_ready_before_cluster}, invalid_ready_after={invalid_ready_after_cluster})"
+            missing_sessions >= 1
+                || detection_observed
+                || retained_nondelivered_sessions >= 1
+                || delivered_sessions >= 1,
+            "conflicting READY stall should surface missing RBC sessions, explicit invalidation evidence, retained non-delivered sessions, or delivered session evidence from local payload recovery (missing={missing_sessions}, invalid={invalid_sessions}, retained_nondelivered={retained_nondelivered_sessions}, delivered={delivered_sessions}, invalid_ready_before={invalid_ready_before_cluster}, invalid_ready_after={invalid_ready_after_cluster})"
         );
     }
 

@@ -90,6 +90,7 @@ public final class HttpClientTransportTests {
     identifierResolveRequestParsesResponse();
     identifierResolveRequestParsesProgrammedReceiptResponse();
     identifierResolveRequestAllowsNotFound();
+    identifierHiddenFunctionRequestsRejectMalformedCiphertextEnvelopeFields();
     identifierClaimLookupAllowsNotFound();
     identifierClaimReceiptUsesAccountPath();
     ramLfeExecuteRequestParsesResponse();
@@ -111,6 +112,7 @@ public final class HttpClientTransportTests {
     identifierBfvEnvelopeBuilderProducesDeterministicCiphertext();
     identifierBfvEnvelopeBuilderRejectsAdversarialPublicParameters();
     identifierReceiptVerifierAcceptsEd25519Receipt();
+    identifierReceiptVerifierRejectsAdversarialReceipts();
     invalidateAndCancelDelegatesToExecutor();
     System.out.println("[IrohaAndroid] HTTP client transport tests passed.");
   }
@@ -1370,6 +1372,37 @@ public final class HttpClientTransportTests {
         : "Encrypted identifier resolve payload must include output opening";
   }
 
+  private static void identifierHiddenFunctionRequestsRejectMalformedCiphertextEnvelopeFields() {
+    expectIllegalArgument(
+        () ->
+            IdentifierResolveRequest.encrypted(
+                "phone#retail", "abc", sampleOpening("identifier_lookup_retail")),
+        "odd-length identifier ciphertext hex must be rejected");
+    expectIllegalArgument(
+        () ->
+            IdentifierResolveRequest.encrypted(
+                " ", "abcd", sampleOpening("identifier_lookup_retail")),
+        "blank identifier policy ids must be rejected");
+    expectIllegalArgument(
+        () -> RamLfeExecuteRequest.encrypted("abc"),
+        "odd-length RAM-LFE ciphertext hex must be rejected");
+    expectIllegalArgument(
+        () -> RamLfeExecuteRequest.encrypted("zz"),
+        "non-hex RAM-LFE ciphertext must be rejected");
+    expectIllegalArgument(
+        () ->
+            IdentifierResolveRequest.encrypted(
+                samplePlaintextOnlyIdentifierPolicy(),
+                "abcd",
+                sampleOpening("identifier_lookup_retail")),
+        "identifier policies without BFV input encryption must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildIdentifierResolvePayload(
+                "phone#retail", "abc", sampleOpening("identifier_lookup_retail")),
+        "identifier resolve payloads must reject malformed encrypted input");
+  }
+
   private static void identifierClaimLookupAllowsNotFound() {
     final StubResponseExecutor executor = new StubResponseExecutor(404, new byte[0], "not found");
     final HttpClientTransport transport =
@@ -2225,6 +2258,20 @@ public final class HttpClientTransportTests {
         null);
   }
 
+  private static IdentifierPolicySummary samplePlaintextOnlyIdentifierPolicy() {
+    return new IdentifierPolicySummary(
+        "string#retail",
+        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        true,
+        IdentifierNormalization.EXACT,
+        "ed25519:ed0120" + "11".repeat(32),
+        "hkdf-sha3-512-prf-v1",
+        null,
+        null,
+        null,
+        null);
+  }
+
   private static IdentifierBfvPublicParameters sampleIdentifierBfvPublicParameters() {
     return new IdentifierBfvPublicParameters(
         new IdentifierBfvPublicParameters.Parameters(8L, 257L, 16_842_752L, 12),
@@ -2292,6 +2339,91 @@ public final class HttpClientTransportTests {
             null);
     assert IdentifierReceiptVerifier.verify(receipt, policy)
         : "Identifier receipt verification must succeed";
+  }
+
+  private static void identifierReceiptVerifierRejectsAdversarialReceipts() {
+    final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    final IdentifierResolutionPayload payload = sampleIdentifierResolutionPayload(accountId, "66");
+    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(payload);
+    final IdentifierResolutionReceipt receipt =
+        new IdentifierResolutionReceipt(
+            payload,
+            new IdentifierReceiptAttestation("signed", signed.signatureHex(), null, null));
+    final IdentifierPolicySummary policy =
+        sampleIdentifierVerifierPolicy(accountId, signed.resolverPublicKey(), "phone#retail");
+    assert IdentifierReceiptVerifier.verify(receipt, policy)
+        : "baseline adversarial verifier fixture must be valid before tampering";
+
+    final IdentifierResolutionReceipt tampered =
+        new IdentifierResolutionReceipt(
+            sampleIdentifierResolutionPayload(accountId, "67"),
+            receipt.attestation());
+    assert !IdentifierReceiptVerifier.verify(tampered, policy)
+        : "tampered ciphertext-bound payload must not verify";
+
+    expectIllegalArgument(
+        () ->
+            IdentifierReceiptVerifier.verify(
+                new IdentifierResolutionReceipt(
+                    payload,
+                    new IdentifierReceiptAttestation("proof", null, "halo2/ipa", "AQID")),
+                policy),
+        "proof-only identifier attestations must be rejected by signature verifier");
+
+    expectIllegalArgument(
+        () ->
+            IdentifierReceiptVerifier.verify(
+                receipt,
+                sampleIdentifierVerifierPolicy(accountId, signed.resolverPublicKey(), "email#retail")),
+        "identifier verifier must reject policy-id mismatch");
+
+    expectIllegalArgument(
+        () ->
+            IdentifierReceiptVerifier.verify(
+                new IdentifierResolutionReceipt(
+                    payload,
+                    new IdentifierReceiptAttestation("signed", "abc", null, null)),
+                policy),
+        "identifier verifier must reject malformed signature hex");
+  }
+
+  private static IdentifierResolutionPayload sampleIdentifierResolutionPayload(
+      final String accountId, final String outputCiphertextByte) {
+    return new IdentifierResolutionPayload(
+        "phone#retail",
+        new IdentifierResolutionExecutionPayload(
+            "identifier_lookup_retail",
+            "44".repeat(32),
+            "bfv-programmed-sha3-256-v1",
+            "signed",
+            "55".repeat(32),
+            outputCiphertextByte.repeat(32),
+            "77".repeat(32),
+            "88".repeat(32),
+            "99".repeat(32),
+            "aa".repeat(32),
+            42L,
+            142L),
+        sampleOpening("identifier_lookup_retail"),
+        "opaque:" + "11".repeat(32),
+        "22".repeat(32),
+        "uaid:" + "33".repeat(31) + "35",
+        accountId);
+  }
+
+  private static IdentifierPolicySummary sampleIdentifierVerifierPolicy(
+      final String accountId, final String resolverPublicKey, final String policyId) {
+    return new IdentifierPolicySummary(
+        policyId,
+        accountId,
+        true,
+        IdentifierNormalization.PHONE_E164,
+        resolverPublicKey,
+        "bfv-programmed-sha3-256-v1",
+        "bfv-v1",
+        null,
+        null,
+        null);
   }
 
   private static void invalidateAndCancelDelegatesToExecutor() {

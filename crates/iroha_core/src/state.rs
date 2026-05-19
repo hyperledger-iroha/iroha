@@ -36438,16 +36438,189 @@ mod tests {
 
     #[test]
     fn autoscale_scale_in_triggered_requires_window_and_low_utilization() {
-        assert!(autoscale_scale_in_triggered(true, 4, 4, Some(500), 500));
-        assert!(autoscale_scale_in_triggered(true, 8, 4, Some(0), 500));
+        assert!(autoscale_scale_in_triggered(
+            true,
+            4,
+            4,
+            Some(900),
+            1_100,
+            Some(500),
+            500
+        ));
+        assert!(autoscale_scale_in_triggered(
+            true,
+            8,
+            4,
+            Some(1),
+            1_100,
+            Some(0),
+            500
+        ));
     }
 
     #[test]
     fn autoscale_scale_in_triggered_rejects_disabled_missing_or_high_utilization() {
-        assert!(!autoscale_scale_in_triggered(false, 4, 4, Some(100), 500));
-        assert!(!autoscale_scale_in_triggered(true, 3, 4, Some(100), 500));
-        assert!(!autoscale_scale_in_triggered(true, 4, 4, Some(501), 500));
-        assert!(!autoscale_scale_in_triggered(true, 4, 4, None, 500));
+        assert!(!autoscale_scale_in_triggered(
+            false,
+            4,
+            4,
+            Some(100),
+            1_100,
+            Some(100),
+            500
+        ));
+        assert!(!autoscale_scale_in_triggered(
+            true,
+            3,
+            4,
+            Some(100),
+            1_100,
+            Some(100),
+            500
+        ));
+        assert!(!autoscale_scale_in_triggered(
+            true,
+            4,
+            4,
+            Some(100),
+            1_100,
+            Some(501),
+            500
+        ));
+        assert!(!autoscale_scale_in_triggered(
+            true,
+            4,
+            4,
+            Some(100),
+            1_100,
+            None,
+            500
+        ));
+    }
+
+    #[test]
+    fn autoscale_scale_in_triggered_rejects_missing_or_high_latency() {
+        assert!(!autoscale_scale_in_triggered(
+            true,
+            4,
+            4,
+            Some(1_101),
+            1_100,
+            Some(100),
+            500
+        ));
+        assert!(!autoscale_scale_in_triggered(
+            true,
+            4,
+            4,
+            None,
+            1_100,
+            Some(100),
+            500
+        ));
+    }
+
+    #[test]
+    fn autoscale_cooldown_active_suppresses_repeated_transitions() {
+        assert!(!autoscale_cooldown_active(0, 128, 1));
+        assert!(autoscale_cooldown_active(10, 128, 138));
+        assert!(!autoscale_cooldown_active(10, 128, 139));
+        assert!(autoscale_cooldown_active(u64::MAX - 1, 128, u64::MAX));
+    }
+
+    #[test]
+    fn autoscale_retire_selection_only_uses_managed_elastic_lanes() {
+        let mut managed_lane_3 = LaneConfig {
+            id: LaneId::new(3),
+            alias: "elastic-lane-3".to_owned(),
+            ..LaneConfig::default()
+        };
+        managed_lane_3
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        let mut managed_lane_4 = LaneConfig {
+            id: LaneId::new(4),
+            alias: "elastic-lane-4".to_owned(),
+            ..LaneConfig::default()
+        };
+        managed_lane_4
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+
+        let lanes = vec![
+            LaneConfig {
+                id: LaneId::new(0),
+                alias: "core".to_owned(),
+                ..LaneConfig::default()
+            },
+            LaneConfig {
+                id: LaneId::new(1),
+                alias: "governance".to_owned(),
+                ..LaneConfig::default()
+            },
+            LaneConfig {
+                id: LaneId::new(2),
+                alias: "zk".to_owned(),
+                ..LaneConfig::default()
+            },
+            managed_lane_3,
+            managed_lane_4,
+        ];
+
+        assert_eq!(
+            autoscale_managed_lane_for_retire(&lanes),
+            Some(LaneId::new(4))
+        );
+    }
+
+    #[test]
+    fn autoscale_public_testnet_profile_retire_preserves_base_lanes() {
+        let mut elastic_lane = LaneConfig {
+            id: LaneId::new(3),
+            alias: "elastic-lane-3".to_owned(),
+            ..LaneConfig::default()
+        };
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        let catalog = LaneCatalog::new(
+            nonzero!(4_u32),
+            vec![
+                LaneConfig {
+                    id: LaneId::new(0),
+                    alias: "core".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "governance".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(2),
+                    alias: "zk".to_owned(),
+                    ..LaneConfig::default()
+                },
+                elastic_lane,
+            ],
+        )
+        .expect("public testnet catalog");
+        let retire = autoscale_managed_lane_for_retire(catalog.lanes()).expect("managed lane");
+        let updated = catalog
+            .apply_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: Vec::new(),
+                retire: vec![retire],
+            })
+            .expect("retire managed lane");
+
+        assert_eq!(
+            updated
+                .lanes()
+                .iter()
+                .map(|lane| lane.id.as_u32())
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
     }
 
     #[test]
