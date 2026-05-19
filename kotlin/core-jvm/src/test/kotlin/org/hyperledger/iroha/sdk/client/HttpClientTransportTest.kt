@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.client
 
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.Signature
 import java.util.Base64
@@ -13,8 +14,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
@@ -60,6 +63,55 @@ class HttpClientTransportTest {
         }
         assertFailsWith<IllegalArgumentException> {
             IdentifierResolveRequest.encrypted(" ", "abcd", sampleOpening())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RamLfeExecuteRequest.encrypted("abc")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RamLfeExecuteRequest.encrypted("zz")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            IdentifierResolveRequest.encrypted(samplePlaintextOnlyPolicy(), "abcd", sampleOpening())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildIdentifierResolvePayload("phone#retail", "abc", sampleOpening())
+        }
+    }
+
+    @Test
+    fun identifierReceiptVerifierRejectsAdversarialReceipts() {
+        val payload = sampleIdentifierResolutionPayload()
+        val fixture = signedIdentifierReceiptFixture(payload)
+        val policy = sampleIdentifierVerifierPolicy(fixture.resolverPublicKey)
+        val receipt = IdentifierResolutionReceipt(
+            payload,
+            IdentifierReceiptAttestation("signed", fixture.signatureHex, null, null),
+        )
+
+        assertTrue(receipt.verifyAttestation(policy))
+
+        val tamperedReceipt = IdentifierResolutionReceipt(
+            sampleIdentifierResolutionPayload(outputCiphertextHash = "67".repeat(32)),
+            receipt.attestation,
+        )
+        assertFalse(tamperedReceipt.verifyAttestation(policy))
+
+        assertFailsWith<IllegalArgumentException> {
+            IdentifierResolutionReceipt(
+                payload,
+                IdentifierReceiptAttestation("proof", null, "halo2/ipa", "AQID"),
+            ).verifyAttestation(policy)
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            receipt.verifyAttestation(sampleIdentifierVerifierPolicy(fixture.resolverPublicKey, policyId = "email#retail"))
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            IdentifierResolutionReceipt(
+                payload,
+                IdentifierReceiptAttestation("signed", "abc", null, null),
+            ).verifyAttestation(policy)
         }
     }
 
@@ -1056,6 +1108,77 @@ class HttpClientTransportTest {
             signature = "aa".repeat(64),
         )
 
+    private data class IdentifierReceiptFixture(
+        val resolverPublicKey: String,
+        val signatureHex: String,
+    )
+
+    private fun signedIdentifierReceiptFixture(payload: IdentifierResolutionPayload): IdentifierReceiptFixture {
+        val generator = KeyPairGenerator.getInstance("Ed25519")
+        val keyPair = generator.generateKeyPair()
+        val rawPublicKey = rawEd25519PublicKey(keyPair)
+        val payloadBytes = IdentifierReceiptCanonicalEncoder.encodePayload(payload)
+        val message = IrohaHash.prehash(payloadBytes)
+        val signer = Signature.getInstance("Ed25519")
+        signer.initSign(keyPair.private)
+        signer.update(message)
+        return IdentifierReceiptFixture(
+            resolverPublicKey = "ed25519:" + encodePublicKeyMultihash(0x01, rawPublicKey),
+            signatureHex = hex(signer.sign()),
+        )
+    }
+
+    private fun rawEd25519PublicKey(keyPair: KeyPair): ByteArray {
+        val encoded = keyPair.public.encoded
+        return encoded.copyOfRange(encoded.size - 32, encoded.size)
+    }
+
+    private fun sampleIdentifierResolutionPayload(
+        outputCiphertextHash: String = "66".repeat(32),
+    ): IdentifierResolutionPayload =
+        IdentifierResolutionPayload(
+            policyId = "phone#retail",
+            execution = IdentifierResolutionExecutionPayload(
+                programId = "identifier_lookup_retail",
+                programDigest = "44".repeat(32),
+                backend = "bfv-programmed-sha3-256-v1",
+                verificationMode = "signed",
+                inputCiphertextHash = "55".repeat(32),
+                outputCiphertextHash = outputCiphertextHash,
+                parameterDigest = "77".repeat(32),
+                evaluationKeyDigest = "88".repeat(32),
+                outputHash = "99".repeat(32),
+                associatedDataHash = "aa".repeat(32),
+                executedAtMs = 42L,
+                expiresAtMs = 142L,
+            ),
+            opening = sampleOpening(),
+            opaqueId = "opaque:" + "11".repeat(32),
+            receiptHash = "22".repeat(32),
+            uaid = "uaid:" + "33".repeat(31) + "35",
+            accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        )
+
+    private fun sampleIdentifierVerifierPolicy(
+        resolverPublicKey: String,
+        policyId: String = "phone#retail",
+    ): IdentifierPolicySummary =
+        IdentifierPolicySummary(
+            policyId = policyId,
+            owner = "owner",
+            active = true,
+            normalization = IdentifierNormalization.PHONE_E164,
+            resolverPublicKey = resolverPublicKey,
+            backend = "bfv-programmed-sha3-256-v1",
+            inputEncryption = "bfv-v1",
+            inputEncryptionPublicParameters = null,
+            inputEncryptionPublicParametersDecoded = null,
+            note = null,
+        )
+
+    private fun hex(bytes: ByteArray): String =
+        bytes.joinToString(separator = "") { "%02X".format(it.toInt() and 0xFF) }
+
     private fun sampleBfvPolicy(parameters: IdentifierBfvPublicParameters?): IdentifierPolicySummary =
         IdentifierPolicySummary(
             policyId = "string#retail",
@@ -1067,6 +1190,20 @@ class HttpClientTransportTest {
             inputEncryption = "bfv-v1",
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = parameters,
+            note = null,
+        )
+
+    private fun samplePlaintextOnlyPolicy(): IdentifierPolicySummary =
+        IdentifierPolicySummary(
+            policyId = "string#retail",
+            owner = "owner",
+            active = true,
+            normalization = IdentifierNormalization.EXACT,
+            resolverPublicKey = "ed25519:ed0120" + "11".repeat(32),
+            backend = "hkdf-sha3-512-prf-v1",
+            inputEncryption = null,
+            inputEncryptionPublicParameters = null,
+            inputEncryptionPublicParametersDecoded = null,
             note = null,
         )
 

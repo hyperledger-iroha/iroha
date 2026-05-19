@@ -433,6 +433,127 @@ mod tests {
         assert!(receipt.verify(&resolver_key).is_err());
     }
 
+    #[test]
+    fn identifier_resolution_receipt_rejects_tampered_payload_after_signing() {
+        let mut payload = live_identifier_resolution_payload_fixture();
+        let signer = KeyPair::random();
+        let signature = SignatureOf::new(signer.private_key(), &payload);
+        let mut receipt = IdentifierResolutionReceipt {
+            payload: payload.clone(),
+            attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
+                signature.payload(),
+            )),
+        };
+
+        payload.opening.payload.opened_output_hash = Hash::new(b"tampered-opened-output");
+        receipt.payload = payload;
+
+        receipt
+            .verify(signer.public_key())
+            .expect_err("tampering nested output-opening payload must invalidate receipt");
+    }
+
+    #[test]
+    fn identifier_resolution_receipt_rejects_mutation_of_security_bindings() {
+        macro_rules! assert_rejected {
+            ($label:literal, |$payload:ident| $body:block) => {{
+                let signer = KeyPair::random();
+                let payload = live_identifier_resolution_payload_fixture();
+                let signature = SignatureOf::new(signer.private_key(), &payload);
+                let mut receipt = IdentifierResolutionReceipt {
+                    payload,
+                    attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
+                        signature.payload(),
+                    )),
+                };
+                let $payload = &mut receipt.payload;
+                $body
+                assert!(
+                    receipt.verify(signer.public_key()).is_err(),
+                    "mutating {} must invalidate identifier receipt signature",
+                    $label
+                );
+            }};
+        }
+
+        assert_rejected!("policy_id", |payload| {
+            payload.policy_id = IdentifierPolicyId::from_str("phone#retail").expect("valid policy");
+        });
+        assert_rejected!("execution.program_id", |payload| {
+            payload.execution.program_id =
+                RamLfeProgramId::from_str("phone_retail").expect("valid program");
+        });
+        assert_rejected!("execution.backend", |payload| {
+            payload.execution.backend = RamLfeBackend::BfvAffineSha3_256V1;
+        });
+        assert_rejected!("execution.input_ciphertext_hash", |payload| {
+            payload.execution.input_ciphertext_hash = Hash::new(b"tampered-input");
+        });
+        assert_rejected!("execution.output_ciphertext_hash", |payload| {
+            payload.execution.output_ciphertext_hash = Hash::new(b"tampered-output");
+        });
+        assert_rejected!("execution.parameter_digest", |payload| {
+            payload.execution.parameter_digest = Hash::new(b"tampered-parameters");
+        });
+        assert_rejected!("execution.evaluation_key_digest", |payload| {
+            payload.execution.evaluation_key_digest = Hash::new(b"tampered-eval-keys");
+        });
+        assert_rejected!("opening.payload.input_ciphertext_hash", |payload| {
+            payload.opening.payload.input_ciphertext_hash = Hash::new(b"tampered-opening-input");
+        });
+        assert_rejected!("opening.payload.output_ciphertext_hash", |payload| {
+            payload.opening.payload.output_ciphertext_hash = Hash::new(b"tampered-opening-output");
+        });
+        assert_rejected!("opening.signature", |payload| {
+            payload.opening.signature = Signature::from_bytes(&[0x42; 64]);
+        });
+        assert_rejected!("opaque_id", |payload| {
+            payload.opaque_id = OpaqueAccountId::from_hash(Hash::new(b"tampered-opaque"));
+        });
+        assert_rejected!("receipt_hash", |payload| {
+            payload.receipt_hash = Hash::new(b"tampered-receipt");
+        });
+        assert_rejected!("uaid", |payload| {
+            payload.uaid = UniversalAccountId::from_hash(Hash::new(b"tampered-uaid"));
+        });
+        assert_rejected!("account_id", |payload| {
+            payload.account_id = AccountId::new(KeyPair::random().public_key().clone());
+        });
+    }
+
+    #[test]
+    fn identifier_resolution_receipt_rejects_wrong_resolver_key() {
+        let payload = live_identifier_resolution_payload_fixture();
+        let signer = KeyPair::random();
+        let wrong_signer = KeyPair::random();
+        let receipt = IdentifierResolutionReceipt {
+            payload: payload.clone(),
+            attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
+                SignatureOf::new(signer.private_key(), &payload).payload(),
+            )),
+        };
+
+        receipt
+            .verify(wrong_signer.public_key())
+            .expect_err("identifier receipt signatures must reject unrelated resolver keys");
+    }
+
+    #[test]
+    fn identifier_resolution_receipt_rejects_proof_attestation_for_signature_verify() {
+        let receipt = IdentifierResolutionReceipt {
+            payload: live_identifier_resolution_payload_fixture(),
+            attestation: RamLfeReceiptAttestation::Proof(crate::proof::ProofBox::new(
+                "halo2/ipa".into(),
+                vec![1, 2, 3],
+            )),
+        };
+        let resolver_key = KeyPair::random();
+
+        receipt
+            .verify(resolver_key.public_key())
+            .expect_err("signature verification must reject proof-only attestations");
+    }
+
     fn live_identifier_resolution_receipt_fixture() -> IdentifierResolutionReceipt {
         IdentifierResolutionReceipt {
             payload: live_identifier_resolution_payload_fixture(),
@@ -518,7 +639,7 @@ mod tests {
     }
 
     fn fixture_output_ciphertext_hash() -> Hash {
-        hash_hex("2222222222222222222222222222222222222222222222222222222222222222")
+        hash_hex("2222222222222222222222222222222222222222222222222222222222222223")
     }
 
     fn fixture_parameter_digest() -> Hash {
@@ -526,7 +647,7 @@ mod tests {
     }
 
     fn fixture_evaluation_key_digest() -> Hash {
-        hash_hex("4444444444444444444444444444444444444444444444444444444444444444")
+        hash_hex("4444444444444444444444444444444444444444444444444444444444444445")
     }
 
     fn hash_hex(value: &str) -> Hash {

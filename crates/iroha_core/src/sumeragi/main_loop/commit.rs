@@ -244,6 +244,13 @@ fn commit_pipeline_sample_from_timings(
     }
 }
 
+fn autoscale_transition_committed_at(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    committed_height: u64,
+) -> bool {
+    nexus.autoscale.enabled && nexus.autoscale.last_transition_height == committed_height
+}
+
 #[derive(Debug)]
 pub(super) enum CommitOutcome {
     Rejected {
@@ -1779,6 +1786,20 @@ impl Actor {
                     .map(|tx| tx.hash());
                 self.queue
                     .remove_committed_hashes(committed_tx_hashes, None);
+                let committed_nexus = self.state.nexus_snapshot();
+                if autoscale_transition_committed_at(&committed_nexus, pending_height) {
+                    let lane_compliance = self.queue.lane_compliance_engine();
+                    self.queue.reconfigure_nexus_with_state(
+                        &committed_nexus,
+                        self.state.as_ref(),
+                        lane_compliance,
+                    );
+                    debug!(
+                        height = pending_height,
+                        lanes = committed_nexus.lane_catalog.lane_count().get(),
+                        "reconfigured queue after deterministic Nexus autoscale transition"
+                    );
+                }
                 crate::sumeragi::status::record_kura_stage(
                     pending_height,
                     pending_view,
@@ -8593,6 +8614,19 @@ mod tests {
             slow_stage,
             Duration::from_secs(5)
         ));
+    }
+
+    #[test]
+    fn autoscale_transition_committed_at_requires_enabled_matching_height() {
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.last_transition_height = 42;
+
+        assert!(autoscale_transition_committed_at(&nexus, 42));
+        assert!(!autoscale_transition_committed_at(&nexus, 41));
+
+        nexus.autoscale.enabled = false;
+        assert!(!autoscale_transition_committed_at(&nexus, 42));
     }
 
     struct CommitFixture {

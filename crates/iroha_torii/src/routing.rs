@@ -2779,9 +2779,24 @@ impl norito::json::JsonDeserialize for RamLfeExecuteRequestDto {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        let value =
-            <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
-        Self::json_from_value(&value)
+        let mut object = norito::json::MapVisitor::new(parser)?;
+        let mut encrypted_input = None;
+        while let Some(key) = object.next_key()? {
+            match key.as_str() {
+                "encrypted_input" => {
+                    if encrypted_input.is_some() {
+                        return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
+                    }
+                    encrypted_input = Some(object.parse_value::<String>()?);
+                }
+                other => return Err(norito::json::MapVisitor::unknown_field(other)),
+            }
+        }
+        object.finish()?;
+        Ok(Self {
+            encrypted_input: encrypted_input
+                .ok_or_else(|| norito::json::MapVisitor::missing_field("encrypted_input"))?,
+        })
     }
 
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
@@ -2997,9 +3012,44 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        let value =
-            <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
-        Self::json_from_value(&value)
+        let mut object = norito::json::MapVisitor::new(parser)?;
+        let mut policy_id = None;
+        let mut encrypted_input = None;
+        let mut output_opening = None;
+        while let Some(key) = object.next_key()? {
+            match key.as_str() {
+                "policy_id" => {
+                    if policy_id.is_some() {
+                        return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
+                    }
+                    policy_id = Some(object.parse_value::<String>()?);
+                }
+                "encrypted_input" => {
+                    if encrypted_input.is_some() {
+                        return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
+                    }
+                    encrypted_input = Some(object.parse_value::<String>()?);
+                }
+                "output_opening" => {
+                    if output_opening.is_some() {
+                        return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
+                    }
+                    output_opening = Some(
+                        object.parse_value::<iroha_data_model::ram_lfe::RamLfeOutputOpening>()?,
+                    );
+                }
+                other => return Err(norito::json::MapVisitor::unknown_field(other)),
+            }
+        }
+        object.finish()?;
+        Ok(Self {
+            policy_id: policy_id
+                .ok_or_else(|| norito::json::MapVisitor::missing_field("policy_id"))?,
+            encrypted_input: encrypted_input
+                .ok_or_else(|| norito::json::MapVisitor::missing_field("encrypted_input"))?,
+            output_opening: output_opening
+                .ok_or_else(|| norito::json::MapVisitor::missing_field("output_opening"))?,
+        })
     }
 
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
@@ -3090,11 +3140,34 @@ mod ram_lfe_encrypted_only_request_dto_tests {
 
         let error = norito::json::from_str::<RamLfeExecuteRequestDto>(r#"{"encrypted_input":123}"#)
             .expect_err("encrypted input must be a string envelope");
-        assert!(error.to_string().contains("string"));
+        assert!(
+            !error.to_string().is_empty(),
+            "non-string ciphertext rejection should report an error"
+        );
 
         let error = norito::json::from_str::<RamLfeExecuteRequestDto>(r#"["ciphertext"]"#)
             .expect_err("RAM-LFE execute request must be a JSON object");
         assert!(error.to_string().contains("object"));
+    }
+
+    #[test]
+    fn ram_lfe_execute_request_rejects_ciphertext_alias_fields() {
+        let error =
+            norito::json::from_str::<RamLfeExecuteRequestDto>(r#"{"encryptedInput":"ciphertext"}"#)
+                .expect_err("camelCase encrypted-input aliases must be rejected");
+        assert!(error.to_string().contains("encryptedInput"));
+
+        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(
+            r#"{"encrypted_input":"ciphertext","ciphertext":"legacy-alias"}"#,
+        )
+        .expect_err("ciphertext aliases must be rejected");
+        assert!(error.to_string().contains("ciphertext"));
+
+        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(
+            r#"{"encrypted_input":"ciphertext-a","encrypted_input":"ciphertext-b"}"#,
+        )
+        .expect_err("duplicate encrypted inputs must be rejected");
+        assert!(error.to_string().contains("encrypted_input"));
     }
 
     #[test]
@@ -3130,6 +3203,42 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         )
         .expect_err("policy id is mandatory");
         assert!(error.to_string().contains("policy_id"));
+    }
+
+    #[test]
+    fn identifier_resolve_request_rejects_malformed_encrypted_fields() {
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":123,"encrypted_input":"ciphertext","output_opening":{}}"#,
+        )
+        .expect_err("policy ids must be strings");
+        assert!(
+            !error.to_string().is_empty(),
+            "non-string policy id rejection should report an error"
+        );
+
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy","encrypted_input":{"hex":"ciphertext"},"output_opening":{}}"#,
+        )
+        .expect_err("encrypted input must be a string envelope");
+        assert!(
+            !error.to_string().is_empty(),
+            "non-string encrypted input rejection should report an error"
+        );
+
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy-a","policy_id":"policy-b","encrypted_input":"ciphertext","output_opening":{}}"#,
+        )
+        .expect_err("duplicate policy ids must be rejected");
+        assert!(error.to_string().contains("policy_id"));
+
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":"not-an-opening"}"#,
+        )
+        .expect_err("output openings must be structured attestation objects");
+        assert!(
+            !error.to_string().is_empty(),
+            "non-object output opening rejection should report an error"
+        );
     }
 }
 

@@ -14650,6 +14650,8 @@ mod tests {
 
         let mut active_without_activation = sample_fhe_param_set();
         active_without_activation.activation_height = None;
+        active_without_activation.deprecation_height = None;
+        active_without_activation.withdraw_height = None;
         let error = active_without_activation
             .validate()
             .expect_err("active parameter sets must declare activation height");

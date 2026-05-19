@@ -81,8 +81,8 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
                 .write(["nexus", "autoscale", "min_lanes"], 1_i64)
                 .write(["nexus", "autoscale", "max_lanes"], 2_i64)
                 .write(["nexus", "autoscale", "target_block_ms"], 3000_i64)
-                .write(["nexus", "autoscale", "scale_out_latency_ratio"], 0.1_f64)
-                .write(["nexus", "autoscale", "scale_in_latency_ratio"], 0.05_f64)
+                .write(["nexus", "autoscale", "scale_out_latency_ratio"], 0.12_f64)
+                .write(["nexus", "autoscale", "scale_in_latency_ratio"], 0.11_f64)
                 .write(
                     ["nexus", "autoscale", "scale_out_utilization_ratio"],
                     0.6_f64,
@@ -1776,6 +1776,10 @@ fn single_cycle_load_tx_count(attempt: usize) -> usize {
     cycle_load_tx_count(STRICT_CYCLE_LOAD_TX_COUNT, attempt)
 }
 
+fn strict_cycle_load_tx_count(attempt: usize) -> usize {
+    cycle_load_tx_count(STRICT_CYCLE_LOAD_TX_COUNT, attempt)
+}
+
 fn soak_cycle_load_tx_count(attempt: usize) -> usize {
     cycle_load_tx_count(STRICT_CYCLE_LOAD_TX_COUNT, attempt)
 }
@@ -2076,6 +2080,69 @@ fn wait_for_expanded_lanes_with_heartbeat(
     ))
 }
 
+fn wait_for_expanded_lane_status_quorum(
+    network: &sandbox::SerializedNetwork,
+    heartbeat_client: &Client,
+    top_up_clients: &[Client],
+    cycle_load_tx_count: usize,
+    baseline_status_snapshot: &[PeerStatusSnapshot],
+    quorum_required: usize,
+    timeout: Duration,
+    context: &str,
+    heartbeat_prefix: &str,
+    heartbeat_interval: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut heartbeat_seq = 0_u64;
+    let mut last_status_snapshot = Vec::new();
+    let mut last_status_error = None::<String>;
+    let mut last_heartbeat_error = None::<String>;
+    let mut last_top_up_error = None::<String>;
+    let mut last_status_signal_peers = 0_usize;
+
+    while started.elapsed() <= timeout {
+        match status_snapshot(network) {
+            Ok(snapshot) => {
+                last_status_signal_peers = peers_with_expanded_lane_signal(
+                    &snapshot,
+                    Some(baseline_status_snapshot),
+                    ELASTIC_LANE_ID,
+                );
+                if last_status_signal_peers >= quorum_required {
+                    eprintln!(
+                        "[autoscale-localnet] {context}: strict expansion status quorum observed ({last_status_signal_peers}/{quorum_required})"
+                    );
+                    return Ok(());
+                }
+                last_status_snapshot = snapshot;
+            }
+            Err(err) => {
+                last_status_error = Some(err.to_string());
+            }
+        }
+
+        if let Err(err) = heartbeat_client.submit(Log::new(
+            Level::INFO,
+            format!("{heartbeat_prefix}-{heartbeat_seq}"),
+        )) {
+            last_heartbeat_error = Some(err.to_string());
+        }
+        heartbeat_seq = heartbeat_seq.saturating_add(1);
+
+        let top_up_tx_count = expansion_scaled_top_up_tx_count(heartbeat_seq, cycle_load_tx_count);
+        if top_up_tx_count > 0 {
+            if let Err(err) = submit_load_round_robin(top_up_clients, top_up_tx_count) {
+                last_top_up_error = Some(err.to_string());
+            }
+        }
+        thread::sleep(heartbeat_interval);
+    }
+
+    Err(eyre!(
+        "{context}: timed out waiting for expanded lane status quorum (status signal {last_status_signal_peers}/{quorum_required}); last status snapshot: {last_status_snapshot:?}; last status error: {last_status_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}"
+    ))
+}
+
 fn wait_for_chain_progress_with_heartbeat(
     network: &sandbox::SerializedNetwork,
     heartbeat_client: &Client,
@@ -2287,6 +2354,7 @@ fn run_expand_contract_cycle(
     attempt: usize,
     require_scale_out_transition: bool,
     require_scale_in_transition: bool,
+    require_expansion_status_before_contraction: bool,
     load_tx_count: usize,
 ) -> Result<ExpandContractCycleOutcome> {
     let pre_contraction_context = format!("autoscale contraction pre-check cycle {cycle_index}");
@@ -2382,6 +2450,23 @@ fn run_expand_contract_cycle(
         &expansion_prefix,
         EXPANSION_PROBE_INTERVAL,
     )?;
+    if require_expansion_status_before_contraction {
+        let strict_expansion_context =
+            format!("autoscale strict expansion status cycle {cycle_index}");
+        let strict_expansion_prefix = format!("autoscale-strict-expand-status-cycle-{cycle_index}");
+        wait_for_expanded_lane_status_quorum(
+            network,
+            &expansion_probe_client,
+            submitters,
+            load_tx_count,
+            &pre_cycle_status,
+            quorum_required,
+            STRICT_SCALE_OUT_WAIT_TIMEOUT,
+            &strict_expansion_context,
+            &strict_expansion_prefix,
+            EXPANSION_PROBE_INTERVAL,
+        )?;
+    }
     let expansion_time_s = expansion_started.elapsed().as_secs_f64();
     eprintln!(
         "[autoscale-localnet][cycle {cycle_index}] expansion wait: {:.3}s",
@@ -2400,12 +2485,16 @@ fn run_expand_contract_cycle(
         "[autoscale-localnet][cycle {cycle_index}] autoscale transition snapshot after expansion: scale-out peers with new transitions {peers_with_scale_out}/{TOTAL_PEERS}, scale-in peers since cycle start {peers_with_scale_in_before_contraction}/{TOTAL_PEERS}"
     );
     let post_expansion_status = status_snapshot(network)?;
-    let require_scale_in_transition_this_cycle = should_require_scale_in_transition(
-        require_scale_in_transition,
-        &post_expansion_status,
-        &pre_cycle_status,
-        quorum_required,
-    );
+    let require_scale_in_transition_this_cycle = if require_expansion_status_before_contraction {
+        require_scale_in_transition
+    } else {
+        should_require_scale_in_transition(
+            require_scale_in_transition,
+            &post_expansion_status,
+            &pre_cycle_status,
+            quorum_required,
+        )
+    };
     if require_scale_in_transition && !require_scale_in_transition_this_cycle {
         eprintln!(
             "[autoscale-localnet][cycle {cycle_index}] scale-in transition check relaxed: expansion status signal was not observed on quorum peers; validating contraction profile only"
@@ -2575,6 +2664,7 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
                 cycle_attempt,
                 false,
                 false,
+                false,
                 attempt_load_tx_count,
             ) {
                 Ok(outcome) => break outcome,
@@ -2666,6 +2756,7 @@ fn nexus_autoscale_repeats_expand_contract_cycles_in_localnet() -> Result<()> {
                 cycle_attempt,
                 true,
                 true,
+                false,
                 attempt_load_tx_count,
             ) {
                 Ok(_) => break,
@@ -2688,6 +2779,90 @@ fn nexus_autoscale_repeats_expand_contract_cycles_in_localnet() -> Result<()> {
 
     eprintln!(
         "[autoscale-localnet][multi-cycle] total runtime: {:.3}s",
+        test_started.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
+#[test]
+fn nexus_autoscale_strict_expand_contract_transitions_in_localnet() -> Result<()> {
+    let context = stringify!(nexus_autoscale_strict_expand_contract_transitions_in_localnet);
+    let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+        .lock()
+        .expect("autoscale localnet test mutex poisoned");
+    configure_load_sequence_seed(None);
+    let test_started = Instant::now();
+    let startup_started = Instant::now();
+    let Some((network, _rt)) =
+        sandbox::start_network_blocking_or_skip(autoscale_localnet_builder(), context)?
+    else {
+        return Ok(());
+    };
+    eprintln!(
+        "[autoscale-localnet][strict] network startup: {:.3}s",
+        startup_started.elapsed().as_secs_f64()
+    );
+
+    ensure!(
+        network.peers().len() == TOTAL_PEERS,
+        "expected {TOTAL_PEERS} peers, got {}",
+        network.peers().len()
+    );
+
+    wait_for_storage_lane_count(
+        &network,
+        INITIAL_PROVISIONED_LANES,
+        SCALE_OUT_WAIT_TIMEOUT,
+        "baseline lane count for strict transitions",
+    )?;
+    let submitters: Vec<Client> = network
+        .peers()
+        .iter()
+        .map(peer_client_with_timeout)
+        .collect();
+    let quorum_required = wait_for_commit_quorum_required(
+        &network,
+        QUORUM_DISCOVERY_TIMEOUT,
+        "discover autoscale commit quorum for strict transitions",
+    )?;
+    eprintln!("[autoscale-localnet][strict] dynamic commit quorum (2f+1): {quorum_required}");
+
+    let mut cycle_attempt = 1_usize;
+    loop {
+        let attempt_load_tx_count = strict_cycle_load_tx_count(cycle_attempt);
+        eprintln!(
+            "[autoscale-localnet][strict] attempt {cycle_attempt}/{AUTOSCALE_SINGLE_CYCLE_RETRY_LIMIT} (load tx count: {attempt_load_tx_count})"
+        );
+        match run_expand_contract_cycle(
+            &network,
+            &submitters,
+            quorum_required,
+            1,
+            cycle_attempt,
+            true,
+            true,
+            true,
+            attempt_load_tx_count,
+        ) {
+            Ok(_) => break,
+            Err(err) if cycle_attempt < AUTOSCALE_SINGLE_CYCLE_RETRY_LIMIT => {
+                let next_attempt = cycle_attempt.saturating_add(1);
+                let next_load_tx_count = strict_cycle_load_tx_count(next_attempt);
+                eprintln!(
+                    "[autoscale-localnet][strict] attempt {cycle_attempt} failed; retrying with attempt {next_attempt}/{AUTOSCALE_SINGLE_CYCLE_RETRY_LIMIT} (load tx count: {next_load_tx_count}): {err}"
+                );
+                cycle_attempt = next_attempt;
+            }
+            Err(err) => {
+                return Err(eyre!(
+                    "autoscale strict transition cycle failed after {cycle_attempt} attempt(s): {err}"
+                ));
+            }
+        }
+    }
+
+    eprintln!(
+        "[autoscale-localnet][strict] total runtime: {:.3}s",
         test_started.elapsed().as_secs_f64()
     );
     Ok(())
@@ -2794,6 +2969,7 @@ fn nexus_autoscale_soak_expand_contract_cycles_in_localnet() -> Result<()> {
                     attempt,
                     true,
                     true,
+                    false,
                     attempt_load_tx_count,
                 ) {
                     Ok(cycle_outcome) => {
