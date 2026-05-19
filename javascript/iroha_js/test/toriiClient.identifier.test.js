@@ -303,6 +303,66 @@ test("encryptIdentifierInputForPolicy builds deterministic BFV Norito envelopes"
   );
 });
 
+test("encryptIdentifierInputForPolicy rejects adversarial BFV public parameters", () => {
+  const basePolicy = {
+    policy_id: "string#retail",
+    owner: ACCOUNT_ID,
+    active: true,
+    normalization: "exact",
+    resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+    backend: "bfv-affine-sha3-256-v1",
+    input_encryption: "bfv-v1",
+  };
+  const cloneParameters = () => JSON.parse(JSON.stringify(BFV_PUBLIC_PARAMETERS));
+  const cases = [
+    {
+      name: "non-divisible ciphertext modulus",
+      expected: ValidationError,
+      params: (() => {
+        const params = cloneParameters();
+        params.parameters.ciphertext_modulus += 1;
+        return params;
+      })(),
+    },
+    {
+      name: "public key coefficient outside modulus",
+      expected: ValidationError,
+      params: (() => {
+        const params = cloneParameters();
+        params.public_key.a[0] = params.parameters.ciphertext_modulus;
+        return params;
+      })(),
+    },
+    {
+      name: "max input byte count outside one plaintext slot",
+      expected: ValidationError,
+      params: (() => {
+        const params = cloneParameters();
+        params.max_input_bytes = params.parameters.plaintext_modulus;
+        return params;
+      })(),
+    },
+    {
+      name: "missing decoded public parameters",
+      expected: /missing decoded BFV public parameters/,
+      params: null,
+    },
+  ];
+
+  for (const { name, expected, params } of cases) {
+    assert.throws(
+      () =>
+        encryptIdentifierInputForPolicy(
+          { ...basePolicy, input_encryption_public_parameters_decoded: params },
+          "ab",
+          { seedHex: BFV_SEED_HEX },
+        ),
+      expected,
+      name,
+    );
+  }
+});
+
 test("resolveIdentifier accepts encrypted input and returns null for missing bindings", async () => {
   let callCount = 0;
   const client = new ToriiClient("https://example.test", {

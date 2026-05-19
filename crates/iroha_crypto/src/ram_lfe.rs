@@ -1609,6 +1609,140 @@ mod tests {
     }
 
     #[test]
+    fn hidden_program_validation_rejects_static_memory_lane_overflow() {
+        let program = HiddenRamFheProgram {
+            version: 1,
+            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
+            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
+            instructions: vec![
+                HiddenRamFheInstruction::LoadState(0, BFV_PROGRAM_STATE_WIDTH_U16),
+                HiddenRamFheInstruction::Output(0),
+            ],
+        };
+
+        let err = validate_hidden_ram_fhe_program(&program)
+            .expect_err("out-of-range memory lane must be rejected before execution");
+        assert!(err.to_string().contains("memory lane"));
+    }
+
+    #[test]
+    fn hidden_program_validation_rejects_static_register_overflow() {
+        let program = HiddenRamFheProgram {
+            version: 1,
+            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
+            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
+            instructions: vec![
+                HiddenRamFheInstruction::LoadConst(BFV_PROGRAM_REGISTER_COUNT_U16, 1),
+                HiddenRamFheInstruction::Output(0),
+            ],
+        };
+
+        let err = validate_hidden_ram_fhe_program(&program)
+            .expect_err("out-of-range register must be rejected before execution");
+        assert!(err.to_string().contains("register"));
+    }
+
+    #[test]
+    fn hidden_program_validation_rejects_output_slot_overflow() {
+        let mut instructions = vec![HiddenRamFheInstruction::LoadConst(0, 1)];
+        instructions.extend(
+            (0..=BFV_PROGRAM_IDENTIFIER_SLOT_COUNT).map(|_| HiddenRamFheInstruction::Output(0)),
+        );
+        let program = HiddenRamFheProgram {
+            version: 1,
+            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
+            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
+            instructions,
+        };
+
+        let err = validate_hidden_ram_fhe_program(&program)
+            .expect_err("programs cannot emit more output slots than the profile admits");
+        assert!(err.to_string().contains("too many output slots"));
+    }
+
+    #[test]
+    fn programmed_public_parameters_reject_tampered_digests() {
+        let secret = b"resolver-secret";
+        let params = ram_lfe_bfv_parameters_v1();
+        let associated_data = b"phone#retail";
+        let program = default_bfv_programmed_hidden_program();
+        let (public_parameters, _, relinearization_key) =
+            derive_identifier_key_material_from_seed(&params, 63, secret, associated_data)
+                .expect("derive BFV public parameters");
+        let programmed = bfv_programmed_public_parameters_with_program(
+            public_parameters,
+            BfvEvaluationKeyBundle {
+                relinearization_key,
+                rotation_keys: Vec::new(),
+                bootstrap_key: None,
+            },
+            &program,
+            RamLfeVerificationMode::Signed,
+            None,
+        );
+
+        let mut wrong_parameter_digest = programmed.clone();
+        wrong_parameter_digest.parameter_digest = Hash::new(b"wrong-parameters");
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&wrong_parameter_digest).expect("encode tampered params"),
+        )
+        .expect_err("tampered parameter digest must be rejected");
+        assert!(err.to_string().contains("parameter digest"));
+
+        let mut wrong_evaluation_digest = programmed;
+        wrong_evaluation_digest.evaluation_key_digest = Hash::new(b"wrong-evaluation-keys");
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&wrong_evaluation_digest).expect("encode tampered params"),
+        )
+        .expect_err("tampered evaluation-key digest must be rejected");
+        assert!(err.to_string().contains("evaluation-key digest"));
+    }
+
+    #[test]
+    fn programmed_evaluation_rejects_truncated_ciphertext_envelope() {
+        let secret = b"resolver-secret";
+        let params = ram_lfe_bfv_parameters_v1();
+        let associated_data = b"phone#retail";
+        let program = default_bfv_programmed_hidden_program();
+        let (public_parameters, _, relinearization_key) =
+            derive_identifier_key_material_from_seed(&params, 63, secret, associated_data)
+                .expect("derive BFV public parameters");
+        let programmed = bfv_programmed_public_parameters_with_program(
+            public_parameters.clone(),
+            BfvEvaluationKeyBundle {
+                relinearization_key,
+                rotation_keys: Vec::new(),
+                bootstrap_key: None,
+            },
+            &program,
+            RamLfeVerificationMode::Signed,
+            None,
+        );
+        let commitment = bfv_programmed_policy_commitment_with_program(
+            secret,
+            &norito::to_bytes(&programmed).expect("encode public parameters"),
+            &program,
+        )
+        .expect("build BFV policy commitment");
+        let mut ciphertext = encrypt_identifier_from_seed(
+            &public_parameters,
+            b"+15551234567",
+            b"truncated-bfv-programmed-ciphertext",
+        )
+        .expect("encrypt identifier");
+        ciphertext.slots.pop().expect("test ciphertext has slots");
+        let request = ClientRequest {
+            normalized_input: norito::to_bytes(&ciphertext).expect("encode tampered ciphertext"),
+            associated_data: associated_data.to_vec(),
+        };
+
+        let err =
+            evaluate_commitment_with_hidden_program(secret, &commitment, &request, Some(&program))
+                .expect_err("truncated ciphertext envelope must not evaluate");
+        assert!(err.to_string().contains("expected"));
+    }
+
+    #[test]
     fn select_eq_zero_truth_table_covers_all_byte_values() {
         let secret = b"resolver-secret";
         let params = ram_lfe_bfv_parameters_v1();

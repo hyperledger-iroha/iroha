@@ -54,6 +54,52 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun identifierHiddenFunctionRequestsRejectMalformedCiphertextEnvelopeFields() {
+        assertFailsWith<IllegalArgumentException> {
+            IdentifierResolveRequest.encrypted("phone#retail", "abc", sampleOpening())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            IdentifierResolveRequest.encrypted(" ", "abcd", sampleOpening())
+        }
+    }
+
+    @Test
+    fun identifierBfvEnvelopeBuilderRejectsAdversarialPublicParameters() {
+        val seed = ByteArray(32) { it.toByte() }
+        val baseParameters = sampleBfvParameters()
+
+        val nonDivisibleModulus = IdentifierBfvPublicParameters(
+            IdentifierBfvPublicParameters.Parameters(8L, 257L, 16_842_753L, 12),
+            baseParameters.publicKey,
+            3,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            sampleBfvPolicy(nonDivisibleModulus).encryptInput("ab", seed)
+        }
+
+        val oversizedCoefficient = IdentifierBfvPublicParameters(
+            baseParameters.parameters,
+            IdentifierBfvPublicParameters.PublicKey(
+                listOf(16_842_752L, 15_791_131L, 10_301_391L, 6_321_610L, 502_045L, 1_948_157L, 5_332_249L, 12_641_494L),
+                baseParameters.publicKey.a,
+            ),
+            3,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            sampleBfvPolicy(oversizedCoefficient).encryptInput("ab", seed)
+        }
+
+        val oversizedInputLimit = IdentifierBfvPublicParameters(
+            baseParameters.parameters,
+            baseParameters.publicKey,
+            257,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            sampleBfvPolicy(oversizedInputLimit).encryptInput("ab", seed)
+        }
+    }
+
+    @Test
     fun deployContractPostsAliasFirstPayloadAndParsesResponse() {
         val executor = StubResponseExecutor(
             statusCode = 200,
@@ -965,6 +1011,30 @@ class HttpClientTransportTest {
                 expiresAtMs = 142L,
             ),
             signature = "aa".repeat(64),
+        )
+
+    private fun sampleBfvPolicy(parameters: IdentifierBfvPublicParameters?): IdentifierPolicySummary =
+        IdentifierPolicySummary(
+            policyId = "string#retail",
+            owner = "owner",
+            active = true,
+            normalization = IdentifierNormalization.EXACT,
+            resolverPublicKey = "ed25519:ed0120" + "11".repeat(32),
+            backend = "bfv-affine-sha3-256-v1",
+            inputEncryption = "bfv-v1",
+            inputEncryptionPublicParameters = null,
+            inputEncryptionPublicParametersDecoded = parameters,
+            note = null,
+        )
+
+    private fun sampleBfvParameters(): IdentifierBfvPublicParameters =
+        IdentifierBfvPublicParameters(
+            IdentifierBfvPublicParameters.Parameters(8L, 257L, 16_842_752L, 12),
+            IdentifierBfvPublicParameters.PublicKey(
+                listOf(11_472_226L, 15_791_131L, 10_301_391L, 6_321_610L, 502_045L, 1_948_157L, 5_332_249L, 12_641_494L),
+                listOf(3_503_246L, 2_379_264L, 12_091_019L, 30_169L, 15_804_162L, 8_155_629L, 2_418_997L, 3_003_107L),
+            ),
+            3,
         )
 
     private open class CapturingExecutor : HttpTransportExecutor {

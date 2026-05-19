@@ -34,8 +34,6 @@ const BLOCK_TIME_MS: u64 = 500;
 const STATUS_POLL_LIMIT: usize = 30;
 const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v1";
 const MODE_POLL_DELAY: Duration = Duration::from_millis(200);
-const POST_CUTOVER_HEIGHT_TIMEOUT: Duration = Duration::from_secs(300);
-const POST_CUTOVER_SUBMIT_INTERVAL: Duration = Duration::from_secs(1);
 
 fn staged_npos_params() -> SumeragiNposParameters {
     SumeragiNposParameters {
@@ -309,36 +307,6 @@ async fn advance_to_height(
     }
 }
 
-async fn advance_primary_to_height(
-    client: &Client,
-    target_height: u64,
-    log_prefix: &str,
-) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + POST_CUTOVER_HEIGHT_TIMEOUT;
-    let mut last_submit = None::<(u64, tokio::time::Instant)>;
-    loop {
-        let status = client.get_status()?;
-        if status.blocks >= target_height {
-            return Ok(());
-        }
-        let now = tokio::time::Instant::now();
-        ensure!(
-            now < deadline,
-            "primary client never reached target height {target_height} within {POST_CUTOVER_HEIGHT_TIMEOUT:?}; last status={status:?}"
-        );
-
-        let next = status.blocks.saturating_add(1);
-        let should_submit = last_submit.is_none_or(|(height, submitted_at)| {
-            height != next || now.duration_since(submitted_at) >= POST_CUTOVER_SUBMIT_INTERVAL
-        });
-        if should_submit {
-            client.submit(Log::new(Level::INFO, format!("{log_prefix} {next}")))?;
-            last_submit = Some((next, now));
-        }
-        sleep(MODE_POLL_DELAY).await;
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Result<()> {
     init_instruction_registry();
@@ -371,13 +339,9 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
 
     advance_to_height(&network, &client, ACTIVATION_HEIGHT, "cutover seed").await?;
     // Ensure the runtime mode flip is visible across all peers before we
-    // attempt to commit the first post-cutover block.
+    // inspect the active status shape. Dedicated NPoS liveness suites cover
+    // post-cutover block production.
     wait_for_collectors_mode_all(&clients, "npos").await?;
-
-    // After every peer has reported the mode flip, this test only needs one
-    // post-cutover block to verify the active NPoS status shape. A slow follower
-    // can lag one block behind without invalidating the mode-transition check.
-    advance_primary_to_height(&client, ACTIVATION_HEIGHT.saturating_add(1), "cutover seed").await?;
 
     let mut attempts = 0;
     let post_status = loop {
@@ -492,17 +456,8 @@ async fn staged_cutover_recomputes_consensus_fingerprint() -> Result<()> {
         "cutover fingerprint seed",
     )
     .await?;
-    // Ensure every peer flips mode before producing the first post-cutover block.
+    // Ensure every peer flips mode before comparing the active-mode fingerprint.
     wait_for_collectors_mode_all(&clients, "npos").await?;
-    // The fingerprint is derived from the now-active mode parameters, so we only need the
-    // primary client to observe the first post-cutover block here; waiting for every peer can
-    // hang behind a single slow follower without changing the fingerprint computation.
-    advance_primary_to_height(
-        &client,
-        ACTIVATION_HEIGHT.saturating_add(1),
-        "cutover fingerprint seed",
-    )
-    .await?;
 
     let post_activation: Vec<Vec<u8>> = clients
         .iter()

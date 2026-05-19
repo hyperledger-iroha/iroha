@@ -10274,9 +10274,9 @@ mod tests {
     use iroha_crypto::{
         Hash, KeyPair,
         fhe_bfv::{
-            BfvEvaluationKeyBundle, BfvIdentifierPublicParameters, bootstrap_key_from_seed,
-            decrypt, decrypt_identifier, encrypt_identifier_from_seed, keygen_from_seed,
-            rotation_key_from_seed,
+            BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters,
+            bootstrap_key_from_seed, decrypt, decrypt_identifier, encrypt_identifier_from_seed,
+            keygen_from_seed, rotation_key_from_seed,
         },
     };
     use iroha_data_model::{
@@ -10927,6 +10927,23 @@ mod tests {
         norito::to_bytes(&ciphertext).expect("encode ciphertext")
     }
 
+    fn sample_fhe_envelope(input: &[u8], seed: &[u8]) -> BfvIdentifierCiphertext {
+        decode_soracloud_fhe_envelope(&sample_fhe_payload(input, seed))
+            .expect("sample FHE payload decodes")
+    }
+
+    fn assert_invalid_parameter_contains(err: InstructionExecutionError, expected: &str) {
+        assert!(
+            matches!(
+                err,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(ref message)
+                ) if message.contains(expected)
+            ),
+            "unexpected error: {err:?}"
+        );
+    }
+
     fn sample_fhe_input_ref(state_key: &str, payload: &[u8]) -> FheJobInputRefV1 {
         FheJobInputRefV1 {
             state_key: state_key.to_string(),
@@ -11021,6 +11038,21 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_bootstrap_rejects_missing_refresh_key() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        evaluation_keys.bootstrap_key = None;
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = 1;
+        let input = sample_fhe_envelope(b"abc", b"soracloud-bootstrap-missing-key");
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("bootstrap must require a bootstrap refresh key");
+        assert_invalid_parameter_contains(err, "missing BFV bootstrap key");
+    }
+
+    #[test]
     fn soracloud_rotate_left_uses_rotation_key_refresh() {
         let params = ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, relinearization_key) =
@@ -11069,6 +11101,44 @@ mod tests {
             .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt")[0])
             .collect::<Vec<_>>();
         assert_eq!(plaintext_slots, vec![97, 98, 0, 0, 2]);
+    }
+
+    #[test]
+    fn soracloud_rotate_left_rejects_missing_rotation_key() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::RotateLeft;
+        job.rotation_steps = 2;
+        let input = sample_fhe_envelope(b"ab", b"soracloud-rotate-missing-key");
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("rotation must require a matching public rotation key");
+        assert_invalid_parameter_contains(err, "missing BFV rotation key for 2 steps");
+    }
+
+    #[test]
+    fn soracloud_fhe_job_rejects_mismatched_ciphertext_slot_counts() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let lhs = sample_fhe_envelope(b"alice", b"soracloud-fhe-slot-count-left");
+        let mut rhs = sample_fhe_envelope(b"bob", b"soracloud-fhe-slot-count-right");
+        rhs.slots.pop().expect("sample envelope has slots");
+        let job = sample_fhe_job(Vec::new());
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[lhs, rhs])
+            .expect_err("FHE jobs must reject incompatible ciphertext envelopes");
+        assert_invalid_parameter_contains(err, "matching slot counts");
+    }
+
+    #[test]
+    fn soracloud_registered_bfv_parameters_reject_digest_mismatch() {
+        let mut param_set = sample_fhe_param_set();
+        param_set.parameter_digest = Hash::new(b"tampered-bfv-parameters");
+
+        let err = registered_soracloud_bfv_parameters(&param_set)
+            .expect_err("tampered parameter-set digest must be rejected");
+        assert_invalid_parameter_contains(err, "registered BFV profile");
     }
 
     fn fhe_job_provenance(
