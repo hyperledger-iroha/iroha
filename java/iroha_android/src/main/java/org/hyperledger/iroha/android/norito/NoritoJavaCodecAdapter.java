@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.norito;
 
+import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -50,6 +51,14 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
   @Override
   public String schemaName() {
     return schemaName;
+  }
+
+  public static byte[] encodeInstructionBox(final InstructionBox instruction) throws NoritoException {
+    try {
+      return TransactionPayloadAdapter.encodeInstructionBox(instruction);
+    } catch (final Exception ex) {
+      throw new NoritoException("Failed to encode Norito instruction box", ex);
+    }
   }
 
   private static boolean hasHeader(final byte[] encoded) {

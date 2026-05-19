@@ -784,6 +784,18 @@ public sealed class ToriiClient : IDisposable
             cancellationToken: cancellationToken);
     }
 
+    public Task<ToriiMultisigResponse> ProposeMultisigAsync(
+        ToriiMultisigProposeRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return PostAsync<ToriiMultisigProposeRequest, ToriiMultisigResponse>(
+            "/v1/multisig/propose",
+            request,
+            cancellationToken: cancellationToken);
+    }
+
     public Task<ToriiMultisigContractCallResponse> ApproveMultisigContractCallAsync(
         ToriiMultisigContractCallApproveRequest request,
         CancellationToken cancellationToken = default)

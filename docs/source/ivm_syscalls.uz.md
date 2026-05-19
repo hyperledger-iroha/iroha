@@ -44,7 +44,7 @@ Kanonik tizimli qo'ng'iroqlar jadvali (quyi to'plam)| Hex | Ism | Argumentlar (`
 | 0x2B | TRANSFER_V1_BATCH_Qo'llash | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Norito kodlangan to'plamni bitta tizim chaqiruvida qo'llash |
 | 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Yangi NFT | ro'yxatdan o'tkazadi
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | NFT egalik huquqini o'tkazadi |
-| 0x27 | NFT_SET_METADATA | `&NftId`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT metama'lumotlarini yangilaydi |
+| 0x27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT metama'lumotlarini yangilaydi |
 | 0x28 | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | NFT |ni yoqadi (yo'q qiladi).
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Takrorlanadigan so'rovlar vaqtincha ishlaydi; `QueryRequest::Continue` rad etildi |
 | 0xA2 | HAMMA_FOYDALANUVCHILAR_UCHUN_NFTS_YARASH | – | `u64=count` | `G_create_nfts_for_all` | yordamchi; xususiyatli || 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64` | `u64=prev` | `G_set_depth` | Admin; xususiyatli |

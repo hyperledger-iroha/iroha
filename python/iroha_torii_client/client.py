@@ -221,6 +221,7 @@ __all__ = [
     "ContractDeployAssertionReceipt",
     "ContractDeployResponse",
     "ContractCallResponse",
+    "MultisigResponse",
     "GovernanceContractResponse",
     "BallotSubmitResult",
     "ProtectedNamespacesApplyResult",
@@ -2624,6 +2625,21 @@ class ContractCallResponse:
 
 
 @dataclass(frozen=True)
+class MultisigResponse:
+    """Result returned by multisig participation endpoints."""
+
+    ok: bool
+    resolved_multisig_account_id: str
+    submitted: Optional[bool]
+    proposal_id: Optional[str]
+    instructions_hash: Optional[str]
+    tx_hash_hex: Optional[str]
+    executed_tx_hash_hex: Optional[str]
+    creation_time_ms: Optional[int]
+    signing_message_b64: Optional[str]
+
+
+@dataclass(frozen=True)
 class GovernanceContractResponse:
     """Governance binding returned by ``GET /v1/gov/contracts/{contract_address}``."""
 
@@ -4717,6 +4733,98 @@ class ToriiClient:
             context="contract call response",
         )
 
+    def propose_multisig(
+        self,
+        *,
+        multisig_account_id: Optional[str] = None,
+        multisig_account_alias: Optional[str] = None,
+        signer_account_id: str,
+        instructions: Sequence[Any],
+        public_key_hex: Optional[str] = None,
+        signature_b64: Optional[str] = None,
+        creation_time_ms: Optional[int] = None,
+        fee_sponsor: Optional[str] = None,
+    ) -> MultisigResponse:
+        """Propose a generic multisig instruction batch via ``POST /v1/multisig/propose``.
+
+        Each instruction may be raw native Norito ``InstructionBox`` bytes or an already-base64
+        encoded string carrying those bytes.
+        """
+
+        has_account_id = multisig_account_id is not None
+        has_alias = multisig_account_alias is not None
+        if has_account_id == has_alias:
+            raise ValueError(
+                "propose_multisig requires exactly one of multisig_account_id or multisig_account_alias"
+            )
+        if isinstance(instructions, (str, bytes, bytearray, memoryview)):
+            raise TypeError("propose_multisig.instructions must be a sequence of instruction payloads")
+        try:
+            instruction_values = list(instructions)
+        except TypeError as exc:
+            raise TypeError(
+                "propose_multisig.instructions must be a sequence of instruction payloads"
+            ) from exc
+        if not instruction_values:
+            raise ValueError("propose_multisig.instructions must not be empty")
+
+        request_payload: Dict[str, Any] = {
+            "signer_account_id": self._normalize_canonical_account_id(
+                signer_account_id,
+                "propose_multisig.signer_account_id",
+            ),
+            "instructions": [
+                self.multisig_instruction_b64(
+                    value,
+                    context=f"propose_multisig.instructions[{index}]",
+                )
+                for index, value in enumerate(instruction_values)
+            ],
+        }
+        if has_account_id:
+            request_payload["multisig_account_id"] = self._normalize_canonical_account_id(
+                multisig_account_id,
+                "propose_multisig.multisig_account_id",
+            )
+        else:
+            request_payload["multisig_account_alias"] = self._require_non_empty_string(
+                multisig_account_alias,
+                "propose_multisig.multisig_account_alias",
+            )
+        if public_key_hex is not None:
+            request_payload["public_key_hex"] = self._normalize_hex_string(
+                public_key_hex,
+                context="propose_multisig.public_key_hex",
+                expected_length=64,
+            )
+        if signature_b64 is not None:
+            request_payload["signature_b64"] = self._normalize_required_base64_payload(
+                signature_b64,
+                "propose_multisig.signature_b64",
+            )
+        normalized_creation_time = self._normalize_optional_int(
+            creation_time_ms,
+            "propose_multisig.creation_time_ms",
+            allow_zero=True,
+        )
+        if normalized_creation_time is not None:
+            request_payload["creation_time_ms"] = normalized_creation_time
+        if fee_sponsor is not None:
+            request_payload["fee_sponsor"] = self._normalize_canonical_account_id(
+                fee_sponsor,
+                "propose_multisig.fee_sponsor",
+            )
+
+        body = self._post_json(
+            "/v1/multisig/propose",
+            request_payload,
+            context="multisig propose response",
+        )
+        return self._parse_multisig_response(
+            body,
+            context="multisig propose response",
+        )
+
     def get_governance_contract(
         self,
         contract_address: str,
@@ -5904,6 +6012,19 @@ class ToriiClient:
         if not decoded:
             raise RuntimeError(f"{context} must not decode to empty bytes")
         return literal
+
+    @staticmethod
+    def multisig_instruction_b64(value: Any, *, context: str = "instruction") -> str:
+        """Return a base64 native Norito ``InstructionBox`` payload for multisig propose."""
+
+        if isinstance(value, str):
+            return ToriiClient._normalize_required_base64_payload(value, context)
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            raw = bytes(value)
+            if not raw:
+                raise RuntimeError(f"{context} must not be empty")
+            return base64.b64encode(raw).decode("ascii")
+        raise TypeError(f"{context} must be bytes-like or base64 text")
 
     @staticmethod
     def _normalize_optional_base64_payload(
@@ -9331,6 +9452,59 @@ class ToriiClient:
                 record.get("signed_transaction_b64"),
                 context=f"{context}.signed_transaction_b64",
             ),
+            signing_message_b64=ToriiClient._normalize_optional_base64_payload(
+                record.get("signing_message_b64"),
+                context=f"{context}.signing_message_b64",
+            ),
+        )
+
+    @staticmethod
+    def _parse_multisig_response(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> MultisigResponse:
+        record = ToriiClient._ensure_mapping(payload, context)
+        submitted_value = record.get("submitted")
+        if submitted_value is None:
+            submitted = None
+        elif isinstance(submitted_value, bool):
+            submitted = submitted_value
+        else:
+            raise TypeError(f"{context}.submitted must be a boolean")
+
+        def optional_hash(field: str) -> Optional[str]:
+            raw = record.get(field)
+            if raw is None:
+                return None
+            return ToriiClient._normalize_hex_string(
+                raw,
+                context=f"{context}.{field}",
+                expected_length=64,
+            )
+
+        creation_raw = record.get("creation_time_ms")
+        creation_time_ms = None
+        if creation_raw is not None:
+            creation_time_ms = ToriiClient._coerce_unsigned(
+                creation_raw,
+                f"{context}.creation_time_ms",
+            )
+        return MultisigResponse(
+            ok=bool(record.get("ok")),
+            resolved_multisig_account_id=ToriiClient._normalize_canonical_account_id(
+                record.get("resolved_multisig_account_id"),
+                f"{context}.resolved_multisig_account_id",
+            ),
+            submitted=submitted,
+            proposal_id=ToriiClient._coerce_optional_string(
+                record.get("proposal_id"),
+                context=f"{context}.proposal_id",
+            ),
+            instructions_hash=optional_hash("instructions_hash"),
+            tx_hash_hex=optional_hash("tx_hash_hex"),
+            executed_tx_hash_hex=optional_hash("executed_tx_hash_hex"),
+            creation_time_ms=creation_time_ms,
             signing_message_b64=ToriiClient._normalize_optional_base64_payload(
                 record.get("signing_message_b64"),
                 context=f"{context}.signing_message_b64",

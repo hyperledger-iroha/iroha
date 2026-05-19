@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { blake3 } from "@noble/hashes/blake3";
+import { sha256 } from "@noble/hashes/sha2";
 import {
   AccountAddress,
   curveIdFromAlgorithm,
@@ -21,6 +22,7 @@ import {
 import { getNativeBinding } from "./native.js";
 
 const ALIGNMENT = 16;
+const COMPACT_LEN_FLAG = 0x02;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 const CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
@@ -50,20 +52,23 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "Rwa.*",
 ];
 const INSTRUCTION_BOX_SCHEMA_HASH = Buffer.from(
-  "73c28483bfb728cd73c28483bfb728cd",
+  "862a7d77075d4d23ff6c1261db027811",
   "hex",
 );
+const MULTISIG_PROPOSE_DTO_SCHEMA_HASH = schemaHashForTypeName(
+  "iroha_torii::routing::MultisigProposeDto",
+);
 const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
-  "iroha.mint": Buffer.from("a77313c153163964a77313c153163964", "hex"),
-  "iroha.burn": Buffer.from("b8a981b5d11aaa54b8a981b5d11aaa54", "hex"),
-  "iroha.register": Buffer.from("5321ba5d245cb6f65321ba5d245cb6f6", "hex"),
-  "iroha.transfer": Buffer.from("ffb7ba8dc1b0c984ffb7ba8dc1b0c984", "hex"),
-  "iroha.custom": Buffer.from("89e9c7d440cf16b689e9c7d440cf16b6", "hex"),
+  "iroha.mint": Buffer.from("ec0b538ed0e5b46ed163e0aedb335e73", "hex"),
+  "iroha.burn": Buffer.from("361f279124a0aad61978c80ff1c9ce0a", "hex"),
+  "iroha.register": Buffer.from("2e9fa44b44ac5295a0b34e05edcb4133", "hex"),
+  "iroha.transfer": Buffer.from("a4174c78d6341f8f98fc2adae8ed67b9", "hex"),
+  "iroha.custom": Buffer.from("6b86902a75600648d186d52cd662b229", "hex"),
   "iroha.execute_trigger": Buffer.from(
-    "f92cdee1227ffa12f92cdee1227ffa12",
+    "d8988afd2c1dee721564dd8d57841eff",
     "hex",
   ),
-  "iroha.rwa": Buffer.from("8732d4f3ae064a128732d4f3ae064a12", "hex"),
+  "iroha.rwa": Buffer.from("4a07cd02fdfb5fe81043a1ba7bf72123", "hex"),
   "iroha_data_model::isi::kaigi::CreateKaigi": Buffer.from(
     "24ee2ad1d6a56d3524ee2ad1d6a56d35",
     "hex",
@@ -214,6 +219,7 @@ const INSTRUCTION_CACHE_SYMBOL = Symbol.for("iroha.js.noritoInstructionCache");
 const instructionCache =
   globalThis[INSTRUCTION_CACHE_SYMBOL] ??
   (globalThis[INSTRUCTION_CACHE_SYMBOL] = new Map());
+let noritoLengthFlags = 0;
 
 class BufferReader {
   constructor(buffer, context) {
@@ -446,6 +452,107 @@ export function noritoEncodeInstruction(instruction) {
 }
 
 /**
+ * Encode a `/v1/multisig/propose` request DTO as a native Norito body.
+ *
+ * Torii's `NoritoJson<MultisigProposeDto>` extractor accepts this payload with
+ * `Content-Type: application/x-norito`. The `instructions` entries are normal
+ * InstructionBox values embedded in the DTO, not base64 strings inside JSON.
+ *
+ * @param {object} request
+ * @returns {Buffer}
+ */
+export function noritoEncodeMultisigProposeRequest(request) {
+  if (!isPlainObject(request)) {
+    throw new TypeError("MultisigProposeDto request must be an object");
+  }
+  const multisigAccountId = request.multisig_account_id ?? request.multisigAccountId ?? null;
+  const multisigAccountAlias =
+    request.multisig_account_alias ?? request.multisigAccountAlias ?? null;
+  if ((multisigAccountId == null) === (multisigAccountAlias == null)) {
+    throw new TypeError(
+      "MultisigProposeDto requires exactly one of multisig_account_id or multisig_account_alias",
+    );
+  }
+  if (!Array.isArray(request.instructions)) {
+    throw new TypeError("MultisigProposeDto.instructions must be an array");
+  }
+  const selector = encodeStructValue([
+    [
+      encodeOptionValue(
+        multisigAccountId,
+        encodeAccountIdValue,
+        "MultisigProposeDto.selector.multisig_account_id",
+      ),
+    ],
+    [
+      encodeOptionValue(
+        multisigAccountAlias,
+        encodeNoritoStringValue,
+        "MultisigProposeDto.selector.multisig_account_alias",
+      ),
+    ],
+  ]);
+  const payload = encodeStructValue([
+    [selector],
+    [
+      encodeAccountIdValue(
+        request.signer_account_id ?? request.signerAccountId,
+        "MultisigProposeDto.signer_account_id",
+      ),
+    ],
+    [
+      encodeOptionValue(
+        request.private_key ?? request.privateKey ?? null,
+        encodeNoritoStringValue,
+        "MultisigProposeDto.private_key",
+      ),
+    ],
+    [
+      encodeOptionValue(
+        request.public_key_hex ?? request.publicKeyHex ?? null,
+        encodeNoritoStringValue,
+        "MultisigProposeDto.public_key_hex",
+      ),
+    ],
+    [
+      encodeOptionValue(
+        request.signature_b64 ?? request.signatureB64 ?? null,
+        encodeNoritoStringValue,
+        "MultisigProposeDto.signature_b64",
+      ),
+    ],
+    [
+      encodeOptionValue(
+        request.creation_time_ms ?? request.creationTimeMs ?? null,
+        encodeU64NumberValue,
+        "MultisigProposeDto.creation_time_ms",
+      ),
+    ],
+    [
+      encodeOptionValue(
+        request.fee_sponsor ?? request.feeSponsor ?? null,
+        encodeNoritoStringValue,
+        "MultisigProposeDto.fee_sponsor",
+      ),
+    ],
+    [
+      encodeNoritoVec(request.instructions, (instruction, index) =>
+        encodeEmbeddedInstructionBox(
+          instruction,
+          `MultisigProposeDto.instructions[${index}]`,
+        ),
+      ),
+    ],
+  ]);
+  return frameNoritoPayload(payload, MULTISIG_PROPOSE_DTO_SCHEMA_HASH);
+}
+
+function encodeEmbeddedInstructionBox(instruction, context) {
+  const framed = Buffer.from(noritoEncodeInstruction(instruction));
+  return decodeNoritoFrame(framed, context, INSTRUCTION_BOX_SCHEMA_HASH).payload;
+}
+
+/**
  * Decode canonical Norito instruction bytes back to JSON.
  *
  * When `options.parseJson !== false`, the result is the parsed JSON payload.
@@ -501,6 +608,10 @@ function toBuffer(value) {
 }
 
 function encodePureJsInstruction(instruction) {
+  return withNoritoCompactLengths(() => encodePureJsInstructionPayload(instruction));
+}
+
+function encodePureJsInstructionPayload(instruction) {
   if (!isPlainObject(instruction)) {
     throw new TypeError("instruction must be a JSON object");
   }
@@ -772,17 +883,20 @@ function encodeInstructionEnvelope(wireId, innerPayload) {
   if (!innerSchemaHash) {
     throw new Error(`Internal Norito canonicalization does not know the schema hash for ${wireId}`);
   }
+  const innerFlags = noritoLengthFlags & COMPACT_LEN_FLAG;
   const innerFrame = frameNoritoPayload(
     innerPayload,
     innerSchemaHash,
-    0,
+    innerFlags,
     INNER_HEADER_PADDING_BY_WIRE_ID[wireId] ?? 0,
   );
-  const outerPayload = Buffer.concat([
-    encodeNoritoField(encodeNoritoStringValue(wireId)),
-    encodeNoritoField(encodeNoritoField(innerFrame)),
-  ]);
-  return frameNoritoPayload(outerPayload, INSTRUCTION_BOX_SCHEMA_HASH);
+  const outerPayload = withNoritoU64Lengths(() =>
+    Buffer.concat([
+      encodeNoritoField(encodeNoritoStringValue(wireId)),
+      encodeNoritoField(encodeNoritoField(innerFrame)),
+    ]),
+  );
+  return frameNoritoPayload(outerPayload, INSTRUCTION_BOX_SCHEMA_HASH, 0);
 }
 
 function encodeEnumInstruction(wireId, variantIndex, bodyPayload) {
@@ -3231,7 +3345,7 @@ function encodeAccountIdValue(value, context) {
     case 0:
       return Buffer.concat([
         u32ToLittleEndianBuffer(0),
-        encodeNoritoField(encodePublicKeyPayload(controller, context)),
+        encodeNoritoField(encodePublicKeyValue(controller, context)),
       ]);
     case 1:
       return Buffer.concat([
@@ -3251,7 +3365,7 @@ function decodeAccountIdValue(payload, context) {
   let header;
   let controller;
   if (kind === 0) {
-    const { curve, publicKey } = decodePublicKeyPayload(controllerPayload, context);
+    const { curve, publicKey } = decodePublicKeyValue(controllerPayload, context);
     header = { version: 0, classId: 0, normVersion: 1, extFlag: false };
     controller = { tag: 0, curve, publicKey };
   } else if (kind === 1) {
@@ -3264,13 +3378,102 @@ function decodeAccountIdValue(payload, context) {
   return new AccountAddress(header, controller).toI105();
 }
 
-function encodePublicKeyPayload(controller, context) {
-  return encodeNoritoStringValue(publicKeyLiteralFromParts(controller.curve, controller.publicKey, context));
+function encodePublicKeyValue(controller, context) {
+  ensureCurveIdEnabled(controller.curve, context);
+  const publicKey = Buffer.from(normalizeBytes(controller.publicKey));
+  validatePublicKeyForCurve(controller.curve, publicKey, context);
+  return encodeConstVecU8Value(
+    Buffer.concat([Buffer.of(algorithmTagForCurveId(controller.curve, context)), publicKey]),
+  );
 }
 
-function decodePublicKeyPayload(payload, context) {
-  const literal = decodeStringValue(payload, context);
-  return parsePublicKeyLiteral(literal, context);
+function decodePublicKeyValue(payload, context) {
+  const bytes = decodeConstVecU8Value(payload, `${context}.publicKey`);
+  if (bytes.length === 0) {
+    throw new Error(`${context}.publicKey payload is empty`);
+  }
+  const curve = curveIdForAlgorithmTag(bytes[0], `${context}.publicKey.algorithm`);
+  const publicKey = bytes.subarray(1);
+  validatePublicKeyForCurve(curve, publicKey, `${context}.publicKey.payload`);
+  return { curve, publicKey: Buffer.from(publicKey) };
+}
+
+function encodeConstVecU8Value(bytes) {
+  return encodeNoritoVec(Array.from(Buffer.from(bytes)), (byte) => Buffer.of(byte));
+}
+
+function decodeConstVecU8Value(payload, context) {
+  return Buffer.from(
+    decodeNoritoVec(
+      payload,
+      (itemPayload, index) => {
+        if (itemPayload.length !== 1) {
+          throw new Error(`${context}[${index}] must contain exactly one byte`);
+        }
+        return itemPayload[0];
+      },
+      context,
+    ),
+  );
+}
+
+function algorithmTagForCurveId(curve, context) {
+  const algorithm = curveIdToAlgorithm(curve);
+  switch (algorithm) {
+    case "ed25519":
+      return 0;
+    case "secp256k1":
+      return 1;
+    case "bls_normal":
+      return 2;
+    case "bls_small":
+      return 3;
+    case "ml-dsa":
+      return 4;
+    case "gost3410-2012-256-paramset-a":
+      return 5;
+    case "gost3410-2012-256-paramset-b":
+      return 6;
+    case "gost3410-2012-256-paramset-c":
+      return 7;
+    case "gost3410-2012-512-paramset-a":
+      return 8;
+    case "gost3410-2012-512-paramset-b":
+      return 9;
+    case "sm2":
+      return 10;
+    default:
+      throw new Error(`${context} uses unsupported public-key algorithm ${algorithm}`);
+  }
+}
+
+function curveIdForAlgorithmTag(tag, context) {
+  switch (tag) {
+    case 0:
+      return curveIdFromAlgorithm("ed25519");
+    case 1:
+      return curveIdFromAlgorithm("secp256k1");
+    case 2:
+      return curveIdFromAlgorithm("bls_normal");
+    case 3:
+      return curveIdFromAlgorithm("bls_small");
+    case 4:
+      return curveIdFromAlgorithm("ml-dsa");
+    case 5:
+      return curveIdFromAlgorithm("gost3410-2012-256-paramset-a");
+    case 6:
+      return curveIdFromAlgorithm("gost3410-2012-256-paramset-b");
+    case 7:
+      return curveIdFromAlgorithm("gost3410-2012-256-paramset-c");
+    case 8:
+      return curveIdFromAlgorithm("gost3410-2012-512-paramset-a");
+    case 9:
+      return curveIdFromAlgorithm("gost3410-2012-512-paramset-b");
+    case 10:
+      return curveIdFromAlgorithm("sm2");
+    default:
+      throw new Error(`${context} uses unsupported public-key algorithm tag ${tag}`);
+  }
 }
 
 function encodeMultisigPolicyPayload(policy, context) {
@@ -3304,17 +3507,15 @@ function decodeMultisigPolicyPayload(payload, context) {
 
 function encodeMultisigMemberPayload(member, context) {
   return Buffer.concat([
-    encodeNoritoField(
-      encodeNoritoStringValue(publicKeyLiteralFromParts(member.curve, member.publicKey, context)),
-    ),
+    encodeNoritoField(encodePublicKeyValue(member, `${context}.public_key`)),
     encodeNoritoField(encodeU16Value(member.weight, `${context}.weight`)),
   ]);
 }
 
 function decodeMultisigMemberPayload(payload, context) {
   const reader = new BufferReader(payload, context);
-  const { curve, publicKey } = parsePublicKeyLiteral(
-    decodeStringValue(readNoritoField(reader, "publicKey"), `${context}.publicKey`),
+  const { curve, publicKey } = decodePublicKeyValue(
+    readNoritoField(reader, "publicKey"),
     `${context}.publicKey`,
   );
   const weight = decodeU16Value(readNoritoField(reader, "weight"), `${context}.weight`);
@@ -3402,7 +3603,9 @@ function encodeAssetBalanceScopeValue(scopeLiteral, context) {
   }
   return Buffer.concat([
     u32ToLittleEndianBuffer(1),
-    encodeNoritoField(encodeU64Value(match[1], `${context}.dataspace`)),
+    encodeNoritoField(
+      encodeNoritoField(encodeU64Value(match[1], `${context}.dataspace.value`)),
+    ),
   ]);
 }
 
@@ -3414,7 +3617,13 @@ function decodeAssetBalanceScopeValue(payload, context) {
     return "";
   }
   if (kind === 1) {
-    const dataspace = decodeU64Value(readNoritoField(reader, "dataspace"), `${context}.dataspace`);
+    const dataspacePayload = readNoritoField(reader, "dataspace");
+    const dataspaceReader = new BufferReader(dataspacePayload, `${context}.dataspace`);
+    const dataspace = decodeU64Value(
+      readNoritoField(dataspaceReader, "value"),
+      `${context}.dataspace.value`,
+    );
+    dataspaceReader.assertEof();
     reader.assertEof();
     return `#dataspace:${dataspace}`;
   }
@@ -4480,16 +4689,41 @@ function readNoritoField(reader, name) {
 }
 
 function encodeNoritoField(payload) {
-  return Buffer.concat([u64ToLittleEndianBuffer(payload.length), payload]);
+  return Buffer.concat([encodeNoritoLength(payload.length), payload]);
 }
 
 function encodeNoritoVec(values, encode) {
   const payloads = values.map(encode);
   const parts = [u64ToLittleEndianBuffer(payloads.length)];
   for (const payload of payloads) {
-    parts.push(u64ToLittleEndianBuffer(payload.length), payload);
+    parts.push(encodeNoritoLength(payload.length), payload);
   }
   return Buffer.concat(parts);
+}
+
+function withNoritoCompactLengths(fn) {
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, fn);
+}
+
+function withNoritoU64Lengths(fn) {
+  return withNoritoLengthFlags(0, fn);
+}
+
+function withNoritoLengthFlags(flags, fn) {
+  const previous = noritoLengthFlags;
+  noritoLengthFlags = flags;
+  try {
+    return fn();
+  } finally {
+    noritoLengthFlags = previous;
+  }
+}
+
+function encodeNoritoLength(value) {
+  if ((noritoLengthFlags & COMPACT_LEN_FLAG) !== 0) {
+    return encodeUnsignedLeb128(value);
+  }
+  return u64ToLittleEndianBuffer(value);
 }
 
 function decodeNoritoVec(payload, decode, context) {
@@ -4507,6 +4741,16 @@ function decodeNoritoVec(payload, decode, context) {
 
 function looksLikeNoritoFrame(buffer) {
   return buffer.length >= 40 && buffer.subarray(0, 4).toString("ascii") === "NRT0";
+}
+
+function schemaHashForTypeName(typeName) {
+  const digest = sha256(
+    Buffer.concat([
+      Buffer.from("norito:v1:type-name\0", "utf8"),
+      Buffer.from(typeName, "utf8"),
+    ]),
+  );
+  return Buffer.from(digest.subarray(0, 16));
 }
 
 function decodeNoritoFrame(buffer, context, expectedSchemaHash) {

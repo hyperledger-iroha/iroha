@@ -3425,6 +3425,61 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
+    public async Task ProposeMultisigAsyncPostsNativeNoritoInstructionFrames()
+    {
+        const string accountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+        var instructionBase64 = TransactionInstruction
+            .ExecuteTrigger("daily-close")
+            .EncodeInstructionBoxBase64(accountId);
+
+        using var handler = new RecordingHandler(request =>
+        {
+            var payload = ReadBodyAsJson(request);
+            Assert.Equal("/v1/multisig/propose", request.RequestUri!.AbsolutePath);
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("ops@universal", payload.RootElement.GetProperty("multisig_account_alias").GetString());
+            Assert.Equal(accountId, payload.RootElement.GetProperty("signer_account_id").GetString());
+            Assert.Equal((ulong)123, payload.RootElement.GetProperty("creation_time_ms").GetUInt64());
+
+            var encodedInstruction = payload.RootElement.GetProperty("instructions")[0].GetString()!;
+            Assert.Equal(instructionBase64, encodedInstruction);
+            var instructionBytes = Convert.FromBase64String(encodedInstruction);
+            Assert.Equal("862a7d77075d4d23ff6c1261db027811", Convert.ToHexString(instructionBytes.AsSpan(6, 16)).ToLowerInvariant());
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                    {
+                      "ok": true,
+                      "resolved_multisig_account_id": "sorauﾛ1Nmultisig",
+                      "submitted": false,
+                      "proposal_id": "aa55",
+                      "instructions_hash": "aa55",
+                      "tx_hash_hex": null,
+                      "executed_tx_hash_hex": null,
+                      "creation_time_ms": 123,
+                      "signing_message_b64": "bXVsdGlzaWc="
+                    }
+                    """),
+            };
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var response = await client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
+        {
+            MultisigAccountAlias = "ops@universal",
+            SignerAccountId = accountId,
+            CreationTimeMilliseconds = 123,
+            Instructions = [instructionBase64],
+        });
+
+        Assert.True(response.Ok);
+        Assert.False(response.Submitted);
+        Assert.Equal("aa55", response.ProposalId);
+        Assert.Equal("bXVsdGlzaWc=", response.SigningMessageBase64);
+    }
+
+    [Fact]
     public async Task ApproveMultisigContractCallAsyncDeserializesScaffoldResponse()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any, Dict, Optional, Union
 
@@ -7,7 +8,12 @@ import pytest
 import requests
 from requests.structures import CaseInsensitiveDict
 
-from iroha_python import ToriiClient, account_query_envelope, asset_holders_query_envelope
+from iroha_python import (
+    MultisigResponse,
+    ToriiClient,
+    account_query_envelope,
+    asset_holders_query_envelope,
+)
 from iroha_python.address import AccountAddress, AccountAddressError
 
 
@@ -118,6 +124,36 @@ def test_query_asset_holders_omits_canonical_i105() -> None:
 
     body = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert "canonical_i105" not in body
+
+
+def test_propose_multisig_inherited_helper_posts_native_instruction_payload() -> None:
+    session = RecordingSession()
+    session._response = StubResponse(
+        payload={
+            "ok": True,
+            "resolved_multisig_account_id": "ops@universal",
+            "submitted": False,
+        }
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    response = client.propose_multisig(
+        multisig_account_alias="ops@universal",
+        signer_account_id="signer@universal",
+        instructions=[b"\x01\x02\x03"],
+        creation_time_ms=0,
+    )
+
+    assert isinstance(response, MultisigResponse)
+    assert response.ok is True
+    assert response.submitted is False
+    assert session.calls[0]["method"] == "POST"
+    assert session.calls[0]["url"] == "http://node.test/v1/multisig/propose"
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload["multisig_account_alias"] == "ops@universal"
+    assert payload["signer_account_id"] == "signer@universal"
+    assert payload["creation_time_ms"] == 0
+    assert payload["instructions"] == [base64.b64encode(b"\x01\x02\x03").decode("ascii")]
 
 
 def test_i105_roundtrip_uses_halfwidth_iroha_poem_alphabet() -> None:

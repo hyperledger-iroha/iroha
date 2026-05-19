@@ -101,6 +101,7 @@ public final class HttpClientTransportTests {
     vpnSessionAndReceiptRequestsUseNativeLeaseDtos();
     deployContractRequestParsesResponse();
     callContractRequestParsesResponse();
+    proposeMultisigRequestParsesResponse();
     callContractRejectsAmbiguousTarget();
     governanceContractRequestParsesResponse();
     resolveAccountAliasRequestParsesResponse();
@@ -1922,6 +1923,87 @@ public final class HttpClientTransportTests {
     assert "alice".equals(requestPayload.get("buyer")) : "Nested buyer mismatch";
     assert Long.valueOf(1L).equals(((Number) requestPayload.get("payment_amount")).longValue())
         : "Nested payment_amount mismatch";
+  }
+
+  private static void proposeMultisigRequestParsesResponse() {
+    final byte[] instructionBytes = new byte[] {1, 2, 3, 4};
+    final String proposalId = "aa".repeat(32);
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(
+            200,
+            ("{"
+                    + "\"ok\":true,"
+                    + "\"resolved_multisig_account_id\":\"multisig\","
+                    + "\"submitted\":false,"
+                    + "\"proposal_id\":\""
+                    + proposalId
+                    + "\","
+                    + "\"instructions_hash\":\""
+                    + proposalId
+                    + "\","
+                    + "\"tx_hash_hex\":null,"
+                    + "\"executed_tx_hash_hex\":null,"
+                    + "\"creation_time_ms\":123,"
+                    + "\"signing_message_b64\":\"AQID\"}")
+                .getBytes(StandardCharsets.UTF_8),
+            "ok");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    final MultisigResponse response =
+        transport
+            .proposeMultisig(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instructionBytes)
+                    .setCreationTimeMs(123L)
+                    .setFeeSponsor("fee-sponsor")
+                    .build())
+            .join();
+
+    assert response.ok() : "Multisig response should be successful";
+    assert "multisig".equals(response.resolvedMultisigAccountId())
+        : "resolved multisig account mismatch";
+    assert Boolean.FALSE.equals(response.submitted()) : "submitted mismatch";
+    assert proposalId.equals(response.instructionsHash()) : "instructions_hash mismatch";
+    assert "AQID".equals(response.signingMessageB64()) : "signing_message_b64 mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Multisig request must be captured";
+    assert request.uri().toString().equals("https://torii.example/api/v1/multisig/propose")
+        : "Multisig URI mismatch";
+    assert "application/json".equals(request.headers().get("Content-Type").get(0))
+        : "Content-Type mismatch";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> payload =
+        (Map<String, Object>) JsonParser.parse(readBody(request));
+    assert "cbdc@banka".equals(payload.get("multisig_account_alias"))
+        : "multisig_account_alias mismatch";
+    assert "alice".equals(payload.get("signer_account_id")) : "signer_account_id mismatch";
+    assert "fee-sponsor".equals(payload.get("fee_sponsor")) : "fee_sponsor mismatch";
+    assert Long.valueOf(123L).equals(((Number) payload.get("creation_time_ms")).longValue())
+        : "creation_time_ms mismatch";
+    @SuppressWarnings("unchecked")
+    final List<String> instructions = (List<String>) payload.get("instructions");
+    assert instructions.size() == 1 : "instructions length mismatch";
+    assert Base64.getEncoder().encodeToString(instructionBytes).equals(instructions.get(0))
+        : "instruction base64 mismatch";
+
+    boolean failed = false;
+    try {
+      HttpClientTransport.buildMultisigProposePayload(
+          MultisigProposeRequest.builder()
+              .setMultisigAccountAlias("cbdc@banka")
+              .setSignerAccountId("alice")
+              .addInstructionBytes(new byte[0])
+              .build());
+    } catch (final IllegalArgumentException ex) {
+      failed = true;
+    }
+    assert failed : "Empty instruction bytes should be rejected";
   }
 
   private static void callContractRejectsAmbiguousTarget() {

@@ -44,7 +44,7 @@ translator: machine-google-reviewed
 | 0x2B | ШИЛЖҮҮЛЭХ_V1_БАГЦ_ХЭРЭГЛЭХ | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Norito кодлогдсон багцыг нэг системд ашиглах |
 | 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Шинэ NFT | бүртгүүлнэ
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | NFT | өмчлөлийг шилжүүлдэг
-| 0x27 | NFT_SET_METADATA | `&NftId`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT мета өгөгдлийг шинэчлэх |
+| 0x27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT мета өгөгдлийг шинэчлэх |
 | 0x28 | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | NFT |-г шатаах (устгах).
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Давталттай асуулга түр зуур ажилладаг; `QueryRequest::Continue` татгалзсан |
 | 0xA2 | БҮХ_ХЭРЭГЛЭГЧДИЙН_ТӨЛӨВ_NFTS_БҮТЭЭХ | – | `u64=count` | `G_create_nfts_for_all` | Туслагч; онцлогтой || 0xA3 | SET_SMARTCONTRACT_ГҮЙЦЭТГЭЛ_ГҮН | `depth:u64` | `u64=prev` | `G_set_depth` | Админ; онцлогтой |

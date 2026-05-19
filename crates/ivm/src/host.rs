@@ -1568,9 +1568,10 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
             crate::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => self.apply_fastpq_batch(vm),
             crate::syscalls::SYSCALL_NFT_SET_METADATA => {
-                // r10=&NftId, r11=&Json
+                // r10=&NftId, r11=&Name, r12=&Json
                 Self::expect_tlv(vm, 10, PointerType::NftId)?;
-                Self::expect_tlv(vm, 11, PointerType::Json)?;
+                Self::expect_tlv(vm, 11, PointerType::Name)?;
+                Self::expect_tlv(vm, 12, PointerType::Json)?;
                 Ok(Self::mutation_gas(0))
             }
             crate::syscalls::SYSCALL_NFT_BURN_ASSET => {

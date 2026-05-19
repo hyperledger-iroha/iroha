@@ -7,6 +7,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -558,6 +559,15 @@ public final class HttpClientTransport implements IrohaClient {
                 gasAssetId));
     final TransportRequest request = buildJsonPostRequest("/v1/contracts/call", body);
     return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call");
+  }
+
+  /** Proposes a generic multisig instruction batch via `POST /v1/multisig/propose`. */
+  @Override
+  public CompletableFuture<MultisigResponse> proposeMultisig(
+      final MultisigProposeRequest requestBody) {
+    final byte[] body = encodeJsonBody(buildMultisigProposePayload(requestBody));
+    final TransportRequest request = buildJsonPostRequest("/v1/multisig/propose", body);
+    return fetchJson(request, ContractJsonParser::parseMultisigResponse, "multisig propose");
   }
 
   /** Fetches one governance binding via `GET /v1/gov/contracts/{contract_address}`. */
@@ -1908,6 +1918,60 @@ public final class HttpClientTransport implements IrohaClient {
       payload.put("gas_asset_id", normalizeNonBlank(gasAssetId, "gasAssetId"));
     }
     payload.put("gas_limit", gasLimit);
+    return payload;
+  }
+
+  static Map<String, Object> buildMultisigProposePayload(
+      final MultisigProposeRequest request) {
+    Objects.requireNonNull(request, "request");
+    final boolean hasAccountId = request.multisigAccountId() != null;
+    final boolean hasAlias = request.multisigAccountAlias() != null;
+    if (hasAccountId == hasAlias) {
+      throw new IllegalArgumentException(
+          "Exactly one of multisigAccountId or multisigAccountAlias must be provided");
+    }
+    if (request.instructions().isEmpty()) {
+      throw new IllegalArgumentException("instructions must not be empty");
+    }
+
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    if (hasAccountId) {
+      payload.put(
+          "multisig_account_id",
+          normalizeNonBlank(request.multisigAccountId(), "multisigAccountId"));
+    } else {
+      payload.put(
+          "multisig_account_alias",
+          normalizeNonBlank(request.multisigAccountAlias(), "multisigAccountAlias"));
+    }
+    payload.put("signer_account_id", normalizeNonBlank(request.signerAccountId(), "signerAccountId"));
+    if (request.publicKeyHex() != null) {
+      payload.put("public_key_hex", normalizeHex32(request.publicKeyHex(), "publicKeyHex"));
+    }
+    if (request.signatureB64() != null) {
+      payload.put(
+          "signature_b64",
+          normalizeRequiredBase64Payload(request.signatureB64(), "signatureB64"));
+    }
+    if (request.creationTimeMs() != null) {
+      if (request.creationTimeMs().longValue() < 0L) {
+        throw new IllegalArgumentException("creationTimeMs must be non-negative");
+      }
+      payload.put("creation_time_ms", request.creationTimeMs());
+    }
+    if (request.feeSponsor() != null) {
+      payload.put("fee_sponsor", normalizeNonBlank(request.feeSponsor(), "feeSponsor"));
+    }
+    final List<String> instructions = new ArrayList<>();
+    int index = 0;
+    for (final byte[] instruction : request.instructions()) {
+      if (instruction == null || instruction.length == 0) {
+        throw new IllegalArgumentException("instructions[" + index + "] must not be empty");
+      }
+      instructions.add(Base64.getEncoder().encodeToString(instruction));
+      index++;
+    }
+    payload.put("instructions", instructions);
     return payload;
   }
 

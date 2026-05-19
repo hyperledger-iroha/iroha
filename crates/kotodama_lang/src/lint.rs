@@ -92,9 +92,7 @@ pub struct LintSourceSpan {
 
 fn lint_category(code: &str) -> LintCategory {
     match code {
-        "nonliteral-state-path" | "opaque-access-hints" | "nonliteral-state-map-key" => {
-            LintCategory::AccessHints
-        }
+        "nonliteral-state-path" | "opaque-access-hints" => LintCategory::AccessHints,
         "duplicate-pointer-literal" | "unused-pointer-constructor" => LintCategory::PointerAbi,
         "nonliteral-trigger-spec" => LintCategory::Triggers,
         _ => LintCategory::Correctness,
@@ -171,7 +169,6 @@ pub fn lint_program(program: &Program) -> Vec<LintWarning> {
     lint_unreachable_after_return(program, &mut warnings);
     lint_pointer_constructor_usage(program, &mut warnings);
     lint_nonliteral_trigger_specs(program, &mut warnings);
-    lint_nonliteral_state_map_keys(program, &mut warnings);
     lint_nonliteral_state_paths(program, &mut warnings);
     lint_opaque_access_hints(program, &mut warnings);
     warnings
@@ -190,7 +187,6 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     "transfer_domain",
     "register_peer",
     "unregister_peer",
-    "nft_set_metadata",
     "sc_execute_submit_ballot",
     "sc_execute_unshield",
     "subscription_bill",
@@ -302,28 +298,6 @@ fn query_request_is_hintable(request: &QueryRequest) -> bool {
     match request {
         QueryRequest::Singular(query) => matches!(query, SingularQueryBox::FindAssetById(_)),
         QueryRequest::Start(_) | QueryRequest::Continue(_) => false,
-    }
-}
-
-fn lint_nonliteral_state_map_keys(program: &Program, warnings: &mut Vec<LintWarning>) {
-    let mut state_maps = HashSet::new();
-    for item in &program.items {
-        if let Item::State(state) = item
-            && matches!(state.ty, super::ast::TypeExpr::Generic { ref base, .. } if base == "Map")
-        {
-            state_maps.insert(state.name.clone());
-        }
-    }
-    if state_maps.is_empty() {
-        return;
-    }
-    for item in &program.items {
-        if let Item::Function(func) = item {
-            if !func.modifiers.access_reads.is_empty() || !func.modifiers.access_writes.is_empty() {
-                continue;
-            }
-            lint_block_map_keys(&func.body, &state_maps, warnings);
-        }
     }
 }
 
@@ -565,119 +539,6 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
             lint_opaque_access_expr(target, warnings);
             lint_opaque_access_expr(index, warnings);
         }
-        Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::Bool(_)
-        | Expr::String(_)
-        | Expr::Bytes(_)
-        | Expr::Ident(_) => {}
-    }
-}
-
-fn lint_block_map_keys(
-    block: &Block,
-    state_maps: &HashSet<String>,
-    warnings: &mut Vec<LintWarning>,
-) {
-    for stmt in &block.statements {
-        lint_stmt_map_keys(stmt, state_maps, warnings);
-    }
-}
-
-fn lint_stmt_map_keys(
-    stmt: &Statement,
-    state_maps: &HashSet<String>,
-    warnings: &mut Vec<LintWarning>,
-) {
-    match stmt {
-        Statement::Let { value, .. } => lint_expr_map_keys(value, state_maps, warnings),
-        Statement::Assign { value, .. } => lint_expr_map_keys(value, state_maps, warnings),
-        Statement::AssignExpr { target, value, .. } => {
-            lint_expr_map_keys(target, state_maps, warnings);
-            lint_expr_map_keys(value, state_maps, warnings);
-        }
-        Statement::Expr(expr) => lint_expr_map_keys(expr, state_maps, warnings),
-        Statement::Return(Some(expr)) => lint_expr_map_keys(expr, state_maps, warnings),
-        Statement::Return(None) | Statement::Break | Statement::Continue => {}
-        Statement::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            lint_expr_map_keys(cond, state_maps, warnings);
-            lint_block_map_keys(then_branch, state_maps, warnings);
-            if let Some(else_block) = else_branch {
-                lint_block_map_keys(else_block, state_maps, warnings);
-            }
-        }
-        Statement::While { cond, body } => {
-            lint_expr_map_keys(cond, state_maps, warnings);
-            lint_block_map_keys(body, state_maps, warnings);
-        }
-        Statement::For {
-            init,
-            cond,
-            step,
-            body,
-            ..
-        } => {
-            if let Some(init_stmt) = init {
-                lint_stmt_map_keys(init_stmt, state_maps, warnings);
-            }
-            if let Some(cond_expr) = cond {
-                lint_expr_map_keys(cond_expr, state_maps, warnings);
-            }
-            if let Some(step_stmt) = step {
-                lint_stmt_map_keys(step_stmt, state_maps, warnings);
-            }
-            lint_block_map_keys(body, state_maps, warnings);
-        }
-        Statement::ForEachMap { map, body, .. } => {
-            lint_expr_map_keys(map, state_maps, warnings);
-            lint_block_map_keys(body, state_maps, warnings);
-        }
-    }
-}
-
-fn lint_expr_map_keys(expr: &Expr, state_maps: &HashSet<String>, warnings: &mut Vec<LintWarning>) {
-    match expr {
-        Expr::Index { target, index } => {
-            if let Expr::Ident(name) = &**target
-                && state_maps.contains(name)
-                && !is_literal_state_key(index)
-            {
-                warnings.push(LintWarning::new(
-                    "nonliteral-state-map-key",
-                    LintMessage::Custom {
-                        message: format!(
-                            "state map `{name}` uses a non-literal key; compiler metadata will use the map-level state conflict key"
-                        ),
-                    },
-                ));
-            }
-            lint_expr_map_keys(target, state_maps, warnings);
-            lint_expr_map_keys(index, state_maps, warnings);
-        }
-        Expr::Binary { left, right, .. } => {
-            lint_expr_map_keys(left, state_maps, warnings);
-            lint_expr_map_keys(right, state_maps, warnings);
-        }
-        Expr::Unary { expr, .. } => lint_expr_map_keys(expr, state_maps, warnings),
-        Expr::Conditional {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            lint_expr_map_keys(cond, state_maps, warnings);
-            lint_expr_map_keys(then_expr, state_maps, warnings);
-            lint_expr_map_keys(else_expr, state_maps, warnings);
-        }
-        Expr::Call { args, .. } | Expr::Tuple(args) => {
-            for arg in args {
-                lint_expr_map_keys(arg, state_maps, warnings);
-            }
-        }
-        Expr::Member { object, .. } => lint_expr_map_keys(object, state_maps, warnings),
         Expr::Number(_)
         | Expr::Decimal(_)
         | Expr::Bool(_)
@@ -1689,15 +1550,11 @@ mod tests {
     }
 
     #[test]
-    fn lint_nonliteral_state_map_key_warns() {
+    fn lint_nonliteral_state_map_key_is_silent() {
         let program = parse("state Foo: Map<int, int>; fn main() { let k = 1; let _x = Foo[k]; }")
             .expect("parse map");
         let warnings = lint_program(&program);
-        assert!(
-            warnings
-                .iter()
-                .any(|w| w.code == "nonliteral-state-map-key")
-        );
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -1705,11 +1562,7 @@ mod tests {
         let program =
             parse("state Foo: Map<int, int>; fn main() { let _x = Foo[1]; }").expect("parse map");
         let warnings = lint_program(&program);
-        assert!(
-            !warnings
-                .iter()
-                .any(|w| w.code == "nonliteral-state-map-key")
-        );
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -1745,6 +1598,18 @@ fn main(k: Name) { let _x = Foo[k]; }"#,
             parse("fn main() { execute_query(json(\"{}\")); }").expect("parse opaque call");
         let warnings = lint_program(&program);
         assert!(warnings.iter().any(|w| w.code == "opaque-access-hints"));
+    }
+
+    #[test]
+    fn lint_nft_set_metadata_is_precise_access() {
+        let program = parse(
+            r#"fn main() {
+  nft_set_metadata(nft_id("n0$wonderland.universal"), name("dpn_metadata"), json("{}"));
+}"#,
+        )
+        .expect("parse nft_set_metadata call");
+        let warnings = lint_program(&program);
+        assert!(!warnings.iter().any(|w| w.code == "opaque-access-hints"));
     }
 
     #[test]

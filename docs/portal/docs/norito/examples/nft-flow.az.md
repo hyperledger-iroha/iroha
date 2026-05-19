@@ -45,7 +45,7 @@ seiyaku NftFlow {
 
     let to = account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
     nft_transfer_asset(owner, nft, to);
-    nft_set_metadata(nft, json!{ issued: "demo" });
+    nft_set_metadata(nft, name!("issued"), json!{ issued: "demo" });
     nft_burn_asset(nft);
   }
 }

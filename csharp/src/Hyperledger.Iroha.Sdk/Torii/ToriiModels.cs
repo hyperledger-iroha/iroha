@@ -2519,6 +2519,33 @@ public sealed record class ToriiContractVerifiedSourceJob
     public ToriiContractVerifiedSourceReference? VerifiedSourceReference { get; init; }
 }
 
+public sealed record class ToriiMultisigProposeRequest
+{
+    [JsonPropertyName("multisig_account_id")]
+    public string? MultisigAccountId { get; init; }
+
+    [JsonPropertyName("multisig_account_alias")]
+    public string? MultisigAccountAlias { get; init; }
+
+    [JsonPropertyName("signer_account_id")]
+    public string SignerAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("public_key_hex")]
+    public string? PublicKeyHex { get; init; }
+
+    [JsonPropertyName("signature_b64")]
+    public string? SignatureBase64 { get; init; }
+
+    [JsonPropertyName("creation_time_ms")]
+    public ulong? CreationTimeMilliseconds { get; init; }
+
+    [JsonPropertyName("fee_sponsor")]
+    public string? FeeSponsor { get; init; }
+
+    [JsonPropertyName("instructions")]
+    public IReadOnlyList<string> Instructions { get; init; } = Array.Empty<string>();
+}
+
 public sealed record class ToriiMultisigContractCallProposeRequest
 {
     [JsonPropertyName("multisig_account_id")]
@@ -2592,6 +2619,36 @@ public sealed record class ToriiMultisigContractCallApproveRequest
 
     [JsonPropertyName("instructions_hash")]
     public string? InstructionsHash { get; init; }
+}
+
+public sealed record class ToriiMultisigResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; init; }
+
+    [JsonPropertyName("resolved_multisig_account_id")]
+    public string ResolvedMultisigAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("submitted")]
+    public bool? Submitted { get; init; }
+
+    [JsonPropertyName("proposal_id")]
+    public string? ProposalId { get; init; }
+
+    [JsonPropertyName("instructions_hash")]
+    public string? InstructionsHash { get; init; }
+
+    [JsonPropertyName("tx_hash_hex")]
+    public string? TransactionHashHex { get; init; }
+
+    [JsonPropertyName("executed_tx_hash_hex")]
+    public string? ExecutedTransactionHashHex { get; init; }
+
+    [JsonPropertyName("creation_time_ms")]
+    public ulong? CreationTimeMilliseconds { get; init; }
+
+    [JsonPropertyName("signing_message_b64")]
+    public string? SigningMessageBase64 { get; init; }
 }
 
 public sealed record class ToriiMultisigContractCallResponse

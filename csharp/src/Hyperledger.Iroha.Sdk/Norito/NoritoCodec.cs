@@ -12,8 +12,18 @@ public static class NoritoCodec
         ArgumentException.ThrowIfNullOrWhiteSpace(typeName);
 
         var schemaHash = SchemaHash(typeName);
+        return EncodeWithSchemaHash(schemaHash, payload, flags);
+    }
+
+    public static byte[] EncodeWithSchemaHash(ReadOnlySpan<byte> schemaHash, ReadOnlySpan<byte> payload, byte flags = 0)
+    {
+        if (schemaHash.Length != 16)
+        {
+            throw new ArgumentException("Norito schema hash must be 16 bytes.", nameof(schemaHash));
+        }
+
         var checksum = Crc64Ecma.Compute(payload);
-        var header = new NoritoHeader(schemaHash, NoritoCompression.None, (ulong)payload.Length, checksum, flags);
+        var header = new NoritoHeader(schemaHash.ToArray(), NoritoCompression.None, (ulong)payload.Length, checksum, flags);
 
         var encodedHeader = header.Encode();
         var output = new byte[encodedHeader.Length + payload.Length];

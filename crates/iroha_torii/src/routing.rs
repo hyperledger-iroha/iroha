@@ -3232,6 +3232,24 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         assert!(error.to_string().contains("policy_id"));
 
         let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext-a","encrypted_input":"ciphertext-b","output_opening":{}}"#,
+        )
+        .expect_err("duplicate encrypted inputs must be rejected");
+        assert!(error.to_string().contains("encrypted_input"));
+
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":{},"output_opening":{}}"#,
+        )
+        .expect_err("duplicate output openings must be rejected");
+        assert!(error.to_string().contains("output_opening"));
+
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":{"payload":{"program_id":"p","program_id":"q"},"signature":"00"}}"#,
+        )
+        .expect_err("nested duplicate output-opening fields must be rejected");
+        assert!(error.to_string().contains("program_id"));
+
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
             r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":"not-an-opening"}"#,
         )
         .expect_err("output openings must be structured attestation objects");
@@ -19746,6 +19764,68 @@ seiyaku BlobPayloadNormalizeTest {
             Some(proposal_id.as_str())
         );
         assert!(payload["signing_message_b64"].as_str().is_some());
+    }
+
+    #[test]
+    fn multisig_generic_propose_json_accepts_native_norito_instruction_strings() {
+        let (
+            _state,
+            _multisig_account_id,
+            _authority_account_id,
+            signer_two_id,
+            alias_literal,
+            _authority_keypair,
+        ) = multisig_contract_test_fixture();
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "native norito instruction".to_owned()).into();
+        let request = MultisigProposeDto {
+            selector: alias_selector(&alias_literal),
+            signer_account_id: signer_two_id,
+            private_key: None,
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(1_700_000_000_345),
+            fee_sponsor: None,
+            instructions: vec![instruction.clone()],
+        };
+
+        let raw = norito::json::to_string(&request).expect("serialize multisig propose dto");
+        let value: norito::json::Value =
+            norito::json::from_str(&raw).expect("parse serialized request");
+        assert!(
+            value["instructions"][0].as_str().is_some(),
+            "InstructionBox JSON should expose native Norito bytes as base64"
+        );
+
+        let decoded: MultisigProposeDto =
+            norito::json::from_str(&raw).expect("decode native Norito instruction request");
+        assert_eq!(
+            norito::to_bytes(&decoded.instructions[0]).expect("encode decoded instruction"),
+            norito::to_bytes(&instruction).expect("encode original instruction")
+        );
+    }
+
+    #[test]
+    fn multisig_generic_propose_json_rejects_invalid_native_norito_instruction_string() {
+        let (
+            _state,
+            _multisig_account_id,
+            _authority_account_id,
+            signer_two_id,
+            alias_literal,
+            _authority_keypair,
+        ) = multisig_contract_test_fixture();
+        let raw = format!(
+            "{{\"multisig_account_alias\":\"{alias_literal}\",\"signer_account_id\":\"{signer_two_id}\",\"instructions\":[\"not base64!!\"]}}"
+        );
+
+        let err =
+            norito::json::from_str::<MultisigProposeDto>(&raw).expect_err("invalid instruction");
+        let message = err.to_string();
+        assert!(
+            message.contains("base64") || message.contains("Invalid"),
+            "unexpected error: {message}"
+        );
     }
 
     #[tokio::test]

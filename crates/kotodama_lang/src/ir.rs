@@ -435,9 +435,10 @@ pub enum Instr {
         nft: Temp,
         owner: Temp,
     },
-    /// Set JSON data for an NFT.
+    /// Set JSON metadata for an NFT key.
     SetNftData {
         nft: Temp,
+        key: Temp,
         json: Temp,
     },
     /// Burn an NFT by id.
@@ -3836,8 +3837,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 }
                 "nft_set_metadata" => {
                     let nft = lower_expr(ctx, &args[0], vars);
-                    let json = lower_expr(ctx, &args[1], vars);
-                    ctx.current_instr(Instr::SetNftData { nft, json });
+                    let key = lower_expr(ctx, &args[1], vars);
+                    let json = lower_expr(ctx, &args[2], vars);
+                    ctx.current_instr(Instr::SetNftData { nft, key, json });
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t

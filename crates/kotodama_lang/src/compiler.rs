@@ -68,6 +68,7 @@ const LITERAL_SHIFT_REG: u8 = 26;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const GLOBAL_WILDCARD_KEY: &str = "*";
 const STATE_WILDCARD_KEY: &str = "state:*";
+const NFT_COARSE_KEY: &str = "nft";
 const AUTHORITY_ACCOUNT_KEY: &str = "account:$authority";
 const AUTHORITY_PLACEHOLDER: &str = "$authority";
 const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
@@ -667,8 +668,8 @@ mod tests {
 
     use super::{
         AUTHORITY_ACCOUNT_KEY, Compiler, CompilerMode, CompilerOptions, ContractFeature,
-        DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY, STATE_WILDCARD_KEY, WIDE_IMM_MAX, emit_addi,
-        emit_load64, emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
+        DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY, NFT_COARSE_KEY, STATE_WILDCARD_KEY, WIDE_IMM_MAX,
+        emit_addi, emit_load64, emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
         reserve_pointer_literal_stub, stack_slot_offset_bytes,
     };
     use crate::{ast::ContractMeta, ir, parser::parse, semantic::analyze};
@@ -1951,7 +1952,7 @@ seiyaku Test {
     fn manifest_access_set_hints_include_nft_set_metadata_literal() {
         let src = r#"
 fn main() {
-  nft_set_metadata(nft_id("n0$wonderland.universal"), json("{\"meta\":1}"));
+  nft_set_metadata(nft_id("n0$wonderland.universal"), name("dpn_metadata"), json("{\"meta\":1}"));
 }
 "#;
         let compiler = Compiler::new();
@@ -1962,8 +1963,13 @@ fn main() {
             .access_set_hints
             .expect("expected access_set_hints");
         let nft_key = "nft:n0$wonderland.universal".to_string();
+        let nft_detail = "nft.detail:n0$wonderland.universal:dpn_metadata".to_string();
+        assert!(hints.read_keys.contains(&NFT_COARSE_KEY.to_string()));
+        assert!(hints.write_keys.contains(&NFT_COARSE_KEY.to_string()));
         assert!(hints.read_keys.contains(&nft_key));
         assert!(hints.write_keys.contains(&nft_key));
+        assert!(hints.read_keys.contains(&nft_detail));
+        assert!(hints.write_keys.contains(&nft_detail));
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
 
@@ -1974,6 +1980,66 @@ fn main() {
             .expect("main entrypoint");
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_coarse_key_for_dynamic_nft_set_metadata() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn set_metadata(nft: NftId, metadata: Json) permission(NftAuthority) {
+    nft_set_metadata(nft, name("dpn_metadata"), metadata);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&NFT_COARSE_KEY.to_string()));
+        assert!(hints.write_keys.contains(&NFT_COARSE_KEY.to_string()));
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let entry = entrypoints
+            .iter()
+            .find(|entry| entry.name == "set_metadata")
+            .expect("set_metadata entrypoint");
+        assert_eq!(entry.access_hints_complete, Some(true));
+        assert!(entry.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_coarse_key_for_dynamic_nft_mint() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn mint(nft: NftId, owner: AccountId) permission(NftAuthority) {
+    nft_mint_asset(nft, owner);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&NFT_COARSE_KEY.to_string()));
+        assert!(hints.write_keys.contains(&NFT_COARSE_KEY.to_string()));
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let entry = entrypoints
+            .iter()
+            .find(|entry| entry.name == "mint")
+            .expect("mint entrypoint");
+        assert_eq!(entry.access_hints_complete, Some(true));
+        assert!(entry.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -6280,11 +6346,14 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
-                        Instr::SetNftData { nft, json } => {
+                        Instr::SetNftData { nft, key, json } => {
                             // Load literals or move regs
                             let k_nft = string_map
                                 .get(&(func_idx, *nft))
                                 .map(|s| DataKey(DataKind::NftId, s.clone()));
+                            let k_key = string_map
+                                .get(&(func_idx, *key))
+                                .map(|s| DataKey(DataKind::Name, s.clone()));
                             let k_json = string_map
                                 .get(&(func_idx, *json))
                                 .map(|s| DataKey(DataKind::Json, s.clone()));
@@ -6294,23 +6363,33 @@ impl Compiler {
                                 let r = src_reg(nft, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
-                            if let Some(kj) = k_json {
-                                emit_literal_stub(&mut code, &mut fixups, 11, kj);
+                            if let Some(kk) = k_key {
+                                emit_literal_stub(&mut code, &mut fixups, 11, kk);
                             } else {
-                                let r = src_reg(json, scratch2, &mut code)?;
+                                let r = src_reg(key, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
                             }
-                            // Mirror both into INPUT
+                            if let Some(kj) = k_json {
+                                emit_literal_stub(&mut code, &mut fixups, 12, kj);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, r, 0)?);
+                            }
+                            // Mirror all pointer arguments into INPUT.
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes()); // r10
-                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(scratch1, 10, 0)?);
                             push_word(&mut code, encode_addi(10, 11, 0)?);
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             push_word(&mut code, encode_addi(10, 12, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch1, 0)?);
+                            push_word(&mut code, encode_addi(11, scratch2, 0)?);
                             // SCALL
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -10026,9 +10105,22 @@ fn record_isi_access(
             };
             add_account_detail_hint_rw(access_set, &id, &key);
         }
-        ir::Instr::CreateNft { nft, .. } | ir::Instr::BurnNft { nft } => {
+        ir::Instr::CreateNft { nft, owner } => {
+            if let Some(owner) =
+                account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *owner)
+            {
+                add_account_hint_r(access_set, &owner);
+            }
             let Some(id) = parse_temp(string_map, func_idx, *nft) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                add_nft_coarse_rw(access_set);
+                return;
+            };
+            add_nft_rw(access_set, &id);
+        }
+        ir::Instr::BurnNft { nft } => {
+            let Some(id) = parse_temp(string_map, func_idx, *nft) else {
+                add_nft_coarse_rw(access_set);
+                return;
             };
             add_nft_rw(access_set, &id);
         }
@@ -10159,11 +10251,16 @@ fn record_isi_access(
             add_domain_rw(access_set, &domain);
             add_account_hint_r(access_set, &to);
         }
-        ir::Instr::SetNftData { nft, .. } => {
+        ir::Instr::SetNftData { nft, key, .. } => {
             let Some(id) = parse_temp(string_map, func_idx, *nft) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                add_nft_coarse_rw(access_set);
+                return;
             };
-            add_nft_rw(access_set, &id);
+            let Some(key) = parse_temp(string_map, func_idx, *key) else {
+                add_nft_rw(access_set, &id);
+                return;
+            };
+            add_nft_detail_rw(access_set, &id, &key);
         }
         // AXT/ZK helpers carry opaque payloads; fall back to wildcard.
         ir::Instr::RegisterPeer { .. }
@@ -10884,9 +10981,15 @@ fn add_asset_rw_for_account_hint(
 }
 
 fn add_nft_rw(set: &mut AccessSets, id: &NftId) {
+    add_nft_coarse_rw(set);
     let key = key_nft(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
+}
+
+fn add_nft_coarse_rw(set: &mut AccessSets) {
+    set.reads.insert(NFT_COARSE_KEY.to_string());
+    set.writes.insert(NFT_COARSE_KEY.to_string());
 }
 
 fn add_nft_detail_rw(set: &mut AccessSets, id: &NftId, key: &Name) {

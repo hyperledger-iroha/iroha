@@ -81,6 +81,7 @@ __Explanation:__
 
 - Proposes setting the string value "congratulations" for the key "success_marker" in the metadata of the multi-signature __account__.
 - The proposer automatically becomes the first __approver__.
+- Torii's `/v1/multisig/propose` endpoint accepts typed JSON instruction objects or base64 native Norito `InstructionBox` frames inside the JSON `instructions` array. Fully native clients may also send the whole `MultisigProposeDto` request body as `application/x-norito`.
 
 ## Listing Multi-Signature Transactions
 

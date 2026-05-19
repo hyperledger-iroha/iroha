@@ -21,6 +21,7 @@ import {
   extractConfidentialGasConfig,
 } from "../src/config.js";
 import {
+  buildMultisigProposeRequest,
   normalizeAccountId,
   ValidationError,
   ValidationErrorCode,
@@ -17357,6 +17358,56 @@ test("callContract rejects unsupported option fields", async () => {
   );
 });
 
+test("proposeMultisig posts the native Norito request DTO", async () => {
+  let captured;
+  const instruction = { Custom: { payload: { probe: true } } };
+  const responsePayload = {
+    ok: true,
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    submitted: false,
+    proposal_id: "a".repeat(64),
+    instructions_hash: "a".repeat(64),
+    tx_hash_hex: null,
+    executed_tx_hash_hex: null,
+    creation_time_ms: 123456,
+    signing_message_b64: "AQ==",
+  };
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: responsePayload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.proposeMultisig({
+    multisigAccountAlias: "cbdc@banka",
+    signerAccountId: FIXTURE_ALICE_ID,
+    instructions: [instruction],
+    feeSponsor: FIXTURE_BOB_ID,
+    creationTimeMs: 123456,
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/propose`);
+  assert.equal(captured.init.headers["Content-Type"], "application/x-norito");
+  const body = Buffer.from(captured.init.body);
+  assert.equal(body.subarray(0, 4).toString("ascii"), "NRT0");
+  assert.deepEqual(result, responsePayload);
+
+  assert.deepEqual(
+    buildMultisigProposeRequest({
+      multisigAccountAlias: "cbdc@banka",
+      signerAccountId: FIXTURE_ALICE_ID,
+      instructions: [instruction],
+    }),
+    {
+      multisig_account_alias: "cbdc@banka",
+      signer_account_id: FIXTURE_ALICE_ID,
+      instructions: [instruction],
+    },
+  );
+});
+
 test("proposeMultisigContractCall posts alias selector and normalizes response", async () => {
   let captured;
   const responsePayload = {
@@ -17401,6 +17452,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   });
   assert.deepEqual(result, {
     ...responsePayload,
+    tx_hash_hex: null,
     executed_tx_hash_hex: null,
   });
 });
@@ -17440,6 +17492,7 @@ test("approveMultisigContractCall posts concrete selector and normalizes respons
   });
   assert.deepEqual(result, {
     ...responsePayload,
+    tx_hash_hex: null,
     creation_time_ms: null,
     signing_message_b64: null,
   });

@@ -1944,7 +1944,7 @@ fn multisig_post_operation(
     operation.insert("description".into(), Value::String(description.to_owned()));
     operation.insert(
         "requestBody".into(),
-        Value::Object(json_request_body(request_schema_ref)),
+        Value::Object(json_or_norito_request_body(request_schema_ref)),
     );
     let mut responses = single_json_response(response_schema_ref);
     responses.insert(
@@ -5607,6 +5607,26 @@ fn json_request_body(schema_ref: &str) -> Map {
         norito::json!({
             "application/json": {
                 "schema": { "$ref": schema_ref }
+            }
+        }),
+    );
+    body
+}
+
+fn json_or_norito_request_body(schema_ref: &str) -> Map {
+    let mut body = Map::new();
+    body.insert("required".into(), Value::Bool(true));
+    body.insert(
+        "content".into(),
+        norito::json!({
+            "application/json": {
+                "schema": { "$ref": schema_ref }
+            },
+            "application/x-norito": {
+                "schema": {
+                    "type": "string",
+                    "format": "binary"
+                }
             }
         }),
     );
@@ -10660,9 +10680,27 @@ fn openapi_schemas() -> Map {
                         "fee_sponsor": { "type": "string" },
                         "instructions": {
                             "type": "array",
-                            "items": { "type": "object" }
+                            "items": { "$ref": "#/components/schemas/MultisigProposeInstructionInput" }
                         }
                     }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigProposeInstructionInput".to_owned(),
+        norito::json!({
+            "description": "Instruction input for multisig proposal creation. Send a JSON instruction object or a base64-encoded native Norito InstructionBox frame.",
+            "oneOf": [
+                {
+                    "type": "object",
+                    "description": "Structured JSON instruction object."
+                },
+                {
+                    "type": "string",
+                    "contentEncoding": "base64",
+                    "contentMediaType": "application/x-norito",
+                    "description": "Base64-encoded full InstructionBox Norito frame, not the concrete instruction payload alone."
                 }
             ]
         }),
@@ -11882,6 +11920,98 @@ mod tests {
             .expect("account get content");
         assert!(content.contains_key("application/json"));
         assert!(content.contains_key("application/x-norito"));
+    }
+
+    #[test]
+    fn multisig_propose_documents_native_norito_request_body() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let propose = paths
+            .get("/v1/multisig/propose")
+            .and_then(Value::as_object)
+            .expect("multisig propose path");
+        let post = propose
+            .get("post")
+            .and_then(Value::as_object)
+            .expect("post operation");
+        let request_body = post
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .expect("request body");
+        let content = request_body
+            .get("content")
+            .and_then(Value::as_object)
+            .expect("request content");
+        assert!(content.contains_key("application/json"));
+        assert!(content.contains_key("application/x-norito"));
+
+        let norito_schema_type = content
+            .get("application/x-norito")
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("type"))
+            .and_then(Value::as_str);
+        assert_eq!(norito_schema_type, Some("string"));
+
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas");
+        let instruction_schema_ref = schemas
+            .get("MultisigProposeRequest")
+            .and_then(Value::as_object)
+            .and_then(|request| request.get("allOf"))
+            .and_then(Value::as_array)
+            .and_then(|all_of| all_of.get(1))
+            .and_then(Value::as_object)
+            .and_then(|payload| payload.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("instructions"))
+            .and_then(Value::as_object)
+            .and_then(|instructions| instructions.get("items"))
+            .and_then(Value::as_object)
+            .and_then(|items| items.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            instruction_schema_ref,
+            Some("#/components/schemas/MultisigProposeInstructionInput")
+        );
+
+        let instruction_input = schemas
+            .get("MultisigProposeInstructionInput")
+            .and_then(Value::as_object)
+            .expect("instruction input schema");
+        let variants = instruction_input
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("instruction variants");
+        assert!(
+            variants.iter().any(|variant| {
+                variant
+                    .as_object()
+                    .and_then(|obj| obj.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("object")
+            }),
+            "structured JSON instruction variant missing"
+        );
+        assert!(
+            variants.iter().any(|variant| {
+                variant.as_object().is_some_and(|obj| {
+                    obj.get("type").and_then(Value::as_str) == Some("string")
+                        && obj.get("contentEncoding").and_then(Value::as_str) == Some("base64")
+                        && obj.get("contentMediaType").and_then(Value::as_str)
+                            == Some("application/x-norito")
+                })
+            }),
+            "native Norito instruction variant missing"
+        );
     }
 
     #[test]

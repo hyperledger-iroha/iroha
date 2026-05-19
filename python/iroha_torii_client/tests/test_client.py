@@ -20,6 +20,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     ContractDeployResponse,
     ExplorerAccountQr,
     GovernanceContractResponse,
+    MultisigResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
     ToriiCanonicalRequestAuth,
@@ -566,6 +567,64 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
         "gas_asset_id": "xor#wonderland",
         "gas_limit": 5000,
     }
+
+
+def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
+    session = RecordingSession()
+    instruction = b"\x01\x02\x03\x04"
+    proposal_id = "aa" * 32
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "resolved_multisig_account_id": CANONICAL_OWNER,
+                "submitted": False,
+                "proposal_id": proposal_id,
+                "instructions_hash": proposal_id,
+                "tx_hash_hex": None,
+                "executed_tx_hash_hex": None,
+                "creation_time_ms": 123,
+                "signing_message_b64": "AQID",
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.propose_multisig(
+        multisig_account_alias="cbdc@banka",
+        signer_account_id=CANONICAL_OWNER,
+        instructions=[instruction],
+        creation_time_ms=123,
+        fee_sponsor=CANONICAL_OWNER,
+    )
+
+    assert isinstance(result, MultisigResponse)
+    assert result.ok is True
+    assert result.resolved_multisig_account_id == CANONICAL_OWNER
+    assert result.submitted is False
+    assert result.instructions_hash == proposal_id
+    assert result.signing_message_b64 == "AQID"
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "http://node.test/v1/multisig/propose"
+    assert call["headers"]["Content-Type"] == "application/json"
+    payload = json.loads(call["data"].decode("utf-8"))
+    assert payload == {
+        "signer_account_id": CANONICAL_OWNER,
+        "instructions": [base64.b64encode(instruction).decode("ascii")],
+        "multisig_account_alias": "cbdc@banka",
+        "creation_time_ms": 123,
+        "fee_sponsor": CANONICAL_OWNER,
+    }
+
+
+def test_multisig_instruction_b64_validates_inputs() -> None:
+    assert ToriiClient.multisig_instruction_b64(b"\x01\x02") == "AQI="
+    assert ToriiClient.multisig_instruction_b64("AQI=") == "AQI="
+    with pytest.raises(RuntimeError, match="valid base64"):
+        ToriiClient.multisig_instruction_b64("not base64")
+    with pytest.raises(RuntimeError, match="must not be empty"):
+        ToriiClient.multisig_instruction_b64(b"")
 
 
 def test_call_contract_rejects_ambiguous_selector() -> None:

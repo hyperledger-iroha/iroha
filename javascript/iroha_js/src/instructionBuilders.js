@@ -3131,6 +3131,78 @@ export function buildProposeMultisigExecuteTriggerNorito(options) {
   return noritoEncodeInstruction(buildProposeMultisigExecuteTriggerInstruction(options));
 }
 
+function normalizeMultisigProposeInstructionInput(value, context) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} must be a JSON instruction object or native Norito instruction payload input`,
+        context,
+      );
+    }
+    return trimmed;
+  }
+  if (Buffer.isBuffer(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return Buffer.from(normalizeByteArray(value, context));
+  }
+  return assertPlainObject(value, context);
+}
+
+/**
+ * Build a normalized payload for `ToriiClient.proposeMultisig(...)`.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildMultisigProposeRequest(options) {
+  const source = assertPlainObject(options, "multisigPropose");
+  const instructions = source.instructions;
+  if (!Array.isArray(instructions) || instructions.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "multisigPropose.instructions must be a non-empty array",
+      "multisigPropose.instructions",
+    );
+  }
+  const payload = {
+    ...normalizeMultisigAccountSelectorInput(source, "multisigPropose"),
+    signer_account_id: normalizeAccountId(
+      source.signerAccountId ?? source.signer_account_id,
+      "multisigPropose.signerAccountId",
+    ),
+    instructions: instructions.map((instruction, index) =>
+      normalizeMultisigProposeInstructionInput(
+        instruction,
+        `multisigPropose.instructions[${index}]`,
+      ),
+    ),
+  };
+  const feeSponsor = source.feeSponsor ?? source.fee_sponsor;
+  if (feeSponsor !== undefined && feeSponsor !== null) {
+    payload.fee_sponsor = normalizeAccountId(feeSponsor, "multisigPropose.feeSponsor");
+  }
+  const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
+  if (publicKeyHex !== undefined && publicKeyHex !== null) {
+    payload.public_key_hex = normalizeOptionalHexString(publicKeyHex, "multisigPropose.publicKeyHex");
+  }
+  const signatureB64 = source.signatureB64 ?? source.signature_b64;
+  if (signatureB64 !== undefined && signatureB64 !== null) {
+    payload.signature_b64 = normalizeOptionalBase64String(signatureB64, "multisigPropose.signatureB64");
+  }
+  const creationTimeMs = source.creationTimeMs ?? source.creation_time_ms;
+  if (creationTimeMs !== undefined && creationTimeMs !== null) {
+    payload.creation_time_ms = asNonNegativeInteger(creationTimeMs, "multisigPropose.creationTimeMs");
+  }
+  const privateKey = normalizeDetachedPrivateKeyForMultisigRequest(source, "multisigPropose");
+  if (privateKey !== null) {
+    payload.private_key = privateKey;
+  }
+  return payload;
+}
+
 /**
  * Build a normalized payload for `ToriiClient.proposeMultisigContractCall(...)`.
  * @param {object} options

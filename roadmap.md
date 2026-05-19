@@ -30,12 +30,15 @@ Completed history lives in `status.md`. This file should only track unfinished w
   parameters and evaluation-key metadata, unregistered BFV parameter sets,
   impossible decrypted identifier envelopes, FHE governance lifecycle/linkage
   abuse, operation-shape and budget-smuggling jobs, encrypted-only Torii DTO
-  rejection, receipt/opening signature-binding tampering, proof-only receipt
+  rejection, duplicate JSON encrypted/opening-field and nested shadow-field
+  rejection before DTO decoding,
+  full receipt/opening security-binding mutation checks, proof-only receipt
   attestations passed to Rust/JavaScript/JVM SDK signature verifiers,
-  mismatched receipt policy ids, missing/malformed Soracloud evaluation keys,
-  empty/malformed ciphertext slots, malformed relinearization keys, malformed
-  SDK ciphertext hex, plaintext-only policy misuse, and slot-count/digest
-  mismatches;
+  wrong resolver keys, mismatched receipt policy ids, validly re-signed but
+  execution-mismatched output openings on `ClaimIdentifier`, missing/malformed
+  Soracloud evaluation keys, empty/malformed ciphertext slots, malformed
+  relinearization keys, malformed SDK ciphertext hex, plaintext-only policy
+  misuse, and slot-count/digest mismatches;
   remaining breadth should emphasize full cross-SDK RNS vectors and Soracloud
   Add/Multiply/RotateLeft/Bootstrap multi-input fixtures.
 
@@ -335,6 +338,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
     Confirm the canonical Norito schema-hash test, transaction-builder goldens,
     faucet PoW vectors, and URL escaping expectations pass unchanged; record the
     Windows result in `status.md`.
+    Also cover the new multisig propose helper work on Windows: the focused
+    tests should include
+    `ToriiClientTests.ProposeMultisigAsyncPostsNativeNoritoInstructionFrames`
+    and `NoritoCodecTests.EncodeWithSchemaHashUsesProvidedSchemaHash`, and the
+    review should confirm `TransactionInstruction.EncodeInstructionBoxBase64`
+    emits `InstructionBox` frames suitable for `/v1/multisig/propose`.
   - Focused Kotlin/JVM and Java Android RAM-LFE parser/transport tests are
     green as of 2026-05-02 with Homebrew OpenJDK 21 pinned via `JAVA_HOME`; the
     same harnesses also cover the canonical BFV identifier schema-hash vector.

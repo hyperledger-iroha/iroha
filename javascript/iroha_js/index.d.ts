@@ -267,6 +267,50 @@ export interface MultisigAccountSelector {
   multisigAccountAlias?: string;
 }
 
+export type MultisigProposeInstructionInput =
+  | object
+  | string
+  | BinaryLike
+  | number[];
+
+export interface MultisigProposeRequest extends MultisigAccountSelector {
+  signerAccountId: string;
+  instructions: MultisigProposeInstructionInput[];
+  feeSponsor?: string | null;
+  publicKeyHex?: string | null;
+  signatureB64?: string | null;
+  creationTimeMs?: number | string | bigint | null;
+  privateKey?: string | BinaryLike | null;
+  privateKeyHex?: string | null;
+  privateKeyMultihash?: string | null;
+  privateKeyBytes?: BinaryLike | number[] | null;
+  privateKeyAlgorithm?: string | null;
+  multisig_account_id?: string;
+  multisig_account_alias?: string;
+  signer_account_id?: string;
+  fee_sponsor?: string | null;
+  public_key_hex?: string | null;
+  signature_b64?: string | null;
+  creation_time_ms?: number | string | bigint | null;
+  private_key?: string | BinaryLike | null;
+  private_key_hex?: string | null;
+  private_key_multihash?: string | null;
+  private_key_bytes?: BinaryLike | number[] | null;
+  private_key_algorithm?: string | null;
+}
+
+export interface MultisigProposePayload {
+  multisig_account_id?: string;
+  multisig_account_alias?: string;
+  signer_account_id: string;
+  instructions: string[];
+  fee_sponsor?: string;
+  public_key_hex?: string;
+  signature_b64?: string;
+  creation_time_ms?: number;
+  private_key?: string | BinaryLike;
+}
+
 export interface MultisigContractCallProposeRequest extends MultisigAccountSelector {
   signerAccountId: string;
   contractAddress?: string;
@@ -364,6 +408,7 @@ export interface MultisigContractCallResponse {
   submitted: boolean | null;
   proposal_id: string | null;
   instructions_hash: string | null;
+  tx_hash_hex: string | null;
   executed_tx_hash_hex: string | null;
   creation_time_ms: number | null;
   signing_message_b64: string | null;
@@ -7742,6 +7787,10 @@ export declare class ToriiClient {
     request: ContractCallRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ContractCallResponse>;
+  proposeMultisig(
+    request: MultisigProposeRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<MultisigContractCallResponse>;
   proposeMultisigContractCall(
     request: MultisigContractCallProposeRequest,
     options?: { signal?: AbortSignal },
@@ -8117,6 +8166,28 @@ export function sm2FixtureFromSeed(
 ): Sm2Fixture;
 
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
+export interface MultisigProposeNoritoRequest {
+  multisig_account_id?: string | null;
+  multisigAccountId?: string | null;
+  multisig_account_alias?: string | null;
+  multisigAccountAlias?: string | null;
+  signer_account_id?: string;
+  signerAccountId?: string;
+  private_key?: string | null;
+  privateKey?: string | null;
+  public_key_hex?: string | null;
+  publicKeyHex?: string | null;
+  signature_b64?: string | null;
+  signatureB64?: string | null;
+  creation_time_ms?: number | string | bigint | null;
+  creationTimeMs?: number | string | bigint | null;
+  fee_sponsor?: string | null;
+  feeSponsor?: string | null;
+  instructions: Array<object | string | ArrayBufferView | ArrayBuffer | Buffer>;
+}
+export function noritoEncodeMultisigProposeRequest(
+  request: MultisigProposeNoritoRequest,
+): Buffer;
 export function noritoDecodeInstruction(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
   options?: { parseJson?: boolean },
@@ -8896,6 +8967,10 @@ export function buildProposeMultisigExecuteTriggerInstruction(
 export function buildProposeMultisigExecuteTriggerNorito(
   options: ProposeMultisigExecuteTriggerOptions,
 ): Buffer;
+
+export function buildMultisigProposeRequest(
+  options: MultisigProposeRequest,
+): MultisigProposePayload;
 
 export function buildMultisigContractCallProposeRequest(
   options: MultisigContractCallProposeRequest & {

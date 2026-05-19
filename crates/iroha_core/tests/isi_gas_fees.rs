@@ -149,6 +149,109 @@ fn non_vm_instructions_charge_fees() {
 }
 
 #[test]
+fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
+    let (alice_id, alice_kp) = gen_account_in("wonderland");
+    let (gas_id, _gas_kp) = gen_account_in("ivm");
+    let route = DataSpaceId::new(10);
+    let dom_w: Domain =
+        Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice_id);
+    let dom_i: Domain = Domain::new(DomainId::try_new("ivm", "universal").unwrap()).build(&gas_id);
+    let alice = new_account_in_domain(&alice_id, "wonderland");
+    let tech = new_account_in_domain(&gas_id, "ivm");
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "routegas".parse().unwrap(),
+    );
+    let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone())
+        .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted)
+        .build(&alice_id);
+    let payer_asset = AssetId::with_scope(
+        asset_def_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::asset::AssetBalanceScope::Dataspace(route),
+    );
+    let init = 100_000u128;
+    let payer_balance = Asset::new(payer_asset.clone(), Numeric::new(init, 0));
+    let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = query::store::LiveQueryStore::start_test();
+    let mut state = new_state(world, kura, query_handle);
+
+    let mut pipeline = state.pipeline.clone();
+    pipeline.gas.tech_account_id = gas_id.to_string();
+    pipeline.gas.accepted_assets = vec![asset_def_id.to_string()];
+    let rate: u64 = 10;
+    pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
+        asset: asset_def_id.to_string(),
+        units_per_gas: rate,
+        twap_local_per_xor: Decimal::ONE,
+        liquidity: GasLiquidity::Tier2,
+        volatility: GasVolatility::Stable,
+    }];
+    state.set_pipeline(pipeline);
+
+    let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
+        alice_id.clone(),
+        "k".parse().unwrap(),
+        iroha_primitives::json::Json::new("v"),
+    )
+    .into();
+    let exec = Executable::from(core::iter::once(instruction.clone()));
+    let used = isi_gas::meter_instructions(match &exec {
+        Executable::Instructions(v) => v.as_ref(),
+        _ => unreachable!(),
+    });
+    assert!(used > 0);
+
+    let mut md = Metadata::default();
+    md.insert(
+        "gas_asset_id".parse().unwrap(),
+        iroha_primitives::json::Json::new(asset_def_id.to_string()),
+    );
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
+        .with_executable(exec)
+        .with_metadata(md)
+        .sign(alice_kp.private_key());
+
+    let executor = Executor::default();
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(block_header);
+    let mut state_tx = block.transaction();
+    state_tx.current_dataspace_id = Some(route);
+    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
+    executor
+        .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
+        .expect("execution");
+
+    assert_eq!(state_tx.current_dataspace_id, Some(route));
+    let fee = u128::from(state_tx.last_tx_gas_used) * u128::from(rate);
+    let payee_asset = AssetId::with_scope(
+        asset_def_id.clone(),
+        gas_id.clone(),
+        iroha_data_model::asset::AssetBalanceScope::Dataspace(route),
+    );
+    let payer_balance_after = state_tx
+        .world
+        .assets()
+        .get(&payer_asset)
+        .expect("payer route-scoped asset exists")
+        .0
+        .try_mantissa_u128()
+        .unwrap();
+    let payee_balance_after = state_tx
+        .world
+        .assets()
+        .get(&payee_asset)
+        .expect("tech account route-scoped asset exists")
+        .0
+        .try_mantissa_u128()
+        .unwrap();
+    assert_eq!(payer_balance_after, init - fee);
+    assert_eq!(payee_balance_after, fee);
+}
+
+#[test]
 fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     use iroha_core::smartcontracts::Execute;
     use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
@@ -682,10 +785,13 @@ fn ivm_syscall_charges_fees() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
+    let contract_route = iroha_data_model::nexus::DataSpaceId::new(10);
+    state_tx.current_dataspace_id = Some(contract_route);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
         .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
         .expect("execution");
+    assert_eq!(state_tx.current_dataspace_id, Some(contract_route));
 
     let scall_cost = ivm::gas::cost_of(scall).expect("SCALL must have gas cost");
     // DEBUG_PRINT charges deterministic host work gas on top of the SCALL opcode.
