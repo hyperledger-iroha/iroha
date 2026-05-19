@@ -24682,6 +24682,7 @@ fn autoscale_scale_in_triggered(
     utilization_threshold_permille: u64,
 ) -> bool {
     can_scale_in
+        && required_window > 0
         && sample_count >= required_window
         && latency_ratio_p95_permille.unwrap_or(u64::MAX) <= latency_threshold_permille
         && utilization_p95_permille.unwrap_or(u64::MAX) <= utilization_threshold_permille
@@ -24698,13 +24699,16 @@ fn autoscale_cooldown_active(
 
 fn autoscale_managed_lane_for_retire(
     lanes: &[iroha_data_model::nexus::LaneConfig],
+    min_lanes: u32,
 ) -> Option<LaneId> {
     lanes
         .iter()
         .filter(|lane| {
-            lane.metadata
-                .get(AUTOSCALE_META_MANAGED)
-                .is_some_and(|value| value == "true")
+            lane.id.as_u32() >= min_lanes
+                && lane
+                    .metadata
+                    .get(AUTOSCALE_META_MANAGED)
+                    .is_some_and(|value| value == "true")
                 && lane.alias == format!("elastic-lane-{}", lane.id.as_u32())
                 && lane
                     .metadata
@@ -24714,6 +24718,20 @@ fn autoscale_managed_lane_for_retire(
         })
         .map(|lane| lane.id)
         .max_by_key(|lane| lane.as_u32())
+}
+
+fn autoscale_next_lane_id(
+    lanes: &[iroha_data_model::nexus::LaneConfig],
+    min_lanes: u32,
+    max_lanes: u32,
+) -> Option<LaneId> {
+    if min_lanes >= max_lanes {
+        return None;
+    }
+    let existing: BTreeSet<u32> = lanes.iter().map(|lane| lane.id.as_u32()).collect();
+    (min_lanes..max_lanes)
+        .find(|candidate| !existing.contains(candidate))
+        .map(LaneId::new)
 }
 
 fn autoscale_sample_latency_ms(prev_ts_ms: u64, curr_ts_ms: u64) -> Option<u64> {
@@ -25866,7 +25884,9 @@ impl<'state> StateBlock<'state> {
         );
 
         if scale_out_triggered {
-            let Some(next_lane_id) = self.next_autoscale_lane_id(autoscale.max_lanes.get()) else {
+            let Some(next_lane_id) =
+                self.next_autoscale_lane_id(autoscale.min_lanes.get(), autoscale.max_lanes.get())
+            else {
                 return;
             };
             let mut lane = iroha_data_model::nexus::LaneConfig {
@@ -25952,21 +25972,15 @@ impl<'state> StateBlock<'state> {
         self.telemetry.record_lane_lifecycle_outcome("autoscale");
     }
 
-    fn next_autoscale_lane_id(&self, max_lanes: u32) -> Option<LaneId> {
-        let existing: BTreeSet<u32> = self
-            .nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id.as_u32())
-            .collect();
-        (0..max_lanes)
-            .find(|candidate| !existing.contains(candidate))
-            .map(LaneId::new)
+    fn next_autoscale_lane_id(&self, min_lanes: u32, max_lanes: u32) -> Option<LaneId> {
+        autoscale_next_lane_id(self.nexus.lane_catalog.lanes(), min_lanes, max_lanes)
     }
 
     fn select_autoscale_lane_for_retire(&self) -> Option<LaneId> {
-        autoscale_managed_lane_for_retire(self.nexus.lane_catalog.lanes())
+        autoscale_managed_lane_for_retire(
+            self.nexus.lane_catalog.lanes(),
+            self.nexus.autoscale.min_lanes.get(),
+        )
     }
 
     fn collect_autoscale_samples(
@@ -36527,6 +36541,59 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_scale_in_triggered_rejects_zero_window_even_with_ideal_metrics() {
+        assert!(!autoscale_scale_in_triggered(
+            true,
+            0,
+            0,
+            Some(0),
+            1_100,
+            Some(0),
+            250
+        ));
+        assert!(!autoscale_scale_in_triggered(
+            true,
+            192,
+            0,
+            Some(0),
+            1_100,
+            Some(0),
+            250
+        ));
+    }
+
+    #[test]
+    fn autoscale_scale_in_triggered_is_inclusive_at_thresholds_only() {
+        assert!(autoscale_scale_in_triggered(
+            true,
+            192,
+            192,
+            Some(1_100),
+            1_100,
+            Some(250),
+            250
+        ));
+        assert!(!autoscale_scale_in_triggered(
+            true,
+            192,
+            192,
+            Some(1_101),
+            1_100,
+            Some(250),
+            250
+        ));
+        assert!(!autoscale_scale_in_triggered(
+            true,
+            192,
+            192,
+            Some(1_100),
+            1_100,
+            Some(251),
+            250
+        ));
+    }
+
+    #[test]
     fn autoscale_scale_in_triggered_rejects_public_window_shortfall_even_with_zero_metrics() {
         assert!(!autoscale_scale_in_triggered(
             true,
@@ -36556,6 +36623,17 @@ mod tests {
         assert_eq!(autoscale_ratio_permille(-0.001), 0);
         assert_eq!(autoscale_ratio_permille(f64::MAX), u64::MAX);
         assert_eq!(autoscale_ratio_permille(1.2345), 1_235);
+    }
+
+    #[test]
+    fn autoscale_ratio_permille_handles_boundary_rounding() {
+        assert_eq!(autoscale_ratio_permille(0.0004), 0);
+        assert_eq!(autoscale_ratio_permille(0.0005), 1);
+        assert_eq!(autoscale_ratio_permille(-0.0), 0);
+        assert_eq!(
+            autoscale_ratio_permille(u64::MAX as f64 / 1_000.0),
+            u64::MAX
+        );
     }
 
     #[test]
@@ -36630,7 +36708,7 @@ mod tests {
         ];
 
         assert_eq!(
-            autoscale_managed_lane_for_retire(&lanes),
+            autoscale_managed_lane_for_retire(&lanes, 3),
             Some(LaneId::new(4))
         );
     }
@@ -36655,7 +36733,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(autoscale_managed_lane_for_retire(&lanes), None);
+        assert_eq!(autoscale_managed_lane_for_retire(&lanes, 0), None);
     }
 
     #[test]
@@ -36713,7 +36791,7 @@ mod tests {
         ];
 
         assert_eq!(
-            autoscale_managed_lane_for_retire(&lanes),
+            autoscale_managed_lane_for_retire(&lanes, 3),
             Some(LaneId::new(6))
         );
     }
@@ -36759,9 +36837,110 @@ mod tests {
         let lanes = vec![spoofed_base_lane, renamed_elastic_lane, valid_elastic_lane];
 
         assert_eq!(
-            autoscale_managed_lane_for_retire(&lanes),
+            autoscale_managed_lane_for_retire(&lanes, 3),
             Some(LaneId::new(4))
         );
+    }
+
+    #[test]
+    fn autoscale_retire_selection_rejects_base_id_even_with_elastic_alias() {
+        let mut spoofed_base_lane = LaneConfig {
+            id: LaneId::new(2),
+            alias: "elastic-lane-2".to_owned(),
+            ..LaneConfig::default()
+        };
+        spoofed_base_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        spoofed_base_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "42".to_owned());
+
+        assert_eq!(
+            autoscale_managed_lane_for_retire(&[spoofed_base_lane.clone()], 3),
+            None
+        );
+
+        let mut valid_elastic_lane = LaneConfig {
+            id: LaneId::new(3),
+            alias: "elastic-lane-3".to_owned(),
+            ..LaneConfig::default()
+        };
+        valid_elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        valid_elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "43".to_owned());
+
+        assert_eq!(
+            autoscale_managed_lane_for_retire(&[spoofed_base_lane, valid_elastic_lane], 3),
+            Some(LaneId::new(3))
+        );
+    }
+
+    #[test]
+    fn autoscale_next_lane_id_never_reuses_base_lane_gaps() {
+        let lanes = vec![
+            LaneConfig {
+                id: LaneId::new(0),
+                alias: "core".to_owned(),
+                ..LaneConfig::default()
+            },
+            LaneConfig {
+                id: LaneId::new(2),
+                alias: "zk".to_owned(),
+                ..LaneConfig::default()
+            },
+        ];
+
+        assert_eq!(autoscale_next_lane_id(&lanes, 3, 5), Some(LaneId::new(3)));
+    }
+
+    #[test]
+    fn autoscale_next_lane_id_fills_elastic_gaps_and_fails_closed() {
+        let lanes_with_gap = vec![
+            LaneConfig {
+                id: LaneId::new(0),
+                alias: "core".to_owned(),
+                ..LaneConfig::default()
+            },
+            LaneConfig {
+                id: LaneId::new(1),
+                alias: "governance".to_owned(),
+                ..LaneConfig::default()
+            },
+            LaneConfig {
+                id: LaneId::new(2),
+                alias: "zk".to_owned(),
+                ..LaneConfig::default()
+            },
+            LaneConfig {
+                id: LaneId::new(4),
+                alias: "elastic-lane-4".to_owned(),
+                ..LaneConfig::default()
+            },
+        ];
+        assert_eq!(
+            autoscale_next_lane_id(&lanes_with_gap, 3, 5),
+            Some(LaneId::new(3))
+        );
+
+        let full_elastic_range = vec![
+            LaneConfig {
+                id: LaneId::new(3),
+                alias: "elastic-lane-3".to_owned(),
+                ..LaneConfig::default()
+            },
+            LaneConfig {
+                id: LaneId::new(4),
+                alias: "elastic-lane-4".to_owned(),
+                ..LaneConfig::default()
+            },
+        ];
+        assert_eq!(autoscale_next_lane_id(&full_elastic_range, 3, 5), None);
+        assert_eq!(autoscale_next_lane_id(&lanes_with_gap, 5, 5), None);
+        assert_eq!(autoscale_next_lane_id(&lanes_with_gap, 6, 5), None);
     }
 
     #[test]
@@ -36799,7 +36978,7 @@ mod tests {
             ],
         )
         .expect("public testnet catalog");
-        let retire = autoscale_managed_lane_for_retire(catalog.lanes()).expect("managed lane");
+        let retire = autoscale_managed_lane_for_retire(catalog.lanes(), 3).expect("managed lane");
         let updated = catalog
             .apply_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
                 additions: Vec::new(),

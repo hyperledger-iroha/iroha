@@ -4326,6 +4326,22 @@ mod evidence_http_tests {
         }
     }
 
+    pub(super) fn assert_single_accept_header(snapshot: &RequestSnapshot, expected: &str) {
+        let accept_headers: Vec<_> = snapshot
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
+            .collect();
+        assert_eq!(
+            accept_headers.len(),
+            1,
+            "expected a single Accept header on {}: {:?}",
+            snapshot.url.path(),
+            snapshot.headers
+        );
+        assert_eq!(accept_headers[0].1, expected);
+    }
+
     #[test]
     fn post_account_resolve_builds_request() {
         let client = client_with_base_url(base_url());
@@ -11525,7 +11541,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     fn get_node_capabilities_json_for_compatibility(&self) -> Result<Option<norito::json::Value>> {
         let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header(http::header::ACCEPT, APPLICATION_JSON),
+        )?;
         if resp.status() == StatusCode::TOO_MANY_REQUESTS {
             let retry_after = resp
                 .headers()
@@ -11555,7 +11574,10 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(Some(norito::json::from_slice(resp.body())?))
+        Ok(Some(
+            norito::json::from_slice(resp.body())
+                .wrap_err("failed to decode node capabilities JSON")?,
+        ))
     }
 
     /// GET `/v1/node/capabilities`
@@ -11564,7 +11586,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_node_capabilities_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header(http::header::ACCEPT, APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get node capabilities: {} {}",
@@ -11572,7 +11597,7 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        Ok(norito::json::from_slice(resp.body())?)
+        norito::json::from_slice(resp.body()).wrap_err("failed to decode node capabilities JSON")
     }
 
     /// GET `/v1/sccp/capabilities`.
@@ -14661,8 +14686,8 @@ mod tests {
     use super::{
         default_alias_policy,
         evidence_http_tests::{
-            SnapshotStore, base_url, client_with_base_url, json_response, respond_with,
-            with_mock_http, with_mock_sorafs_fetch,
+            SnapshotStore, assert_single_accept_header, base_url, client_with_base_url,
+            json_response, respond_with, with_mock_http, with_mock_sorafs_fetch,
         },
         *,
     };
@@ -16871,6 +16896,11 @@ mod tests {
             2,
             "expected node capabilities + transaction requests"
         );
+        let capabilities_snapshot = store_guard
+            .iter()
+            .find(|snapshot| snapshot.url.path() == "/v1/node/capabilities")
+            .expect("capabilities snapshot captured");
+        assert_single_accept_header(capabilities_snapshot, APPLICATION_JSON);
         let snapshot = store_guard
             .iter()
             .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
@@ -16898,6 +16928,32 @@ mod tests {
             TransactionEntrypoint::decode_all_versioned(&snapshot.body).is_err(),
             "public /transaction requests must not use internal TransactionEntrypoint envelopes"
         );
+    }
+
+    #[test]
+    fn get_node_capabilities_json_requests_json_accept() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &compatible_capabilities_body());
+
+        with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            let capabilities = client
+                .get_node_capabilities_json()
+                .expect("node capabilities should decode");
+            assert_eq!(
+                parse_required_u64(
+                    capabilities.get("data_model_version"),
+                    "node capabilities data_model_version"
+                )
+                .expect("data model version field"),
+                u64::from(DATA_MODEL_VERSION)
+            );
+        });
+
+        let store_guard = store.lock().expect("snapshot lock");
+        assert_eq!(store_guard.len(), 1);
+        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+        assert_single_accept_header(&store_guard[0], APPLICATION_JSON);
     }
 
     #[test]

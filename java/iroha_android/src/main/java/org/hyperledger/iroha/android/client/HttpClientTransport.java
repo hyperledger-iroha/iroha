@@ -95,6 +95,19 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   @Override
+  public CompletableFuture<ClientResponse> submitTransactionJson(
+      final byte[] encodedVersionedTransactionJson) {
+    final TransportRequest request =
+        ToriiRequestBuilder.buildSubmitJsonRequest(
+            config.baseUri(),
+            encodedVersionedTransactionJson,
+            config.requestTimeout(),
+            config.defaultHeaders(),
+            config.wireFormatPreference().acceptHeader());
+    return executeAccepted(request, "transaction JSON submit", 202);
+  }
+
+  @Override
   public CompletableFuture<ClientResponse> submitTransactionEntrypoint(
       final byte[] encodedVersionedEntrypoint) {
     final TransportRequest request =
@@ -135,6 +148,56 @@ public final class HttpClientTransport implements IrohaClient {
               return CompletableFuture.completedFuture(clientResponse);
             })
         .thenCompose(future -> future);
+  }
+
+  @Override
+  public CompletableFuture<ClientResponse> submitTransactionEntrypointJson(
+      final byte[] encodedVersionedEntrypointJson) {
+    final TransportRequest request =
+        ToriiRequestBuilder.buildSubmitEntrypointJsonRequest(
+            config.baseUri(),
+            encodedVersionedEntrypointJson,
+            config.requestTimeout(),
+            config.defaultHeaders(),
+            config.wireFormatPreference().acceptHeader());
+    return executeAccepted(request, "transaction entrypoint JSON submit", 202);
+  }
+
+  private CompletableFuture<ClientResponse> executeAccepted(
+      final TransportRequest request, final String errorContext, final int acceptedStatus) {
+    notifyRequest(request);
+    final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause =
+                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
+                notifyFailure(request, cause);
+                future.completeExceptionally(
+                    new RuntimeException(errorContext + " request failed", cause));
+                return;
+              }
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      response.body(),
+                      response.message(),
+                      null,
+                      extractRejectCode(response));
+              if (response.statusCode() != acceptedStatus) {
+                final RuntimeException error =
+                    new RuntimeException(
+                        errorContext + " request failed with status " + response.statusCode());
+                notifyFailure(request, error);
+                future.completeExceptionally(error);
+                return;
+              }
+              notifyResponse(request, clientResponse);
+              future.complete(clientResponse);
+            });
+    return future;
   }
 
   @Override

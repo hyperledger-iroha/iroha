@@ -226,29 +226,51 @@ Last updated: 2026-05-19
 - A public-testnet-shaped strict localnet variant now starts from three base
   lanes, expands to elastic lane `3`, waits for expansion status quorum before
   contraction, and verifies scale-in quorum without retiring base lanes `0..2`.
+- Client transaction submission now requests JSON for the compatibility
+  `/v1/node/capabilities` probe, so Torii deployments that default negotiated
+  endpoints to Norito no longer fail the submit path with JSON decode errors.
 - Additional negative/adversarial coverage now rejects scale-in with a
-  public-profile window shortfall even when metrics are ideal, sanitizes
-  malformed autoscale ratios, covers p95 and zero-cooldown boundaries, rejects
-  spoofed autoscale-managed lane metadata, requires a valid
-  autoscale-created-height marker before a managed lane can be retired, rejects
-  counter rollback/truncated transition snapshots, rejects transition-only
-  strict status gates, rejects wrong-lane or partial-quorum public-profile
-  expansion signals, and rejects contraction if any base lane is missing or
-  elastic lane `3` still has governance, commitment, relay, or validator
-  residue.
+  public-profile window shortfall or zero direct-call window even when metrics
+  are ideal, verifies exact threshold inclusivity, sanitizes malformed
+  autoscale ratios, covers p95 and zero-cooldown boundaries, rejects spoofed
+  autoscale-managed lane metadata, requires a valid autoscale-created-height
+  marker before a managed lane can be retired, rejects
+  alias-spoofed managed lanes, refuses managed-lane retirement below the
+  configured `min_lanes` floor, prevents autoscale scale-out from filling
+  missing base-lane IDs, rejects counter rollback/truncated transition
+  snapshots, rejects transition-only strict status gates, rejects stale
+  baseline expansion signals without lane progress, rejects wrong-lane,
+  wrong-storage-lane, prefix-spoofed storage-lane, or partial-quorum
+  public-profile expansion signals, and rejects contraction if any base lane
+  lacks active capacity or elastic lane `3` still has governance, commitment,
+  relay, or validator residue.
 - Focused validation is green with
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_core --lib autoscale -- --nocapture`
-  (`16 passed`),
+  (`23 passed`),
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha --lib get_node_capabilities_json_requests_json_accept -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha --lib submit_transaction_uses_norito_content_type_header_and_signed_transaction_payload -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::tests:: -- --nocapture`
-  (`40 passed`),
+  (`46 passed`),
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_core --lib lane_lifecycle -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-autoscale-params/iroha-test-network cargo build -p irohad --bin iroha3d`,
   and the single-cycle, repeated-cycle, strict, and public-profile strict
   localnet autoscale tests in `integration_tests --test nexus_and_streaming`
-  using the freshly built `iroha3d` binary.
-- The touched autoscale Rust files pass `rustfmt --edition 2024 --check`, and
-  `git diff --check` is clean. A repo-wide `cargo fmt --all -- --check`
-  currently reports formatting diffs in unrelated dirty client/Torii files.
+  using the freshly built `iroha3d` binary. The single-cycle localnet path was
+  rerun after the client compatibility fix and passed in 244.50s.
+- Torii response negotiation/OpenAPI follow-up validation is green with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_torii --lib response_format_tests -- --nocapture`
+  (`3 passed`),
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_torii --lib openapi::tests:: -- --nocapture`
+  (`25 passed`),
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_torii --lib da_ingest_error_response_negotiates_error_envelopes -- --nocapture`,
+  and
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_torii --lib negotiate_json_only -- --nocapture`
+  (`2 passed`).
+- Hygiene is green with
+  `rustfmt --edition 2024 --check crates/iroha/src/client.rs crates/iroha_core/src/state.rs integration_tests/tests/nexus/autoscale_localnet.rs`,
+  `cargo fmt --all -- --check`, and `git diff --check`.
+- Kotlin/Java SDK Gradle validation was attempted, but this host has no Java
+  runtime visible to `/usr/libexec/java_home` or `./gradlew`.
 
 ## 2026-05-19 Torii queue default headroom
 

@@ -256,7 +256,7 @@ use crate::{
         PorCoordinatorError, PorStatusExportV1, PorStatusFilter, QuotaExceeded, SorafsAction,
         SorafsQuotaEnforcer,
     },
-    utils::NoritoJsonBody,
+    utils::JsonValueBody,
 };
 
 #[allow(dead_code)]
@@ -28979,7 +28979,7 @@ mod soradns_tests {
         );
         drop(view);
 
-        let NoritoJsonBody(value) =
+        let JsonValueBody(value) =
             handle_v1_soradns_directory_latest(Arc::clone(&state)).expect("directory record");
         let Value::Object(map) = value else {
             panic!("expected JSON object for directory payload");
@@ -44173,15 +44173,7 @@ pub async fn handle_v1_kaigi_relays(
         total: items.len() as u64,
         items,
     };
-    let payload_value =
-        norito::json::to_value(&payload).map_err(|source| Error::SerializationFailure {
-            context: "kaigi_relays_summary",
-            source,
-        })?;
-    Ok(crate::utils::respond_value_with_format(
-        payload_value,
-        format,
-    ))
+    Ok(crate::utils::respond_with_format(payload, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -44290,15 +44282,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
         notes,
         metrics,
     };
-    let detail_value =
-        norito::json::to_value(&detail).map_err(|source| Error::SerializationFailure {
-            context: "kaigi_relay_detail",
-            source,
-        })?;
-    Ok(crate::utils::respond_value_with_format(
-        detail_value,
-        format,
-    ))
+    Ok(crate::utils::respond_with_format(detail, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -44366,15 +44350,7 @@ pub async fn handle_v1_kaigi_relays_health(
         failovers_total,
         domains,
     };
-    let snapshot_value =
-        norito::json::to_value(&snapshot).map_err(|source| Error::SerializationFailure {
-            context: "kaigi_relays_health",
-            source,
-        })?;
-    Ok(crate::utils::respond_value_with_format(
-        snapshot_value,
-        format,
-    ))
+    Ok(crate::utils::respond_with_format(snapshot, format))
 }
 
 #[cfg(feature = "app_api")]
@@ -44674,7 +44650,7 @@ pub fn handle_v1_kaigi_relays_sse(
 
 #[cfg(feature = "app_api")]
 /// GET `/v1/soradns/directory/latest` — return the latest resolver directory record.
-pub fn handle_v1_soradns_directory_latest(state: Arc<CoreState>) -> Result<NoritoJsonBody, Error> {
+pub fn handle_v1_soradns_directory_latest(state: Arc<CoreState>) -> Result<JsonValueBody, Error> {
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     let world = state.world_view();
@@ -44694,7 +44670,7 @@ pub fn handle_v1_soradns_directory_latest(state: Arc<CoreState>) -> Result<Norit
         Value::from(hex::encode(latest_id)),
     );
     payload.insert("record".into(), json_value(&record));
-    Ok(NoritoJsonBody(Value::Object(payload)))
+    Ok(JsonValueBody(Value::Object(payload)))
 }
 
 #[cfg(feature = "app_api")]
@@ -72836,7 +72812,7 @@ pub async fn handle_post_nexus_lane_lifecycle(
     );
     Ok((
         StatusCode::ACCEPTED,
-        utils::NoritoJsonBody(norito::json::Value::Object(payload)),
+        utils::JsonValueBody(norito::json::Value::Object(payload)),
     ))
 }
 
@@ -73161,7 +73137,7 @@ pub async fn handle_post_soranet_privacy_event(
     }
 
     let payload = json_object(entries);
-    Ok((StatusCode::ACCEPTED, NoritoJsonBody(payload)))
+    Ok((StatusCode::ACCEPTED, JsonValueBody(payload)))
 }
 
 #[cfg(feature = "telemetry")]
@@ -73225,7 +73201,7 @@ pub async fn handle_post_soranet_privacy_share(
     }
 
     let payload = json_object(entries);
-    Ok((StatusCode::ACCEPTED, NoritoJsonBody(payload)))
+    Ok((StatusCode::ACCEPTED, JsonValueBody(payload)))
 }
 
 #[cfg(feature = "telemetry")]

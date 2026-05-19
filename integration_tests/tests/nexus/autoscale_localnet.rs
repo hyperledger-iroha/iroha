@@ -1240,6 +1240,16 @@ fn all_peers_have_storage_lane_count(
         .all(|(_, lanes)| lanes.len() == expected_count)
 }
 
+fn all_peers_have_storage_lane(snapshot: &[(usize, Vec<String>)], lane_id: u32) -> bool {
+    let lane_prefix = format!("lane_{lane_id:03}");
+    let lane_prefix_with_separator = format!("{lane_prefix}_");
+    snapshot.iter().all(|(_, lanes)| {
+        lanes.iter().any(|lane| {
+            lane == &lane_prefix || lane.starts_with(lane_prefix_with_separator.as_str())
+        })
+    })
+}
+
 fn peer_has_active_lane_capacity(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
     peer.lanes
         .iter()
@@ -1382,8 +1392,10 @@ fn peers_with_expanded_lane_signal(
     let mut peers_with_signal = 0_usize;
     for (index, peer) in snapshot.iter().enumerate() {
         let baseline_peer = baseline_snapshot.and_then(|baseline| baseline.get(index));
-        if peer_has_active_lane_capacity(peer, lane_id)
-            || peer_has_lane_commitment_activity(peer, lane_id)
+        let current_state_counts_without_baseline = baseline_peer.is_none()
+            && (peer_has_active_lane_capacity(peer, lane_id)
+                || peer_has_lane_commitment_activity(peer, lane_id));
+        if current_state_counts_without_baseline
             || peer_has_lane_declaration_transition(peer, baseline_peer, lane_id)
             || peer_has_lane_progress_transition(peer, baseline_peer, lane_id)
         {
@@ -1512,8 +1524,21 @@ fn expansion_observed_on_storage_for_count(
     all_peers_have_storage_lane_count(storage_snapshot, expanded_provisioned_lanes)
 }
 
+fn expansion_observed_on_storage_for_lane_count(
+    storage_snapshot: &[(usize, Vec<String>)],
+    expanded_provisioned_lanes: usize,
+    elastic_lane_id: u32,
+) -> bool {
+    expansion_observed_on_storage_for_count(storage_snapshot, expanded_provisioned_lanes)
+        && all_peers_have_storage_lane(storage_snapshot, elastic_lane_id)
+}
+
 fn expansion_observed_on_storage(storage_snapshot: &[(usize, Vec<String>)]) -> bool {
-    expansion_observed_on_storage_for_count(storage_snapshot, EXPANDED_PROVISIONED_LANES)
+    expansion_observed_on_storage_for_lane_count(
+        storage_snapshot,
+        EXPANDED_PROVISIONED_LANES,
+        ELASTIC_LANE_ID,
+    )
 }
 
 fn expansion_observed_with_prior_scale_out_quorum_on_storage_for_count(
@@ -1526,15 +1551,30 @@ fn expansion_observed_with_prior_scale_out_quorum_on_storage_for_count(
         && peers_with_scale_out_transition(baseline_transitions, &[]) >= quorum_required
 }
 
+fn expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
+    storage_snapshot: &[(usize, Vec<String>)],
+    baseline_transitions: &[AutoscaleTransitionStats],
+    expanded_provisioned_lanes: usize,
+    elastic_lane_id: u32,
+    quorum_required: usize,
+) -> bool {
+    expansion_observed_on_storage_for_lane_count(
+        storage_snapshot,
+        expanded_provisioned_lanes,
+        elastic_lane_id,
+    ) && peers_with_scale_out_transition(baseline_transitions, &[]) >= quorum_required
+}
+
 fn expansion_observed_with_prior_scale_out_quorum_on_storage(
     storage_snapshot: &[(usize, Vec<String>)],
     baseline_transitions: &[AutoscaleTransitionStats],
     quorum_required: usize,
 ) -> bool {
-    expansion_observed_with_prior_scale_out_quorum_on_storage_for_count(
+    expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
         storage_snapshot,
         baseline_transitions,
         EXPANDED_PROVISIONED_LANES,
+        ELASTIC_LANE_ID,
         quorum_required,
     )
 }
@@ -2073,17 +2113,21 @@ fn wait_for_expanded_lanes_with_heartbeat(
             })
             .count();
         let storage_progressed_on_quorum = peers_with_storage_progress >= quorum_required;
-        let storage_expanded =
-            expansion_observed_on_storage_for_count(&storage_snapshot, expanded_provisioned_lanes);
+        let storage_expanded = expansion_observed_on_storage_for_lane_count(
+            &storage_snapshot,
+            expanded_provisioned_lanes,
+            elastic_lane_id,
+        );
         let elapsed = started.elapsed();
         let fallback_ready_at =
             EXPANSION_STATUS_SIGNAL_GRACE + EXPANSION_POST_STORAGE_STATUS_WINDOW;
 
         if require_scale_out_transition
-            && expansion_observed_with_prior_scale_out_quorum_on_storage_for_count(
+            && expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
                 &storage_snapshot,
                 baseline_autoscale_transitions,
                 expanded_provisioned_lanes,
+                elastic_lane_id,
                 quorum_required,
             )
         {
@@ -3408,8 +3452,10 @@ mod tests {
         expansion_observed_on_quorum_or_scale_out_transition_for_lane,
         expansion_observed_on_quorum_peers, expansion_observed_on_quorum_peers_for_lane,
         expansion_observed_on_storage, expansion_observed_on_storage_for_count,
+        expansion_observed_on_storage_for_lane_count,
         expansion_observed_with_prior_scale_out_quorum_on_storage,
         expansion_observed_with_prior_scale_out_quorum_on_storage_for_count,
+        expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count,
         expansion_probe_top_up_tx_count, expansion_scaled_top_up_tx_count,
         expansion_top_up_tx_count, parse_autoscale_transition_stats,
         peers_with_scale_in_transition, peers_with_scale_out_transition,
@@ -4014,7 +4060,16 @@ mod tests {
     #[test]
     fn public_profile_expansion_ignores_wrong_elastic_lane_signal() {
         let pre_cycle_snapshot = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
-        let wrong_elastic_snapshot = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
+        let mut wrong_elastic_snapshot = pre_cycle_snapshot.clone();
+        for peer in wrong_elastic_snapshot.iter_mut().take(3) {
+            let lane = peer
+                .lanes
+                .iter_mut()
+                .find(|lane| lane.lane_id == 1)
+                .expect("wrong elastic lane must exist");
+            lane.capacity += 1;
+            lane.committed += 1;
+        }
 
         assert!(expansion_observed_on_quorum_peers_for_lane(
             &wrong_elastic_snapshot,
@@ -4114,6 +4169,68 @@ mod tests {
             true,
             &status_without_lane_three,
             &status_without_lane_three,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+    }
+
+    #[test]
+    fn public_profile_expansion_rejects_stale_elastic_status_without_progress() {
+        let stale_elastic_snapshot =
+            vec![status_with_declared_lanes(&[0, 1, 2, PUBLIC_PROFILE_ELASTIC_LANE_ID,]); 4];
+
+        assert!(expansion_observed_on_quorum_peers_for_lane(
+            &stale_elastic_snapshot,
+            None,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &stale_elastic_snapshot,
+            Some(&stale_elastic_snapshot),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+        assert!(!should_require_scale_in_transition_for_lane(
+            true,
+            &stale_elastic_snapshot,
+            &stale_elastic_snapshot,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+    }
+
+    #[test]
+    fn public_profile_expansion_requires_progress_after_stale_commitments() {
+        let mut stale_commitments = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
+        for peer in stale_commitments.iter_mut().take(3) {
+            peer.lane_commitments.push(LaneCommitmentSnapshot {
+                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                block_height: 42,
+                tx_count: 1,
+                teu_total: 1,
+            });
+        }
+        let mut progressed_commitments = stale_commitments.clone();
+        for peer in progressed_commitments.iter_mut().take(3) {
+            peer.lane_commitments[0].block_height = 43;
+        }
+
+        assert!(expansion_observed_on_quorum_peers_for_lane(
+            &stale_commitments,
+            None,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &stale_commitments,
+            Some(&stale_commitments),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+        assert!(expansion_observed_on_quorum_peers_for_lane(
+            &progressed_commitments,
+            Some(&stale_commitments),
             PUBLIC_PROFILE_ELASTIC_LANE_ID,
             3
         ));
@@ -4227,6 +4344,27 @@ mod tests {
     }
 
     #[test]
+    fn public_profile_contraction_rejects_zero_capacity_base_lane() {
+        let mut zero_capacity_base_lane = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
+        for peer in zero_capacity_base_lane.iter_mut().take(3) {
+            let lane = peer
+                .lanes
+                .iter_mut()
+                .find(|lane| lane.lane_id == 2)
+                .expect("base lane must exist");
+            lane.capacity = 0;
+            lane.committed = 0;
+        }
+
+        assert!(!contraction_observed_on_quorum_peers_for_profile(
+            &zero_capacity_base_lane,
+            PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+    }
+
+    #[test]
     fn public_profile_contraction_rejects_stale_base_declarations_without_active_capacity() {
         let mut stale_base_lane = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         for peer in stale_base_lane.iter_mut().take(3) {
@@ -4316,6 +4454,20 @@ mod tests {
                 3
             )
         );
+        assert!(expansion_observed_on_storage_for_lane_count(
+            &expanded_storage,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID
+        ));
+        assert!(
+            expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
+                &expanded_storage,
+                &prior_transitions,
+                PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3
+            )
+        );
         assert!(
             !expansion_observed_with_prior_scale_out_quorum_on_storage_for_count(
                 &partial_four_lane_storage,
@@ -4324,6 +4476,82 @@ mod tests {
                 3
             )
         );
+    }
+
+    #[test]
+    fn public_profile_storage_fallback_rejects_wrong_elastic_lane_directory() {
+        let wrong_elastic_storage = vec![
+            (
+                0,
+                vec![
+                    "lane_000_core".to_owned(),
+                    "lane_001_governance".to_owned(),
+                    "lane_002_zk".to_owned(),
+                    "lane_004_elastic_lane_4".to_owned(),
+                ],
+            );
+            4
+        ];
+        let prior_transitions = vec![
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats::default(),
+        ];
+
+        assert!(expansion_observed_on_storage_for_count(
+            &wrong_elastic_storage,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES
+        ));
+        assert!(!expansion_observed_on_storage_for_lane_count(
+            &wrong_elastic_storage,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID
+        ));
+        assert!(
+            !expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
+                &wrong_elastic_storage,
+                &prior_transitions,
+                PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3
+            )
+        );
+    }
+
+    #[test]
+    fn public_profile_storage_fallback_rejects_prefix_spoofed_lane_directory() {
+        let prefix_spoofed_storage = vec![
+            (
+                0,
+                vec![
+                    "lane_000_core".to_owned(),
+                    "lane_001_governance".to_owned(),
+                    "lane_002_zk".to_owned(),
+                    "lane_003shadow".to_owned(),
+                ],
+            );
+            4
+        ];
+
+        assert!(expansion_observed_on_storage_for_count(
+            &prefix_spoofed_storage,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES
+        ));
+        assert!(!expansion_observed_on_storage_for_lane_count(
+            &prefix_spoofed_storage,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID
+        ));
     }
 
     #[test]

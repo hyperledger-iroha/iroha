@@ -63,6 +63,17 @@ class HttpClientTransport(
         return flushPendingQueue().exceptionally { null }.thenCompose { submitWithRetryInternal(transaction, hashHex, 1, true) }
     }
 
+    override fun submitTransactionJson(encodedVersionedTransactionJson: ByteArray): CompletableFuture<ClientResponse> {
+        val request = ToriiRequestBuilder.buildSubmitJsonRequest(
+            config.baseUri(),
+            encodedVersionedTransactionJson,
+            config.requestTimeout(),
+            config.defaultHeaders(),
+            config.wireFormatPreference().acceptHeader(),
+        )
+        return executeAccepted(request, "transaction JSON submit", 202)
+    }
+
     override fun submitTransactionEntrypoint(encodedVersionedEntrypoint: ByteArray): CompletableFuture<ClientResponse> {
         val request = ToriiRequestBuilder.buildSubmitEntrypointRequest(
             config.baseUri(),
@@ -94,6 +105,17 @@ class HttpClientTransport(
             }
             CompletableFuture.completedFuture(clientResponse)
         }.thenCompose { it }
+    }
+
+    override fun submitTransactionEntrypointJson(encodedVersionedEntrypointJson: ByteArray): CompletableFuture<ClientResponse> {
+        val request = ToriiRequestBuilder.buildSubmitEntrypointJsonRequest(
+            config.baseUri(),
+            encodedVersionedEntrypointJson,
+            config.requestTimeout(),
+            config.defaultHeaders(),
+            config.wireFormatPreference().acceptHeader(),
+        )
+        return executeAccepted(request, "transaction entrypoint JSON submit", 202)
     }
 
     override fun waitForTransactionStatus(hashHex: String, options: PipelineStatusOptions?): CompletableFuture<Map<String, Any>> {

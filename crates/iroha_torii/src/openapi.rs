@@ -418,7 +418,7 @@ fn schema_ref(name: &str) -> Value {
 }
 
 fn error_schema_reference() -> Value {
-    schema_ref("ErrorResponse")
+    schema_ref("ErrorEnvelope")
 }
 
 fn not_acceptable_response() -> Value {
@@ -1331,7 +1331,7 @@ fn transaction_paths() -> Map {
     let mut pipeline_status = json_get_operation(
         "Transactions",
         "Fetch pipeline transaction status.",
-        "Return the latest typed pipeline status for a signed transaction hash. Defaults to JSON when Accept is omitted or */*; application/x-norito returns the same typed payload encoded as Norito.",
+        "Return the latest typed pipeline status for a signed transaction hash. Defaults to application/x-norito when Accept is omitted or */*; application/json returns the same typed payload encoded as JSON.",
         "#/components/schemas/PipelineTransactionStatusResponse",
         vec![
             required_string_query_param("hash", "Transaction hash (hex)."),
@@ -1354,9 +1354,9 @@ fn transaction_paths() -> Map {
             );
             responses.insert(
                 "404".to_owned(),
-                json_response(
+                dual_format_response(
                     "Pipeline status not found; Torii has no cached entry for the hash yet.",
-                    error_schema_reference(),
+                    "#/components/schemas/ErrorEnvelope",
                 ),
             );
         }
@@ -2965,7 +2965,7 @@ fn account_paths() -> Map {
     let mut account_get = json_get_operation(
         "Accounts",
         "Fetch canonical account detail.",
-        "Fetch the canonical account existence/materialization view for a specific account id or alias. This read is ingress-independent and fans out across the configured Nexus dataspaces, returning the shared canonical account payload when any authoritative dataspace reports it. Defaults to JSON when Accept is omitted or */*; application/x-norito returns the same typed payload encoded as Norito.",
+        "Fetch the canonical account existence/materialization view for a specific account id or alias. This read is ingress-independent and fans out across the configured Nexus dataspaces, returning the shared canonical account payload when any authoritative dataspace reports it. Defaults to application/x-norito when Accept is omitted or */*; application/json returns the same typed payload encoded as JSON.",
         "#/components/schemas/AccountReadResponse",
         vec![string_path_param(
             "account_id",
@@ -2985,7 +2985,7 @@ fn account_paths() -> Map {
             );
             responses.insert(
                 "404".to_owned(),
-                json_response("Account not found.", error_schema_reference()),
+                dual_format_response("Account not found.", "#/components/schemas/ErrorEnvelope"),
             );
         }
     }
@@ -5852,20 +5852,20 @@ fn versioned_dual_format_post_operation(
     );
     responses.insert(
         "400".to_owned(),
-        dual_format_response("Bad request", "#/components/schemas/ErrorResponse"),
+        dual_format_response("Bad request", "#/components/schemas/ErrorEnvelope"),
     );
     responses.insert(
         "406".to_owned(),
         dual_format_response(
             "Requested content type is not acceptable; supported: application/json, application/x-norito.",
-            "#/components/schemas/ErrorResponse",
+            "#/components/schemas/ErrorEnvelope",
         ),
     );
     responses.insert(
         "415".to_owned(),
         dual_format_response(
             "Unsupported request content type.",
-            "#/components/schemas/ErrorResponse",
+            "#/components/schemas/ErrorEnvelope",
         ),
     );
     operation.insert("responses".into(), Value::Object(responses));
@@ -5906,16 +5906,16 @@ fn kaigi_relays_responses() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".to_owned(),
-        json_response(
+        dual_format_response(
             "Relay summaries retrieved.",
-            schema_ref("KaigiRelaySummaryList"),
+            "#/components/schemas/KaigiRelaySummaryList",
         ),
     );
     responses.insert(
         "503".to_owned(),
-        json_response(
+        dual_format_response(
             "Telemetry profile does not permit relay telemetry.",
-            error_schema_reference(),
+            "#/components/schemas/ErrorEnvelope",
         ),
     );
     responses
@@ -6221,21 +6221,27 @@ fn kaigi_relay_detail_responses() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".to_owned(),
-        json_response("Relay detail retrieved.", schema_ref("KaigiRelayDetail")),
+        dual_format_response(
+            "Relay detail retrieved.",
+            "#/components/schemas/KaigiRelayDetail",
+        ),
     );
     responses.insert(
         "400".to_owned(),
-        json_response("Invalid relay identifier.", error_schema_reference()),
+        dual_format_response(
+            "Invalid relay identifier.",
+            "#/components/schemas/ErrorEnvelope",
+        ),
     );
     responses.insert(
         "404".to_owned(),
-        json_response("Relay not found.", error_schema_reference()),
+        dual_format_response("Relay not found.", "#/components/schemas/ErrorEnvelope"),
     );
     responses.insert(
         "503".to_owned(),
-        json_response(
+        dual_format_response(
             "Telemetry profile does not permit relay telemetry.",
-            error_schema_reference(),
+            "#/components/schemas/ErrorEnvelope",
         ),
     );
     responses
@@ -6276,16 +6282,16 @@ fn kaigi_relays_health_responses() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".to_owned(),
-        json_response(
+        dual_format_response(
             "Relay health snapshot retrieved.",
-            schema_ref("KaigiRelayHealthSnapshot"),
+            "#/components/schemas/KaigiRelayHealthSnapshot",
         ),
     );
     responses.insert(
         "503".to_owned(),
-        json_response(
+        dual_format_response(
             "Telemetry profile does not permit relay telemetry.",
-            error_schema_reference(),
+            "#/components/schemas/ErrorEnvelope",
         ),
     );
     responses
@@ -11228,7 +11234,7 @@ fn components_section() -> Value {
         queue_error_snapshot_schema(),
     );
     schemas.insert("ErrorDetails".to_owned(), error_details_schema());
-    schemas.insert("ErrorResponse".to_owned(), shared_error_schema());
+    schemas.insert("ErrorEnvelope".to_owned(), shared_error_schema());
     components.insert("schemas".into(), Value::Object(schemas));
     Value::Object(components)
 }
@@ -11490,9 +11496,9 @@ mod tests {
             .and_then(Value::as_object)
             .expect("components schemas");
         let error_response = schemas
-            .get("ErrorResponse")
+            .get("ErrorEnvelope")
             .and_then(Value::as_object)
-            .expect("ErrorResponse schema");
+            .expect("ErrorEnvelope schema");
         assert_eq!(
             error_response.get("additionalProperties"),
             Some(&Value::Bool(false))
@@ -11502,7 +11508,7 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|properties| properties.get("details"))
             .and_then(Value::as_object)
-            .expect("ErrorResponse details property");
+            .expect("ErrorEnvelope details property");
         let detail_refs = details
             .get("anyOf")
             .and_then(Value::as_array)
@@ -12005,6 +12011,16 @@ mod tests {
             responses.contains_key("404"),
             "pipeline status should document 404 for missing cache entries"
         );
+        let response_404 = responses
+            .get("404")
+            .and_then(Value::as_object)
+            .expect("404 response");
+        let error_content = response_404
+            .get("content")
+            .and_then(Value::as_object)
+            .expect("pipeline status error content");
+        assert!(error_content.contains_key("application/json"));
+        assert!(error_content.contains_key("application/x-norito"));
         let response_200 = responses
             .get("200")
             .and_then(Value::as_object)
@@ -12015,7 +12031,7 @@ mod tests {
             .expect("pipeline status content");
         assert!(
             content.contains_key("application/json"),
-            "pipeline status should document default JSON output"
+            "pipeline status should document JSON output"
         );
         assert!(
             content.contains_key("application/x-norito"),
@@ -12061,6 +12077,16 @@ mod tests {
             responses.contains_key("404"),
             "account get should document missing-account behavior"
         );
+        let response_404 = responses
+            .get("404")
+            .and_then(Value::as_object)
+            .expect("404 response");
+        let error_content = response_404
+            .get("content")
+            .and_then(Value::as_object)
+            .expect("account get error content");
+        assert!(error_content.contains_key("application/json"));
+        assert!(error_content.contains_key("application/x-norito"));
         let response_200 = responses
             .get("200")
             .and_then(Value::as_object)
@@ -12071,6 +12097,88 @@ mod tests {
             .expect("account get content");
         assert!(content.contains_key("application/json"));
         assert!(content.contains_key("application/x-norito"));
+    }
+
+    #[test]
+    fn signed_submission_routes_document_dual_error_envelopes() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+
+        for path in [uri::TRANSACTION, uri::TRANSACTION_ENTRYPOINT, uri::QUERY] {
+            let path_item = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{path} path"));
+            let post = path_item
+                .get("post")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{path} post operation"));
+            let request_content = post
+                .get("requestBody")
+                .and_then(Value::as_object)
+                .and_then(|body| body.get("content"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{path} request content"));
+            assert!(request_content.contains_key("application/json"));
+            assert!(request_content.contains_key("application/x-norito"));
+            assert!(!request_content.contains_key("application/octet-stream"));
+
+            let responses = post
+                .get("responses")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{path} responses"));
+            for status in ["400", "406", "415"] {
+                let content = responses
+                    .get(status)
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("content"))
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("{path} {status} content"));
+                assert!(content.contains_key("application/json"));
+                assert!(content.contains_key("application/x-norito"));
+                let schema_ref = content
+                    .get("application/json")
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str);
+                assert_eq!(schema_ref, Some("#/components/schemas/ErrorEnvelope"));
+            }
+        }
+    }
+
+    #[test]
+    fn kaigi_typed_routes_document_dual_responses() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+
+        for path in [
+            "/v1/kaigi/relays",
+            "/v1/kaigi/relays/{relay_id}",
+            "/v1/kaigi/relays/health",
+        ] {
+            let content = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|path_item| path_item.get("get"))
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("responses"))
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{path} 200 response content"));
+            assert!(content.contains_key("application/json"));
+            assert!(content.contains_key("application/x-norito"));
+        }
     }
 
     #[test]

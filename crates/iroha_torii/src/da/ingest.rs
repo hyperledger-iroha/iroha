@@ -682,8 +682,9 @@ pub async fn handler_get_da_manifest(
     NoritoQuery(params): NoritoQuery<DaManifestQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ResponseError> {
-    let format = utils::negotiate_response_format(headers.get(axum::http::header::ACCEPT))
+    utils::negotiate_json_only_response(headers.get(axum::http::header::ACCEPT))
         .map_err(ResponseError::from)?;
+    let format = ResponseFormat::Json;
 
     let nexus_enabled = app.state.nexus_snapshot().enabled;
     if !nexus_enabled {
@@ -1874,13 +1875,26 @@ fn verify_manifest_against_request(
 }
 
 fn build_error_response(status: StatusCode, message: &str, format: ResponseFormat) -> Response {
-    let mut map = Map::new();
-    map.insert("status".into(), Value::from(status.as_str()));
-    map.insert("error".into(), Value::from(message));
-    let body = Value::Object(map);
-    let mut response = utils::respond_value_with_format(body, format);
-    *response.status_mut() = status;
-    response
+    let payload =
+        iroha_torii_shared::ErrorEnvelope::new(error_code_for_status(status), message.to_owned());
+    utils::respond_with_status_and_format(status, payload, format)
+}
+
+fn error_code_for_status(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::BAD_REQUEST => "bad_request",
+        StatusCode::UNAUTHORIZED => "unauthorized",
+        StatusCode::FORBIDDEN => "forbidden",
+        StatusCode::NOT_FOUND => "not_found",
+        StatusCode::CONFLICT => "conflict",
+        StatusCode::PAYLOAD_TOO_LARGE => "payload_too_large",
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => "unsupported_media_type",
+        StatusCode::TOO_MANY_REQUESTS => "too_many_requests",
+        StatusCode::SERVICE_UNAVAILABLE => "service_unavailable",
+        _ if status.is_client_error() => "client_error",
+        _ if status.is_server_error() => "server_error",
+        _ => "error",
+    }
 }
 
 fn ceil_div_u64(value: u64, divisor: u64) -> u64 {
