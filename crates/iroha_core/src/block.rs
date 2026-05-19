@@ -6788,6 +6788,11 @@ pub(crate) mod valid {
                 (decisions, errors)
             };
 
+            let transaction_event_hashes: Vec<_> = entrypoints
+                .iter()
+                .map(Self::signed_transaction_from_entrypoint)
+                .map(|tx| tx.map(SignedTransaction::hash))
+                .collect();
             let mut execution_order: Vec<usize> = (0..n).collect();
             let reveal_positions: Vec<usize> = execution_order
                 .iter()
@@ -6850,6 +6855,14 @@ pub(crate) mod valid {
                 }));
             }
 
+            Self::execute_deterministic_pipeline_triggers(
+                block,
+                state_block,
+                &transaction_event_hashes,
+                &ordered_results,
+                &routing_decisions,
+            )?;
+
             let (time_trgs, mut time_hashes, mut time_results) =
                 state_block.execute_time_triggers(&block.header());
             #[cfg(test)]
@@ -6905,6 +6918,51 @@ pub(crate) mod valid {
                 timings.execution_tx_apply_ms = elapsed;
                 timings.execution_tx_apply_sequential_ms = elapsed;
             }
+            Ok(())
+        }
+
+        fn execute_deterministic_pipeline_triggers(
+            block: &SignedBlock,
+            state_block: &mut StateBlock<'_>,
+            transaction_event_hashes: &[Option<HashOf<SignedTransaction>>],
+            ordered_results: &[TransactionResultInner],
+            routing_decisions: &[crate::queue::RoutingDecision],
+        ) -> Result<(), BlockValidationError> {
+            debug_assert_eq!(transaction_event_hashes.len(), ordered_results.len());
+            debug_assert_eq!(routing_decisions.len(), ordered_results.len());
+
+            let mut deterministic_pipeline_events =
+                Vec::with_capacity(transaction_event_hashes.len().saturating_add(1));
+            for (idx, maybe_hash) in transaction_event_hashes.iter().copied().enumerate() {
+                let Some(hash) = maybe_hash else {
+                    continue;
+                };
+                let status = match &ordered_results[idx] {
+                    Ok(_) => TransactionStatus::Approved,
+                    Err(reason) => TransactionStatus::Rejected(Box::new(reason.clone())),
+                };
+                deterministic_pipeline_events.push(PipelineEventBox::from(TransactionEvent {
+                    hash,
+                    block_height: Some(block.header().height()),
+                    lane_id: routing_decisions[idx].lane_id,
+                    dataspace_id: routing_decisions[idx].dataspace_id,
+                    status,
+                }));
+            }
+            deterministic_pipeline_events.push(PipelineEventBox::from(BlockEvent {
+                header: block.header(),
+                status: BlockStatus::Approved,
+            }));
+
+            let mut transaction = state_block.transaction();
+            transaction
+                .execute_pipeline_triggers(deterministic_pipeline_events)
+                .map_err(|reason| {
+                    BlockValidationError::ExecutionContextInvalid(format!(
+                        "pipeline trigger execution failed: {reason}"
+                    ))
+                })?;
+            transaction.apply();
             Ok(())
         }
 
@@ -10810,35 +10868,17 @@ pub(crate) mod valid {
                 apply_results_ms = to_ms(start.elapsed());
             }
 
-            let mut deterministic_pipeline_events = Vec::with_capacity(n.saturating_add(1));
-            for idx in 0..n {
-                let status = match &ordered_results[idx] {
-                    Ok(_) => TransactionStatus::Approved,
-                    Err(reason) => TransactionStatus::Rejected(Box::new(reason.clone())),
-                };
-                deterministic_pipeline_events.push(PipelineEventBox::from(TransactionEvent {
-                    hash: txs[idx].hash(),
-                    block_height: Some(block.header().height()),
-                    lane_id: routing_decisions[idx].lane_id,
-                    dataspace_id: routing_decisions[idx].dataspace_id,
-                    status,
-                }));
-            }
-            deterministic_pipeline_events.push(PipelineEventBox::from(BlockEvent {
-                header: block.header(),
-                status: BlockStatus::Approved,
-            }));
-            {
-                let mut transaction = state_block.transaction();
-                transaction
-                    .execute_pipeline_triggers(deterministic_pipeline_events)
-                    .map_err(|reason| {
-                        BlockValidationError::ExecutionContextInvalid(format!(
-                            "pipeline trigger execution failed: {reason}"
-                        ))
-                    })?;
-                transaction.apply();
-            }
+            let transaction_event_hashes: Vec<_> = prepared_txs
+                .iter()
+                .map(|prepared| Some(prepared.metadata.signed_hash))
+                .collect();
+            Self::execute_deterministic_pipeline_triggers(
+                block,
+                state_block,
+                &transaction_event_hashes,
+                &ordered_results,
+                &routing_decisions,
+            )?;
 
             let time_triggers_start = timings.as_ref().map(|_| Instant::now());
             let (time_trgs, mut time_trg_hashes, mut time_trg_results) =
@@ -17692,6 +17732,7 @@ mod tests {
     use iroha_crypto::Hash;
     use iroha_data_model::{
         errors::AmxStage,
+        events::pipeline::{BlockEventFilter, TransactionEventFilter},
         prelude::*,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SealedTransactionReveal,
@@ -18348,6 +18389,37 @@ mod tests {
         State::new_with_chain(world, kura, query_handle, chain_id.clone())
     }
 
+    fn add_pipeline_metadata_trigger(
+        world: &mut World,
+        authority: &AccountId,
+        trigger_id: &str,
+        key: Name,
+        filter: PipelineEventFilterBox,
+    ) {
+        let action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                authority.clone(),
+                key,
+                Json::new("ok"),
+            ))],
+            Repeats::Exactly(1),
+            authority.clone(),
+            filter,
+        );
+        let mut trigger_block = world.triggers.block();
+        let mut trigger_transaction = trigger_block.transaction();
+        trigger_transaction
+            .add_pipeline_trigger(
+                crate::smartcontracts::triggers::specialized::SpecializedTrigger::new(
+                    trigger_id.parse().expect("trigger id"),
+                    action,
+                ),
+            )
+            .expect("add pipeline trigger");
+        trigger_transaction.apply();
+        trigger_block.commit();
+    }
+
     fn previous_block_at_height(height: u64) -> SignedBlock {
         let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
@@ -18461,6 +18533,241 @@ mod tests {
             results[0].2.0.is_ok(),
             "non-external entrypoint fallback must preserve execution: {:?}",
             results[0].2
+        );
+    }
+
+    #[test]
+    fn block_validation_sequential_entrypoints_execute_pipeline_triggers() {
+        let chain_id = ChainId::from("sequential-pipeline-triggers");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([domain], [account], []);
+        let block_key = Name::from_str("sequential_block_pipeline_trigger").expect("metadata key");
+        let tx_key = Name::from_str("sequential_tx_pipeline_trigger").expect("metadata key");
+        let external_signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "external".to_owned())])
+            .sign(keypair.private_key());
+        let external_hash = external_signed.hash();
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sequential_block_approved",
+            block_key.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sequential_external_approved",
+            tx_key.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new()
+                    .for_hash(external_hash)
+                    .for_status(TransactionStatus::Approved),
+            ),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        let metadata_key = Name::from_str("sequential_commitment_marker").expect("metadata key");
+        let (commitment_entrypoint, _reveal_entrypoint) =
+            sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key);
+
+        let accepted_external = AcceptedTransaction::new_unchecked(Cow::Owned(external_signed));
+        let accepted_commitment =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let block = BlockBuilder::new(vec![accepted_external, accepted_commitment])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+
+        let valid_block = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        assert!(
+            valid_block
+                .as_ref()
+                .entrypoint_results()
+                .all(|(_, _, result)| result.0.is_ok()),
+            "mixed sequential block should validate successfully"
+        );
+        let (block_value, tx_value) = state_block
+            .world
+            .map_account(&authority, |account| {
+                (
+                    account.value().metadata().get(&block_key).cloned(),
+                    account.value().metadata().get(&tx_key).cloned(),
+                )
+            })
+            .expect("authority account exists");
+        assert_eq!(block_value, Some(Json::new("ok")));
+        assert_eq!(tx_value, Some(Json::new("ok")));
+    }
+
+    #[test]
+    fn block_validation_sealed_only_entrypoint_executes_only_block_pipeline_trigger() {
+        let chain_id = ChainId::from("sealed-only-pipeline-triggers");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([domain], [account], []);
+        let block_key = Name::from_str("sealed_only_block_pipeline_trigger").expect("metadata key");
+        let tx_key = Name::from_str("sealed_only_tx_pipeline_trigger").expect("metadata key");
+        let dummy_signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+            .sign(keypair.private_key());
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sealed_only_block_approved",
+            block_key.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sealed_only_dummy_tx_approved",
+            tx_key.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new()
+                    .for_hash(dummy_signed.hash())
+                    .for_status(TransactionStatus::Approved),
+            ),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        let metadata_key = Name::from_str("sealed_only_commitment_marker").expect("metadata key");
+        let (commitment_entrypoint, _reveal_entrypoint) =
+            sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key);
+        let accepted_commitment =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let block = BlockBuilder::new(vec![accepted_commitment])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+
+        let valid_block = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        assert!(
+            valid_block
+                .as_ref()
+                .entrypoint_results()
+                .all(|(_, _, result)| result.0.is_ok()),
+            "sealed-only block should validate successfully"
+        );
+        let (block_value, tx_value) = state_block
+            .world
+            .map_account(&authority, |account| {
+                (
+                    account.value().metadata().get(&block_key).cloned(),
+                    account.value().metadata().get(&tx_key).cloned(),
+                )
+            })
+            .expect("authority account exists");
+        assert_eq!(block_value, Some(Json::new("ok")));
+        assert_eq!(
+            tx_value, None,
+            "sealed-only entrypoints must not synthesize transaction pipeline events"
+        );
+    }
+
+    #[test]
+    fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline_trigger() {
+        let chain_id = ChainId::from("sequential-rejected-pipeline-trigger");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([domain], [account], []);
+        let block_key =
+            Name::from_str("sequential_rejected_block_pipeline_trigger").expect("metadata key");
+        let rejected_key =
+            Name::from_str("sequential_rejected_tx_pipeline_trigger").expect("metadata key");
+        let approved_key =
+            Name::from_str("sequential_wrong_approved_tx_pipeline_trigger").expect("metadata key");
+        let external_signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_instructions([Unregister::domain(
+                DomainId::try_new("missing-domain", "universal").expect("valid domain id"),
+            )])
+            .sign(keypair.private_key());
+        let external_hash = external_signed.hash();
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sequential_rejected_block_approved",
+            block_key.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sequential_external_rejected",
+            rejected_key.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new()
+                    .for_hash(external_hash)
+                    .for_status(TransactionStatus::Rejected(Box::new(
+                        TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+                    ))),
+            ),
+        );
+        add_pipeline_metadata_trigger(
+            &mut world,
+            &authority,
+            "sequential_external_wrong_approved",
+            approved_key.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new()
+                    .for_hash(external_hash)
+                    .for_status(TransactionStatus::Approved),
+            ),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        let metadata_key =
+            Name::from_str("sequential_rejected_commitment_marker").expect("metadata key");
+        let (commitment_entrypoint, _reveal_entrypoint) =
+            sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key);
+        let accepted_external = AcceptedTransaction::new_unchecked(Cow::Owned(external_signed));
+        let accepted_commitment =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let block = BlockBuilder::new(vec![accepted_external, accepted_commitment])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+
+        let valid_block = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results: Vec<_> = valid_block.as_ref().entrypoint_results().collect();
+        assert!(
+            results.iter().any(|(_, _, result)| result.0.is_err()),
+            "mixed sequential block should record the failing external transaction"
+        );
+        let (block_value, rejected_value, approved_value) = state_block
+            .world
+            .map_account(&authority, |account| {
+                (
+                    account.value().metadata().get(&block_key).cloned(),
+                    account.value().metadata().get(&rejected_key).cloned(),
+                    account.value().metadata().get(&approved_key).cloned(),
+                )
+            })
+            .expect("authority account exists");
+        assert_eq!(block_value, Some(Json::new("ok")));
+        assert_eq!(rejected_value, Some(Json::new("ok")));
+        assert_eq!(
+            approved_value, None,
+            "rejected transaction must not match approved transaction filters"
         );
     }
 

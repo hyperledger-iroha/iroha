@@ -8,7 +8,7 @@
 /// corresponding encoder is updated.
 use std::env;
 
-use iroha_crypto::PublicKey;
+use iroha_crypto::{PublicKey, default_bfv_programmed_hidden_program};
 use iroha_crypto::{RamLfeBackend, RamLfeVerificationMode};
 use iroha_data_model::account::{AccountId, NewAccount, OpaqueAccountId};
 use iroha_data_model::asset::{AssetDefinitionId, AssetId};
@@ -40,7 +40,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!(
-            "Usage: {} <register-account|transfer-asset|claim-identifier>",
+            "Usage: {} <register-account|transfer-asset|claim-identifier|hidden-ram-fhe-program>",
             args[0]
         );
         std::process::exit(1);
@@ -49,11 +49,18 @@ fn main() {
         "register-account" => emit_register_account(),
         "transfer-asset" => emit_transfer_asset(),
         "claim-identifier" => emit_claim_identifier(),
+        "hidden-ram-fhe-program" => emit_hidden_ram_fhe_program(),
         other => {
             eprintln!("Unknown fixture: {other}");
             std::process::exit(1);
         }
     }
+}
+
+fn emit_hidden_ram_fhe_program() {
+    let program = default_bfv_programmed_hidden_program();
+    let encoded = norito::to_bytes(&program).expect("encode HiddenRamFheProgram");
+    println!("{}", hex::encode(encoded));
 }
 
 fn emit_register_account() {

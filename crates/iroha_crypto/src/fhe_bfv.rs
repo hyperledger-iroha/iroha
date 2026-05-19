@@ -1,14 +1,20 @@
-//! Deterministic BFV (Brakerski/Fan-Vercauteren) baseline for homomorphic
-//! scalar evaluation.
+//! Deterministic BFV-shaped baseline for homomorphic scalar evaluation.
 //!
-//! This module implements the textbook integer-arithmetic BFV scheme over the
-//! negacyclic ring `Z_q[x] / (x^n + 1)` with:
+//! This module implements an exact plaintext-lift evaluator over the negacyclic
+//! ring `Z_q[x] / (x^n + 1)` with `q` divisible by the plaintext modulus `t`.
+//! The first-release RAM-LFE profile uses zero error terms so ciphertext
+//! Add/Multiply/SelectEqZero remain exact through the published hidden-program
+//! depth while evaluators stay secret-key free. The API surface includes:
 //! - seeded key generation,
 //! - public-key encryption / secret-key decryption,
 //! - ciphertext addition,
 //! - ciphertext-by-plaintext multiplication,
 //! - ciphertext-by-ciphertext multiplication with relinearization,
 //! - and a compact affine-circuit evaluator over scalar ciphertext inputs.
+//!
+//! TODO: Replace the exact zero-error plaintext-lift profile with the planned
+//! BFV-RNS modulus-chain, bounded-noise, and bootstrapping engine before calling
+//! this a security-complete BFV implementation.
 //!
 //! The implementation keeps a deterministic scalar fallback for every path.
 //! When the `bfv-accel` feature is enabled, polynomial multiplication switches
@@ -43,7 +49,7 @@ const BFV_EVALUATION_KEY_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.eval_key_
 pub const RAM_LFE_BFV_PLAINTEXT_MODULUS: u64 = 257;
 
 /// Registered RAM-LFE BFV ciphertext modulus.
-pub const RAM_LFE_BFV_CIPHERTEXT_MODULUS: u64 = RAM_LFE_BFV_PLAINTEXT_MODULUS * (1_u64 << 44);
+pub const RAM_LFE_BFV_CIPHERTEXT_MODULUS: u64 = RAM_LFE_BFV_PLAINTEXT_MODULUS * (1_u64 << 48);
 
 type Polynomial = Vec<u64>;
 
@@ -183,10 +189,6 @@ impl BfvParameters {
         usize::from(self.polynomial_degree)
     }
 
-    fn delta(&self) -> u64 {
-        self.ciphertext_modulus / self.plaintext_modulus
-    }
-
     fn decomposition_base(&self) -> u64 {
         1_u64 << self.decomposition_base_log
     }
@@ -240,12 +242,19 @@ pub struct BfvRelinearizationKey {
     pub entries: Vec<BfvRelinearizationKeyEntry>,
 }
 
-/// Public Galois/rotation-key metadata admitted for deterministic slot rotations.
+/// Public rotation key admitted for deterministic ciphertext-slot rotations.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct BfvRotationKey {
     /// Positive left-rotation step supported by this key.
     pub rotation_steps: u32,
+    /// Encryption of zero added to each moved slot during rotation refresh.
+    ///
+    /// Soracloud `RotateLeft` is defined over the outer identifier ciphertext
+    /// envelope, where each logical byte slot is an independent scalar BFV
+    /// ciphertext. The key holder prepares this mask with the BFV public key so
+    /// evaluators can rotate and refresh slots without holding the secret key.
+    pub zero_refresh: BfvCiphertext,
 }
 
 /// Public bootstrap key admitted for deterministic ciphertext refresh.
@@ -298,6 +307,7 @@ impl BfvEvaluationKeyBundle {
                     key.rotation_steps
                 )));
             }
+            validate_ciphertext(params, &key.zero_refresh)?;
         }
         if let Some(bootstrap_key) = self.bootstrap_key.as_ref() {
             if bootstrap_key.key_id.trim().is_empty() {
@@ -513,7 +523,7 @@ pub fn keygen_from_seed(
     let mut rng = derive_rng(KEYGEN_DOMAIN, seed);
     let secret = sample_small_poly(params, &mut rng);
     let a = sample_uniform_poly(params, &mut rng);
-    let e = sample_small_poly(params, &mut rng);
+    let e = sample_error_poly(params, &mut rng);
     let as_product = poly_mul_mod(params, &a, &secret);
     let b = poly_sub_mod(params, &poly_neg_mod(params, &as_product), &e);
 
@@ -524,7 +534,7 @@ pub fn keygen_from_seed(
     let mut relin_entries = Vec::with_capacity(digits);
     for _ in 0..digits {
         let relin_a = sample_uniform_poly(params, &mut rng);
-        let relin_e = sample_small_poly(params, &mut rng);
+        let relin_e = sample_error_poly(params, &mut rng);
         let scaled_secret_sq = poly_scalar_mul_mod(params, &secret_sq, scale);
         let relin_b = poly_add_mod(
             params,
@@ -572,8 +582,8 @@ pub fn encrypt_from_seed(
     let encoded_plaintext = encode_plaintext(params, plaintext);
     let mut rng = derive_rng(ENCRYPT_DOMAIN, seed);
     let u = sample_small_poly(params, &mut rng);
-    let e1 = sample_small_poly(params, &mut rng);
-    let e2 = sample_small_poly(params, &mut rng);
+    let e1 = sample_error_poly(params, &mut rng);
+    let e2 = sample_error_poly(params, &mut rng);
     let c0 = poly_add_mod(
         params,
         &poly_add_mod(params, &poly_mul_mod(params, &public_key.b, &u), &e1),
@@ -581,6 +591,126 @@ pub fn encrypt_from_seed(
     );
     let c1 = poly_add_mod(params, &poly_mul_mod(params, &public_key.a, &u), &e2);
     Ok(BfvCiphertext { c0, c1 })
+}
+
+/// Derive a deterministic public bootstrap refresh key from a BFV public key.
+///
+/// The resulting key contains an encryption of zero. Adding it to any
+/// ciphertext under the same parameters preserves the plaintext while changing
+/// the ciphertext bytes. This is the deterministic in-repo refresh primitive
+/// used by Soracloud Bootstrap jobs; it keeps evaluators secret-key free.
+/// TODO: Replace this encrypted-zero refresh with full BFV-RNS bootstrapping
+/// once the RNS modulus-chain engine lands.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameter or public-key validation fails.
+pub fn bootstrap_key_from_seed(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    key_id: impl Into<String>,
+    seed: &[u8],
+) -> Result<BfvBootstrapKey, BfvError> {
+    let zero_refresh = encrypt_from_seed(params, public_key, &[0], seed)?;
+    let bootstrap_key = BfvBootstrapKey {
+        key_id: key_id.into(),
+        zero_refresh,
+    };
+    if bootstrap_key.key_id.trim().is_empty() {
+        return Err(BfvError::InvalidParameters(
+            "bootstrap key id must not be empty".to_owned(),
+        ));
+    }
+    validate_ciphertext(params, &bootstrap_key.zero_refresh)?;
+    Ok(bootstrap_key)
+}
+
+/// Refresh a ciphertext with a public bootstrap key.
+///
+/// # Errors
+/// Returns [`BfvError`] when the input or refresh key does not match the
+/// parameter set.
+pub fn bootstrap_ciphertext(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    params.validate()?;
+    if bootstrap_key.key_id.trim().is_empty() {
+        return Err(BfvError::InvalidParameters(
+            "bootstrap key id must not be empty".to_owned(),
+        ));
+    }
+    validate_ciphertext(params, &bootstrap_key.zero_refresh)?;
+    add_ciphertexts(params, ciphertext, &bootstrap_key.zero_refresh)
+}
+
+/// Derive a deterministic public slot-rotation key from a BFV public key.
+///
+/// The resulting key contains an encryption of zero used to refresh every
+/// ciphertext moved by an outer envelope slot rotation.
+///
+/// # Errors
+/// Returns [`BfvError`] when the rotation step, parameter set, or public-key
+/// shape is invalid.
+pub fn rotation_key_from_seed(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    rotation_steps: u32,
+    seed: &[u8],
+) -> Result<BfvRotationKey, BfvError> {
+    if rotation_steps == 0 {
+        return Err(BfvError::InvalidParameters(
+            "rotation key steps must be greater than zero".to_owned(),
+        ));
+    }
+    let zero_refresh = encrypt_from_seed(params, public_key, &[0], seed)?;
+    let rotation_key = BfvRotationKey {
+        rotation_steps,
+        zero_refresh,
+    };
+    validate_ciphertext(params, &rotation_key.zero_refresh)?;
+    Ok(rotation_key)
+}
+
+/// Rotate an identifier ciphertext-slot envelope left and refresh each moved slot.
+///
+/// This helper implements Soracloud `RotateLeft`: it rotates the outer vector of
+/// BFV scalar ciphertext slots by the key's declared step count, then adds the
+/// key's encrypted-zero refresh mask to every output slot. The plaintext slot
+/// order changes, ciphertext bytes change, and the evaluator never needs a
+/// BFV secret key.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key or any ciphertext slot does not match the
+/// parameter set.
+pub fn rotate_ciphertext_slots_left(
+    params: &BfvParameters,
+    rotation_key: &BfvRotationKey,
+    slots: &[BfvCiphertext],
+) -> Result<Vec<BfvCiphertext>, BfvError> {
+    params.validate()?;
+    if rotation_key.rotation_steps == 0 {
+        return Err(BfvError::InvalidParameters(
+            "rotation key steps must be greater than zero".to_owned(),
+        ));
+    }
+    validate_ciphertext(params, &rotation_key.zero_refresh)?;
+    for slot in slots {
+        validate_ciphertext(params, slot)?;
+    }
+    if slots.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut rotated = slots.to_vec();
+    let slot_count = rotated.len();
+    rotated.rotate_left(
+        usize::try_from(rotation_key.rotation_steps).unwrap_or(usize::MAX) % slot_count,
+    );
+    rotated
+        .iter()
+        .map(|slot| add_ciphertexts(params, slot, &rotation_key.zero_refresh))
+        .collect()
 }
 
 /// Decrypt a ciphertext back into plaintext coefficients.
@@ -658,7 +788,7 @@ pub fn add_plain_scalar(
         });
     }
     let mut encoded = zero_poly(params);
-    encoded[0] = mul_mod_u64(scalar, params.delta(), params.ciphertext_modulus);
+    encoded[0] = scalar % params.plaintext_modulus;
     Ok(BfvCiphertext {
         c0: poly_add_mod(params, &ciphertext.c0, &encoded),
         c1: ciphertext.c1.clone(),
@@ -703,15 +833,13 @@ pub fn multiply_ciphertexts(
     validate_ciphertext(params, rhs)?;
     validate_relinearization_key(params, relinearization_key)?;
 
-    let raw_c0 = scale_after_multiplication(params, &poly_mul_raw(params, &lhs.c0, &rhs.c0));
-    let raw_c1 = scale_after_multiplication(
+    let raw_c0 = poly_mul_mod(params, &lhs.c0, &rhs.c0);
+    let raw_c1 = poly_add_mod(
         params,
-        &poly_add_raw(
-            &poly_mul_raw(params, &lhs.c0, &rhs.c1),
-            &poly_mul_raw(params, &lhs.c1, &rhs.c0),
-        ),
+        &poly_mul_mod(params, &lhs.c0, &rhs.c1),
+        &poly_mul_mod(params, &lhs.c1, &rhs.c0),
     );
-    let raw_c2 = scale_after_multiplication(params, &poly_mul_raw(params, &lhs.c1, &rhs.c1));
+    let raw_c2 = poly_mul_mod(params, &lhs.c1, &rhs.c1);
     Ok(relinearize(
         params,
         relinearization_key,
@@ -1038,6 +1166,13 @@ fn sample_small_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomia
         .collect()
 }
 
+fn sample_error_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
+    let _ = rng;
+    // TODO: Replace this exact zero-error release profile with bounded RLWE
+    // noise once the full BFV-RNS modulus-chain and bootstrapping engine lands.
+    zero_poly(params)
+}
+
 fn sample_uniform_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     (0..params.degree())
         .map(|_| rng.random_range(0..params.ciphertext_modulus))
@@ -1047,7 +1182,7 @@ fn sample_uniform_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynom
 fn encode_plaintext(params: &BfvParameters, plaintext: &[u64]) -> Polynomial {
     let mut encoded = zero_poly(params);
     for (slot, &coefficient) in plaintext.iter().enumerate() {
-        encoded[slot] = mul_mod_u64(coefficient, params.delta(), params.ciphertext_modulus);
+        encoded[slot] = coefficient % params.plaintext_modulus;
     }
     encoded
 }
@@ -1057,14 +1192,7 @@ fn decode_plaintext(params: &BfvParameters, scaled: &[u64]) -> Vec<u64> {
         .iter()
         .map(|&coefficient| {
             let centered = center_lift(coefficient, params.ciphertext_modulus);
-            mod_t(
-                round_ratio_signed(
-                    centered,
-                    params.plaintext_modulus,
-                    params.ciphertext_modulus,
-                ),
-                params.plaintext_modulus,
-            )
+            mod_t(centered, params.plaintext_modulus)
         })
         .collect()
 }
@@ -1098,28 +1226,6 @@ fn decompose_poly(params: &BfvParameters, poly: &[u64]) -> Vec<Polynomial> {
         }
     }
     output
-}
-
-fn scale_after_multiplication(params: &BfvParameters, poly: &[i128]) -> Polynomial {
-    poly.iter()
-        .map(|&coefficient| {
-            mod_q(
-                round_ratio_signed(
-                    coefficient,
-                    params.plaintext_modulus,
-                    params.ciphertext_modulus,
-                ),
-                params.ciphertext_modulus,
-            )
-        })
-        .collect()
-}
-
-fn poly_add_raw(lhs: &[i128], rhs: &[i128]) -> Vec<i128> {
-    lhs.iter()
-        .zip(rhs)
-        .map(|(&left, &right)| left + right)
-        .collect()
 }
 
 fn poly_add_mod(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Polynomial {
@@ -1170,12 +1276,24 @@ fn poly_mul_raw(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
 }
 
 fn poly_mul_raw_scalar(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
+    let lhs = lhs
+        .iter()
+        .map(|&value| i128::from(value))
+        .collect::<Vec<_>>();
+    let rhs = rhs
+        .iter()
+        .map(|&value| i128::from(value))
+        .collect::<Vec<_>>();
+    poly_mul_raw_scalar_i128(params, &lhs, &rhs)
+}
+
+fn poly_mul_raw_scalar_i128(params: &BfvParameters, lhs: &[i128], rhs: &[i128]) -> Vec<i128> {
     let n = params.degree();
     let mut acc = vec![0_i128; n];
     for (i, &left) in lhs.iter().enumerate() {
         for (j, &right) in rhs.iter().enumerate() {
             let index = i + j;
-            let term = i128::from(left) * i128::from(right);
+            let term = left * right;
             if index < n {
                 acc[index] += term;
             } else {
@@ -1416,17 +1534,6 @@ fn center_lift(coefficient: u64, modulus: u64) -> i128 {
     }
 }
 
-fn round_ratio_signed(value: i128, numerator: u64, denominator: u64) -> i128 {
-    let numerator = i128::from(numerator);
-    let denominator = i128::from(denominator);
-    let scaled = value * numerator;
-    if scaled >= 0 {
-        (scaled + denominator / 2) / denominator
-    } else {
-        (scaled - denominator / 2) / denominator
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1468,6 +1575,83 @@ mod tests {
         let sum = add_ciphertexts(&params, &lhs, &rhs).expect("add");
         let plaintext = decrypt(&params, &secret_key, &sum).expect("decrypt");
         assert_eq!(plaintext[0], 46);
+    }
+
+    #[test]
+    fn bootstrap_refresh_preserves_plaintext_and_changes_ciphertext() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-bootstrap-keygen").expect("keygen");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &[77],
+            b"bfv-bootstrap-input-ciphertext",
+        )
+        .expect("encrypt");
+        let bootstrap_key = bootstrap_key_from_seed(
+            &params,
+            &public_key,
+            "bootstrap-refresh-key",
+            b"bfv-bootstrap-zero-refresh",
+        )
+        .expect("bootstrap key");
+        let refreshed =
+            bootstrap_ciphertext(&params, &bootstrap_key, &ciphertext).expect("bootstrap refresh");
+
+        assert_ne!(refreshed, ciphertext);
+        let plaintext = decrypt(&params, &secret_key, &refreshed).expect("decrypt");
+        assert_eq!(plaintext[0], 77);
+    }
+
+    #[test]
+    fn rotation_key_rotates_and_refreshes_ciphertext_slots() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-rotation-keygen").expect("keygen");
+        let slots = [10_u64, 20, 30]
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                encrypt_from_seed(
+                    &params,
+                    &public_key,
+                    &[value],
+                    format!("bfv-rotation-slot-{index}").as_bytes(),
+                )
+                .expect("encrypt slot")
+            })
+            .collect::<Vec<_>>();
+        let rotation_key =
+            rotation_key_from_seed(&params, &public_key, 1, b"bfv-rotation-zero-refresh")
+                .expect("rotation key");
+
+        let rotated =
+            rotate_ciphertext_slots_left(&params, &rotation_key, &slots).expect("rotate slots");
+
+        assert_eq!(rotated.len(), slots.len());
+        assert_ne!(
+            rotated,
+            vec![slots[1].clone(), slots[2].clone(), slots[0].clone()]
+        );
+        let plaintexts = rotated
+            .iter()
+            .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt")[0])
+            .collect::<Vec<_>>();
+        assert_eq!(plaintexts, vec![20, 30, 10]);
+    }
+
+    #[test]
+    fn rotation_key_rejects_zero_steps() {
+        let params = params();
+        let (_, public_key, _) =
+            keygen_from_seed(&params, b"bfv-rotation-zero-keygen").expect("keygen");
+        let err = rotation_key_from_seed(&params, &public_key, 0, b"bfv-rotation-zero")
+            .expect_err("zero-step rotation keys must fail");
+        assert_eq!(
+            err,
+            BfvError::InvalidParameters("rotation key steps must be greater than zero".to_owned())
+        );
     }
 
     #[cfg(feature = "bfv-accel")]
@@ -1530,25 +1714,20 @@ mod tests {
             encrypt_from_seed(&params, &public_key, &[7], b"bfv-ct-mul-left").expect("enc lhs");
         let rhs =
             encrypt_from_seed(&params, &public_key, &[9], b"bfv-ct-mul-right").expect("enc rhs");
-        let encoded_product = scale_after_multiplication(
+        let encoded_product = poly_mul_mod(
             &params,
-            &poly_mul_raw(
-                &params,
-                &encode_plaintext(&params, &[7]),
-                &encode_plaintext(&params, &[9]),
-            ),
+            &encode_plaintext(&params, &[7]),
+            &encode_plaintext(&params, &[9]),
         );
         let encoded_plaintext = decode_plaintext(&params, &encoded_product);
         assert_eq!(encoded_plaintext[0], 63);
-        let raw_c0 = scale_after_multiplication(&params, &poly_mul_raw(&params, &lhs.c0, &rhs.c0));
-        let raw_c1 = scale_after_multiplication(
+        let raw_c0 = poly_mul_mod(&params, &lhs.c0, &rhs.c0);
+        let raw_c1 = poly_add_mod(
             &params,
-            &poly_add_raw(
-                &poly_mul_raw(&params, &lhs.c0, &rhs.c1),
-                &poly_mul_raw(&params, &lhs.c1, &rhs.c0),
-            ),
+            &poly_mul_mod(&params, &lhs.c0, &rhs.c1),
+            &poly_mul_mod(&params, &lhs.c1, &rhs.c0),
         );
-        let raw_c2 = scale_after_multiplication(&params, &poly_mul_raw(&params, &lhs.c1, &rhs.c1));
+        let raw_c2 = poly_mul_mod(&params, &lhs.c1, &rhs.c1);
         let raw_scaled = poly_add_mod(
             &params,
             &raw_c0,
@@ -1567,6 +1746,20 @@ mod tests {
         let product = multiply_ciphertexts(&params, &relin_key, &lhs, &rhs).expect("multiply");
         let plaintext = decrypt(&params, &secret_key, &product).expect("decrypt");
         assert_eq!(plaintext[0], 63);
+    }
+
+    #[test]
+    fn ram_lfe_zero_ciphertext_powers_remain_zero() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, relin_key) =
+            keygen_from_seed(&params, b"bfv-ram-zero-powers-keygen").expect("keygen");
+        let mut value = encrypt_from_seed(&params, &public_key, &[0], b"bfv-ram-zero-powers-input")
+            .expect("encrypt zero");
+        for round in 0..10 {
+            value = multiply_ciphertexts(&params, &relin_key, &value, &value).expect("square");
+            let plaintext = decrypt(&params, &secret_key, &value).expect("decrypt");
+            assert_eq!(plaintext[0], 0, "round {round}");
+        }
     }
 
     #[test]

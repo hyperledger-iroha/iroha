@@ -31,7 +31,15 @@ Last updated: 2026-05-19
   `input_hex` / identifier `input` requests, evaluates the programmed BFV path
   over ciphertext envelopes, and signs receipts that bind input/output
   ciphertext hashes, program digest, parameter digest, evaluation-key digest,
-  backend, verification mode, and timestamps.
+  backend, verification mode, and timestamps. Torii runtime entries now carry
+  explicit Norito-encoded hidden program material in `hidden_program_hex` plus
+  receipt-signing keys; they do not carry BFV secret keys.
+- The in-repo RAM-LFE BFV profile now uses an exact plaintext-lift
+  representation with plaintext modulus `257`, validates accumulated hidden
+  program multiplicative depth through registers/state, rejects static
+  register/input/memory overflows before execution, and proves
+  `SelectEqZero` across all byte values without decrypting inside the
+  evaluator. Full bounded-noise BFV-RNS remains tracked in `roadmap.md`.
 - Identifier claim/resolve receipts now require a signed
   `RamLfeOutputOpening`. Torii derives `opaque:` identifiers from the verified
   opened-output hash instead of decrypting locally or deriving directly from a
@@ -42,6 +50,10 @@ Last updated: 2026-05-19
   payloads, verify stored payload commitments before execution, run Add,
   Multiply, RotateLeft, and Bootstrap over encoded BFV ciphertext envelopes,
   and commit the encoded output ciphertext bytes back into authoritative state.
+  Bootstrap uses a validated public encrypted-zero refresh key so evaluators
+  remain secret-key free while ciphertext bytes are actually transformed.
+  RotateLeft now also requires public rotation-key refresh material and
+  re-randomizes every moved ciphertext slot after the envelope slot rotation.
 - OpenAPI/static portal specs and the universal-account/Soracloud docs now
   describe the encrypted-only RAM-LFE flow, encrypted output ciphertexts, and
   opening-required identifier resolution. The translated universal-account
@@ -76,8 +88,38 @@ Last updated: 2026-05-19
   `npm run lint`, `npm run build:dist`, `CARGO_TARGET_DIR=target/codex-fhe-fix
   cargo check -p kotlin-fixture-gen`, and `CARGO_TARGET_DIR=target/codex-fhe-fix
   cargo test -p iroha_core claim_identifier_rejects_invalid_output_opening_signature
-  --lib -- --nocapture`. Kotlin/JVM and Java Android Gradle suites are blocked in
-  this environment because no Java runtime is installed.
+  --lib -- --nocapture`. After staging Temurin 21 under `/tmp/temurin21`,
+  `JAVA_HOME=/tmp/temurin21/Contents/Home ./gradlew :core-jvm:test --console=plain`
+  is green from `kotlin/`, and
+  `JAVA_HOME=/tmp/temurin21/Contents/Home ANDROID_HOME=~/Library/Android/sdk
+  ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain` is green
+  from `java/iroha_android/`.
+- Follow-up focused Bootstrap validation is green with
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_crypto
+  bootstrap_refresh_preserves_plaintext_and_changes_ciphertext -- --nocapture`
+  and `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_core
+  soracloud_bootstrap_uses_refresh_key --lib -- --nocapture`.
+- Follow-up rotation-key validation is green with
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_crypto rotation_key
+  -- --nocapture` and `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p
+  iroha_core soracloud_rotate_left_uses_rotation_key_refresh --lib --
+  --nocapture`.
+- Follow-up hidden-program runtime-config validation is green with
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo run -p kotlin-fixture-gen --
+  hidden-ram-fhe-program`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_config
+  torii_ram_lfe_parses -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo check -p iroha_config`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo check -p iroha_torii`,
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_torii
+  identifier_resolution --lib -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_torii
+  torii_ram_lfe_uses_config_runtime --lib -- --nocapture`.
+- Follow-up EqZero/depth validation is green with
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_crypto ram_lfe
+  --lib -- --nocapture` and
+  `CARGO_TARGET_DIR=target/codex-fhe-fix cargo test -p iroha_crypto fhe_bfv
+  --lib -- --nocapture`.
 
 ## 2026-05-19 Structural hardening validation closeout
 
@@ -241,6 +283,66 @@ Last updated: 2026-05-19
   proposal_ivm_budget_defers_extra_ivm_and_keeps_cheap_slots -- --nocapture`.
   Touched-file `rustfmt --edition 2024 --check` and `git diff --check` are
   also green.
+
+## 2026-05-19 Nexus verified relay commit hydration
+
+- `RegisterVerifiedLaneRelay` execution now stages the verified relay record on
+  the transaction, carries successful transactions into the block accumulator,
+  and hydrates the runtime lane-relay cache immediately after the block's
+  contract-visible state commits.
+- The shared hydration path still validates relay-ref, proof digest,
+  verification-height, manifest-root, FastPQ effect type, and claim digest
+  before recording a relay. Invalid or stale staged records are logged and do
+  not enter the merge-admissible relay set.
+- Added adversarial hydration coverage proving bad claim digests are ignored,
+  staged records missing FastPQ proof material or carrying zeroed manifest roots
+  are ignored, dropped transactions neither persist nor hydrate relay records,
+  conflicting cached relay material is not overwritten, and older committed
+  records cannot regress a newer cached lane relay.
+- Added admission-boundary negative coverage for missing/zero manifest roots,
+  disabled Nexus, unknown lane ids, lane/dataspace mismatches, unknown
+  dataspaces, empty or malformed proof payloads, proof dataspace and
+  manifest-root mismatches, zero-like proof digests, stale/future FastPQ
+  metadata heights, malformed envelope block heights, settlement
+  lane/dataspace/hash/totals mismatches, expired proof blobs, missing FastPQ
+  bindings, source dataspace mismatches, wrong FastPQ effect types, malformed
+  stored relay state, and conflicting stored relay state.
+- Added persisted-state corruption coverage proving merge-candidate hydration
+  ignores verified relay records whose relay ref, proof payload hash,
+  verification height, manifest root, FastPQ source dataspace, or FastPQ effect
+  type no longer match the embedded relay envelope.
+- Added key-space and sibling-corruption coverage proving noncanonical
+  prefix-matching verified relay keys cannot hydrate relays, malformed or
+  corrupted prefixed sibling records cannot block a valid canonical record,
+  self-consistent records stored under another relay's canonical key are
+  ignored, spoofed-key siblings cannot replace the valid canonical relay,
+  records for unconfigured lanes or unexpected dataspaces are ignored, and
+  unrelated malformed contract state is ignored by the relay scanner.
+- Added direct lane-relay-burn ingestion coverage proving malformed canonical
+  verified state, canonical keys containing another relay's record, corrupted
+  verified state fields, and noncanonical verified state keys cannot satisfy
+  `record_lane_relay` admission.
+- Fixed an existing Soracloud BFV bootstrap `Result` inference blocker that was
+  preventing current dirty-tree `iroha_core` tests from compiling.
+- Fixed an existing block-test pipeline-trigger helper compile blocker by
+  staging synthetic pipeline triggers through the trigger storage transaction
+  API and using a concrete rejected transaction status in rejected-event
+  filters.
+- Focused validation with `CARGO_TARGET_DIR=target/codex-lane-consensus` is
+  green for `cargo check -p iroha_core`,
+  `cargo test -p iroha_core --lib merge_candidates -- --nocapture` (16 tests),
+  `cargo test -p iroha_core --lib merge_candidates_ignore_contract_state_record
+  -- --nocapture`,
+  `cargo test -p iroha_core --lib verified_lane_relay -- --nocapture` (45
+  tests),
+  `cargo test -p iroha_core --lib
+  committed_verified_lane_relay_record_hydrates_runtime_cache -- --nocapture`,
+  `cargo test -p iroha_core --lib register_verified_lane_relay -- --nocapture`
+  (27 tests), `cargo test -p iroha_core --lib record_lane_relay -- --nocapture`
+  (26 tests),
+  and `cargo test -p iroha_core --lib
+  block_validation_sequential_entrypoints_execute_pipeline_triggers --
+  --nocapture`.
 
 ## 2026-05-19 Nexus lane relay merge hardening
 

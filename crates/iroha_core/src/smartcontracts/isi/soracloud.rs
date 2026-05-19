@@ -9,8 +9,9 @@ use iroha_crypto::{
     Hash,
     fhe_bfv::{
         BfvCiphertext, BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvParameters,
-        add_ciphertexts, multiply_ciphertexts, multiply_plain_scalar, ram_lfe_bfv_parameters_v1,
-        registered_bfv_parameter_digest, validate_registered_bfv_parameters,
+        add_ciphertexts, bootstrap_ciphertext, multiply_ciphertexts, multiply_plain_scalar,
+        ram_lfe_bfv_parameters_v1, registered_bfv_parameter_digest, rotate_ciphertext_slots_left,
+        validate_registered_bfv_parameters,
     },
 };
 use iroha_data_model::{
@@ -4836,42 +4837,40 @@ fn execute_soracloud_fhe_job(
         }),
         FheJobOperationV1::RotateLeft => {
             ensure_matching_fhe_slots(inputs)?;
-            if !evaluation_keys
+            let rotation_key = evaluation_keys
                 .rotation_keys
                 .iter()
-                .any(|key| key.rotation_steps == job.rotation_steps)
-            {
-                return Err(invalid_parameter(format!(
-                    "missing BFV rotation key for {} steps",
-                    job.rotation_steps
-                )));
-            }
-            let mut slots = inputs
-                .first()
-                .expect("input presence checked above")
-                .slots
-                .clone();
-            let slot_count = slots.len();
-            slots.rotate_left(
-                usize::try_from(job.rotation_steps).unwrap_or(usize::MAX) % slot_count,
-            );
+                .find(|key| key.rotation_steps == job.rotation_steps)
+                .ok_or_else(|| {
+                    invalid_parameter(format!(
+                        "missing BFV rotation key for {} steps",
+                        job.rotation_steps
+                    ))
+                })?;
+            let slots = &inputs.first().expect("input presence checked above").slots;
+            let slots = rotate_ciphertext_slots_left(params, rotation_key, slots)
+                .map_err(|err| invalid_parameter(format!("FHE rotate failed: {err}")))?;
             Ok(BfvIdentifierCiphertext { slots })
         }
         FheJobOperationV1::Bootstrap => {
             ensure_matching_fhe_slots(inputs)?;
-            if evaluation_keys.bootstrap_key.is_none() {
-                return Err(invalid_parameter(
-                    "missing BFV bootstrap key for bootstrap operation",
-                ));
-            }
+            let bootstrap_key = evaluation_keys.bootstrap_key.as_ref().ok_or_else(|| {
+                invalid_parameter("missing BFV bootstrap key for bootstrap operation")
+            })?;
             let slots = inputs
                 .first()
                 .expect("input presence checked above")
                 .slots
                 .iter()
                 .map(|slot| {
-                    multiply_plain_scalar(params, slot, 1)
-                        .map_err(|err| invalid_parameter(format!("FHE bootstrap failed: {err}")))
+                    let mut refreshed = slot.clone();
+                    for _ in 0..job.bootstrap_count {
+                        refreshed = bootstrap_ciphertext(params, bootstrap_key, &refreshed)
+                            .map_err(|err| {
+                                invalid_parameter(format!("FHE bootstrap failed: {err}"))
+                            })?;
+                    }
+                    Ok::<BfvCiphertext, InstructionExecutionError>(refreshed)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(BfvIdentifierCiphertext { slots })
@@ -10275,8 +10274,9 @@ mod tests {
     use iroha_crypto::{
         Hash, KeyPair,
         fhe_bfv::{
-            BfvBootstrapKey, BfvEvaluationKeyBundle, BfvIdentifierPublicParameters, BfvRotationKey,
-            encrypt_identifier_from_seed, keygen_from_seed,
+            BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters,
+            bootstrap_key_from_seed, decrypt, decrypt_identifier, encrypt_identifier_from_seed,
+            keygen_from_seed, rotation_key_from_seed,
         },
     };
     use iroha_data_model::{
@@ -10893,20 +10893,23 @@ mod tests {
 
     fn sample_bfv_evaluation_key_bundle() -> BfvEvaluationKeyBundle {
         let params = ram_lfe_bfv_parameters_v1();
-        let (_secret_key, _public_key, relinearization_key) =
+        let (_secret_key, public_key, relinearization_key) =
             keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
-        let degree = usize::from(params.polynomial_degree);
-        let zero_refresh = BfvCiphertext {
-            c0: vec![0; degree],
-            c1: vec![0; degree],
-        };
         BfvEvaluationKeyBundle {
             relinearization_key,
-            rotation_keys: vec![BfvRotationKey { rotation_steps: 1 }],
-            bootstrap_key: Some(BfvBootstrapKey {
-                key_id: "bootstrap-test-key".to_string(),
-                zero_refresh,
-            }),
+            rotation_keys: vec![
+                rotation_key_from_seed(&params, &public_key, 1, b"soracloud-fhe-rotation-key")
+                    .expect("rotation key"),
+            ],
+            bootstrap_key: Some(
+                bootstrap_key_from_seed(
+                    &params,
+                    &public_key,
+                    "bootstrap-test-key",
+                    b"soracloud-fhe-bootstrap-key",
+                )
+                .expect("bootstrap key"),
+            ),
         }
     }
 
@@ -10922,6 +10925,23 @@ mod tests {
         let ciphertext =
             encrypt_identifier_from_seed(&public_parameters, input, seed).expect("encrypt");
         norito::to_bytes(&ciphertext).expect("encode ciphertext")
+    }
+
+    fn sample_fhe_envelope(input: &[u8], seed: &[u8]) -> BfvIdentifierCiphertext {
+        decode_soracloud_fhe_envelope(&sample_fhe_payload(input, seed))
+            .expect("sample FHE payload decodes")
+    }
+
+    fn assert_invalid_parameter_contains(err: InstructionExecutionError, expected: &str) {
+        assert!(
+            matches!(
+                err,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(ref message)
+                ) if message.contains(expected)
+            ),
+            "unexpected error: {err:?}"
+        );
     }
 
     fn sample_fhe_input_ref(state_key: &str, payload: &[u8]) -> FheJobInputRefV1 {
@@ -10964,6 +10984,161 @@ mod tests {
             rotation_steps: 0,
             bootstrap_count: 0,
         }
+    }
+
+    #[test]
+    fn soracloud_bootstrap_uses_refresh_key() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-bootstrap-refresh-keygen").expect("keygen");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key: public_key.clone(),
+            max_input_bytes: 8,
+        };
+        let input =
+            encrypt_identifier_from_seed(&public_parameters, b"abc", b"soracloud-bootstrap-input")
+                .expect("encrypt input");
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            bootstrap_key: Some(
+                bootstrap_key_from_seed(
+                    &params,
+                    &public_key,
+                    "bootstrap-refresh-key",
+                    b"soracloud-bootstrap-refresh-zero",
+                )
+                .expect("bootstrap key"),
+            ),
+        };
+        let job = FheJobSpecV1 {
+            schema_version: iroha_data_model::soracloud::FHE_JOB_SPEC_VERSION_V1,
+            job_id: "bootstrap-job".to_string(),
+            policy_name: "analytics".parse().expect("valid name"),
+            param_set: "bfv-default".parse().expect("valid name"),
+            param_set_version: NonZeroU32::new(1).expect("nonzero"),
+            operation: FheJobOperationV1::Bootstrap,
+            inputs: vec![sample_fhe_input_ref(
+                "/state/private/input",
+                &norito::to_bytes(&input).expect("encode input"),
+            )],
+            output_state_key: "/state/private/bootstrap-output".to_string(),
+            requested_multiplication_depth: 0,
+            rotation_steps: 0,
+            bootstrap_count: 1,
+        };
+
+        let output = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input.clone()])
+            .expect("execute bootstrap job");
+        assert_ne!(output, input);
+        let plaintext =
+            decrypt_identifier(&public_parameters, &secret_key, &output).expect("decrypt output");
+        assert_eq!(plaintext, b"abc");
+    }
+
+    #[test]
+    fn soracloud_bootstrap_rejects_missing_refresh_key() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        evaluation_keys.bootstrap_key = None;
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = 1;
+        let input = sample_fhe_envelope(b"abc", b"soracloud-bootstrap-missing-key");
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("bootstrap must require a bootstrap refresh key");
+        assert_invalid_parameter_contains(err, "missing BFV bootstrap key");
+    }
+
+    #[test]
+    fn soracloud_rotate_left_uses_rotation_key_refresh() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-rotate-refresh-keygen").expect("keygen");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key: public_key.clone(),
+            max_input_bytes: 4,
+        };
+        let input =
+            encrypt_identifier_from_seed(&public_parameters, b"ab", b"soracloud-rotate-input")
+                .expect("encrypt input");
+        let mut plain_rotated = input.slots.clone();
+        plain_rotated.rotate_left(1);
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: vec![
+                rotation_key_from_seed(&params, &public_key, 1, b"soracloud-rotate-refresh-zero")
+                    .expect("rotation key"),
+            ],
+            bootstrap_key: None,
+        };
+        let job = FheJobSpecV1 {
+            schema_version: iroha_data_model::soracloud::FHE_JOB_SPEC_VERSION_V1,
+            job_id: "rotate-job".to_string(),
+            policy_name: "analytics".parse().expect("valid name"),
+            param_set: "bfv-default".parse().expect("valid name"),
+            param_set_version: NonZeroU32::new(1).expect("nonzero"),
+            operation: FheJobOperationV1::RotateLeft,
+            inputs: vec![sample_fhe_input_ref(
+                "/state/private/input",
+                &norito::to_bytes(&input).expect("encode input"),
+            )],
+            output_state_key: "/state/private/rotate-output".to_string(),
+            requested_multiplication_depth: 0,
+            rotation_steps: 1,
+            bootstrap_count: 0,
+        };
+
+        let output = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect("execute rotate job");
+        assert_ne!(output.slots, plain_rotated);
+        let plaintext_slots = output
+            .slots
+            .iter()
+            .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt")[0])
+            .collect::<Vec<_>>();
+        assert_eq!(plaintext_slots, vec![97, 98, 0, 0, 2]);
+    }
+
+    #[test]
+    fn soracloud_rotate_left_rejects_missing_rotation_key() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::RotateLeft;
+        job.rotation_steps = 2;
+        let input = sample_fhe_envelope(b"ab", b"soracloud-rotate-missing-key");
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("rotation must require a matching public rotation key");
+        assert_invalid_parameter_contains(err, "missing BFV rotation key for 2 steps");
+    }
+
+    #[test]
+    fn soracloud_fhe_job_rejects_mismatched_ciphertext_slot_counts() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let lhs = sample_fhe_envelope(b"alice", b"soracloud-fhe-slot-count-left");
+        let mut rhs = sample_fhe_envelope(b"bob", b"soracloud-fhe-slot-count-right");
+        rhs.slots.pop().expect("sample envelope has slots");
+        let job = sample_fhe_job(Vec::new());
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[lhs, rhs])
+            .expect_err("FHE jobs must reject incompatible ciphertext envelopes");
+        assert_invalid_parameter_contains(err, "matching slot counts");
+    }
+
+    #[test]
+    fn soracloud_registered_bfv_parameters_reject_digest_mismatch() {
+        let mut param_set = sample_fhe_param_set();
+        param_set.parameter_digest = Hash::new(b"tampered-bfv-parameters");
+
+        let err = registered_soracloud_bfv_parameters(&param_set)
+            .expect_err("tampered parameter-set digest must be rejected");
+        assert_invalid_parameter_contains(err, "registered BFV profile");
     }
 
     fn fhe_job_provenance(

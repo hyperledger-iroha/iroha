@@ -10813,6 +10813,7 @@ pub mod isi {
                     )
                     .into());
                 }
+                state_transaction.stage_verified_lane_relay_record(record);
                 return Ok(());
             }
 
@@ -10820,6 +10821,7 @@ pub mod isi {
                 .world
                 .smart_contract_state
                 .insert(key, encoded);
+            state_transaction.stage_verified_lane_relay_record(record);
             Ok(())
         }
     }

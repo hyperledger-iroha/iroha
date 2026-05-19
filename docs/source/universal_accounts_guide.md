@@ -122,7 +122,12 @@ Current Torii routes:
 Torii's in-process execution runtime is configured under
 `torii.ram_lfe.programs[*]`, keyed by `program_id`. The identifier routes now
 reuse that same RAM-LFE runtime instead of a separate `identifier_resolver`
-config surface.
+config surface. Each runtime entry must include `secret_hex`,
+`hidden_program_hex`, `signer_private_key`, and the optional `receipt_ttl_ms`.
+`hidden_program_hex` is the Norito-encoded `HiddenRamFheProgram` whose digest
+must match the on-chain programmed BFV public parameters. Torii runtime config
+must not include BFV secret keys; it signs execution receipts and evaluates
+with public/evaluation-key material only.
 
 Current SDK support:
 

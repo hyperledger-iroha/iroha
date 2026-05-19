@@ -60,7 +60,10 @@ Before selecting candidates, nodes also scan persisted verified lane relay
 records in smart-contract state and hydrate any valid records into the runtime
 relay cache. Hydrated records must match their relay reference, proof digest,
 verification height, manifest root, FastPQ effect type, and claim digest before
-they can enter the active relay set.
+they can enter the active relay set. When a `RegisterVerifiedLaneRelay`
+instruction commits, the verified record is staged through the block commit and
+hydrates the same runtime cache immediately after the contract-visible state is
+durable.
 
 Configured lanes that did not produce a verified relay for the current merge
 window are omitted rather than carried forward. Merge epochs increase

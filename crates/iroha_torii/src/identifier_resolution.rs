@@ -9,9 +9,10 @@ use std::{
 
 use iroha_crypto::{
     BfvIdentifierCiphertext, BfvIdentifierPublicParameters, BfvProgrammedPublicParameters,
-    BfvRamProgramProfile, ClientRequest, EvalResponse, Hash, KeyPair, RamLfeBackend, RamLfeError,
-    RamLfeVerificationMode, Signature, SignatureOf, decode_bfv_programmed_public_parameters,
-    evaluate_commitment, identifier_hashes_from_output_hash, ram_lfe_output_hash,
+    BfvRamProgramProfile, ClientRequest, EvalResponse, Hash, HiddenRamFheProgram, KeyPair,
+    RamLfeBackend, RamLfeError, RamLfeVerificationMode, Signature, SignatureOf,
+    decode_bfv_programmed_public_parameters, evaluate_commitment_with_hidden_program,
+    identifier_hashes_from_output_hash, ram_lfe_output_hash,
 };
 use iroha_data_model::{
     account::OpaqueAccountId,
@@ -31,6 +32,7 @@ use thiserror::Error;
 #[derive(Debug, Clone)]
 struct ProgramRuntime {
     secret: Vec<u8>,
+    hidden_program: HiddenRamFheProgram,
     signer: KeyPair,
     receipt_ttl_ms: Option<u64>,
 }
@@ -118,6 +120,7 @@ impl IdentifierResolutionService {
         &self,
         program_id: RamLfeProgramId,
         secret: Vec<u8>,
+        hidden_program: HiddenRamFheProgram,
         signer: KeyPair,
         receipt_ttl_ms: Option<u64>,
     ) {
@@ -128,6 +131,7 @@ impl IdentifierResolutionService {
                 program_id,
                 ProgramRuntime {
                     secret,
+                    hidden_program,
                     signer,
                     receipt_ttl_ms,
                 },
@@ -168,7 +172,12 @@ impl IdentifierResolutionService {
             opaque_id,
             receipt_hash,
             backend,
-        } = evaluate_commitment(&runtime.secret, &program_policy.commitment, &request)?;
+        } = evaluate_commitment_with_hidden_program(
+            &runtime.secret,
+            &program_policy.commitment,
+            &request,
+            Some(&runtime.hidden_program),
+        )?;
         let output_hash = ram_lfe_output_hash(&output);
         let input_ciphertext_hash = Hash::new(&request.normalized_input);
         let output_ciphertext_hash = output_hash;
@@ -611,6 +620,7 @@ mod tests {
         service.register_program_runtime(
             program_policy.program_id.clone(),
             secret,
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -677,6 +687,187 @@ mod tests {
     }
 
     #[test]
+    fn programmed_backend_rejects_mismatched_runtime_hidden_program() {
+        let service = IdentifierResolutionService::new();
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let signer = KeyPair::random();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let secret = b"hidden-phone-policy".to_vec();
+        let (_, program_policy) = sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
+        let mut mismatched_program = default_bfv_programmed_hidden_program();
+        mismatched_program
+            .instructions
+            .pop()
+            .expect("default program has instructions");
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            mismatched_program,
+            signer,
+            Some(30_000),
+        );
+
+        let ciphertext = encrypted_identifier(
+            &program_policy,
+            b"+15551234567",
+            b"mismatched-hidden-program-ciphertext",
+        );
+        let err = service
+            .execute_encrypted(&program_policy, &ciphertext)
+            .expect_err("runtime hidden program digest mismatch must fail");
+        assert!(matches!(
+            err,
+            IdentifierResolutionError::Evaluation(RamLfeError::CommitmentMismatch)
+        ));
+    }
+
+    #[test]
+    fn derive_rejects_replayed_output_opening_for_different_ciphertext() {
+        let service = IdentifierResolutionService::new();
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let signer = KeyPair::random();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let secret = b"hidden-phone-policy".to_vec();
+        let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            default_bfv_programmed_hidden_program(),
+            signer.clone(),
+            Some(30_000),
+        );
+
+        let first_ciphertext =
+            encrypted_identifier(&program_policy, b"+15551234567", b"opening-replay-first");
+        let first_execution = service
+            .execute_encrypted(&program_policy, &first_ciphertext)
+            .expect("execute first encrypted input");
+        let replayed_opening = opening_for_execution(&program_policy, &signer, &first_execution);
+        let second_ciphertext =
+            encrypted_identifier(&program_policy, b"+15557654321", b"opening-replay-second");
+
+        let err = service
+            .derive_encrypted(
+                &policy,
+                &program_policy,
+                &second_ciphertext,
+                replayed_opening,
+            )
+            .expect_err("opening bound to one ciphertext must not verify for another");
+        assert!(matches!(
+            err,
+            IdentifierResolutionError::InvalidOutputOpening(message)
+                if message.contains("input ciphertext hash mismatch")
+        ));
+    }
+
+    #[test]
+    fn derive_rejects_tampered_output_opening_signature() {
+        let service = IdentifierResolutionService::new();
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let signer = KeyPair::random();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let secret = b"hidden-phone-policy".to_vec();
+        let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            default_bfv_programmed_hidden_program(),
+            signer.clone(),
+            Some(30_000),
+        );
+
+        let ciphertext = encrypted_identifier(
+            &program_policy,
+            b"+15551234567",
+            b"tampered-opening-signature",
+        );
+        let execution = service
+            .execute_encrypted(&program_policy, &ciphertext)
+            .expect("execute encrypted input");
+        let mut opening = opening_for_execution(&program_policy, &signer, &execution);
+        opening.payload.opened_output_hash = Hash::new(b"tampered-opened-output");
+
+        let err = service
+            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
+            .expect_err("payload mutation must invalidate output-opening signature");
+        assert!(matches!(
+            err,
+            IdentifierResolutionError::InvalidOutputOpening(_)
+        ));
+    }
+
+    #[test]
+    fn derive_rejects_signed_zero_output_opening_hash() {
+        let service = IdentifierResolutionService::new();
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let signer = KeyPair::random();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let secret = b"hidden-phone-policy".to_vec();
+        let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            default_bfv_programmed_hidden_program(),
+            signer.clone(),
+            Some(30_000),
+        );
+
+        let ciphertext =
+            encrypted_identifier(&program_policy, b"+15551234567", b"zero-opening-hash");
+        let execution = service
+            .execute_encrypted(&program_policy, &ciphertext)
+            .expect("execute encrypted input");
+        let mut opening = opening_for_execution(&program_policy, &signer, &execution);
+        opening.payload.opened_output_hash = Hash::prehashed([0; Hash::LENGTH]);
+        opening.signature = SignatureOf::new(signer.private_key(), &opening.payload).into();
+
+        let err = service
+            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
+            .expect_err("zero opened-output hash must be rejected even when signed");
+        assert!(matches!(
+            err,
+            IdentifierResolutionError::InvalidOutputOpening(message)
+                if message.contains("opened output hash")
+        ));
+    }
+
+    #[test]
+    fn derive_rejects_future_output_opening_timestamp() {
+        let service = IdentifierResolutionService::new();
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let signer = KeyPair::random();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let secret = b"hidden-phone-policy".to_vec();
+        let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            default_bfv_programmed_hidden_program(),
+            signer.clone(),
+            Some(30_000),
+        );
+
+        let ciphertext = encrypted_identifier(&program_policy, b"+15551234567", b"future-opening");
+        let execution = service
+            .execute_encrypted(&program_policy, &ciphertext)
+            .expect("execute encrypted input");
+        let mut opening = opening_for_execution(&program_policy, &signer, &execution);
+        opening.payload.opened_at_ms = now_ms().saturating_add(60_000);
+        opening.payload.expires_at_ms = opening.payload.opened_at_ms.checked_add(60_000);
+        opening.signature = SignatureOf::new(signer.private_key(), &opening.payload).into();
+
+        let err = service
+            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
+            .expect_err("future-dated output opening must be rejected");
+        assert!(matches!(
+            err,
+            IdentifierResolutionError::InvalidOutputOpening(message)
+                if message.contains("future")
+        ));
+    }
+
+    #[test]
     fn programmed_backend_derives_deterministic_receipts() {
         let service = IdentifierResolutionService::new();
         let owner = AccountId::new(KeyPair::random().public_key().clone());
@@ -688,6 +879,7 @@ mod tests {
         service.register_program_runtime(
             program_policy.program_id.clone(),
             secret,
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );
@@ -724,6 +916,7 @@ mod tests {
         service.register_program_runtime(
             program_policy.program_id.clone(),
             secret,
+            default_bfv_programmed_hidden_program(),
             signer.clone(),
             Some(30_000),
         );

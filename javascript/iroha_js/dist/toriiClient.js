@@ -76,14 +76,6 @@ const BFV_IDENTIFIER_U_DOMAIN = Buffer.from(
   "iroha.sdk.identifier.bfv.u.v1",
   "utf8",
 );
-const BFV_IDENTIFIER_E1_DOMAIN = Buffer.from(
-  "iroha.sdk.identifier.bfv.e1.v1",
-  "utf8",
-);
-const BFV_IDENTIFIER_E2_DOMAIN = Buffer.from(
-  "iroha.sdk.identifier.bfv.e2.v1",
-  "utf8",
-);
 const CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
 const DA_FETCH_ARTIFACT_PREFIX = "artifacts/da/fetch_";
 const DA_PROVE_ARTIFACT_PREFIX = "artifacts/da/prove_availability_";
@@ -20278,7 +20270,6 @@ function validateIdentifierBfvPublicParameters(publicParameters, context) {
     plaintextModulus,
     ciphertextModulus,
     maxInputBytes,
-    delta: ciphertextModulus / plaintextModulus,
     publicKey: { a, b },
   };
 }
@@ -20373,16 +20364,10 @@ function encryptIdentifierScalar(params, scalar, seed) {
     params,
     new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_U_DOMAIN),
   );
-  const e1 = sampleSmallPoly(
-    params,
-    new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_E1_DOMAIN),
-  );
-  const e2 = sampleSmallPoly(
-    params,
-    new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_E2_DOMAIN),
-  );
+  const e1 = Array.from({ length: params.polynomialDegree }, () => 0n);
+  const e2 = Array.from({ length: params.polynomialDegree }, () => 0n);
   const encoded = Array.from({ length: params.polynomialDegree }, () => 0n);
-  encoded[0] = mulModBigInt(scalar, params.delta, params.ciphertextModulus);
+  encoded[0] = scalar % params.plaintextModulus;
   return {
     c0: polyAddMod(
       params,

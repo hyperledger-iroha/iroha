@@ -696,13 +696,13 @@ mod tests {
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
-        block::consensus::LaneBlockCommitment,
+        block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         events::execute_trigger::ExecuteTriggerEventFilter,
         isi::error::{InstructionExecutionError, InvalidParameterError},
         nexus::{
             AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceCatalog, DataSpaceId,
             DataSpaceMetadata, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneConfig,
-            LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob,
+            LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob, VerifiedLaneRelayRecord,
             VerifiedNexusFeeBudgetRecord, lane_relay_fastpq_claim_digest,
             nexus_fee_budget_claim_digest,
         },
@@ -1074,6 +1074,49 @@ mod tests {
         }))
     }
 
+    fn relay_state_key_for_test(envelope: &LaneRelayEnvelope) -> Name {
+        envelope
+            .relay_ref()
+            .relay_state_key()
+            .parse()
+            .expect("relay state key")
+    }
+
+    fn lane_relay_envelope_with_proof_payload(
+        envelope: LaneRelayEnvelope,
+        proof_blob: &ProofBlob,
+        verified_at_height: u64,
+    ) -> LaneRelayEnvelope {
+        envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest: iroha_crypto::Hash::new(&proof_blob.payload),
+            verified_at_height,
+        }))
+    }
+
+    fn verified_lane_relay_record_for_test(
+        envelope: LaneRelayEnvelope,
+        proof_blob: &ProofBlob,
+        verified_at_height: u64,
+    ) -> VerifiedLaneRelayRecord {
+        let proof_envelope: AxtProofEnvelope =
+            norito::decode_from_bytes(&proof_blob.payload).expect("decode proof envelope");
+        let binding = proof_envelope
+            .fastpq_binding
+            .clone()
+            .expect("test fastpq binding");
+        let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
+            .expect("verify test fastpq proof");
+        VerifiedLaneRelayRecord::new(
+            envelope,
+            iroha_crypto::Hash::new(&proof_blob.payload),
+            verified_fastpq.statement_digest,
+            verified_fastpq.proof_digest,
+            verified_at_height,
+            proof_envelope.manifest_root,
+            binding,
+        )
+    }
+
     #[test]
     async fn register_verified_lane_relay_instruction_box_is_registered() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -1268,6 +1311,732 @@ mod tests {
     }
 
     #[test]
+    async fn register_verified_lane_relay_rejects_when_nexus_disabled() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+
+        let manifest_root = [0x42; 32];
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            LaneId::new(3),
+            DataSpaceId::new(10),
+            manifest_root,
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-nexus-disabled",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("disabled nexus must reject verified lane relay registration");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("requires nexus.enabled=true")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_unknown_lane_id() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, LaneId::new(3));
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            LaneId::new(4),
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-unknown-lane",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("unknown lane id must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("unknown lane id 4")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_lane_dataspace_mismatch() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let lane_dsid = DataSpaceId::new(10);
+        let envelope_dsid = DataSpaceId::new(11);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, lane_dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            envelope_dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-lane-dsid-mismatch",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("lane dataspace mismatch must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("belongs to dataspace")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_unknown_dataspace_id() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+        let unrelated_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::UNIVERSAL,
+            alias: "universal".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("unrelated dataspace catalog");
+        state_transaction.nexus.dataspace_catalog = unrelated_catalog.clone();
+        state_transaction.world.dataspace_catalog = unrelated_catalog;
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-unknown-dsid",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("unknown dataspace id must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("unknown dataspace id 10")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_empty_proof_payload() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let proof_blob = ProofBlob {
+            payload: Vec::new(),
+            expiry_slot: Some(state_transaction.block_height() + 10),
+        };
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(&proof_blob.payload),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("empty proof payload must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("proof payload is empty")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_malformed_proof_envelope() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let proof_blob = ProofBlob {
+            payload: vec![0xFF, 0x00, 0xFE],
+            expiry_slot: Some(state_transaction.block_height() + 10),
+        };
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(&proof_blob.payload),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("malformed proof envelope must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("proof envelope decode failed")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_proof_manifest_root_mismatch() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let mut proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-proof-manifest-mismatch",
+            state_transaction.block_height() + 10,
+        );
+        let mut proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
+        proof_envelope.manifest_root = [0x43; 32];
+        proof_blob.payload = norito::to_bytes(&proof_envelope)?;
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("proof manifest root mismatch must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("does not match the declared manifest_root")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_proof_dataspace_mismatch() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let mut proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-proof-dsid-mismatch",
+            state_transaction.block_height() + 10,
+        );
+        let mut proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
+        proof_envelope.dsid = DataSpaceId::new(11);
+        proof_blob.payload = norito::to_bytes(&proof_envelope)?;
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("proof dataspace mismatch must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("does not match the declared manifest_root")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_stale_fastpq_height() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-stale-fastpq-height",
+            state_transaction.block_height() + 10,
+        );
+        let stale_verified_at_height = envelope.block_height.saturating_sub(1);
+        let envelope = envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest: iroha_crypto::Hash::new(&proof_blob.payload),
+            verified_at_height: stale_verified_at_height,
+        }));
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("stale proof material height must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("FASTPQ binding failed verification")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_zero_like_fastpq_digest() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-zero-like-fastpq-digest",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest: iroha_crypto::Hash::prehashed([0; iroha_crypto::Hash::LENGTH]),
+            verified_at_height: state_transaction.block_height(),
+        }));
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("zero-like FastPQ digest must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("FASTPQ binding failed verification")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_envelope_block_height_mismatch() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-block-height-mismatch",
+            state_transaction.block_height() + 10,
+        );
+        let mut envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        envelope.block_height = envelope.block_height.saturating_add(1);
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("envelope block height mismatch must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("lane relay envelope failed verification")
+                && message.contains("block height")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_settlement_lane_mismatch() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-settlement-lane-mismatch",
+            state_transaction.block_height() + 10,
+        );
+        let mut envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        envelope.settlement_commitment.lane_id = LaneId::new(4);
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("settlement lane mismatch must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("lane relay envelope failed verification")
+                && message.contains("settlement")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_settlement_dataspace_mismatch() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-settlement-dsid-mismatch",
+            state_transaction.block_height() + 10,
+        );
+        let mut envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        envelope.settlement_commitment.dataspace_id = DataSpaceId::new(11);
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("settlement dataspace mismatch must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("lane relay envelope failed verification")
+                && message.contains("settlement")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_settlement_hash_mismatch() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-settlement-hash-mismatch",
+            state_transaction.block_height() + 10,
+        );
+        let mut envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        envelope.settlement_hash = iroha_crypto::HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"register-lane-relay-bad-settlement-hash"),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("settlement hash mismatch must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("lane relay envelope failed verification")
+                && message.contains("settlement")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_settlement_totals_mismatch() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-settlement-totals-mismatch",
+            state_transaction.block_height() + 10,
+        );
+        let mut envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        envelope
+            .settlement_commitment
+            .receipts
+            .push(LaneSettlementReceipt {
+                source_id: [0xA5; 32],
+                local_amount_micro: 1,
+                xor_due_micro: 1,
+                xor_after_haircut_micro: 1,
+                xor_variance_micro: 0,
+                timestamp_ms: 1_700_000_001_000,
+            });
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("settlement totals mismatch must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("lane relay envelope failed verification")
+                && message.contains("settlement")
+        ));
+        Ok(())
+    }
+
+    #[test]
     async fn register_verified_lane_relay_rejects_mismatched_fastpq_digest() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -1410,6 +2179,413 @@ mod tests {
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(message)
             ) if message.contains("proof metadata height is in the future")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_missing_manifest_root() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope_with_manifest = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope_with_manifest,
+            b"register-lane-relay-missing-manifest",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope_with_manifest.with_manifest_root(None),
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("missing manifest root must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("missing manifest_root")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_zero_manifest_root() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-zero-manifest",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("zero manifest root must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("manifest_root cannot be zeroed")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_expired_proof_blob() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-expired-proof",
+            state_transaction.block_height().saturating_sub(1),
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("expired proof must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("proof expired")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_missing_fastpq_binding() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let mut proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-missing-binding",
+            state_transaction.block_height() + 10,
+        );
+        let mut proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
+        proof_envelope.fastpq_binding = None;
+        proof_blob.payload = norito::to_bytes(&proof_envelope)?;
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("missing fastpq binding must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("missing fastpq_binding")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_source_dsid_mismatch() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let mut proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-source-dsid-mismatch",
+            state_transaction.block_height() + 10,
+        );
+        let mut proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
+        proof_envelope
+            .fastpq_binding
+            .as_mut()
+            .expect("test fastpq binding")
+            .source_dsid = dsid.as_u64() + 1;
+        proof_blob.payload = norito::to_bytes(&proof_envelope)?;
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("source dataspace mismatch must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("source_dsid mismatch")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_wrong_effect_type() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let mut proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-wrong-effect-type",
+            state_transaction.block_height() + 10,
+        );
+        let mut proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
+        proof_envelope
+            .fastpq_binding
+            .as_mut()
+            .expect("test fastpq binding")
+            .verified_effect_type = "nexus_fee_budget".to_owned();
+        proof_blob.payload = norito::to_bytes(&proof_envelope)?;
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("wrong effect type must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("effect must be lane_relay_block")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_malformed_existing_state() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-malformed-existing",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(relay_state_key_for_test(&envelope), vec![0xFF]);
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("malformed existing state must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("stored")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_conflicting_existing_state() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-conflicting-existing",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let mut existing = verified_lane_relay_record_for_test(
+            envelope.clone(),
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        existing.fastpq_statement_digest[0] ^= 0xFF;
+        let existing_json = Json::try_new(existing)?;
+        state_transaction.world.smart_contract_state.insert(
+            relay_state_key_for_test(&envelope),
+            norito::to_bytes(&existing_json)?,
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("conflicting existing state must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("conflicting verified lane relay")
         ));
         Ok(())
     }

@@ -415,6 +415,7 @@ fileprivate func tcMakeGatewayFetchResult() -> SorafsGatewayFetchResult {
 @available(iOS 15.0, macOS 12.0, *)
 fileprivate enum TcHelperError: Error {
     case invalidHashEncoding
+    case invalidPayloadEncoding
 }
 
 fileprivate func tcMakePipelineEnvelope(hashHex: String, marker: UInt8) throws -> SignedTransactionEnvelope {
@@ -698,7 +699,9 @@ final class ToriiClientTests: XCTestCase {
                                                     outputHashHex: String = String(repeating: "22", count: 31) + "23",
                                                     associatedDataHashHex: String = String(repeating: "33", count: 32),
                                                     resolvedAtMs: UInt64 = 42,
-                                                    expiresAtMs: UInt64? = 142) -> ToriiIdentifierResolutionPayload {
+                                                    expiresAtMs: UInt64? = 142,
+                                                    openingSignatureHex: String = String(repeating: "ff", count: 64))
+                                                    -> ToriiIdentifierResolutionPayload {
         ToriiIdentifierResolutionPayload(
             policyId: policyId,
             opaqueId: opaqueId,
@@ -727,7 +730,8 @@ final class ToriiClientTests: XCTestCase {
                 evaluationKeyDigest: evaluationKeyDigestHex,
                 openedOutputHash: outputHashHex,
                 openedAtMs: resolvedAtMs,
-                expiresAtMs: expiresAtMs
+                expiresAtMs: expiresAtMs,
+                signatureHex: openingSignatureHex
             )
         )
     }
@@ -759,14 +763,20 @@ final class ToriiClientTests: XCTestCase {
     }
 
     private func signedIdentifierReceiptFixture(
-        payload: ToriiIdentifierResolutionPayload
+        payload: ToriiIdentifierResolutionPayload,
+        canonicalPayloadBytes: Data? = nil
     ) throws -> (resolverPublicKey: String, signatureHex: String) {
         let privateKey = Curve25519.Signing.PrivateKey()
         let multihash = OfflineNorito.publicKeyMultihash(
             algorithm: .ed25519,
             payload: privateKey.publicKey.rawRepresentation
         )
-        let payloadBytes = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
+        let payloadBytes: Data
+        if let canonicalPayloadBytes {
+            payloadBytes = canonicalPayloadBytes
+        } else {
+            payloadBytes = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
+        }
         var digest = Blake2b.hash256(payloadBytes)
         digest[digest.count - 1] |= 0x01
         let signature = try privateKey.signature(for: digest)
@@ -774,6 +784,95 @@ final class ToriiClientTests: XCTestCase {
             resolverPublicKey: "ed25519:\(multihash)",
             signatureHex: signature.hexUppercased()
         )
+    }
+
+    private func noritoField(_ payload: Data) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(payload)
+        return writer.data
+    }
+
+    private func legacyFlatBytesVec(_ bytes: Data) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeLength(UInt64(bytes.count))
+        writer.writeBytes(bytes)
+        return writer.data
+    }
+
+    private func readCompactLength(_ data: Data, offset: inout Int) throws -> Int {
+        var shift = 0
+        var result: UInt64 = 0
+        while true {
+            guard offset < data.count, shift < 64 else {
+                throw TcHelperError.invalidPayloadEncoding
+            }
+            let byte = data[offset]
+            offset += 1
+            result |= UInt64(byte & 0x7F) << UInt64(shift)
+            if byte & 0x80 == 0 {
+                break
+            }
+            shift += 7
+        }
+        guard result <= UInt64(Int.max) else {
+            throw TcHelperError.invalidPayloadEncoding
+        }
+        return Int(result)
+    }
+
+    private func noritoFieldRange(in data: Data, fieldIndex: Int) throws -> Range<Data.Index> {
+        var offset = 0
+        for index in 0...fieldIndex {
+            let fieldStart = offset
+            let fieldLength = try readCompactLength(data, offset: &offset)
+            let fieldEnd = offset + fieldLength
+            guard fieldEnd <= data.count else {
+                throw TcHelperError.invalidPayloadEncoding
+            }
+            if index == fieldIndex {
+                return fieldStart..<fieldEnd
+            }
+            offset = fieldEnd
+        }
+        throw TcHelperError.invalidPayloadEncoding
+    }
+
+    private func noritoFieldPayload(_ field: Data) throws -> Data {
+        var offset = 0
+        let fieldLength = try readCompactLength(field, offset: &offset)
+        let fieldEnd = offset + fieldLength
+        guard fieldEnd == field.count else {
+            throw TcHelperError.invalidPayloadEncoding
+        }
+        return Data(field[offset..<fieldEnd])
+    }
+
+    private func payloadBytesWithLegacyFlatOpeningSignature(
+        _ payload: ToriiIdentifierResolutionPayload
+    ) throws -> Data {
+        let signatureHex = payload.opening.signature.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSignatureHex: String
+        if signatureHex.hasPrefix("0x") || signatureHex.hasPrefix("0X") {
+            normalizedSignatureHex = String(signatureHex.dropFirst(2))
+        } else {
+            normalizedSignatureHex = signatureHex
+        }
+        guard let signatureBytes = Data(hexString: normalizedSignatureHex) else {
+            throw TcHelperError.invalidHashEncoding
+        }
+
+        var canonicalPayload = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
+        let openingFieldRange = try noritoFieldRange(in: canonicalPayload, fieldIndex: 2)
+        let openingField = Data(canonicalPayload[openingFieldRange])
+        var openingPayload = try noritoFieldPayload(openingField)
+        let signatureFieldRange = try noritoFieldRange(in: openingPayload, fieldIndex: 1)
+        openingPayload.replaceSubrange(
+            signatureFieldRange,
+            with: noritoField(legacyFlatBytesVec(signatureBytes))
+        )
+
+        canonicalPayload.replaceSubrange(openingFieldRange, with: noritoField(openingPayload))
+        return canonicalPayload
     }
 
     private func identifierReceiptJSON(
@@ -1427,6 +1526,127 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(try receipt?.verifyAttestation(using: policy), true)
     }
 
+    func testIdentifierReceiptOpeningSignatureUsesConstVecEncoding() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1",
+            openingSignatureHex: "FAFBFC"
+        )
+
+        let encoded = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
+
+        XCTAssertNotNil(
+            encoded.range(of: Data([0x07, 0x03, 0x01, 0xFA, 0x01, 0xFB, 0x01, 0xFC]))
+        )
+        XCTAssertNil(
+            encoded.range(of: Data([0x04, 0x03, 0xFA, 0xFB, 0xFC]))
+        )
+    }
+
+    func testIdentifierReceiptRejectsLegacyFlatOpeningSignatureAttestation() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1",
+            openingSignatureHex: "FAFBFC"
+        )
+        let currentSigned = try signedIdentifierReceiptFixture(payload: payload)
+        let legacySigned = try signedIdentifierReceiptFixture(
+            payload: payload,
+            canonicalPayloadBytes: payloadBytesWithLegacyFlatOpeningSignature(payload)
+        )
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "phone#retail",
+            owner: accountId,
+            active: true,
+            normalization: .phoneE164,
+            resolverPublicKey: currentSigned.resolverPublicKey,
+            backend: "bfv-affine-sha3-256-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: nil,
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
+        let currentReceipt = try JSONDecoder().decode(
+            ToriiIdentifierResolutionReceipt.self,
+            from: Data(try identifierReceiptJSON(
+                payload: payload,
+                signatureHex: currentSigned.signatureHex
+            ).utf8)
+        )
+        let legacyReceipt = try JSONDecoder().decode(
+            ToriiIdentifierResolutionReceipt.self,
+            from: Data(try identifierReceiptJSON(
+                payload: payload,
+                signatureHex: legacySigned.signatureHex
+            ).utf8)
+        )
+
+        XCTAssertEqual(try currentReceipt.verifyAttestation(using: policy), true)
+        XCTAssertEqual(try legacyReceipt.verifyAttestation(using: policy), false)
+    }
+
+    func testIdentifierReceiptRejectsOpeningSignatureMutationAfterSigning() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let originalPayload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1",
+            openingSignatureHex: String(repeating: "fa", count: 64)
+        )
+        let mutatedPayload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1",
+            openingSignatureHex: String(repeating: "fb", count: 64)
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: originalPayload)
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "phone#retail",
+            owner: accountId,
+            active: true,
+            normalization: .phoneE164,
+            resolverPublicKey: signed.resolverPublicKey,
+            backend: "bfv-affine-sha3-256-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: nil,
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
+        let originalReceipt = try JSONDecoder().decode(
+            ToriiIdentifierResolutionReceipt.self,
+            from: Data(try identifierReceiptJSON(
+                payload: originalPayload,
+                signatureHex: signed.signatureHex
+            ).utf8)
+        )
+        let mutatedReceipt = try JSONDecoder().decode(
+            ToriiIdentifierResolutionReceipt.self,
+            from: Data(try identifierReceiptJSON(
+                payload: mutatedPayload,
+                signatureHex: signed.signatureHex
+            ).utf8)
+        )
+
+        XCTAssertEqual(try originalReceipt.verifyAttestation(using: policy), true)
+        XCTAssertEqual(try mutatedReceipt.verifyAttestation(using: policy), false)
+    }
+
     func testIdentifierReceiptCanonicalPayloadMatchesLiveToriiFixtureAndRejectsLegacySignature() throws {
         let accountId = "sorauﾛ1NiGｸﾛﾋRuﾎQtﾐpヱﾈｻHﾍﾐ3RZﾕYdvbｺhcｽG8A8ｿRﾗeP1E463"
         let receiptJSON = """
@@ -1791,8 +2011,8 @@ final class ToriiClientTests: XCTestCase {
             inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters(
                 parameters: ToriiIdentifierBfvParameters(
                     polynomialDegree: 8,
-                    plaintextModulus: 256,
-                    ciphertextModulus: 16_777_216,
+                    plaintextModulus: 257,
+                    ciphertextModulus: 16_842_752,
                     decompositionBaseLog: 12
                 ),
                 publicKey: ToriiIdentifierBfvPublicKey(
@@ -1807,7 +2027,7 @@ final class ToriiClientTests: XCTestCase {
         )
         let seedHex = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
         let expected =
-            "4e52543000001042e5b988077612440e4cd45673596b00b0040000000000007f6fd892e275492500a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002bab6f00000000000800000000000000440e93000000000008000000000000005b2502000000000008000000000000004a671400000000000800000000000000bc3e2600000000000800000000000000413d86000000000008000000000000005619f800000000000800000000000000bd73fa0000000000880000000000000008000000000000000800000000000000ee884300000000000800000000000000dd21b100000000000800000000000000fe7c52000000000008000000000000001639a5000000000008000000000000006a979d00000000000800000000000000ddd4430000000000080000000000000051086700000000000800000000000000ef13ae00000000002001000000000000880000000000000008000000000000000800000000000000776dc80000000000080000000000000093060d0000000000080000000000000033077500000000000800000000000000ddc4190000000000080000000000000062ea230000000000080000000000000056ef0b00000000000800000000000000ab52d500000000000800000000000000e9457c0000000000880000000000000008000000000000000800000000000000f2214200000000000800000000000000c9edcf000000000008000000000000001dfb5a00000000000800000000000000d16e640000000000080000000000000016ec0f000000000008000000000000003dee83000000000008000000000000006e7efa00000000000800000000000000c1fbbc0000000000200100000000000088000000000000000800000000000000080000000000000066c74d00000000000800000000000000c9c04900000000000800000000000000f01e8700000000000800000000000000aed22c000000000008000000000000006121980000000000080000000000000036ac8d00000000000800000000000000d143930000000000080000000000000089206d0000000000880000000000000008000000000000000800000000000000417ded00000000000800000000000000d79c33000000000008000000000000009f332d0000000000080000000000000091fe5700000000000800000000000000533de8000000000008000000000000005db9df00000000000800000000000000a8c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d656000000000008000000000000005d874500000000000800000000000000567ab30000000000080000000000000007272f00000000000800000000000000ff6d0a00000000000800000000000000077467000000000008000000000000006d1c1a00000000000800000000000000704fc100000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a000000000000800000000000000cbf92a000000000008000000000000005748720000000000080000000000000060909200000000000800000000000000f5f5dc00000000000800000000000000445a3a00000000000800000000000000999f680000000000"
+            "4e52543000001042e5b988077612440e4cd45673596b00b0040000000000004887a2a6d485fb5100a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002cab6c00000000000800000000000000440e92000000000008000000000000005a25000000000000080000000000000049671100000000000800000000000000bd3e2300000000000800000000000000403d85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ed884300000000000800000000000000dc21b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006b979b00000000000800000000000000ddd4410000000000080000000000000052086600000000000800000000000000ee13ae00000000002001000000000000880000000000000008000000000000000800000000000000d96d690000000000080000000000000092060e0000000000080000000000000034077500000000000800000000000000dcc4190000000000080000000000000062ea230000000000080000000000000055ef0a00000000000800000000000000ac52d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f3214400000000000800000000000000caedd2000000000008000000000000001cfb5b00000000000800000000000000d26e660000000000080000000000000016ec0e000000000008000000000000003cee83000000000008000000000000006d7ef900000000000800000000000000c2fbbb00000000002001000000000000880000000000000008000000000000000800000000000000c9c7eb00000000000800000000000000c8c04800000000000800000000000000ef1e8700000000000800000000000000aed22c000000000008000000000000006021990000000000080000000000000035ac8c00000000000800000000000000d24393000000000008000000000000008a206d0000000000880000000000000008000000000000000800000000000000407ded00000000000800000000000000d79c3400000000000800000000000000a0332c0000000000080000000000000091fe5700000000000800000000000000543de8000000000008000000000000005eb9df00000000000800000000000000a7c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005c874400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006c1c1a000000000008000000000000006f4fc200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000caf929000000000008000000000000005848730000000000080000000000000061909200000000000800000000000000f5f5dd00000000000800000000000000435a3b000000000008000000000000009a9f690000000000"
 
         XCTAssertEqual(try policy.encryptInput("ab", seedHex: seedHex), expected)
         let request = try policy.encryptedRequest(
