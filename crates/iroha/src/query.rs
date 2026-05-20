@@ -109,12 +109,18 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
         StatusCode::BAD_REQUEST
         | StatusCode::UNAUTHORIZED
         | StatusCode::FORBIDDEN
+        | StatusCode::GONE
         | StatusCode::NOT_FOUND
         | StatusCode::UNPROCESSABLE_ENTITY => {
             let body = resp.body();
             match norito::decode_from_bytes::<ValidationFail>(body) {
                 Ok(fail) => Err(QueryError::Validation(fail)),
                 Err(decode_err) => {
+                    if resp.status() == StatusCode::GONE {
+                        return Err(QueryError::Validation(ValidationFail::QueryFailed(
+                            QueryExecutionFail::Expired,
+                        )));
+                    }
                     if resp.status() == StatusCode::NOT_FOUND {
                         return Err(QueryError::Validation(ValidationFail::QueryFailed(
                             QueryExecutionFail::NotFound,
@@ -460,6 +466,20 @@ mod tests {
         assert!(matches!(
             err,
             QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
+        ));
+    }
+
+    #[test]
+    fn garbled_gone_is_treated_as_expired() {
+        let resp = http::Response::builder()
+            .status(StatusCode::GONE)
+            .body(b"query_validation_failed: The stored cursor has expired".to_vec())
+            .expect("response");
+
+        let err = super::decode_query_response(&resp).expect_err("expected validation error");
+        assert!(matches!(
+            err,
+            QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Expired))
         ));
     }
 }

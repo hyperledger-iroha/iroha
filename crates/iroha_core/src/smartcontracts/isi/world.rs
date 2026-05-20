@@ -62,7 +62,7 @@ pub mod isi {
         },
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
-            ProposalKind, RuntimeUpgradeProposal,
+            ParliamentEnactment, ProposalKind, RuntimeUpgradeProposal,
         },
         isi::{
             bridge, consensus_keys, endorsement,
@@ -6616,11 +6616,245 @@ pub mod isi {
         events
     }
 
+    fn invalid_bridge_proof(message: impl Into<String>) -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message.into(),
+        ))
+        .into()
+    }
+
+    fn is_reserved_sccp_manifest_hash(hash: &[u8; 32]) -> bool {
+        iroha_sccp::sccp_reserved_bridge_manifest_hashes_v1()
+            .into_iter()
+            .any(|reserved| &reserved == hash)
+    }
+
+    fn sccp_decode_finality_proof(
+        bytes: &[u8],
+    ) -> Result<iroha_sccp::NexusBridgeFinalityProofV1, Error> {
+        iroha_sccp::decode_nexus_bridge_finality_proof(bytes)
+            .ok_or_else(|| invalid_bridge_proof("SCCP bundle finality proof could not be decoded"))
+    }
+
+    fn validate_sccp_finality_against_state(
+        finality: &iroha_sccp::NexusBridgeFinalityProofV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        crate::bridge::verify_sccp_finality_proof_against_local_state(state_transaction, finality)
+            .map(|_| ())
+            .map_err(|err| {
+                invalid_bridge_proof(format!(
+                    "SCCP finality proof is not locally anchored: {err}"
+                ))
+            })
+    }
+
+    fn validate_sccp_burn_bridge_proof(
+        bundle: &iroha_sccp::NexusSccpBurnProofV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if !iroha_sccp::verify_burn_bundle_structure(bundle) {
+            return Err(invalid_bridge_proof(
+                "SCCP burn bundle failed structural verification",
+            ));
+        }
+        let finality = sccp_decode_finality_proof(&bundle.finality_proof)?;
+        validate_sccp_finality_against_state(&finality, state_transaction)
+    }
+
+    fn sccp_min_votes_for_len(len: usize) -> u16 {
+        if len > 3 {
+            u16::try_from(((len.saturating_sub(1)) / 3) * 2 + 1).unwrap_or(u16::MAX)
+        } else {
+            u16::try_from(len).unwrap_or(u16::MAX)
+        }
+    }
+
+    fn sccp_parliament_member_public_keys(account_id: &AccountId) -> Vec<String> {
+        match &account_id.controller {
+            AccountController::Single(public_key) => vec![public_key.to_string()],
+            AccountController::Multisig(policy) => policy
+                .members()
+                .iter()
+                .map(|member| member.public_key().to_string())
+                .collect(),
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn validate_sccp_parliament_certificate_against_state(
+        certificate: &iroha_sccp::NexusParliamentCertificateV1,
+        governance_payload: &iroha_sccp::GovernancePayloadV1,
+        proof_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let payload = norito::decode_from_bytes::<ParliamentEnactment>(&certificate.payload_bytes)
+            .map_err(|err| {
+                invalid_bridge_proof(format!(
+                    "SCCP parliament certificate payload could not be decoded: {err}"
+                ))
+            })?;
+        if payload.preimage_hash
+            != iroha_sccp::payload_hash(&iroha_sccp::canonical_governance_payload_bytes(
+                governance_payload,
+            ))
+            || payload.preimage_hash != certificate.preimage_hash
+            || payload.at_window.lower != certificate.enactment_window_start
+            || payload.at_window.upper != certificate.enactment_window_end
+        {
+            return Err(invalid_bridge_proof(
+                "SCCP parliament certificate payload does not match governance proof",
+            ));
+        }
+        if proof_height < certificate.enactment_window_start
+            || proof_height > certificate.enactment_window_end
+        {
+            return Err(invalid_bridge_proof(
+                "SCCP parliament certificate is outside its enactment window",
+            ));
+        }
+        if certificate.signature_scheme
+            != iroha_sccp::NexusParliamentSignatureSchemeV1::SimpleThreshold
+        {
+            return Err(invalid_bridge_proof(
+                "unsupported SCCP parliament certificate signature scheme",
+            ));
+        }
+
+        let roster_epoch = proof_height / state_transaction.gov.parliament_term_blocks.max(1);
+        if certificate.roster_epoch != roster_epoch {
+            return Err(invalid_bridge_proof(
+                "SCCP parliament certificate roster epoch does not match proof height",
+            ));
+        }
+        let Some(council_term) = state_transaction.world.council.get(&roster_epoch) else {
+            return Err(invalid_bridge_proof(format!(
+                "no persisted council roster found for SCCP parliament epoch {roster_epoch}"
+            )));
+        };
+        if council_term.members.is_empty() {
+            return Err(invalid_bridge_proof(
+                "persisted council roster for SCCP parliament proof is empty",
+            ));
+        }
+
+        let expected_roster: Vec<_> = council_term
+            .members
+            .iter()
+            .map(|member| iroha_sccp::NexusParliamentRosterMemberV1 {
+                signer: member.to_string(),
+                public_keys: sccp_parliament_member_public_keys(member),
+            })
+            .collect();
+        if certificate.roster_members != expected_roster {
+            return Err(invalid_bridge_proof(
+                "SCCP parliament certificate roster does not match persisted council roster",
+            ));
+        }
+        let required_signatures = sccp_min_votes_for_len(expected_roster.len());
+        if certificate.required_signatures != required_signatures {
+            return Err(invalid_bridge_proof(
+                "SCCP parliament certificate threshold does not match persisted council roster",
+            ));
+        }
+
+        let roster_by_signer = expected_roster
+            .iter()
+            .map(|member| (member.signer.as_str(), &member.public_keys))
+            .collect::<BTreeMap<_, _>>();
+        let mut seen_signers = BTreeSet::new();
+        for signature in &certificate.signatures {
+            if !seen_signers.insert(signature.signer.as_str()) {
+                return Err(invalid_bridge_proof(
+                    "SCCP parliament certificate contains duplicate signers",
+                ));
+            }
+            let public_key = signature.public_key.parse::<PublicKey>().map_err(|err| {
+                invalid_bridge_proof(format!(
+                    "SCCP parliament certificate public key could not be parsed: {err}"
+                ))
+            })?;
+            let Some(allowed_public_keys) = roster_by_signer.get(signature.signer.as_str()) else {
+                return Err(invalid_bridge_proof(
+                    "SCCP parliament certificate signer is not in the persisted council roster",
+                ));
+            };
+            if !allowed_public_keys
+                .iter()
+                .any(|allowed| allowed == &public_key.to_string())
+            {
+                return Err(invalid_bridge_proof(
+                    "SCCP parliament certificate signer key is not authorized by the persisted council roster",
+                ));
+            }
+            let raw_signature = iroha_crypto::Signature::from_bytes(&signature.signature);
+            let typed_signature =
+                iroha_crypto::SignatureOf::<ParliamentEnactment>::from_signature(raw_signature);
+            typed_signature
+                .verify(&public_key, &payload)
+                .map_err(|err| {
+                    invalid_bridge_proof(format!(
+                        "SCCP parliament certificate contains an invalid signature: {err}"
+                    ))
+                })?;
+        }
+        if seen_signers.len() < usize::from(required_signatures) {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP parliament certificate has {} signatures but requires {}",
+                seen_signers.len(),
+                required_signatures
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_sccp_governance_bridge_proof(
+        bundle: &iroha_sccp::NexusSccpGovernanceProofV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if !iroha_sccp::verify_governance_bundle_structure(bundle) {
+            return Err(invalid_bridge_proof(
+                "SCCP governance bundle failed structural verification",
+            ));
+        }
+        let finality = sccp_decode_finality_proof(&bundle.finality_proof)?;
+        validate_sccp_finality_against_state(&finality, state_transaction)?;
+        let certificate =
+            iroha_sccp::decode_nexus_parliament_certificate(&bundle.parliament_certificate)
+                .ok_or_else(|| {
+                    invalid_bridge_proof(
+                        "SCCP governance bundle parliament certificate could not be decoded",
+                    )
+                })?;
+        validate_sccp_parliament_certificate_against_state(
+            &certificate,
+            &bundle.payload,
+            finality.height,
+            state_transaction,
+        )
+    }
+
+    fn validate_sccp_message_transparent_bridge_proof(
+        artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if !iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(artifact)
+            || !iroha_sccp::verify_message_bundle_structure(&artifact.bundle)
+        {
+            return Err(invalid_bridge_proof(
+                "SCCP transparent message proof failed structural verification",
+            ));
+        }
+        let finality = sccp_decode_finality_proof(&artifact.bundle.finality_proof)?;
+        validate_sccp_finality_against_state(&finality, state_transaction)
+    }
+
     fn encode_and_validate_bridge_proof(
         proof: &iroha_data_model::bridge::BridgeProof,
-        zk_cfg: &iroha_config::parameters::actual::Zk,
-        current_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Vec<u8>, Error> {
+        let zk_cfg = &state_transaction.zk;
+        let current_height = state_transaction._curr_block.height.get();
         if !proof.range.is_valid() {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -6689,6 +6923,11 @@ pub mod isi {
 
         match &proof.payload {
             iroha_data_model::bridge::BridgeProofPayload::Ics(ics) => {
+                if is_reserved_sccp_manifest_hash(&proof.manifest_hash) {
+                    return Err(invalid_bridge_proof(
+                        "SCCP proofs must use typed SCCP bridge proof backends",
+                    ));
+                }
                 validate_bridge_ics_proof(ics, zk_cfg.merkle_depth)?;
             }
             iroha_data_model::bridge::BridgeProofPayload::TransparentZk(tp) => {
@@ -6699,17 +6938,76 @@ pub mod isi {
                         ),
                     ));
                 }
-                if tp.proof.backend.starts_with("sccp/stark-fri-v1/")
-                    && iroha_sccp::recover_nexus_sccp_message_transparent_proof(
-                        tp.proof.backend.as_str(),
-                        &tp.proof.bytes,
-                    )
-                    .is_none()
+                match tp.proof.backend.as_str() {
+                    iroha_sccp::SCCP_BURN_BRIDGE_PROOF_BACKEND_V1 => {
+                        if proof.manifest_hash != iroha_sccp::sccp_burn_bridge_manifest_hash_v1() {
+                            return Err(invalid_bridge_proof(
+                                "SCCP burn proof manifest hash mismatch",
+                            ));
+                        }
+                        let bundle = iroha_sccp::decode_nexus_sccp_burn_proof(&tp.proof.bytes)
+                            .ok_or_else(|| {
+                                invalid_bridge_proof(
+                                    "SCCP burn proof bundle bytes could not be decoded",
+                                )
+                            })?;
+                        validate_sccp_burn_bridge_proof(&bundle, state_transaction)?;
+                    }
+                    iroha_sccp::SCCP_GOVERNANCE_BRIDGE_PROOF_BACKEND_V1 => {
+                        if proof.manifest_hash
+                            != iroha_sccp::sccp_governance_bridge_manifest_hash_v1()
+                        {
+                            return Err(invalid_bridge_proof(
+                                "SCCP governance proof manifest hash mismatch",
+                            ));
+                        }
+                        let bundle =
+                            iroha_sccp::decode_nexus_sccp_governance_proof(&tp.proof.bytes)
+                                .ok_or_else(|| {
+                                    invalid_bridge_proof(
+                                        "SCCP governance proof bundle bytes could not be decoded",
+                                    )
+                                })?;
+                        validate_sccp_governance_bridge_proof(&bundle, state_transaction)?;
+                    }
+                    backend if backend.starts_with("sccp/stark-fri-v1/") => {
+                        let Some(artifact) =
+                            iroha_sccp::recover_nexus_sccp_message_transparent_proof(
+                                backend,
+                                &tp.proof.bytes,
+                            )
+                        else {
+                            return Err(invalid_bridge_proof(
+                                "SCCP transparent bridge proofs must decode as valid typed message artifacts",
+                            ));
+                        };
+                        if proof.manifest_hash
+                            != iroha_sccp::sccp_bridge_manifest_hash_for_seed(
+                                &artifact.manifest_seed,
+                            )
+                        {
+                            return Err(invalid_bridge_proof(
+                                "SCCP message proof manifest hash mismatch",
+                            ));
+                        }
+                        validate_sccp_message_transparent_bridge_proof(
+                            &artifact,
+                            state_transaction,
+                        )?;
+                    }
+                    _ if is_reserved_sccp_manifest_hash(&proof.manifest_hash) => {
+                        return Err(invalid_bridge_proof(
+                            "reserved SCCP manifests require typed SCCP bridge proof backends",
+                        ));
+                    }
+                    _ => {}
+                }
+                if tp.proof.backend.starts_with("sccp/")
+                    && !is_reserved_sccp_manifest_hash(&proof.manifest_hash)
                 {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
-                            "SCCP transparent bridge proofs must decode as valid typed message artifacts"
-                                .into(),
+                            "SCCP bridge proofs must use a reserved SCCP manifest hash".into(),
                         ),
                     ));
                 }
@@ -6925,11 +7223,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let current_height = state_transaction._curr_block.height.get();
-            let encoded = encode_and_validate_bridge_proof(
-                &self.proof,
-                &state_transaction.zk,
-                current_height,
-            )?;
+            let encoded = encode_and_validate_bridge_proof(&self.proof, state_transaction)?;
             let proof_size = encoded.len();
             let backend_label = self.proof.backend_label();
             let commitment = hash_bridge_proof(&backend_label, &encoded);
@@ -20308,14 +20602,17 @@ pub mod isi {
                 state_ro: &impl StateReadOnly,
             ) -> Result<impl Iterator<Item = iroha_data_model::proof::ProofRecord>, Error>
             {
-                let backend = self.backend;
+                let backend = self.backend.to_string();
+                let requested_backend = backend.clone();
                 // Own the backend-range results because the returned iterator cannot borrow the
                 // query's owned backend string after this function returns.
                 let proofs = state_ro
                     .world()
                     .proofs_by_backend_iter(&backend)
                     .map(|(_, rec)| rec)
-                    .filter(move |rec| filter.applies(rec))
+                    .filter(move |rec| {
+                        rec.id.backend.as_str() == requested_backend.as_str() && filter.applies(rec)
+                    })
                     .cloned()
                     .collect::<Vec<_>>();
                 Ok(proofs.into_iter())
@@ -20332,13 +20629,14 @@ pub mod isi {
             ) -> Result<impl Iterator<Item = iroha_data_model::proof::ProofRecord>, Error>
             {
                 let status = self.status;
+                let requested_status = status;
                 // Own the status-index results because the returned iterator cannot borrow the
                 // query's owned status value after this function returns.
                 let proofs = state_ro
                     .world()
                     .proofs_by_status_iter(&status)
                     .map(|(_, rec)| rec)
-                    .filter(move |rec| filter.applies(rec))
+                    .filter(move |rec| rec.status == requested_status && filter.applies(rec))
                     .cloned()
                     .collect::<Vec<_>>();
                 Ok(proofs.into_iter())

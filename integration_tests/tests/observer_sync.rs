@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use eyre::{Result, eyre};
+use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_config::base::toml::WriteExt as _;
@@ -476,14 +476,30 @@ fn observer_node_catches_up() -> Result<()> {
         );
     }
 
+    let fetch_status_json = |url: String| -> Result<JsonValue> {
+        let body = rt.block_on(async {
+            reqwest::Client::new()
+                .get(&url)
+                .header("Accept", "application/json")
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await
+        })?;
+        norito::json::from_str(&body).wrap_err_with(|| {
+            let snippet = body.chars().take(120).collect::<String>();
+            format!("HTTP /status did not return JSON from {url}; body starts with `{snippet}`")
+        })
+    };
+
     // HTTP /status parity snapshot: compare HTTP JSON blocks/non_empty with peer.status()
     for p in network.peers() {
         let s = rt
             .block_on(async { p.status().await })
             .expect("peer status");
         let url = format!("{}/status", p.torii_url());
-        let txt = rt.block_on(async { reqwest::get(url).await.unwrap().text().await.unwrap() });
-        let jv: JsonValue = norito::json::from_str(&txt)?;
+        let jv = fetch_status_json(url)?;
         let blocks = jv
             .as_object()
             .and_then(|m| m.get("blocks").and_then(norito::json::Value::as_u64))
@@ -506,8 +522,7 @@ fn observer_node_catches_up() -> Result<()> {
             .block_on(async { observer.status().await })
             .expect("observer status");
         let url = format!("{}/status", observer.torii_url());
-        let txt = rt.block_on(async { reqwest::get(url).await.unwrap().text().await.unwrap() });
-        let jv: JsonValue = norito::json::from_str(&txt)?;
+        let jv = fetch_status_json(url)?;
         let blocks = jv
             .as_object()
             .and_then(|m| m.get("blocks").and_then(norito::json::Value::as_u64))

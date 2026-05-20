@@ -6,16 +6,20 @@ use std::{convert::TryFrom as _, str::FromStr as _, time::Duration};
 use eyre::{Report, Result};
 use integration_tests::sandbox;
 use iroha_core::zk::test_utils::halo2_fixture_envelope;
-use iroha_data_model::proof::{ProofId, ProofStatus};
+use iroha_data_model::{
+    confidential::ConfidentialStatus,
+    isi::verifying_keys,
+    permission::Permission,
+    prelude::{Grant, Json},
+    proof::{ProofAttachment, ProofBox, ProofId, ProofStatus, VerifyingKeyBox, VerifyingKeyId},
+    zk::BackendTag,
+};
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
+use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 use reqwest::Client as HttpClient;
-use sha2::{Digest as ShaDigest, Sha256};
 
 fn compute_proof_hash(backend: &str, bytes: &[u8]) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(backend.as_bytes());
-    h.update(bytes);
-    h.finalize().into()
+    iroha_core::zk::hash_proof(&ProofBox::new(backend.into(), bytes.to_vec()))
 }
 
 fn parse_hex32(input: &str) -> Option<[u8; 32]> {
@@ -126,6 +130,43 @@ fn is_duplicate_tx_error(err: &Report) -> bool {
     })
 }
 
+fn active_halo2_vk_registration(
+    vk_name: &str,
+) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
+    let backend = "halo2/ipa";
+    let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+    let vk_hash = seed
+        .vk_hash(backend)
+        .expect("fixture should include a verifying key");
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", vk_hash);
+    let proof = fixture.proof_box(backend);
+    let vk_box: VerifyingKeyBox = fixture
+        .vk_box(backend)
+        .expect("fixture should include verifying key bytes");
+    let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
+        1,
+        "halo2/ipa:tiny-add",
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        fixture.schema_hash,
+        iroha_core::zk::hash_vk(&vk_box),
+    );
+    record.vk_len =
+        u32::try_from(vk_box.bytes.len()).expect("verifying key length should fit in u32");
+    record.max_proof_bytes =
+        u32::try_from(proof.bytes.len()).expect("proof length should fit in u32");
+    record.gas_schedule_id = Some("halo2_default".to_owned());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+
+    let vk_id = VerifyingKeyId::new(backend, vk_name);
+    let attachment = ProofAttachment::new_ref(backend.into(), proof, vk_id.clone());
+    (
+        attachment,
+        verifying_keys::RegisterVerifyingKey { id: vk_id, record },
+    )
+}
+
 async fn fetch_proof_snapshot(url: reqwest::Url) -> Result<(String, [u8; 32], ProofStatus)> {
     let response = HttpClient::new()
         .get(url)
@@ -181,11 +222,18 @@ async fn fetch_proof_snapshot(url: reqwest::Url) -> Result<(String, [u8; 32], Pr
 
 #[tokio::test]
 async fn submit_proof_and_query_record() -> Result<()> {
+    let (attachment, vk_registration) = active_halo2_vk_registration("proof_vk");
     // Start a minimal network
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_config_layer(|layer| {
-            layer.write(["zk", "halo2", "enabled"], true);
-        }),
+        NetworkBuilder::new()
+            .with_genesis_instruction(Grant::account_permission(
+                Permission::new("CanManageVerifyingKeys".into(), Json::new(())),
+                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            ))
+            .with_genesis_instruction(vk_registration)
+            .with_config_layer(|layer| {
+                layer.write(["zk", "halo2", "enabled"], true);
+            }),
         stringify!(submit_proof_and_query_record),
     )
     .await?
@@ -203,14 +251,7 @@ async fn submit_proof_and_query_record() -> Result<()> {
     }
 
     let backend = "halo2/ipa";
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let proof = fixture.proof_box(backend);
-    let proof_bytes = proof.bytes.clone();
-    let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        backend.into(),
-        proof.clone(),
-        iroha_data_model::proof::VerifyingKeyId::new(backend, "proof_vk"),
-    );
+    let proof_bytes = attachment.proof.bytes.clone();
     let isi = iroha_data_model::isi::zk::VerifyProof::new(attachment);
 
     // Submit the transaction to all peers so one healthy peer can accept it

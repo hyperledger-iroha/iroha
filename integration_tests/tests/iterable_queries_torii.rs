@@ -53,7 +53,9 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
     };
 
     let Some((network, rt)) = start_network_or_skip(
-        NetworkBuilder::new(),
+        NetworkBuilder::new().with_config_layer(|layer| {
+            layer.write(["pipeline", "query_default_cursor_mode"], "stored");
+        }),
         stringify!(blocks_iterable_start_and_continue),
     )?
     else {

@@ -269,7 +269,7 @@ fn append_bootstrap_authority_overlay(
     for instruction in manifest.instructions() {
         if let Some(RegisterBox::Domain(register_domain)) =
             instruction.as_any().downcast_ref::<RegisterBox>()
-            && &register_domain.object().id == &authority.linked_domain
+            && register_domain.object().id == authority.linked_domain
         {
             has_linked_domain_registration = true;
         }
@@ -705,7 +705,9 @@ mod tests {
         let seeded = manifest
             .into_builder()
             .next_transaction()
-            .append_instruction(Register::domain(Domain::new(bootstrap.linked_domain.clone())))
+            .append_instruction(Register::domain(Domain::new(
+                bootstrap.linked_domain.clone(),
+            )))
             .append_instruction(Register::account(Account::new(
                 bootstrap.account_id.clone(),
             )))
@@ -771,7 +773,9 @@ mod tests {
         let seeded = manifest
             .into_builder()
             .next_transaction()
-            .append_instruction(Register::domain(Domain::new(bootstrap.linked_domain.clone())))
+            .append_instruction(Register::domain(Domain::new(
+                bootstrap.linked_domain.clone(),
+            )))
             .append_instruction(Register::account(Account::new(
                 bootstrap.account_id.clone(),
             )))

@@ -46,10 +46,10 @@ fn current_time() -> Duration {
 fn schedule_start(network: &sandbox::SerializedNetwork) -> (Duration, u64) {
     let now = current_time();
     let pipeline_time = network.pipeline_time();
-    let gap = std::cmp::max(
-        Duration::from_millis(200),
-        pipeline_time.checked_div(2).unwrap_or(pipeline_time),
-    );
+    let pipeline_setup_gap = pipeline_time
+        .checked_mul(12)
+        .unwrap_or_else(|| Duration::from_secs(45));
+    let gap = std::cmp::max(Duration::from_secs(45), pipeline_setup_gap);
     let start = now + gap;
     let start_ms = u64::try_from(start.as_millis()).expect("timestamp should fit in u64");
     (start, start_ms)

@@ -5519,7 +5519,7 @@ fn sccp_bundle_response<T>(bundle: &T, accept: Option<&axum::http::HeaderValue>)
 where
     T: norito::core::NoritoSerialize + serde::Serialize,
 {
-    let format = match crate::utils::negotiate_response_format(accept) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
@@ -5578,7 +5578,7 @@ fn sccp_bundle_response_with_json_value<T>(
 where
     T: norito::core::NoritoSerialize + serde::Serialize,
 {
-    let format = match crate::utils::negotiate_response_format(accept) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
@@ -6032,33 +6032,7 @@ fn sccp_proof_manifest_snapshot() -> Result<SccpProofManifestSetDto> {
 
 #[cfg(feature = "app_api")]
 fn bridge_manifest_hash_for_seed(seed: &str) -> [u8; 32] {
-    <[u8; 32]>::from(iroha_crypto::Hash::new(seed.as_bytes()))
-}
-
-#[cfg(feature = "app_api")]
-fn sccp_merkle_proof_to_bridge_merkle(
-    proof: &SccpMerkleProofV1,
-) -> Result<iroha_crypto::MerkleProof<[u8; 32]>> {
-    let mut leaf_index = 0u32;
-    let mut audit_path = Vec::with_capacity(proof.steps.len());
-
-    for (depth, step) in proof.steps.iter().enumerate() {
-        if step.sibling_is_left {
-            if depth >= u32::BITS as usize {
-                return Err(conversion_error(format!(
-                    "SCCP Merkle proof depth {depth} exceeds bridge leaf_index width"
-                )));
-            }
-            leaf_index |= 1u32 << depth;
-        }
-        audit_path.push(Some(HashOf::<[u8; 32]>::from_untyped_unchecked(
-            Hash::prehashed(step.sibling_hash),
-        )));
-    }
-
-    Ok(iroha_crypto::MerkleProof::from_audit_path(
-        leaf_index, audit_path,
-    ))
+    iroha_sccp::sccp_bridge_manifest_hash_for_seed(seed)
 }
 
 #[cfg(feature = "app_api")]
@@ -6073,19 +6047,24 @@ fn bridge_proof_from_sccp_burn_bundle(
     let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof).ok_or_else(|| {
         conversion_error("SCCP burn bundle finality proof could not be decoded".to_owned())
     })?;
-    let proof = sccp_merkle_proof_to_bridge_merkle(&bundle.merkle_proof)?;
+    let proof_bytes = to_bytes(bundle).map_err(|err| {
+        conversion_error(format!(
+            "failed to encode SCCP burn bridge proof bundle: {err}"
+        ))
+    })?;
     Ok(iroha_data_model::bridge::BridgeProof {
         range: iroha_data_model::bridge::BridgeProofRange {
             start_height: finality.height,
             end_height: finality.height,
         },
-        manifest_hash: bridge_manifest_hash_for_seed("iroha:sccp:bridge-proof:burn:v1"),
-        payload: iroha_data_model::bridge::BridgeProofPayload::Ics(
-            iroha_data_model::bridge::BridgeIcsProof {
-                state_root: bundle.commitment_root,
-                leaf_hash: commitment_leaf_hash(&bundle.commitment),
-                proof,
-                hash_function: iroha_data_model::bridge::BridgeHashFunction::Blake2b,
+        manifest_hash: iroha_sccp::sccp_burn_bridge_manifest_hash_v1(),
+        payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
+            iroha_data_model::bridge::BridgeTransparentProof {
+                proof: iroha_data_model::proof::ProofBox::new(
+                    iroha_sccp::SCCP_BURN_BRIDGE_PROOF_BACKEND_V1.to_owned(),
+                    proof_bytes,
+                ),
+                recursion_depth: None,
             },
         ),
         pinned: false,
@@ -6104,19 +6083,24 @@ fn bridge_proof_from_sccp_governance_bundle(
     let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof).ok_or_else(|| {
         conversion_error("SCCP governance bundle finality proof could not be decoded".to_owned())
     })?;
-    let proof = sccp_merkle_proof_to_bridge_merkle(&bundle.merkle_proof)?;
+    let proof_bytes = to_bytes(bundle).map_err(|err| {
+        conversion_error(format!(
+            "failed to encode SCCP governance bridge proof bundle: {err}"
+        ))
+    })?;
     Ok(iroha_data_model::bridge::BridgeProof {
         range: iroha_data_model::bridge::BridgeProofRange {
             start_height: finality.height,
             end_height: finality.height,
         },
-        manifest_hash: bridge_manifest_hash_for_seed("iroha:sccp:bridge-proof:governance:v1"),
-        payload: iroha_data_model::bridge::BridgeProofPayload::Ics(
-            iroha_data_model::bridge::BridgeIcsProof {
-                state_root: bundle.commitment_root,
-                leaf_hash: commitment_leaf_hash(&bundle.commitment),
-                proof,
-                hash_function: iroha_data_model::bridge::BridgeHashFunction::Blake2b,
+        manifest_hash: iroha_sccp::sccp_governance_bridge_manifest_hash_v1(),
+        payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
+            iroha_data_model::bridge::BridgeTransparentProof {
+                proof: iroha_data_model::proof::ProofBox::new(
+                    iroha_sccp::SCCP_GOVERNANCE_BRIDGE_PROOF_BACKEND_V1.to_owned(),
+                    proof_bytes,
+                ),
+                recursion_depth: None,
             },
         ),
         pinned: false,

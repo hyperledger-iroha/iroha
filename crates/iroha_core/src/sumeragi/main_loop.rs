@@ -2971,6 +2971,7 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         BlockValidationError::HasCommittedTransactions
         | BlockValidationError::EmptyBlock
         | BlockValidationError::DuplicateTransactions
+        | BlockValidationError::SccpCommitmentRootMismatch { .. }
         | BlockValidationError::ExecutionContextInvalid(_)
         | BlockValidationError::TransactionAccept(_)
         | BlockValidationError::MerkleRootMismatch
@@ -21494,7 +21495,7 @@ impl Actor {
         view: u64,
     ) -> Option<(super::vnext::ChainOrder, super::vnext::QuorumPolicy)> {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let mut commit_topology = self.state.commit_topology_snapshot();
+        let mut commit_topology = self.roster_for_live_vote_with_mode(height, consensus_mode);
         if commit_topology.is_empty() {
             commit_topology = self.effective_commit_topology();
         }

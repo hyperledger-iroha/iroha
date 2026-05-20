@@ -205,6 +205,32 @@ fn bridge_height_window_respected() {
 }
 
 #[test]
+fn generic_ics_proof_rejects_reserved_sccp_manifest_hash() {
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let state = State::with_telemetry(world, kura, query_handle, telemetry);
+
+    let exec = Executor::default();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let mut proof = make_ics_proof(0x67, (1, 1), false);
+    proof.manifest_hash = iroha_sccp::sccp_burn_bridge_manifest_hash_v1();
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
+    let err = exec
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .expect_err("generic ICS SCCP manifest bypass must be rejected");
+    assert!(
+        format!("{err:?}").contains("typed SCCP bridge proof backends"),
+        "unexpected error for reserved manifest bypass: {err:?}"
+    );
+}
+
+#[test]
 fn bridge_overlapping_ranges_are_rejected() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();

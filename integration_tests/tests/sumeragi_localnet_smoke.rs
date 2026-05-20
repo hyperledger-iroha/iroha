@@ -130,11 +130,13 @@ const THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX: f64 = 0.3;
 const THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV: &str = "IROHA_THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_SECS";
 const REALISTIC_30TPS_PEERS: usize = 4;
 const REALISTIC_30TPS_DURATION_SECS: u64 = 1_200;
-const REALISTIC_30TPS_TARGET_BLOCKS: u64 = 600;
+// Default to the transaction-capacity floor; env can raise this for stricter
+// block-cadence checks.
+const REALISTIC_30TPS_TARGET_BLOCKS: u64 = 0;
 const REALISTIC_30TPS_TARGET_TPS: u64 = 30;
 const REALISTIC_30TPS_BLOCK_TIME_MS: u64 = 500;
 const REALISTIC_30TPS_COMMIT_TIME_MS: u64 = 500;
-const REALISTIC_30TPS_BLOCK_MAX_TXS: u64 = 50;
+const REALISTIC_30TPS_BLOCK_MAX_TXS: u64 = 512;
 const REALISTIC_30TPS_SUBMIT_PARALLELISM: usize = 16;
 const REALISTIC_30TPS_QUEUE_SOFT_LIMIT: u64 = 3_000;
 const REALISTIC_30TPS_STALL_THRESHOLD: Duration = Duration::from_secs(20);
@@ -1007,7 +1009,7 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
         "IROHA_REALISTIC_30TPS_TARGET_TPS",
         REALISTIC_30TPS_TARGET_TPS,
     );
-    let target_blocks = env_or_default(
+    let configured_target_blocks = env_or_default(
         "IROHA_REALISTIC_30TPS_TARGET_BLOCKS",
         REALISTIC_30TPS_TARGET_BLOCKS,
     );
@@ -1068,6 +1070,7 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
         total_txs > 0 && block_max_txs > 0,
         "realistic 30 TPS run requires a positive duration and TPS"
     );
+    let target_blocks = realistic_target_blocks(configured_target_blocks, total_txs, block_max_txs);
     let load_kind = Realistic30TpsLoadKind::from_env()?;
     let transfer_asset_definition_id = realistic_transfer_asset_definition_id();
     let transfer_load_accounts = if load_kind == Realistic30TpsLoadKind::Transfer {
@@ -1561,6 +1564,7 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 ThroughputStatusSummary::from_statuses(&load_end_snapshots);
             let load_end_produced_blocks =
                 load_end_min_non_empty.saturating_sub(baseline_non_empty);
+            let max_load_queue_size = max_queue_size_for_phase(&artifacts.samples, "load");
             let mut after_statuses = load_end_statuses;
             let mut drain_last_progress = Instant::now();
             let mut drain_last_min_approved = after_statuses
@@ -1710,6 +1714,21 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 min_approved,
                 target_approved,
                 max_rejected,
+            );
+            ensure!(
+                load_end_produced_blocks >= target_blocks,
+                "realistic 30 TPS load did not keep up with submitted TPS: produced {load_end_produced_blocks} non-empty blocks during load, target {target_blocks}, block_max_txs={block_max_txs}, load_elapsed={load_end_elapsed:?}"
+            );
+            ensure!(
+                max_load_queue_size <= queue_soft_limit,
+                "realistic 30 TPS queue exceeded soft limit during load: max_queue_size={max_load_queue_size}, queue_soft_limit={queue_soft_limit}, load_committed_tps={:.3}, submitted_tps={:.3}",
+                rate_per_second(
+                    load_end_summary
+                        .min_txs_approved
+                        .saturating_sub(baseline_approved),
+                    load_end_elapsed,
+                ),
+                rate_per_second(submitted, submit_elapsed),
             );
             ensure!(
                 min_non_empty >= target_non_empty,
@@ -4793,6 +4812,221 @@ fn realistic_artifact_summary_counts_load_samples_and_keeps_zero_block_rates_fin
 }
 
 #[test]
+fn realistic_target_blocks_cover_load_capacity() {
+    assert_eq!(realistic_target_blocks(0, 216_000, 512), 422);
+    assert_eq!(realistic_target_blocks(0, 36_000, 100), 360);
+    assert_eq!(realistic_target_blocks(600, 36_000, 100), 600);
+    assert_eq!(realistic_target_blocks(0, 36_001, 50), 721);
+    assert_eq!(realistic_target_blocks(600, 36_000, 0), 600);
+}
+
+#[test]
+fn realistic_target_blocks_handle_extreme_counters() {
+    assert_eq!(realistic_target_blocks(0, u64::MAX, 1), u64::MAX);
+    assert_eq!(realistic_target_blocks(0, u64::MAX, 2), 1u64 << 63);
+    assert_eq!(realistic_target_blocks(u64::MAX, 1, 1), u64::MAX);
+    assert_eq!(realistic_target_blocks(u64::MAX - 1, 1, 0), u64::MAX - 1);
+}
+
+#[test]
+fn realistic_target_blocks_zero_transactions_never_inflates_default() {
+    assert_eq!(realistic_target_blocks(0, 0, 100), 0);
+    assert_eq!(realistic_target_blocks(7, 0, 100), 7);
+    assert_eq!(realistic_target_blocks(7, 0, 0), 7);
+}
+
+#[test]
+fn realistic_target_blocks_rounds_up_partial_capacity() {
+    assert_eq!(realistic_target_blocks(0, 1, 100), 1);
+    assert_eq!(realistic_target_blocks(0, 100, 100), 1);
+    assert_eq!(realistic_target_blocks(0, 101, 100), 2);
+    assert_eq!(realistic_target_blocks(1, 101, 100), 2);
+}
+
+#[test]
+fn realistic_target_blocks_handles_near_max_capacity_without_overflow() {
+    assert_eq!(realistic_target_blocks(0, u64::MAX, u64::MAX), 1);
+    assert_eq!(realistic_target_blocks(0, u64::MAX - 1, u64::MAX), 1);
+    assert_eq!(
+        realistic_target_blocks(0, u64::MAX - 1, (u64::MAX / 2) + 1),
+        2
+    );
+}
+
+#[test]
+fn max_queue_size_for_phase_filters_samples() {
+    let samples = vec![
+        ThroughputSample {
+            phase: Some("load".to_string()),
+            timestamp_ms: 1,
+            statuses: vec![StatusSnapshot {
+                queue_size: 7,
+                ..StatusSnapshot::default()
+            }],
+            sumeragi: Vec::new(),
+        },
+        ThroughputSample {
+            phase: Some("drain".to_string()),
+            timestamp_ms: 2,
+            statuses: vec![StatusSnapshot {
+                queue_size: 99,
+                ..StatusSnapshot::default()
+            }],
+            sumeragi: Vec::new(),
+        },
+        ThroughputSample {
+            phase: Some("load".to_string()),
+            timestamp_ms: 3,
+            statuses: vec![StatusSnapshot {
+                queue_size: 11,
+                ..StatusSnapshot::default()
+            }],
+            sumeragi: Vec::new(),
+        },
+    ];
+
+    assert_eq!(max_queue_size_for_phase(&samples, "load"), 11);
+    assert_eq!(max_queue_size_for_phase(&samples, "drain"), 99);
+    assert_eq!(max_queue_size_for_phase(&samples, "missing"), 0);
+}
+
+#[test]
+fn max_queue_size_for_phase_ignores_adversarial_non_matching_samples() {
+    let samples = vec![
+        ThroughputSample {
+            phase: None,
+            timestamp_ms: 1,
+            statuses: vec![StatusSnapshot {
+                queue_size: u64::MAX,
+                ..StatusSnapshot::default()
+            }],
+            sumeragi: Vec::new(),
+        },
+        ThroughputSample {
+            phase: Some("Load".to_string()),
+            timestamp_ms: 2,
+            statuses: vec![StatusSnapshot {
+                queue_size: u64::MAX - 1,
+                ..StatusSnapshot::default()
+            }],
+            sumeragi: Vec::new(),
+        },
+        ThroughputSample {
+            phase: Some("load".to_string()),
+            timestamp_ms: 3,
+            statuses: Vec::new(),
+            sumeragi: Vec::new(),
+        },
+        ThroughputSample {
+            phase: Some("load".to_string()),
+            timestamp_ms: 4,
+            statuses: vec![
+                StatusSnapshot {
+                    queue_size: 13,
+                    ..StatusSnapshot::default()
+                },
+                StatusSnapshot {
+                    queue_size: 21,
+                    ..StatusSnapshot::default()
+                },
+            ],
+            sumeragi: Vec::new(),
+        },
+    ];
+
+    assert_eq!(max_queue_size_for_phase(&samples, "load"), 21);
+    assert_eq!(max_queue_size_for_phase(&samples, "Load"), u64::MAX - 1);
+    assert_eq!(max_queue_size_for_phase(&samples, ""), 0);
+}
+
+#[test]
+fn max_queue_size_for_phase_counts_all_matching_statuses_without_summing() {
+    let samples = vec![
+        ThroughputSample {
+            phase: Some("load".to_string()),
+            timestamp_ms: 1,
+            statuses: vec![
+                StatusSnapshot {
+                    queue_size: u64::MAX - 10,
+                    ..StatusSnapshot::default()
+                },
+                StatusSnapshot {
+                    queue_size: 9,
+                    ..StatusSnapshot::default()
+                },
+            ],
+            sumeragi: Vec::new(),
+        },
+        ThroughputSample {
+            phase: Some("drain".to_string()),
+            timestamp_ms: 2,
+            statuses: vec![StatusSnapshot {
+                queue_size: u64::MAX,
+                ..StatusSnapshot::default()
+            }],
+            sumeragi: Vec::new(),
+        },
+        ThroughputSample {
+            phase: Some("load".to_string()),
+            timestamp_ms: 3,
+            statuses: vec![StatusSnapshot {
+                queue_size: u64::MAX - 1,
+                ..StatusSnapshot::default()
+            }],
+            sumeragi: Vec::new(),
+        },
+    ];
+
+    assert_eq!(max_queue_size_for_phase(&samples, "load"), u64::MAX - 1);
+    assert_eq!(max_queue_size_for_phase(&samples, "drain"), u64::MAX);
+}
+
+#[test]
+fn max_queue_size_for_phase_requires_exact_phase_match() {
+    let samples = vec![
+        ThroughputSample {
+            phase: Some("load ".to_string()),
+            timestamp_ms: 1,
+            statuses: vec![StatusSnapshot {
+                queue_size: u64::MAX,
+                ..StatusSnapshot::default()
+            }],
+            sumeragi: Vec::new(),
+        },
+        ThroughputSample {
+            phase: Some("load\n".to_string()),
+            timestamp_ms: 2,
+            statuses: vec![StatusSnapshot {
+                queue_size: u64::MAX - 1,
+                ..StatusSnapshot::default()
+            }],
+            sumeragi: Vec::new(),
+        },
+        ThroughputSample {
+            phase: Some("load\0".to_string()),
+            timestamp_ms: 3,
+            statuses: vec![StatusSnapshot {
+                queue_size: u64::MAX - 2,
+                ..StatusSnapshot::default()
+            }],
+            sumeragi: Vec::new(),
+        },
+        ThroughputSample {
+            phase: Some("load".to_string()),
+            timestamp_ms: 4,
+            statuses: vec![StatusSnapshot {
+                queue_size: 5,
+                ..StatusSnapshot::default()
+            }],
+            sumeragi: Vec::new(),
+        },
+    ];
+
+    assert_eq!(max_queue_size_for_phase(&samples, "load"), 5);
+    assert_eq!(max_queue_size_for_phase(&samples, "load "), u64::MAX);
+}
+
+#[test]
 fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
     let dir = tempdir().expect("tempdir");
     let artifact_root = dir.path().join("artifacts");
@@ -5108,7 +5342,7 @@ fn scale_duration(duration: Duration, factor: u64) -> Duration {
     Duration::from_millis(u64::try_from(total_ms).unwrap_or(u64::MAX))
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[allow(dead_code)]
 struct StatusSnapshot {
     blocks: u64,
@@ -6110,6 +6344,26 @@ fn seconds_per_block(elapsed: Duration, blocks: u64) -> f64 {
         return 0.0;
     }
     elapsed.as_secs_f64() / blocks as f64
+}
+
+fn realistic_target_blocks(
+    configured_target_blocks: u64,
+    total_txs: u64,
+    block_max_txs: u64,
+) -> u64 {
+    if block_max_txs == 0 {
+        return configured_target_blocks;
+    }
+    configured_target_blocks.max(total_txs.div_ceil(block_max_txs))
+}
+
+fn max_queue_size_for_phase(samples: &[ThroughputSample], phase: &str) -> u64 {
+    samples
+        .iter()
+        .filter(|sample| sample.phase.as_deref() == Some(phase))
+        .flat_map(|sample| sample.statuses.iter().map(|status| status.queue_size))
+        .max()
+        .unwrap_or_default()
 }
 
 #[allow(clippy::too_many_arguments)]

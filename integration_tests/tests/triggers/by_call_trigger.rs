@@ -26,7 +26,10 @@ use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, load_sample_ivm};
 use mint_rose_trigger_data_model::MintRoseArgs;
-use tokio::{task::spawn_blocking, time::timeout};
+use tokio::{
+    task::spawn_blocking,
+    time::{Duration, Instant, sleep, timeout},
+};
 
 use crate::triggers::get_asset_value;
 
@@ -59,6 +62,45 @@ async fn submit_instruction_and_wait(
     let context = context.to_string();
     spawn_blocking(move || client.submit_blocking(instruction).wrap_err(context)).await??;
     Ok(())
+}
+
+async fn wait_for_asset_value(
+    client: &iroha::client::Client,
+    asset_id: &AssetId,
+    expected: Numeric,
+    timeout_after: Duration,
+    context: &str,
+) -> Result<Numeric> {
+    let deadline = Instant::now() + timeout_after;
+    let mut last_observed = String::from("asset value was not queried");
+
+    loop {
+        if Instant::now() >= deadline {
+            return Err(eyre::eyre!(
+                "timed out waiting for asset {asset_id} to equal {expected} after {context}; last_observed={last_observed}"
+            ));
+        }
+
+        match spawn_blocking({
+            let client = client.clone();
+            let asset_id = asset_id.clone();
+            move || get_asset_value(&client, &asset_id)
+        })
+        .await?
+        {
+            Ok(value) => {
+                if value == expected {
+                    return Ok(value);
+                }
+                last_observed = value.to_string();
+            }
+            Err(error) => {
+                last_observed = format!("query failed: {error}");
+            }
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
 }
 
 fn is_trigger_register_collision(err: &eyre::Report, trigger_id: &TriggerId) -> bool {
@@ -801,20 +843,29 @@ async fn unregister_trigger() -> Result<()> {
         .await?;
 
         // Finding trigger
-        let found_trigger = spawn_blocking({
-            let client = test_client.clone();
-            let trigger_id = trigger_id.clone();
-            move || {
-                client
-                    .query(FindTriggers::new())
-                    .execute_all()
-                    .unwrap()
-                    .into_iter()
-                    .find(|trigger| trigger.id() == &trigger_id)
-                    .expect("trigger not found")
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let found_trigger = loop {
+            let found_trigger = spawn_blocking({
+                let client = test_client.clone();
+                let trigger_id = trigger_id.clone();
+                move || {
+                    client
+                        .query(FindTriggers::new())
+                        .execute_all()
+                        .unwrap()
+                        .into_iter()
+                        .find(|trigger| trigger.id() == &trigger_id)
+                }
+            })
+            .await?;
+            if let Some(found_trigger) = found_trigger {
+                break found_trigger;
             }
-        })
-        .await?;
+            if Instant::now() >= deadline {
+                panic!("trigger not found");
+            }
+            sleep(Duration::from_millis(250)).await;
+        };
         let found_action = found_trigger.action();
         let Executable::Instructions(found_instructions) = found_action.executable() else {
             panic!("Expected instructions");
@@ -841,20 +892,29 @@ async fn unregister_trigger() -> Result<()> {
         .await?;
 
         // Checking result
-        let still_present = spawn_blocking({
-            let client = test_client.clone();
-            let trigger_id = trigger_id.clone();
-            move || {
-                client
-                    .query(FindTriggers::new())
-                    .execute_all()
-                    .unwrap()
-                    .into_iter()
-                    .any(|trigger| trigger.id() == &trigger_id)
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let still_present = spawn_blocking({
+                let client = test_client.clone();
+                let trigger_id = trigger_id.clone();
+                move || {
+                    client
+                        .query(FindTriggers::new())
+                        .execute_all()
+                        .unwrap()
+                        .into_iter()
+                        .any(|trigger| trigger.id() == &trigger_id)
+                }
+            })
+            .await?;
+            if !still_present {
+                break;
             }
-        })
-        .await?;
-        assert!(!still_present);
+            if Instant::now() >= deadline {
+                assert!(!still_present);
+            }
+            sleep(Duration::from_millis(250)).await;
+        }
 
         Ok(())
     })
@@ -1397,13 +1457,16 @@ async fn call_execute_trigger_with_args() -> Result<()> {
         )
         .await?;
 
-        let new_value = spawn_blocking({
-            let client = test_client.clone();
-            let asset_id = asset_id.clone();
-            move || get_asset_value(&client, &asset_id)
-        })
-        .await??;
-        assert_eq!(new_value, prev_value.checked_add(numeric!(42)).unwrap());
+        let expected_value = prev_value.checked_add(numeric!(42)).unwrap();
+        let new_value = wait_for_asset_value(
+            &test_client,
+            &asset_id,
+            expected_value.clone(),
+            network.sync_timeout(),
+            stringify!(call_execute_trigger_with_args),
+        )
+        .await?;
+        assert_eq!(new_value, expected_value);
 
         Ok(())
     })

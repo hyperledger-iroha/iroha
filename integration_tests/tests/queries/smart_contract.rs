@@ -25,7 +25,9 @@ fn metadata_with_gas_limit(bytecode: &IvmBytecode) -> Result<Metadata> {
 #[test]
 fn smart_contract_query_scenarios() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new(),
+        NetworkBuilder::new().with_config_layer(|layer| {
+            layer.write(["pipeline", "query_default_cursor_mode"], "stored");
+        }),
         stringify!(smart_contract_query_scenarios),
     )?
     else {

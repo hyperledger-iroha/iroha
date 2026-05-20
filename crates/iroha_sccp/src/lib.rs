@@ -35,6 +35,15 @@ pub const SCCP_DOMAIN_SORA_POLKADOT: u32 = 7;
 pub const SCCP_DOMAIN_SORA2: u32 = 8;
 pub const SCCP_STARK_FRI_PROOF_FAMILY_V1: &str = "stark-fri-v1";
 pub const SCCP_EVM_SECP256K1_PROOF_BACKEND_V1: &str = "evm-secp256k1-keccak-v1";
+/// Typed bridge-proof backend for SCCP burn bundles submitted to Iroha.
+pub const SCCP_BURN_BRIDGE_PROOF_BACKEND_V1: &str = "sccp/burn-bundle-v1";
+/// Typed bridge-proof backend for SCCP governance bundles submitted to Iroha.
+pub const SCCP_GOVERNANCE_BRIDGE_PROOF_BACKEND_V1: &str = "sccp/governance-bundle-v1";
+/// Manifest seed reserved for SCCP burn bundle bridge proofs.
+pub const SCCP_BURN_BRIDGE_PROOF_MANIFEST_SEED_V1: &str = "iroha:sccp:bridge-proof:burn:v1";
+/// Manifest seed reserved for SCCP governance bundle bridge proofs.
+pub const SCCP_GOVERNANCE_BRIDGE_PROOF_MANIFEST_SEED_V1: &str =
+    "iroha:sccp:bridge-proof:governance:v1";
 
 pub const SCCP_CODEC_TEXT_UTF8: u8 = 1;
 pub const SCCP_CODEC_EVM_HEX: u8 = 2;
@@ -1795,6 +1804,39 @@ pub fn sccp_manifest_seed_for_domain(domain: u32) -> Option<String> {
     Some(format!(
         "iroha:sccp:bridge-proof:message:stark-fri:v1:{chain}"
     ))
+}
+
+#[cfg(feature = "std")]
+/// Compute the bridge proof manifest hash used by SCCP proof submissions.
+pub fn sccp_bridge_manifest_hash_for_seed(seed: &str) -> H256 {
+    <[u8; 32]>::from(iroha_crypto::Hash::new(seed.as_bytes()))
+}
+
+#[cfg(feature = "std")]
+/// Return the reserved manifest hash for SCCP burn bundle bridge proofs.
+pub fn sccp_burn_bridge_manifest_hash_v1() -> H256 {
+    sccp_bridge_manifest_hash_for_seed(SCCP_BURN_BRIDGE_PROOF_MANIFEST_SEED_V1)
+}
+
+#[cfg(feature = "std")]
+/// Return the reserved manifest hash for SCCP governance bundle bridge proofs.
+pub fn sccp_governance_bridge_manifest_hash_v1() -> H256 {
+    sccp_bridge_manifest_hash_for_seed(SCCP_GOVERNANCE_BRIDGE_PROOF_MANIFEST_SEED_V1)
+}
+
+#[cfg(feature = "std")]
+/// Return all manifest hashes reserved for typed SCCP bridge proof submissions.
+pub fn sccp_reserved_bridge_manifest_hashes_v1() -> Vec<H256> {
+    let mut hashes = vec![
+        sccp_burn_bridge_manifest_hash_v1(),
+        sccp_governance_bridge_manifest_hash_v1(),
+    ];
+    hashes.extend(
+        sccp_proof_manifests_v1()
+            .into_iter()
+            .map(|manifest| sccp_bridge_manifest_hash_for_seed(&manifest.manifest_seed)),
+    );
+    hashes
 }
 
 pub fn sccp_required_public_inputs_v1() -> Vec<String> {
@@ -4373,13 +4415,25 @@ pub fn verify_sccp_payload_structure(payload: &SccpPayloadV1) -> bool {
                 && validate_sccp_codec_bytes(payload.route_id_codec, &payload.route_id)
         }
         SccpPayloadV1::Transfer(payload) => {
+            let Some(expected_sender_codec) =
+                sccp_counterparty_account_codec(payload.source_domain)
+            else {
+                return false;
+            };
+            let Some(expected_recipient_codec) =
+                sccp_counterparty_account_codec(payload.dest_domain)
+            else {
+                return false;
+            };
             payload.version == 1
                 && is_supported_domain(payload.source_domain)
                 && is_supported_domain(payload.asset_home_domain)
                 && payload.source_domain != payload.dest_domain
                 && validate_sccp_codec_bytes(payload.asset_id_codec, &payload.asset_id)
                 && payload.amount != 0
+                && payload.sender_codec == expected_sender_codec
                 && validate_sccp_codec_bytes(payload.sender_codec, &payload.sender)
+                && payload.recipient_codec == expected_recipient_codec
                 && validate_sccp_codec_bytes(payload.recipient_codec, &payload.recipient)
                 && validate_sccp_codec_bytes(payload.route_id_codec, &payload.route_id)
         }
@@ -5536,8 +5590,8 @@ mod tests {
             asset_id_codec: SCCP_CODEC_TEXT_UTF8,
             asset_id: b"xor#universal".to_vec(),
             amount: 10,
-            sender_codec: SCCP_CODEC_TEXT_UTF8,
-            sender: b"alice".to_vec(),
+            sender_codec: SCCP_CODEC_EVM_HEX,
+            sender: b"0x1111111111111111111111111111111111111111".to_vec(),
             recipient_codec: SCCP_CODEC_TEXT_UTF8,
             recipient: b"bob".to_vec(),
             route_id_codec: SCCP_CODEC_TEXT_UTF8,
@@ -6618,6 +6672,52 @@ mod tests {
             route_id: b"nexus:tron:xor".to_vec(),
         });
         assert!(verify_sccp_payload_structure(&tron_recipient_payload));
+
+        for (domain, codec, sender) in [
+            (
+                SCCP_DOMAIN_ETH,
+                SCCP_CODEC_EVM_HEX,
+                b"0x3333333333333333333333333333333333333333".as_slice(),
+            ),
+            (
+                SCCP_DOMAIN_BSC,
+                SCCP_CODEC_EVM_HEX,
+                b"0x3333333333333333333333333333333333333333".as_slice(),
+            ),
+            (
+                SCCP_DOMAIN_SOL,
+                SCCP_CODEC_SOLANA_BASE58,
+                b"11111111111111111111111111111111".as_slice(),
+            ),
+            (
+                SCCP_DOMAIN_TON,
+                SCCP_CODEC_TON_RAW,
+                b"0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".as_slice(),
+            ),
+            (
+                SCCP_DOMAIN_TRON,
+                SCCP_CODEC_TRON_BASE58CHECK,
+                b"T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb".as_slice(),
+            ),
+        ] {
+            let inbound_transfer = SccpPayloadV1::Transfer(TransferPayloadV1 {
+                version: 1,
+                source_domain: domain,
+                dest_domain: SCCP_DOMAIN_SORA,
+                nonce: u64::from(domain),
+                asset_home_domain: domain,
+                asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"xor#remote".to_vec(),
+                amount: 10,
+                sender_codec: codec,
+                sender: sender.to_vec(),
+                recipient_codec: SCCP_CODEC_TEXT_UTF8,
+                recipient: b"alice@sora".to_vec(),
+                route_id_codec: SCCP_CODEC_TEXT_UTF8,
+                route_id: b"remote:sora:xor".to_vec(),
+            });
+            assert!(verify_sccp_payload_structure(&inbound_transfer));
+        }
     }
 
     #[test]
@@ -6713,6 +6813,46 @@ mod tests {
         assert!(!verify_sccp_payload_structure(
             &invalid_tron_recipient_payload
         ));
+
+        let wrong_sender_codec = SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_ETH,
+            dest_domain: SCCP_DOMAIN_SORA,
+            nonce: 5,
+            asset_home_domain: SCCP_DOMAIN_ETH,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#eth".to_vec(),
+            amount: 10,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"0x3333333333333333333333333333333333333333".to_vec(),
+            recipient_codec: SCCP_CODEC_TEXT_UTF8,
+            recipient: b"alice@sora".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"eth:sora:xor".to_vec(),
+        });
+        assert!(!verify_sccp_payload_structure(&wrong_sender_codec));
+
+        let wrong_recipient_codec = SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_ETH,
+            nonce: 6,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 10,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"bridge@sora".to_vec(),
+            recipient_codec: SCCP_CODEC_TEXT_UTF8,
+            recipient: b"0x3333333333333333333333333333333333333333".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"sora:eth:xor".to_vec(),
+        });
+        assert!(!verify_sccp_payload_structure(&wrong_recipient_codec));
+
+        assert!(!verify_message_bundle_structure(&sample_message_bundle(
+            wrong_recipient_codec
+        )));
     }
 
     #[test]

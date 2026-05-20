@@ -58,6 +58,7 @@ use iroha_data_model::{
         InstructionBox, SetParameter,
         register::RegisterBox,
         set_instruction_registry,
+        sns::RegisterSnsName,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
     metadata::Metadata,
@@ -101,7 +102,7 @@ use tracing::{Instrument, debug, error, info, info_span, warn};
 
 use crate::config::ensure_genesis_results;
 const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
-const TEST_SNS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(30);
+const TEST_SNS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(120);
 const TEST_SNS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
 
 pub use crate::config::genesis as genesis_factory;
@@ -181,15 +182,27 @@ fn domain_registration_lease_visible_to_client(client: &Client, domain: &DomainI
     }
 }
 
+fn domain_registration_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
+    let domain_exists = client
+        .query(FindDomains::new())
+        .execute_all()?
+        .into_iter()
+        .any(|existing| existing.id() == domain);
+    if domain_exists {
+        return Ok(true);
+    }
+    domain_registration_lease_visible_to_client(client, domain)
+}
+
 fn wait_for_domain_registration_lease(client: &Client, domain: &DomainId) -> Result<bool> {
     let deadline = Instant::now() + TEST_SNS_LEASE_VISIBILITY_TIMEOUT;
     while Instant::now() < deadline {
-        if domain_registration_lease_visible_to_client(client, domain)? {
+        if domain_registration_ready_to_client(client, domain)? {
             return Ok(true);
         }
         std::thread::sleep(TEST_SNS_LEASE_VISIBILITY_POLL);
     }
-    domain_registration_lease_visible_to_client(client, domain)
+    domain_registration_ready_to_client(client, domain)
 }
 
 /// Ensure a runtime domain registration has the SNS lease required by the executor.
@@ -208,8 +221,19 @@ pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> R
     }
 
     let request = test_domain_register_request(domain, &client.account)?;
-    match client.sns().register(&request) {
-        Ok(_) => Ok(()),
+    let transaction =
+        client.build_transaction_from_items([RegisterSnsName::new(request)], Metadata::default());
+    match client.submit_transaction(&transaction) {
+        Ok(_) => {
+            if wait_for_domain_registration_lease(client, domain)? {
+                Ok(())
+            } else {
+                Err(eyre!(
+                    "domain `{domain}` SNS lease was not visible within {:?}",
+                    TEST_SNS_LEASE_VISIBILITY_TIMEOUT
+                ))
+            }
+        }
         Err(err) if is_duplicate_sns_selector_error(&err) => {
             if wait_for_domain_registration_lease(client, domain)? {
                 Ok(())
@@ -227,8 +251,25 @@ pub fn ensure_domain_registration_lease_for_network(
     network: &Network,
     domain: &DomainId,
 ) -> Result<()> {
-    for peer in network.peers() {
-        ensure_domain_registration_lease(&peer.client(), domain)?;
+    let mut peers = network.peers().iter().collect::<Vec<_>>();
+    peers.sort_by(|left, right| left.id().cmp(&right.id()));
+    let clients = peers
+        .into_iter()
+        .map(NetworkPeer::client)
+        .collect::<Vec<_>>();
+    let Some((primary, replicas)) = clients.split_first() else {
+        return Ok(());
+    };
+
+    ensure_domain_registration_lease(primary, domain)?;
+    for client in replicas {
+        if !wait_for_domain_registration_lease(client, domain)? {
+            return Err(eyre!(
+                "domain `{domain}` SNS lease was not visible to peer `{}` within {:?}",
+                client.torii_url,
+                TEST_SNS_LEASE_VISIBILITY_TIMEOUT
+            ));
+        }
     }
     Ok(())
 }
@@ -250,8 +291,29 @@ pub fn ensure_domain_registration_leases_for_executable(
             domains.insert(register_domain.object.id.clone());
         }
     }
+    let mut registrations = Vec::new();
+    for domain in &domains {
+        if domain_registration_ready_to_client(client, domain)? {
+            continue;
+        }
+        let request = test_domain_register_request(domain, &client.account)?;
+        registrations.push(RegisterSnsName::new(request));
+    }
+    if !registrations.is_empty() {
+        let transaction = client.build_transaction_from_items(registrations, Metadata::default());
+        match client.submit_transaction(&transaction) {
+            Ok(_) => {}
+            Err(err) if is_duplicate_sns_selector_error(&err) => {}
+            Err(err) => return Err(err),
+        }
+    }
     for domain in domains {
-        ensure_domain_registration_lease(client, &domain)?;
+        if !wait_for_domain_registration_lease(client, &domain)? {
+            return Err(eyre!(
+                "domain `{domain}` SNS lease was not visible within {:?}",
+                TEST_SNS_LEASE_VISIBILITY_TIMEOUT
+            ));
+        }
     }
     Ok(())
 }
