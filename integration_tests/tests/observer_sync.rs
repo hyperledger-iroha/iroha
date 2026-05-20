@@ -288,8 +288,15 @@ fn observer_node_catches_up() -> Result<()> {
             &*ALICE_ID,
             limit
         );
-        let body =
-            rt.block_on(async { reqwest::Client::new().get(url).send().await?.text().await })?;
+        let body = rt.block_on(async {
+            reqwest::Client::new()
+                .get(url)
+                .header("Accept", "application/json")
+                .send()
+                .await?
+                .text()
+                .await
+        })?;
         let parsed: JsonValue = norito::json::from_str(&body)?;
         let (items, total) = match parsed {
             JsonValue::Object(m) => {

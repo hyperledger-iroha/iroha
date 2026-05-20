@@ -10,16 +10,35 @@ use std::{
 
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox::start_network_async_or_skip;
+use iroha::{
+    client::{Client, SorafsPinRegisterArgs},
+    data_model::{
+        isi::{Grant, InstructionBox, Mint, Register},
+        prelude::*,
+    },
+};
+use iroha_executor_data_model::permission::sorafs::CanRegisterSorafsPin;
+use iroha_primitives::numeric::Numeric;
 use iroha_test_network::NetworkBuilder;
-use sorafs_car::{CarBuildPlan, CarWriter};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
 use sorafs_manifest::{
-    DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
+    CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
     SorafsReconciliationReportV1, StorageClass, chunker_registry,
 };
 
 const REPORT_TIMEOUT: Duration = Duration::from_secs(20);
 const REPORT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const RECONCILIATION_DIR: &str = "sorafs/governance/reconciliation";
+
+fn test_governance_proofs() -> GovernanceProofs {
+    GovernanceProofs {
+        council_signatures: vec![CouncilSignature {
+            signer: [0x11; 32],
+            signature: vec![0x22; 64],
+        }],
+    }
+}
 
 fn build_manifest(payload: &[u8]) -> Result<(ManifestV1, CarBuildPlan)> {
     let descriptor = chunker_registry::default_descriptor();
@@ -43,11 +62,57 @@ fn build_manifest(payload: &[u8]) -> Result<(ManifestV1, CarBuildPlan)> {
             storage_class: StorageClass::Hot,
             retention_epoch: 0,
         })
-        .governance(GovernanceProofs {
-            council_signatures: Vec::new(),
-        })
+        .governance(test_governance_proofs())
         .build()?;
     Ok((manifest, plan))
+}
+
+fn with_sorafs_pin_fee_bootstrap(mut builder: NetworkBuilder) -> NetworkBuilder {
+    for instruction in sorafs_pin_fee_bootstrap_instructions() {
+        builder = builder.with_genesis_instruction(instruction);
+    }
+    builder.with_genesis_instruction(Grant::account_permission(
+        Permission::from(CanRegisterSorafsPin),
+        ALICE_ID.clone(),
+    ))
+}
+
+fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
+    let fee_asset_id: AssetDefinitionId =
+        iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
+            .parse()
+            .expect("default SoraFS pin fee asset id");
+    let treasury =
+        iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id();
+    let fee_name = fee_asset_id
+        .try_name()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "xor".to_owned());
+    let fee_definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(fee_name);
+    let seed_amount = Numeric::new(10_000_000_000_000_u128, 0);
+
+    vec![
+        Register::account(Account::new(treasury)).into(),
+        Register::asset_definition(fee_definition).into(),
+        Mint::asset_numeric(seed_amount, AssetId::new(fee_asset_id, ALICE_ID.clone())).into(),
+    ]
+}
+
+fn register_paid_pin_manifest(
+    client: &Client,
+    manifest: &ManifestV1,
+    plan: &CarBuildPlan,
+) -> Result<()> {
+    client.post_sorafs_pin_register(SorafsPinRegisterArgs {
+        authority: &ALICE_ID,
+        private_key: ALICE_KEYPAIR.private_key(),
+        manifest,
+        chunk_digest_sha3_256: compute_chunk_plan_digest_sha3(&plan.chunks),
+        submitted_epoch: 1,
+        alias: None,
+        successor_of: None,
+    })?;
+    Ok(())
 }
 
 fn load_reconciliation_reports(dir: &Path) -> Result<Vec<SorafsReconciliationReportV1>> {
@@ -104,18 +169,19 @@ where
 
 #[tokio::test]
 async fn sorafs_reconciliation_reports_detect_divergence() -> Result<()> {
-    let builder = NetworkBuilder::new()
-        .with_min_peers(4)
-        .with_config_layer(|layer| {
-            layer
-                .write(["sorafs", "storage", "enabled"], true)
-                .write(
-                    ["sorafs", "storage", "governance_dag_dir"],
-                    "storage/sorafs/governance",
-                )
-                .write(["sorafs", "gc", "enabled"], true)
-                .write(["sorafs", "gc", "interval_secs"], 1);
-        });
+    let builder =
+        with_sorafs_pin_fee_bootstrap(NetworkBuilder::new().with_min_peers(4).with_config_layer(
+            |layer| {
+                layer
+                    .write(["sorafs", "storage", "enabled"], true)
+                    .write(
+                        ["sorafs", "storage", "governance_dag_dir"],
+                        "storage/sorafs/governance",
+                    )
+                    .write(["sorafs", "gc", "enabled"], true)
+                    .write(["sorafs", "gc", "interval_secs"], 1);
+            },
+        ));
     let Some(network) = start_network_async_or_skip(
         builder,
         stringify!(sorafs_reconciliation_reports_detect_divergence),
@@ -127,14 +193,17 @@ async fn sorafs_reconciliation_reports_detect_divergence() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let payload = b"sorafs reconciliation divergence payload";
-    let (manifest, _plan) = build_manifest(payload)?;
+    let (manifest, plan) = build_manifest(payload)?;
     let manifest_bytes = manifest.encode()?;
     let client = network.client();
+    register_paid_pin_manifest(&client, &manifest, &plan)?;
+    network.ensure_blocks(2).await?;
     let response = client.post_sorafs_storage_pin(&manifest_bytes, payload, None)?;
     assert!(
         response.status().is_success(),
-        "storage pin rejected: {}",
-        response.status()
+        "storage pin rejected: {} {}",
+        response.status(),
+        String::from_utf8_lossy(response.body())
     );
 
     let pinned_peer = network.peers().first().expect("peer");

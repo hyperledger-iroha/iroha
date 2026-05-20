@@ -36,6 +36,25 @@ deploy_burst_per_origin = 2000
 webhooks_enabled = false
 zk_attachments_enabled = false
 
+[torii.cors]
+enabled = true
+allowed_origins = [
+  "http://127.0.0.1:3000",
+  "http://localhost:3000",
+  "https://dweb.link",
+  "https://ipfs.io",
+  "https://cloudflare-ipfs.com",
+  "https://w3s.link",
+  "https://nftstorage.link",
+]
+allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
+allowed_headers = ["accept", "authorization", "content-type"]
+exposed_headers = [
+  "x-iroha-api-version",
+  "x-iroha-api-supported",
+  "x-iroha-api-min-proof-version",
+]
+
 [torii.mcp]
 enabled = true
 profile = "writer"

@@ -66,7 +66,7 @@ impl TryFrom<&Telemetry> for FuturePollTelemetry {
     fn try_from(
         Telemetry { target, fields }: &Telemetry,
     ) -> Result<Self, TelemetryConversionError> {
-        if target != &"iroha_futures" && fields.len() != 3 {
+        if *target != "iroha_futures" {
             return Err(TelemetryConversionError);
         }
 
@@ -82,14 +82,18 @@ impl TryFrom<&Telemetry> for FuturePollTelemetry {
                 (DURATION, Value::Number(duration_value)) if duration.is_none() => {
                     duration = Some(duration_value.as_u64().unwrap())
                 }
-                _ => return Err(TelemetryConversionError),
+                _ => {}
             }
         }
 
+        let (Some(id), Some(name), Some(duration)) = (id, name, duration) else {
+            return Err(TelemetryConversionError);
+        };
+
         Ok(Self {
-            id: id.unwrap(),
-            name: name.unwrap().clone(),
-            duration: duration.unwrap(),
+            id,
+            name: name.clone(),
+            duration,
         })
     }
 }
@@ -98,7 +102,7 @@ impl TryFrom<Telemetry> for FuturePollTelemetry {
     type Error = TelemetryConversionError;
 
     fn try_from(Telemetry { target, fields }: Telemetry) -> Result<Self, TelemetryConversionError> {
-        if target != "iroha_futures" && fields.len() != 3 {
+        if target != "iroha_futures" {
             return Err(TelemetryConversionError);
         }
 
@@ -114,15 +118,15 @@ impl TryFrom<Telemetry> for FuturePollTelemetry {
                 (DURATION, Value::Number(duration_value)) if duration.is_none() => {
                     duration = Some(duration_value.as_u64().unwrap())
                 }
-                _ => return Err(TelemetryConversionError),
+                _ => {}
             }
         }
 
-        Ok(Self {
-            id: id.unwrap(),
-            name: name.unwrap(),
-            duration: duration.unwrap(),
-        })
+        let (Some(id), Some(name), Some(duration)) = (id, name, duration) else {
+            return Err(TelemetryConversionError);
+        };
+
+        Ok(Self { id, name, duration })
     }
 }
 
@@ -151,6 +155,9 @@ impl<F: Future> Future for TelemetryFuture<F> {
 mod tests {
     use std::time::Duration;
 
+    use iroha_logger::telemetry::{Event as Telemetry, Fields as TelemetryFields};
+    use norito::json::Value;
+
     use super::*;
     #[test]
     fn future_poll_telemetry_json_roundtrip() {
@@ -168,5 +175,25 @@ mod tests {
         assert_eq!(decoded.name, sample.name);
         assert_eq!(decoded.duration, sample.duration);
         assert_eq!(decoded.duration(), Duration::from_nanos(sample.duration));
+    }
+
+    #[test]
+    fn future_poll_telemetry_ignores_logger_enrichment_fields() {
+        let event = Telemetry {
+            target: "iroha_futures",
+            fields: TelemetryFields(vec![
+                ("level", Value::from("INFO")),
+                ("lane_id", Value::Number(0_u64.into())),
+                ("dataspace_id", Value::Number(0_u64.into())),
+                ("id", Value::Number(42_u64.into())),
+                ("name", Value::from("basic::sleep")),
+                ("duration", Value::Number(123_u64.into())),
+            ]),
+        };
+
+        let telemetry = FuturePollTelemetry::try_from(event).expect("convert future telemetry");
+        assert_eq!(telemetry.id, 42);
+        assert_eq!(telemetry.name, "basic::sleep");
+        assert_eq!(telemetry.duration, 123);
     }
 }

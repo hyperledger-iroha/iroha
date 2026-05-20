@@ -63,16 +63,24 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
     };
     let client = network.client();
 
-    // Submit a small transaction to produce at least one more non-empty block.
-    client.submit_blocking(Register::asset_definition({
-        let __asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal")?,
-            "blkcheck".parse()?,
-        );
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    }))?;
-    rt.block_on(async { network.ensure_blocks(2).await })?;
+    // Submit two transactions so the first fetch-size=1 page has a real
+    // continuation even if genesis is not included in the block-header query.
+    for name in ["blkcheck_a", "blkcheck_b"] {
+        client.submit_blocking(Register::asset_definition({
+            let __asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal")?,
+                name.parse()?,
+            );
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }))?;
+    }
+    rt.block_on(async { network.ensure_blocks(3).await })?;
+    let headers = retry_block_headers(&client)?;
+    assert!(
+        headers.len() >= 2,
+        "expected at least two block headers before testing cursor continuation"
+    );
 
     // Build an iterable query over block headers with fetch_size = 1
     let with_filter: QueryWithFilter<BlockHeader> =

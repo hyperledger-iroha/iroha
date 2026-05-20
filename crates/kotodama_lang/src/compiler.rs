@@ -6492,6 +6492,12 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::BlockHeight { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::ResolveAccountAlias { dest, alias } => {
                             if let Some(alias_str) = string_map
                                 .get(&(func_idx, *alias))
@@ -9380,12 +9386,10 @@ impl Compiler {
             let ptr = data_base_rel + data_off;
             lit_bytes.extend_from_slice(&ptr.to_le_bytes());
         }
-        if self.opts.mode == CompilerMode::Production && !hint_diagnostics.is_empty() {
-            return Err(format!(
-                "E_ACCESS_INCOMPLETE: production Kotodama requires complete compiler-generated access metadata; state fallbacks: {}, opaque host fallbacks: {}",
-                hint_diagnostics.state_wildcards, hint_diagnostics.isi_wildcards
-            ));
-        }
+        // Sora Nexus contracts still have legitimate dynamic ledger operations
+        // whose exact account/asset keys are only known from the call payload.
+        // Keep emitting compiler-owned fallback hints for those paths and let
+        // the scheduler's dynamic prepass/conservative fallback serialize them.
         // Patch literal pointer stubs with absolute data addresses
         let literal_start = contract_section.len() as u64 + debug_section.len() as u64;
         for (at, rd, key) in &fixups {

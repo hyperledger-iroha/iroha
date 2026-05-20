@@ -31,6 +31,20 @@ public_address = "addr:127.0.0.1:1337#8F78"
 address = "addr:0.0.0.0:8080#B922"
 max_content_len = 1_073_741_824
 
+[torii.cors]
+enabled = true
+allowed_origins = [
+  "http://127.0.0.1:3000",
+  "http://localhost:3000",
+]
+allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
+allowed_headers = ["accept", "authorization", "content-type"]
+exposed_headers = [
+  "x-iroha-api-version",
+  "x-iroha-api-supported",
+  "x-iroha-api-min-proof-version",
+]
+
 [torii.mcp]
 enabled = true
 profile = "writer"

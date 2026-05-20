@@ -418,6 +418,18 @@ impl From<crate::isi::soracloud::UpgradeSoracloudService> for InstructionBox {
     }
 }
 
+impl From<crate::isi::soracloud::DeploySoracloudAppInfra> for InstructionBox {
+    fn from(i: crate::isi::soracloud::DeploySoracloudAppInfra) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::UpgradeSoracloudAppInfra> for InstructionBox {
+    fn from(i: crate::isi::soracloud::UpgradeSoracloudAppInfra) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::soracloud::RollbackSoracloudService> for InstructionBox {
     fn from(i: crate::isi::soracloud::RollbackSoracloudService) -> Self {
         InstructionBox(Box::new(i))

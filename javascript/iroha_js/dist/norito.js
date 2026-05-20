@@ -4250,22 +4250,78 @@ function encodeAccessSetHintsValue(value, context) {
     [encodeNoritoVec(value.write_keys ?? [], (entry, index) =>
       encodeNoritoStringValue(assertNonEmptyString(entry, `${context}.write_keys[${index}]`)),
     )],
+    [encodeNoritoVec(value.dynamic_reads ?? [], (entry, index) =>
+      encodeDynamicAccessHintValue(entry, `${context}.dynamic_reads[${index}]`),
+    )],
+    [encodeNoritoVec(value.dynamic_writes ?? [], (entry, index) =>
+      encodeDynamicAccessHintValue(entry, `${context}.dynamic_writes[${index}]`),
+    )],
   ]);
 }
 
 function decodeAccessSetHintsValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["read_keys", "write_keys"]);
+  const reader = new BufferReader(payload, context);
+  const read_keys = readNoritoField(reader, "read_keys");
+  const write_keys = readNoritoField(reader, "write_keys");
+  const dynamic_reads =
+    reader.offset < reader.buffer.length ? readNoritoField(reader, "dynamic_reads") : null;
+  const dynamic_writes =
+    reader.offset < reader.buffer.length ? readNoritoField(reader, "dynamic_writes") : null;
+  reader.assertEof();
   return {
     read_keys: decodeNoritoVec(
-      fields.read_keys,
+      read_keys,
       (entry, index) => decodeStringValue(entry, `${context}.read_keys[${index}]`),
       `${context}.read_keys`,
     ),
     write_keys: decodeNoritoVec(
-      fields.write_keys,
+      write_keys,
       (entry, index) => decodeStringValue(entry, `${context}.write_keys[${index}]`),
       `${context}.write_keys`,
     ),
+    dynamic_reads:
+      dynamic_reads === null
+        ? []
+        : decodeNoritoVec(
+            dynamic_reads,
+            (entry, index) => decodeDynamicAccessHintValue(entry, `${context}.dynamic_reads[${index}]`),
+            `${context}.dynamic_reads`,
+          ),
+    dynamic_writes:
+      dynamic_writes === null
+        ? []
+        : decodeNoritoVec(
+            dynamic_writes,
+            (entry, index) => decodeDynamicAccessHintValue(entry, `${context}.dynamic_writes[${index}]`),
+            `${context}.dynamic_writes`,
+          ),
+  };
+}
+
+function encodeDynamicAccessHintValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  return encodeStructValue([
+    [encodeNoritoStringValue(assertNonEmptyString(value.base_key, `${context}.base_key`))],
+    [encodeNoritoStringValue(assertNonEmptyString(value.key_type, `${context}.key_type`))],
+    [encodeNoritoStringValue(assertNonEmptyString(value.bound_kind, `${context}.bound_kind`))],
+    [encodeU32Value(value.max_keys, `${context}.max_keys`)],
+  ]);
+}
+
+function decodeDynamicAccessHintValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "base_key",
+    "key_type",
+    "bound_kind",
+    "max_keys",
+  ]);
+  return {
+    base_key: decodeStringValue(fields.base_key, `${context}.base_key`),
+    key_type: decodeStringValue(fields.key_type, `${context}.key_type`),
+    bound_kind: decodeStringValue(fields.bound_kind, `${context}.bound_kind`),
+    max_keys: decodeU32Value(fields.max_keys, `${context}.max_keys`),
   };
 }
 
@@ -4744,11 +4800,14 @@ function looksLikeNoritoFrame(buffer) {
 }
 
 function schemaHashForTypeName(typeName) {
-  const digest = sha256(
+  const input = Uint8Array.from(
     Buffer.concat([
       Buffer.from("norito:v1:type-name\0", "utf8"),
       Buffer.from(typeName, "utf8"),
     ]),
+  );
+  const digest = sha256(
+    input,
   );
   return Buffer.from(digest.subarray(0, 16));
 }

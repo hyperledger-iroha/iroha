@@ -243,8 +243,6 @@ pub struct SccpCapabilities {
     pub proof_family: String,
     /// Legacy burn-bundle fetch path.
     pub burn_bundle_path: String,
-    /// Legacy governance-bundle fetch path.
-    pub governance_bundle_path: String,
     /// Generic SCCP message-bundle fetch path.
     pub message_bundle_path: String,
     /// Runtime SCALE proof family accepted by the SORA SCCP pallet.
@@ -253,9 +251,6 @@ pub struct SccpCapabilities {
     /// Runtime verifier backend label accepted by the SORA SCCP pallet.
     #[norito(default)]
     pub runtime_verifier_backend: Option<String>,
-    /// Optional runtime SCALE governance-envelope fetch path.
-    #[norito(default)]
-    pub governance_runtime_bundle_path: Option<String>,
     /// Optional runtime SCALE message-envelope fetch path.
     #[norito(default)]
     pub message_runtime_bundle_path: Option<String>,
@@ -267,8 +262,6 @@ pub struct SccpCapabilities {
     pub proof_manifest_path: String,
     /// Registry backend label used by legacy burn proofs.
     pub legacy_burn_registry_backend: String,
-    /// Registry backend label used by legacy governance proofs.
-    pub legacy_governance_registry_backend: String,
     /// Optional Torii path for outbound proof registration.
     #[norito(default)]
     pub proof_submit_path: Option<String>,
@@ -3842,7 +3835,8 @@ impl Client {
         let response = self.send_builder(
             // Evidence submission is an operator endpoint guarded by operator signatures.
             self.operator_signed_request(HttpMethod::POST, url, body)
-                .header("Content-Type", APPLICATION_JSON),
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
         )?;
         let value = Self::parse_evidence_post_response(&response)?;
         Ok(value)
@@ -5469,6 +5463,7 @@ mod evidence_http_tests {
             headers.get("content-type"),
             Some(&"application/json".to_owned())
         );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
         let payload: norito::json::Value =
             norito::json::from_slice(&snapshot.body).expect("json body");
         let map = payload.as_object().expect("payload object");
@@ -6492,6 +6487,93 @@ mod evidence_http_tests {
             }),
             "request should set Accept: application/json"
         );
+    }
+
+    #[test]
+    fn runtime_and_node_json_requests_set_accept_json() {
+        fn assert_json_accept(store: &SnapshotStore, expected_path: &str) {
+            let snapshot = store
+                .lock()
+                .expect("snapshot lock")
+                .first()
+                .cloned()
+                .expect("request snapshot");
+            assert_eq!(snapshot.url.path(), expected_path);
+            assert!(
+                snapshot.headers.iter().any(|(name, value)| {
+                    name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
+                }),
+                "request should set Accept: application/json"
+            );
+        }
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client
+                .get_runtime_abi_active_json()
+                .expect("runtime ABI active JSON")
+        });
+        assert_json_accept(&store, "/v1/runtime/abi/active");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client
+                .get_runtime_abi_hash_json()
+                .expect("runtime ABI hash JSON")
+        });
+        assert_json_accept(&store, "/v1/runtime/abi/hash");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client
+                .get_node_capabilities_json_for_compatibility()
+                .expect("compatibility node capabilities JSON")
+        });
+        assert_json_accept(&store, "/v1/node/capabilities");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client
+                .get_node_capabilities_json()
+                .expect("node capabilities JSON")
+        });
+        assert_json_accept(&store, "/v1/node/capabilities");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url())
+                .get_sumeragi_collectors_json()
+                .expect("Sumeragi collectors JSON")
+        });
+        assert_json_accept(&store, "/v1/sumeragi/collectors");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url())
+                .get_sumeragi_evidence_count_json()
+                .expect("Sumeragi evidence count JSON")
+        });
+        assert_json_accept(&store, "/v1/sumeragi/evidence/count");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            let filter = SumeragiEvidenceListFilter::default();
+            client_with_base_url(base_url())
+                .get_sumeragi_evidence_list_json(&filter)
+                .expect("Sumeragi evidence list JSON")
+        });
+        assert_json_accept(&store, "/v1/sumeragi/evidence");
     }
 
     #[test]
@@ -12692,8 +12774,6 @@ where
     // Keep track of the block height in which the transaction was approved
     // so we can later detect the corresponding block finalization event.
     let mut block_height = None;
-    // Remember whether we have observed a matching committed block event.
-    let mut committed_block_observed = false;
     // Track when the transaction first entered the queue.
     let mut queued_at: Option<Instant> = None;
     let poll_enabled = poll_interval != Duration::ZERO;
@@ -12751,9 +12831,6 @@ where
                         }
                         TxConfirmationStatus::Approved(height) => {
                             if let Some(height) = height {
-                                if block_height != Some(height) {
-                                    committed_block_observed = false;
-                                }
                                 block_height = Some(height);
                             }
                         }
@@ -12810,9 +12887,6 @@ where
                                         "transaction approved"
                                     );
                                     let next_height = transaction_event.block_height();
-                                    if block_height != next_height {
-                                        committed_block_observed = false;
-                                    }
                                     block_height = next_height;
                                 }
                                 TransactionStatus::Rejected(reason) => {
@@ -12850,9 +12924,6 @@ where
                                         }
                                         TxConfirmationStatus::Approved(height) => {
                                             if let Some(height) = height {
-                                                if block_height != Some(height) {
-                                                    committed_block_observed = false;
-                                                }
                                                 block_height = Some(height);
                                             }
                                         }
@@ -12931,27 +13002,12 @@ where
                                                 | TxConfirmationStatus::Committed,
                                             )
                                             | None) => {
-                                                if committed_block_observed {
-                                                    debug!(
-                                                        %hash,
-                                                        "block committed+applied observed; accepting despite stale polled status"
-                                                    );
-                                                    return Some(Ok(hash));
-                                                }
                                                 debug!(
                                                     %hash,
                                                     "block applied observed before final transaction status; waiting"
                                                 );
                                             }
                                             Err(err) => {
-                                                if committed_block_observed {
-                                                    debug!(
-                                                        %hash,
-                                                        ?err,
-                                                        "status check failed after committed+applied block events; accepting"
-                                                    );
-                                                    return Some(Ok(hash));
-                                                }
                                                 debug!(
                                                     %hash,
                                                     ?err,
@@ -12976,7 +13032,6 @@ where
                                             status = ?block_event.status(),
                                             "transaction committed observed in block event"
                                         );
-                                        committed_block_observed = true;
                                     }
                                     _ => {}
                                 }
@@ -14003,6 +14058,11 @@ mod tx_confirmation_stream_tests {
 
     #[tokio::test]
     async fn committed_block_event_waits_for_applied() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([14_u8; Hash::LENGTH]));
         let height = std::num::NonZeroU64::new(15).expect("nonzero height");
@@ -14046,6 +14106,8 @@ mod tx_confirmation_stream_tests {
         }));
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
         let mut events = UnboundedReceiverStream::new(rx);
+        let status_is_applied = Arc::new(AtomicBool::new(false));
+        let status_is_applied_in_task = Arc::clone(&status_is_applied);
         let mut handle = tokio::spawn(async move {
             listen_for_tx_confirmation_stream_with_status_check(
                 &mut events,
@@ -14053,7 +14115,13 @@ mod tx_confirmation_stream_tests {
                 Duration::from_secs(1),
                 Duration::from_millis(1),
                 None,
-                || Ok(Some(super::TxConfirmationStatus::Approved(Some(height)))),
+                || {
+                    if status_is_applied_in_task.load(Ordering::SeqCst) {
+                        Ok(Some(super::TxConfirmationStatus::Applied))
+                    } else {
+                        Ok(Some(super::TxConfirmationStatus::Approved(Some(height))))
+                    }
+                },
             )
             .await
         });
@@ -14067,6 +14135,16 @@ mod tx_confirmation_stream_tests {
             "confirmation should wait for applied"
         );
 
+        let _ = tx.send(Ok(applied_event.clone()));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), &mut handle)
+                .await
+                .is_err(),
+            "applied block event should still wait for the transaction's Applied status"
+        );
+
+        status_is_applied.store(true, Ordering::SeqCst);
         let _ = tx.send(Ok(applied_event));
         let result = tokio::time::timeout(Duration::from_secs(1), &mut handle)
             .await
@@ -17983,6 +18061,12 @@ mod tests {
             assert_eq!(snapshot.method, HttpMethod::GET);
             assert_eq!(snapshot.url.path(), path);
             assert!(
+                snapshot.headers.iter().any(|(name, value)| {
+                    name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
+                }),
+                "request should set Accept: application/json"
+            );
+            assert!(
                 snapshot
                     .headers
                     .iter()
@@ -20834,7 +20918,6 @@ mod tests {
             target_domain: iroha_sccp::SCCP_DOMAIN_TON,
             message_id: sccp_message_id(&payload),
             payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
-            parliament_certificate_hash: None,
         };
         let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
@@ -20948,13 +21031,9 @@ mod tests {
             local_chain: "sora".to_owned(),
             proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
             burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
-            governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
             runtime_proof_family: Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1.to_owned()),
             runtime_verifier_backend: Some(iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1.to_owned()),
-            governance_runtime_bundle_path: Some(
-                "/v1/sccp/proofs/governance/{message_id}/runtime-scale".to_owned(),
-            ),
             message_runtime_bundle_path: Some(
                 "/v1/sccp/proofs/message/{message_id}/runtime-scale".to_owned(),
             ),
@@ -20962,7 +21041,6 @@ mod tests {
             message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
             proof_manifest_path: "/v1/sccp/manifests".to_owned(),
             legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
-            legacy_governance_registry_backend: "bridge/sccp/governance-v1".to_owned(),
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             message_submit_path: Some("/v1/bridge/messages".to_owned()),
             message_payload_kinds: vec![

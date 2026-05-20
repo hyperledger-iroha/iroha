@@ -368,6 +368,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | DataRef { .. }
         | GetAuthority { .. }
         | CurrentTimeMs { .. }
+        | BlockHeight { .. }
         | GetTriggerEvent { .. }
         | TransferBatchBegin
         | TransferBatchEnd => {}
@@ -862,6 +863,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::MapNew { dest }
         | Instr::GetAuthority { dest }
         | Instr::CurrentTimeMs { dest }
+        | Instr::BlockHeight { dest }
         | Instr::CallContract { dest, .. }
         | Instr::ResolveAccountAlias { dest, .. }
         | Instr::GetTriggerEvent { dest }

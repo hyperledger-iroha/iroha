@@ -398,7 +398,7 @@ mod halo2_bundle {
         let public_inputs_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/pasta/tiny-add2inst-public",
+            "halo2/pasta/ipa/vote-bool-commit-merkle8",
             BackendTag::Halo2IpaPasta,
             "pallas",
             public_inputs_hash,

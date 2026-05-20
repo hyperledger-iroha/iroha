@@ -419,8 +419,8 @@ fn minimal_config_snapshot() {
                 quic_enabled: false,
                 quic_datagrams_enabled: true,
                 quic_datagram_max_payload_bytes: 1200,
-                quic_datagram_receive_buffer_bytes: 1048576,
-                quic_datagram_send_buffer_bytes: 1048576,
+                quic_datagram_receive_buffer_bytes: 67108864,
+                quic_datagram_send_buffer_bytes: 67108864,
                 scion: ScionConfig {
                     enabled: false,
                     fallback_to_legacy: true,

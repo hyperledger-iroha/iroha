@@ -8,33 +8,38 @@ use iroha::data_model::{
     confidential::ConfidentialStatus,
     isi::verifying_keys,
     prelude::*,
-    proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-    query::proof::prelude::{FindProofRecords, FindProofRecordsByStatus},
+    proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+    query::proof::prelude::{
+        FindProofRecords, FindProofRecordsByBackend, FindProofRecordsByStatus,
+    },
     zk::{BackendTag, OpenVerifyEnvelope},
 };
-use iroha_core::zk::test_utils::halo2_fixture_envelope;
+use iroha_core::zk::{hash_vk, test_utils::halo2_fixture_envelope};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 
 fn active_vk_record(
     circuit_id: &str,
+    backend: BackendTag,
+    curve: &str,
     vk_box: VerifyingKeyBox,
     public_inputs_schema_hash: [u8; 32],
     max_proof_bytes: usize,
+    gas_schedule_id: &str,
 ) -> VerifyingKeyRecord {
     let mut record = VerifyingKeyRecord::new(
         1,
         circuit_id,
-        BackendTag::Halo2IpaPasta,
-        "pallas",
+        backend,
+        curve,
         public_inputs_schema_hash,
-        iroha_core::zk::hash_vk(&vk_box),
+        hash_vk(&vk_box),
     );
     record.vk_len =
         u32::try_from(vk_box.bytes.len()).expect("verifying key length should fit in u32");
     record.max_proof_bytes =
         u32::try_from(max_proof_bytes).expect("proof length should fit in u32");
-    record.gas_schedule_id = Some("halo2_default".to_owned());
+    record.gas_schedule_id = Some(gas_schedule_id.to_owned());
     record.key = Some(vk_box);
     record.status = ConfidentialStatus::Active;
     record
@@ -56,9 +61,12 @@ fn halo2_attachment_and_registration(
     let vk_id = VerifyingKeyId::new("halo2/ipa", vk_name);
     let record = active_vk_record(
         circuit_id,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
         vk_box,
         fixture.schema_hash,
         proof_box.bytes.len(),
+        "halo2_default",
     );
     let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
     (
@@ -88,11 +96,64 @@ fn rejected_halo2_attachment_and_registration()
     let vk_id = VerifyingKeyId::new("halo2/ipa", "query_bad_vk");
     let record = active_vk_record(
         circuit_id,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
         vk_box,
         iroha_crypto::Hash::new(&public_inputs).into(),
         proof_box.bytes.len(),
+        "halo2_default",
     );
     let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+    (
+        attachment,
+        verifying_keys::RegisterVerifyingKey { id: vk_id, record },
+    )
+}
+
+fn rejected_stark_attachment_and_registration(
+    label: &str,
+) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
+    let backend = "stark/fri/sha256-goldilocks";
+    let circuit_id = format!("{backend}:query-stark");
+    let public_inputs = b"query-stark-public-inputs".to_vec();
+    let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
+        version: 1,
+        circuit_id: circuit_id.clone(),
+        n_log2: 4,
+        blowup_log2: 2,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: iroha_core::zk_stark::STARK_HASH_SHA256_V1,
+    };
+    let vk_box = VerifyingKeyBox::new(
+        backend.into(),
+        norito::to_bytes(&vk_payload).expect("STARK verifying key should encode"),
+    );
+    let vk_hash = hash_vk(&vk_box);
+    let envelope = OpenVerifyEnvelope {
+        backend: BackendTag::Stark,
+        circuit_id: circuit_id.clone(),
+        vk_hash,
+        public_inputs: public_inputs.clone(),
+        proof_bytes: vec![0x30, 0x31, 0x32],
+        aux: Vec::new(),
+    };
+    let proof_box = ProofBox::new(
+        backend.into(),
+        norito::to_bytes(&envelope).expect("OpenVerifyEnvelope should encode"),
+    );
+    let vk_id = VerifyingKeyId::new(backend, label);
+    let record = active_vk_record(
+        &circuit_id,
+        BackendTag::Stark,
+        "goldilocks",
+        vk_box,
+        iroha_crypto::Hash::new(&public_inputs).into(),
+        proof_box.bytes.len(),
+        "stark_default",
+    );
+    let attachment = ProofAttachment::new_ref(backend.into(), proof_box, vk_id.clone());
     (
         attachment,
         verifying_keys::RegisterVerifyingKey { id: vk_id, record },
@@ -108,7 +169,9 @@ fn proof_query_network_builder(
             SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         ))
         .with_config_layer(|layer| {
-            layer.write(["zk", "halo2", "enabled"], true);
+            layer
+                .write(["zk", "halo2", "enabled"], true)
+                .write(["zk", "stark", "enabled"], true);
         });
     for registration in registrations {
         builder = builder.with_genesis_instruction(registration);
@@ -126,8 +189,6 @@ fn halo2_attachment(circuit_id: &str) -> ProofAttachment {
 
 #[test]
 fn proof_query_scenarios() -> Result<()> {
-    use iroha::data_model::query::proof::prelude::FindProofRecordsByBackend;
-
     let (find_attachment, find_vk) =
         halo2_attachment_and_registration("halo2/ipa:tiny-add", "query_vk_find");
     let (backend_attachment, backend_vk) =
@@ -135,9 +196,17 @@ fn proof_query_scenarios() -> Result<()> {
     let (verified_attachment, verified_vk) =
         halo2_attachment_and_registration("halo2/ipa:tiny-add2inst-public", "query_vk_status");
     let (rejected_attachment, rejected_vk) = rejected_halo2_attachment_and_registration();
+    let (stark_backend_attachment, stark_backend_vk) =
+        rejected_stark_attachment_and_registration("query_stark_vk");
 
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
-        proof_query_network_builder([find_vk, backend_vk, verified_vk, rejected_vk]),
+        proof_query_network_builder([
+            find_vk,
+            backend_vk,
+            verified_vk,
+            rejected_vk,
+            stark_backend_vk,
+        ]),
         stringify!(proof_query_scenarios),
     )?
     else {
@@ -152,7 +221,7 @@ fn proof_query_scenarios() -> Result<()> {
         ))?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
 
-        let recs = client.query(FindProofRecords).execute_all()?;
+        let recs = retry_all_proof_records(&client)?;
         assert!(
             !recs.is_empty(),
             "expected at least one proof record after VerifyProof"
@@ -164,11 +233,15 @@ fn proof_query_scenarios() -> Result<()> {
         client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(
             backend_attachment,
         )])?;
+        client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(
+            stark_backend_attachment,
+        )])?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
 
-        let halo2 = client
-            .query(FindProofRecordsByBackend::new("halo2/ipa".into()))
-            .execute_all()?;
+        let halo2 = retry_records_by_backend(&client, "halo2/ipa")?;
+        let stark = retry_records_by_backend(&client, "stark/fri/sha256-goldilocks")?;
+        let halo2_backends = proof_record_backends(&halo2);
+        let stark_backends = proof_record_backends(&stark);
         assert!(
             !halo2.is_empty(),
             "expected at least one halo2/ipa proof record"
@@ -177,7 +250,17 @@ fn proof_query_scenarios() -> Result<()> {
             halo2
                 .iter()
                 .all(|record| record.id.backend.as_str() == "halo2/ipa"),
-            "backend query should only return halo2/ipa proof records"
+            "backend query should only return halo2/ipa proof records, got {halo2_backends:?}"
+        );
+        assert!(
+            !stark.is_empty(),
+            "expected at least one stark/fri/sha256-goldilocks proof record"
+        );
+        assert!(
+            stark
+                .iter()
+                .all(|record| record.id.backend.as_str() == "stark/fri/sha256-goldilocks"),
+            "backend query should only return stark/fri/sha256-goldilocks proof records, got {stark_backends:?}"
         );
 
         let nonexistent = client
@@ -221,14 +304,38 @@ fn retry_records_by_status(
     client: &iroha::client::Client,
     status: iroha::data_model::proof::ProofStatus,
 ) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
+    retry_proof_records(|| {
+        Ok(client
+            .query(FindProofRecordsByStatus::new(status))
+            .execute_all()?)
+    })
+}
+
+fn retry_all_proof_records(
+    client: &iroha::client::Client,
+) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
+    retry_proof_records(|| Ok(client.query(FindProofRecords).execute_all()?))
+}
+
+fn retry_records_by_backend(
+    client: &iroha::client::Client,
+    backend: &str,
+) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
+    retry_proof_records(|| {
+        Ok(client
+            .query(FindProofRecordsByBackend::new(backend.into()))
+            .execute_all()?)
+    })
+}
+
+fn retry_proof_records(
+    mut query: impl FnMut() -> Result<Vec<iroha::data_model::proof::ProofRecord>>,
+) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
     const RETRIES: usize = 5;
     const DELAY: Duration = Duration::from_millis(200);
 
     for attempt in 0..RETRIES {
-        match client
-            .query(FindProofRecordsByStatus::new(status))
-            .execute_all()
-        {
+        match query() {
             Ok(records) if !records.is_empty() => return Ok(records),
             Ok(records) if attempt + 1 < RETRIES => {
                 let _ = records;
@@ -244,6 +351,13 @@ fn retry_records_by_status(
         }
     }
     unreachable!()
+}
+
+fn proof_record_backends(records: &[iroha::data_model::proof::ProofRecord]) -> Vec<String> {
+    records
+        .iter()
+        .map(|record| record.id.backend.to_string())
+        .collect()
 }
 
 #[test]

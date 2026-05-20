@@ -2,32 +2,87 @@
 
 Last updated: 2026-05-20
 
+## 2026-05-20 WSV/Kura and query stabilization follow-up
+
+- Kept WSV recovery on the memory-only path and tightened the surrounding
+  query/test corridor instead of adding durable WSV state.
+- `Client::submit_blocking` confirmation now waits for the transaction's own
+  applied status when polling is enabled, rather than treating an observed
+  applied block as sufficient by itself. This closes the race where a follow-up
+  query could hit Torii before the submitted transaction was visible.
+- Proof query scenarios now use supported first-release backends only:
+  `halo2/ipa` plus STARK/Fri. The proof query test polls all/backend/status
+  result sets to absorb normal multi-peer query visibility delay after
+  `VerifyProof`.
+- SCCP token add, pause, and resume projections now populate recent-message
+  asset ids from the SORA asset id and report no route id, matching the new
+  token-control payload shape.
+- QUIC datagram send/receive buffer defaults are now 64 MiB
+  (`67108864` bytes) instead of 1 MiB, with the config snapshot updated.
+- Focused validation passed:
+  - `CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test network_functional extra_functional::unstable_network::unstable_network_9_peers_2_faults -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p iroha_core --lib fastpq_proof_snapshots_for_same_block_flush_as_single_sidecar_update -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha tx_confirmation_stream_tests::committed_block_event_waits_for_applied -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test queries_and_proofs queries::account::find_accounts_with_asset -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test queries_and_proofs queries::proof::proof_query_scenarios -- --test-threads=1 --nocapture` (before the later polling hardening)
+  - `env -u LOG_FORMAT RUST_TEST_THREADS=1 CARGO_TARGET_DIR=target/codex-autoscale-params IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/soramitsudev/iroha/target/iroha-test-network/debug/iroha3d target/codex-autoscale-params/debug/deps/queries_and_proofs-5d1140de19a0c614 queries::proof::proof_query_scenarios --test-threads=1 --nocapture`
+  - `env -u LOG_FORMAT RUST_TEST_THREADS=1 CARGO_TARGET_DIR=target/codex-autoscale-params IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/soramitsudev/iroha/target/iroha-test-network/debug/iroha3d target/codex-autoscale-params/debug/deps/queries_and_proofs-5d1140de19a0c614 --test-threads=1 --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test queries_and_proofs queries::proof::proof_query_scenarios --no-run`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo test -p iroha_torii --lib recent_message_projection_handles_sccp_token_controls -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo test -p iroha_torii --lib sccp -- --test-threads=1 --nocapture`
+  - `env -u LOG_FORMAT target/codex-autoscale-params/debug/deps/fixtures-81f97a218bdf7f57 minimal_config_snapshot --nocapture`
+  - `rustfmt --edition 2024 integration_tests/tests/queries/proof.rs crates/iroha_torii/src/routing.rs crates/iroha_config/src/parameters/defaults.rs crates/iroha_config/tests/fixtures.rs crates/iroha/src/client.rs`
+  - `git diff --check`
+  - `scripts/check_no_scale.sh`
+- The patched proof scenario and the full `queries_and_proofs` binary are now
+  green. The earlier local loader stall was cleared by terminating stuck child
+  test executables; no `cargo` or `rustc` process was killed.
+
 ## 2026-05-20 SCCP audit hardening
 
 - SCCP commitment roots are now consensus-validated: blocks recompute the root
   from committed `RecordSccpMessage` instructions and reject mismatches, including
   non-empty roots on blocks with no SCCP messages, before empty-block policy.
   Rejections surface as `SccpCommitmentRootMismatch`.
-- SCCP proof execution now fails closed against local state. Burn, governance,
-  and message bundles must anchor to the locally committed block header, SCCP
-  root, and trusted commit QC projection; the full trusted QC is reverified with
-  core finality checks. Governance bundles additionally verify parliament
-  signatures against the persisted council roster for the proof height.
-- SCCP bridge manifests are reserved away from generic ICS submissions. Burn and
-  governance submissions are stored as typed transparent proof boxes carrying the
-  full Norito-encoded SCCP bundle bytes under SCCP backend labels, while typed
+- SCCP proof execution now fails closed against local state. Burn and message
+  bundles must anchor to the locally committed block header, SCCP root, and
+  trusted commit QC projection; the full trusted QC is reverified with core
+  finality checks.
+- SCCP token add, token pause, and token resume operations are ordinary SCCP
+  message payloads verified through the cryptographic message-proof path. The
+  bridge no longer accepts parliament certificates as transaction proofs.
+- SCCP bridge manifests are reserved away from generic ICS submissions. Burn
+  submissions are stored as typed transparent proof boxes carrying the full
+  Norito-encoded SCCP bundle bytes under SCCP backend labels, while typed
   message artifacts retain their transparent path with local finality binding.
+- SCCP transparent message proof recovery now fails closed on raw message-bundle
+  bytes. The verifier only accepts typed `NexusSccpMessageTransparentProofV1`
+  artifacts whose embedded OpenVerify/FASTPQ proof validates against the
+  canonical SCCP statement.
 - Transfer payload validation now requires sender and recipient codecs to match
   the source and destination domain account codecs. Asset and route codec policy
   remains on the existing supported-codec checks for compatibility with current
   fixtures.
-- Focused validation is green with:
-  `cargo test -p iroha_sccp codec_validation -- --nocapture`,
-  `cargo test -p iroha_core generic_ics_proof_rejects_reserved_sccp_manifest_hash --test bridge_proofs -- --nocapture`,
-  `cargo test -p iroha_core sccp_commitment_root_validation --lib -- --nocapture`,
-  `cargo test -p iroha_core malformed_sccp_transparent_bridge_proof_is_rejected --test bridge_proofs -- --nocapture`,
-  and serial Torii SCCP coverage via
-  `cargo test -p iroha_torii sccp -- --nocapture --test-threads=1`.
+- Focused validation is green with `cargo check -p iroha_sccp`,
+  `cargo check -p iroha_torii`,
+  `cargo test -p iroha_sccp --lib token_control`,
+  `cargo test -p iroha_torii --lib sccp_token_control_message_bundle_endpoint_roundtrips_json`,
+  `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k sccp`,
+  a pure `node --input-type=module` SCCP helper smoke, `cargo fmt --all`, and
+  `git diff --check`. The broader JS Torii test file still requires a refreshed
+  native binding checksum before it can start.
+- Additional SCCP audit validation is green with `cargo test -p iroha_sccp`,
+  `cargo test -p iroha_core bridge`, and
+  `cargo test -p iroha_torii --lib sccp -- --test-threads=1`. The broad
+  `cargo test -p iroha_torii sccp` command reached green SCCP lib coverage
+  before a later zero-match integration target was terminated by SIGTERM, so the
+  SCCP Torii handler coverage was rerun serially to avoid the shared registry
+  race in those tests.
+- Raw-bundle recovery hardening was rechecked with
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib transparent -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo check -p iroha_core`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo check -p iroha_torii`,
+  `cargo fmt --all -- --check`, and `git diff --check`.
 
 ## 2026-05-20 Adversarial coverage expansion
 
@@ -58,9 +113,8 @@ Last updated: 2026-05-20
 - SCCP transfer payload validation now enforces chain-specific sender and
   recipient codecs by source/destination domain, with focused positive inbound
   coverage and negative wrong-codec coverage.
-- SCCP parliament certificate validation now compares canonical signer strings
-  against the persisted council roster directly instead of trying to parse
-  domainless `AccountId` values from text.
+- SCCP bridge transaction proofs no longer use parliament certificates; channel
+  governance remains outside the transaction-proof path.
 - Focused validation is green with
   `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p kotodama_lang parse_json_macro_rejects_trailing_comma_object -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p kotodama_lang parse_json_macro_rejects_trailing_comma_array -- --nocapture`,
@@ -130,6 +184,68 @@ Last updated: 2026-05-20
   `scripts/check_no_scale.sh`. Workspace test-target compilation is green with
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test --workspace --no-run`
   (CUDA helper crates fell back because `nvcc` is not installed on this host).
+
+## 2026-05-20 Taira Browser Connect CORS Config
+
+- Enabled explicit Torii CORS config in the checked-in Sora Taira validator
+  template for the SoraSwap local dev origin and common IPFS gateway origins,
+  so browser-hosted SoraSwap can register IrohaConnect sessions directly
+  against Taira without introducing a proxy dependency.
+- Enabled the same local dev CORS policy in the kagami `iroha3-taira` sample
+  config for `http://127.0.0.1:3000` and `http://localhost:3000`.
+- Focused validation is green with
+  `cargo test -p iroha_config torii_cors_parse --lib`.
+
+## 2026-05-19 C# SDK validation and clippy closure
+
+- Finished the previously blocked C# SDK validation with the local .NET 8.0.419
+  SDK at `$HOME/.dotnet/dotnet`. The focused multisig/Norito helper coverage is
+  now included in the green C# unit suite, including
+  `ToriiClientTests.ProposeMultisigAsyncPostsNativeNoritoInstructionFrames` and
+  `NoritoCodecTests.EncodeWithSchemaHashUsesProvidedSchemaHash`.
+- The C# live Torii smoke now treats 404s from optional deployment-specific
+  contract metadata and SoraFS denylist endpoints as "surface unavailable" while
+  still validating them when present. `csharp/README.md` now documents those
+  live-smoke reads as conditional, matching the current public Taira deployment.
+- The final strict clippy pass over the touched Rust crates exposed existing
+  `ivm` lint drift in vector helpers. The `ivm` cleanup is mechanical only:
+  iterator fills replace range-index writes, and x86 SIMD transmutes now spell
+  out their source and target types.
+- C# validation commands passed from `csharp/`:
+  `$HOME/.dotnet/dotnet restore Hyperledger.Iroha.Sdk.sln`;
+  `$HOME/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+  (143 tests);
+  `$HOME/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+  (143 unit tests plus two integration-project tests with
+  `IROHA_CSHARP_RUN_LIVE_TESTS` unset);
+  `$HOME/.dotnet/dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore`;
+  `$HOME/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build`;
+  `$HOME/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build`;
+  and
+  `IROHA_CSHARP_RUN_LIVE_TESTS=1 IROHA_CSHARP_TORII_BASE_URL=https://taira.sora.org timeout 120s $HOME/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.IntegrationTests/Hyperledger.Iroha.Sdk.IntegrationTests.csproj -c Release --no-build`
+  against public Taira (two tests, including the live read-only smoke).
+- Additional Rust validation passed:
+  `cargo fmt --package ivm --package iroha_crypto --package iroha_data_model -- --check`,
+  `cargo test -p ivm bn254_vec --lib -- --nocapture`, `cargo test -p ivm --test
+  vector_ops -- --nocapture`, and `cargo clippy -p iroha_crypto -p
+  iroha_data_model --features sm --all-targets -- -D warnings`.
+  A final repository-wide `cargo fmt --all -- --check` is green after applying
+  the corresponding `cargo fmt --all` formatting pass, and `git diff --check`
+  is clean.
+
+## 2026-05-19 SM acceleration and transaction JSON build hygiene
+
+- Removed the redundant JSON derives from `TransactionEntrypoint`; its manual
+  Norito JSON writer/reader remains the JSON contract and no longer trips the
+  derive enum tag validation.
+- Made the SM acceleration test-disable guard compose every acceleration guard
+  available to the current build, removed unused non-NEON block-operation stubs,
+  and cfg-gated the private `NeonPolicy::Auto` variant to aarch64 NEON builds.
+- Focused validation is green with
+  `cargo fmt --package iroha_crypto --package iroha_data_model`,
+  `cargo test -p iroha_data_model transaction_entrypoint_json_roundtrip -- --nocapture`,
+  `cargo test -p iroha_crypto --features sm sm3_digest_fallback_produces_expected_bytes -- --nocapture`, and
+  `cargo test -p iroha_crypto --features sm sm4_block_encrypt_fallback_matches_reference_vector -- --nocapture`.
 
 ## 2026-05-19 IVM CUDA vector boundary adversarial hardening
 
@@ -12157,5 +12273,7 @@ Last updated: 2026-05-20
   - `git diff --check`
 - Python focused validation could not run because the local Python 3.14
   environment does not have `pytest` installed (`No module named pytest`).
-- C# focused validation could not run because this environment does not have
-  the `dotnet` CLI installed.
+- C# focused validation is now green with the local .NET 8.0.419 SDK at
+  `$HOME/.dotnet/dotnet`; the C# unit suite covers the multisig native Norito
+  instruction-frame helper, schema-hash helper, malformed success response, and
+  negative timestamp response cases.

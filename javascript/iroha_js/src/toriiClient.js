@@ -172,7 +172,7 @@ const SCCP_FINALITY_MODEL_VALUES = new Set([
   "SubstrateGrandpa",
 ]);
 const SCCP_PROOF_SECURITY_MODEL_VALUES = new Set(["RecursiveZk"]);
-const SCCP_ANCHOR_GOVERNANCE_VALUES = new Set(["SoraParliament"]);
+const SCCP_ANCHOR_GOVERNANCE_VALUES = new Set(["CryptographicProof"]);
 const SCCP_VERIFIER_TARGET_VALUES = new Set([
   "EvmContract",
   "SolanaProgram",
@@ -653,6 +653,17 @@ function coerceRejectionReason(value) {
   }
   const text = String(value).trim();
   return text ? text : null;
+}
+
+function assertNonBlankString(value, context) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must be a non-empty string`,
+      context,
+    );
+  }
+  return value.trim();
 }
 
 function normalizeStatusSet(input, defaultStatuses) {
@@ -4139,6 +4150,114 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     return normalizeStatusSnapshot(payload, this._statusState);
+  }
+
+  /**
+   * Submit a canonical Soracloud app-infra deployment request.
+   * @param {Record<string, unknown>} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<unknown>}
+   */
+  async deploySoracloudAppInfra(request, options = {}) {
+    return this._submitSoracloudAppInfraMutation(
+      "/v1/soracloud/apps/deploy",
+      request,
+      options,
+      "deploySoracloudAppInfra",
+    );
+  }
+
+  /**
+   * Submit a canonical Soracloud app-infra upgrade request.
+   * @param {Record<string, unknown>} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<unknown>}
+   */
+  async upgradeSoracloudAppInfra(request, options = {}) {
+    return this._submitSoracloudAppInfraMutation(
+      "/v1/soracloud/apps/upgrade",
+      request,
+      options,
+      "upgradeSoracloudAppInfra",
+    );
+  }
+
+  /**
+   * Fetch authoritative Soracloud app-infra status.
+   * @param {{appName?: string, auditLimit?: number | string | bigint, signal?: AbortSignal}} [options]
+   * @returns {Promise<unknown>}
+   */
+  async getSoracloudAppInfraStatus(options = {}) {
+    const { signal } = normalizeSignalOption(options, "getSoracloudAppInfraStatus");
+    const params = {};
+    if (options.appName !== undefined && options.appName !== null) {
+      params.app_name = assertNonBlankString(options.appName, "appName");
+    }
+    if (options.auditLimit !== undefined && options.auditLimit !== null) {
+      params.audit_limit = ToriiClient._normalizeUnsignedInteger(
+        options.auditLimit,
+        "auditLimit",
+        { allowZero: false },
+      );
+    }
+    const response = await this._request("GET", "/v1/soracloud/apps/status", {
+      params,
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    return this._maybeJson(response);
+  }
+
+  /**
+   * Fetch authoritative Soracloud app-infra status for one app.
+   * @param {string} appName
+   * @param {{auditLimit?: number | string | bigint, signal?: AbortSignal}} [options]
+   * @returns {Promise<unknown>}
+   */
+  async getSoracloudNamedAppInfraStatus(appName, options = {}) {
+    const normalizedAppName = encodeURIComponent(assertNonBlankString(appName, "appName"));
+    const { signal } = normalizeSignalOption(options, "getSoracloudNamedAppInfraStatus");
+    const params = {};
+    if (options.auditLimit !== undefined && options.auditLimit !== null) {
+      params.audit_limit = ToriiClient._normalizeUnsignedInteger(
+        options.auditLimit,
+        "auditLimit",
+        { allowZero: false },
+      );
+    }
+    const response = await this._request(
+      "GET",
+      `/v1/soracloud/apps/${normalizedAppName}/status`,
+      {
+        params,
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    return this._maybeJson(response);
+  }
+
+  async _submitSoracloudAppInfraMutation(path, request, options, context) {
+    const { signal } = normalizeSignalOnlyOption(options, context);
+    if (request == null || typeof request !== "object" || Array.isArray(request)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "request must be an object",
+        "request",
+      );
+    }
+    const response = await this._request("POST", path, {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(request),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    return this._maybeJson(response);
   }
 
   /**
@@ -13271,10 +13390,6 @@ function normalizeSccpCapabilitiesResponse(payload) {
       record.burn_bundle_path,
       "sccp capabilities response.burn_bundle_path",
     ),
-    governanceBundlePath: requireNonEmptyString(
-      record.governance_bundle_path,
-      "sccp capabilities response.governance_bundle_path",
-    ),
     messageBundlePath: requireNonEmptyString(
       record.message_bundle_path,
       "sccp capabilities response.message_bundle_path",
@@ -13298,10 +13413,6 @@ function normalizeSccpCapabilitiesResponse(payload) {
     burnRegistryBackend: requireNonEmptyString(
       record.burn_registry_backend,
       "sccp capabilities response.burn_registry_backend",
-    ),
-    governanceRegistryBackend: requireNonEmptyString(
-      record.governance_registry_backend,
-      "sccp capabilities response.governance_registry_backend",
     ),
     proofSubmitPath: optionalString(
       record.proof_submit_path ?? null,
@@ -14193,13 +14304,6 @@ function normalizeSccpHubCommitment(value, context) {
     }),
     messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
     payloadHash: normalizeHex32String(record.payload_hash, `${context}.payload_hash`),
-    parliamentCertificateHash:
-      record.parliament_certificate_hash === undefined || record.parliament_certificate_hash === null
-        ? null
-        : normalizeHex32String(
-            record.parliament_certificate_hash,
-            `${context}.parliament_certificate_hash`,
-          ),
   };
 }
 
@@ -17723,6 +17827,40 @@ function normalizeAccessSetHintsPayload(payload, context) {
       requireNonEmptyString(entry, `${name}[${index}]`),
     );
   };
+  const normalizeDynamicHints = (value, name) => {
+    if (value === undefined || value === null) {
+      return [];
+    }
+    if (!Array.isArray(value)) {
+      throw new TypeError(`${name} must be an array of dynamic access hints`);
+    }
+    return value.map((entry, index) => {
+      const hint = ensureRecord(entry, `${name}[${index}]`);
+      const maxKeys = ToriiClient._normalizeUnsignedInteger(
+        hint.max_keys ?? hint.maxKeys,
+        `${name}[${index}].max_keys`,
+        { allowZero: true },
+      );
+      if (maxKeys > 0xffffffff) {
+        throw new TypeError(`${name}[${index}].max_keys must fit in u32`);
+      }
+      return {
+        base_key: requireNonEmptyString(
+          hint.base_key ?? hint.baseKey,
+          `${name}[${index}].base_key`,
+        ),
+        key_type: requireNonEmptyString(
+          hint.key_type ?? hint.keyType,
+          `${name}[${index}].key_type`,
+        ),
+        bound_kind: requireNonEmptyString(
+          hint.bound_kind ?? hint.boundKind,
+          `${name}[${index}].bound_kind`,
+        ),
+        max_keys: maxKeys,
+      };
+    });
+  };
   return {
     read_keys: normalizeKeys(
       record.read_keys ?? record.readKeys,
@@ -17731,6 +17869,14 @@ function normalizeAccessSetHintsPayload(payload, context) {
     write_keys: normalizeKeys(
       record.write_keys ?? record.writeKeys,
       `${context}.write_keys`,
+    ),
+    dynamic_reads: normalizeDynamicHints(
+      record.dynamic_reads ?? record.dynamicReads,
+      `${context}.dynamic_reads`,
+    ),
+    dynamic_writes: normalizeDynamicHints(
+      record.dynamic_writes ?? record.dynamicWrites,
+      `${context}.dynamic_writes`,
     ),
   };
 }

@@ -195,7 +195,6 @@ Allowlist prefixes: _none_ (crates/norito is implicitly allowed)
 - source: crates/iroha_torii/src/routing.rs:6232 (prod) — serde_json — `summary.get("backend").and_then(serde_json::Value::as_str),`
 - source: crates/iroha_torii/src/routing.rs:6238 (prod) — serde_json — `.and_then(serde_json::Value::as_str),`
 - source: crates/iroha_torii/src/routing.rs:12598 (prod) — serde_json — `serde_json::from_str::<NexusSccpBurnProofV1>(&raw)`
-- source: crates/iroha_torii/src/routing.rs:12606 (prod) — serde_json — `serde_json::from_str::<NexusSccpGovernanceProofV1>(&raw)`
 - source: crates/iroha_torii/src/routing.rs:12614 (prod) — serde_json — `serde_json::from_str::<NexusSccpMessageProofV1>(&raw)`
 - source: crates/iroha_torii/src/routing.rs:12843 (prod) — serde_json — `let message_bundle = serde_json::from_str::<NexusSccpMessageProofV1>(&raw)`
 - source: crates/iroha_torii/src/routing.rs:17223 (prod) — serde_json — `let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({`

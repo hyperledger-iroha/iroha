@@ -60,7 +60,7 @@ fn create_election_inserts_referendum_with_configured_window() {
     let vk_id = VerifyingKeyId::new("halo2/ipa", "vk-auto");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "vk-auto",
+        "halo2/pasta/ipa/vote-bool-commit-merkle8",
         BackendTag::Halo2IpaPasta,
         "pallas",
         [0x11; 32],

@@ -118,6 +118,7 @@ Kotodama intrinsics
 - ``sm::hash(msg: Blob) -> Blob`` mirrors `msg` into INPUT with `INPUT_PUBLISH_TLV` and issues `SM3_HASH`, returning a pointer to the digest Blob.
 - ``sm::verify(msg: Blob, sig: Blob, pk: Blob[, distid: Blob]) -> bool`` mirrors each Blob argument into INPUT, invokes `SM2_VERIFY`, and returns `true` for valid signatures. Omitting the fourth argument selects the runtime-configured default (``Sm2PublicKey::default_distid()``, sourced from `crypto.sm2_distid_default`); providing it enforces a custom distinguishing identifier.
 - ``current_time_ms() -> int`` issues `CURRENT_TIME_MS` and returns the host-provided block time in milliseconds. `CoreHost` binds this to block time; test/default hosts use deterministic configured time and default to `0`.
+- ``block_height() -> int`` issues `SYSVAR_BLOCK_HEIGHT` and returns the host-provided committed block height. `CoreHost` binds this to the attached transaction context; test/default hosts default to `0`.
 
 Numeric helpers (Norito)
 - 0x69 NUMERIC_FROM_INT — Args: `r10=value:i64` (non‑negative) → `r10=&NoritoBytes(Numeric)` (scale = 0).

@@ -1193,16 +1193,21 @@ def test_get_sccp_capabilities_parses_snapshot() -> None:
                 "local_chain": "sora",
                 "proof_family": "stark-fri-v1",
                 "burn_bundle_path": "/v1/sccp/proofs/burn/{message_id}",
-                "governance_bundle_path": "/v1/sccp/proofs/governance/{message_id}",
                 "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
                 "message_proof_path": "/v1/sccp/artifacts/message/{message_id}",
                 "message_job_path": "/v1/sccp/jobs/message/{message_id}",
                 "proof_manifest_path": "/v1/sccp/manifests",
                 "burn_registry_backend": "bridge/sccp/burn-v1",
-                "governance_registry_backend": "bridge/sccp/governance-v1",
                 "proof_submit_path": "/v1/bridge/proofs/submit",
                 "message_submit_path": "/v1/bridge/messages",
-                "message_payload_kinds": ["asset_register", "route_activate", "transfer"],
+                "message_payload_kinds": [
+                    "asset_register",
+                    "route_activate",
+                    "transfer",
+                    "token_add",
+                    "token_pause",
+                    "token_resume",
+                ],
                 "codecs": [
                     {
                         "id": 4,
@@ -1233,8 +1238,14 @@ def test_get_sccp_capabilities_parses_snapshot() -> None:
     assert capabilities.message_job_path == "/v1/sccp/jobs/message/{message_id}"
     assert capabilities.proof_manifest_path == "/v1/sccp/manifests"
     assert capabilities.burn_registry_backend == "bridge/sccp/burn-v1"
-    assert capabilities.governance_registry_backend == "bridge/sccp/governance-v1"
-    assert capabilities.message_payload_kinds == ["asset_register", "route_activate", "transfer"]
+    assert capabilities.message_payload_kinds == [
+        "asset_register",
+        "route_activate",
+        "transfer",
+        "token_add",
+        "token_pause",
+        "token_resume",
+    ]
     assert capabilities.codecs[0].key == "ton_raw"
     assert capabilities.counterparties[0].message_backend == "sccp/stark-fri-v1/ton"
 
@@ -1477,7 +1488,6 @@ def test_get_sccp_message_proof_artifact_parses_typed_snapshot() -> None:
                         "target_domain": 4,
                         "message_id": message_id,
                         "payload_hash": payload_hash,
-                        "parliament_certificate_hash": None,
                     },
                     "merkle_proof": {
                         "steps": [
@@ -1606,7 +1616,6 @@ def test_get_sccp_message_proof_artifact_rejects_mismatched_public_inputs() -> N
                         "target_domain": 1,
                         "message_id": "99" * 32,
                         "payload_hash": "22" * 32,
-                        "parliament_certificate_hash": None,
                     },
                     "merkle_proof": {"steps": []},
                     "payload": {"Transfer": {"version": 1}},
@@ -1680,7 +1689,6 @@ def test_get_sccp_message_proof_artifact_against_mock_server() -> None:
                                 "target_domain": 4,
                                 "message_id": message_id,
                                 "payload_hash": "22" * 32,
-                                "parliament_certificate_hash": None,
                             },
                             "merkle_proof": {"steps": []},
                             "payload": {"Transfer": {"version": 1, "amount": "77"}},
@@ -1809,7 +1817,6 @@ def test_get_sccp_message_proof_job_parses_typed_snapshot() -> None:
                         "target_domain": 4,
                         "message_id": message_id,
                         "payload_hash": payload_hash,
-                        "parliament_certificate_hash": None,
                     },
                     "merkle_proof": {"steps": []},
                     "payload": {"Transfer": {"version": 1, "amount": "77"}},
@@ -1946,7 +1953,6 @@ def test_get_sccp_message_proof_job_against_mock_server() -> None:
                                 "target_domain": 4,
                                 "message_id": message_id,
                                 "payload_hash": "22" * 32,
-                                "parliament_certificate_hash": None,
                             },
                             "merkle_proof": {"steps": []},
                             "payload": {"Transfer": {"version": 1, "amount": "77"}},

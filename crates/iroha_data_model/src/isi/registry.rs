@@ -93,6 +93,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<vpn::RefundExpiredVpnLease>,
     InstructionRegistry::register_slice::<soracloud::DeploySoracloudService>,
     InstructionRegistry::register_slice::<soracloud::UpgradeSoracloudService>,
+    InstructionRegistry::register_slice::<soracloud::DeploySoracloudAppInfra>,
+    InstructionRegistry::register_slice::<soracloud::UpgradeSoracloudAppInfra>,
     InstructionRegistry::register_slice::<soracloud::RollbackSoracloudService>,
     InstructionRegistry::register_slice::<soracloud::SetSoracloudServiceConfig>,
     InstructionRegistry::register_slice::<soracloud::DeleteSoracloudServiceConfig>,

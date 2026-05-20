@@ -25261,93 +25261,6 @@ async fn handler_sccp_burn_proof(
         .into_response())
 }
 
-async fn handler_sccp_governance_proof(
-    State(app): State<SharedAppState>,
-    axum::extract::Path(message_id): axum::extract::Path<String>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sccp/proofs/governance/{message_id}",
-        app.api_token_enforced(),
-    );
-    rate_limit_requests(&app, &key).await?;
-    #[cfg(feature = "telemetry")]
-    if let Some(api_token) = token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            &api_token,
-            "v1/sccp/proofs/governance",
-        );
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(
-        routing::handle_v1_sccp_governance_bundle(message_id, accept)
-            .await?
-            .into_response(),
-    )
-}
-
-async fn handler_sccp_governance_runtime_envelope(
-    State(app): State<SharedAppState>,
-    axum::extract::Path(message_id): axum::extract::Path<String>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sccp/proofs/governance/{message_id}/runtime-scale",
-        app.api_token_enforced(),
-    );
-    rate_limit_requests(&app, &key).await?;
-    #[cfg(feature = "telemetry")]
-    if let Some(api_token) = token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            &api_token,
-            "v1/sccp/proofs/governance/runtime-scale",
-        );
-    }
-    Ok(
-        routing::handle_v1_sccp_governance_runtime_envelope(message_id)
-            .await?
-            .into_response(),
-    )
-}
-
 async fn handler_sccp_message_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
@@ -33563,14 +33476,6 @@ impl Torii {
                     get(handler_sccp_burn_proof),
                 )
                 .route(
-                    "/v1/sccp/proofs/governance/{message_id}",
-                    get(handler_sccp_governance_proof),
-                )
-                .route(
-                    "/v1/sccp/proofs/governance/{message_id}/runtime-scale",
-                    get(handler_sccp_governance_runtime_envelope),
-                )
-                .route(
                     "/v1/sccp/proofs/message/{message_id}",
                     get(handler_sccp_message_proof),
                 )
@@ -34547,6 +34452,22 @@ impl Torii {
                 )
                 .route("/v1/soracloud/deploy", post(soracloud::handle_deploy))
                 .route("/v1/soracloud/upgrade", post(soracloud::handle_upgrade))
+                .route(
+                    "/v1/soracloud/apps/deploy",
+                    post(soracloud::handle_app_deploy),
+                )
+                .route(
+                    "/v1/soracloud/apps/upgrade",
+                    post(soracloud::handle_app_upgrade),
+                )
+                .route(
+                    "/v1/soracloud/apps/status",
+                    get(soracloud::handle_app_status),
+                )
+                .route(
+                    "/v1/soracloud/apps/{app_name}/status",
+                    get(soracloud::handle_named_app_status),
+                )
                 .route("/v1/soracloud/rollback", post(soracloud::handle_rollback))
                 .route("/v1/soracloud/rollout", post(soracloud::handle_rollout))
                 .route(
@@ -46880,7 +46801,6 @@ pub(crate) mod tests_runtime_handlers {
             payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_burn_payload_bytes(
                 &payload,
             )),
-            parliament_certificate_hash: None,
         };
         let app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
         let bundle =
@@ -46928,117 +46848,29 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn sccp_governance_bundle_endpoint_roundtrips_json() {
+    async fn sccp_token_control_message_bundle_endpoint_roundtrips_json() {
         routing::clear_sccp_bundles_for_tests();
-        let roster_epoch = {
-            let seed_app = mk_app_state_for_tests();
-            1 / seed_app.state.gov.parliament_term_blocks.max(1)
-        };
-        let payload = iroha_sccp::GovernancePayloadV1::Pause(iroha_sccp::TokenControlPayloadV1 {
+        let payload = iroha_sccp::SccpPayloadV1::TokenPause(iroha_sccp::TokenControlPayloadV1 {
             version: 1,
             target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
             nonce: 9,
             sora_asset_id: [0x44; 32],
         });
-        let keypair = iroha_crypto::KeyPair::random();
-        let signer = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
-        let enactment = iroha_data_model::governance::types::ParliamentEnactment {
-            preimage_hash: iroha_sccp::payload_hash(
-                &iroha_sccp::canonical_governance_payload_bytes(&payload),
-            ),
-            at_window: iroha_data_model::governance::types::AtWindow { lower: 1, upper: 3 },
-        };
-        let parliament_certificate = {
-            let certificate = iroha_data_model::governance::types::ParliamentEnactmentCertificate {
-                payload: enactment.clone(),
-                signatures: iroha_data_model::governance::types::ParliamentEnactmentSignatureSet {
-                    scheme:
-                        iroha_data_model::governance::types::EnactmentSignatureScheme::SimpleThreshold,
-                    signatures: vec![
-                        iroha_data_model::governance::types::ParliamentEnactmentSignature {
-                            signer: signer.clone(),
-                            public_key: keypair.public_key().clone(),
-                            signature: iroha_crypto::SignatureOf::new(
-                                keypair.private_key(),
-                                &enactment,
-                            ),
-                        },
-                    ],
-                },
-            };
-            let encoded = norito::to_bytes(&iroha_sccp::NexusParliamentCertificateV1 {
-                version: 1,
-                preimage_hash: enactment.preimage_hash,
-                enactment_window_start: enactment.at_window.lower,
-                enactment_window_end: enactment.at_window.upper,
-                payload_bytes: norito::to_bytes(&enactment).expect("encode enactment"),
-                signature_scheme: iroha_sccp::NexusParliamentSignatureSchemeV1::SimpleThreshold,
-                roster_epoch,
-                roster_members: vec![iroha_sccp::NexusParliamentRosterMemberV1 {
-                    signer: signer.to_string(),
-                    public_keys: vec![keypair.public_key().to_string()],
-                }],
-                required_signatures: 1,
-                signatures: vec![iroha_sccp::NexusParliamentSignatureV1 {
-                    signer: signer.to_string(),
-                    public_key: keypair.public_key().to_string(),
-                    signature: iroha_crypto::SignatureOf::new(keypair.private_key(), &enactment)
-                        .payload()
-                        .to_vec(),
-                }],
-            })
-            .expect("encode parliament certificate");
-            (certificate, encoded)
-        };
         let commitment = iroha_sccp::SccpHubCommitmentV1 {
             version: 1,
             kind: iroha_sccp::SccpHubMessageKind::TokenPause,
-            target_domain: iroha_sccp::governance_target_domain(&payload),
-            message_id: iroha_sccp::governance_message_id(&payload),
-            payload_hash: iroha_sccp::payload_hash(
-                &iroha_sccp::canonical_governance_payload_bytes(&payload),
-            ),
-            parliament_certificate_hash: Some(iroha_sccp::parliament_certificate_hash(
-                &parliament_certificate.1,
+            target_domain: iroha_sccp::sccp_message_target_domain(&payload),
+            message_id: iroha_sccp::sccp_message_id(&payload),
+            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
+                &payload,
             )),
         };
-        let mut app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
-        {
-            let app_mut = Arc::get_mut(&mut app).expect("unique app state for governance test");
-            let state =
-                Arc::get_mut(&mut app_mut.state).expect("unique core state for governance test");
-            let mut block = state.block(iroha_data_model::block::BlockHeader::new(
-                nonzero_ext::nonzero!(2_u64),
-                None,
-                None,
-                None,
-                0,
-                0,
-            ));
-            let mut tx = block.transaction();
-            tx.world.council_mut().insert(
-                roster_epoch,
-                iroha_core::state::CouncilState {
-                    epoch: roster_epoch,
-                    members: vec![signer.clone()],
-                    alternates: Vec::new(),
-                    verified: 1,
-                    candidate_count: 1,
-                    derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Fallback,
-                },
-            );
-            tx.apply();
-            block.commit().expect("commit council roster seed block");
-        }
-        let bundle = routing::publish_sccp_governance_bundle(
-            app.state.as_ref(),
-            1,
-            payload.clone(),
-            parliament_certificate.0,
-        )
-        .expect("publish");
+        let app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
+        let bundle = routing::publish_sccp_message_bundle(app.state.as_ref(), 1, payload.clone())
+            .expect("publish");
 
-        let response = routing::handle_v1_sccp_governance_bundle(
+        let response = routing::handle_v1_sccp_message_bundle(
+            app.state.as_ref(),
             hex::encode(bundle.commitment.message_id),
             None,
         )
@@ -47054,13 +46886,14 @@ pub(crate) mod tests_runtime_handlers {
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("json body");
-        let decoded: iroha_sccp::NexusSccpGovernanceProofV1 =
+        let decoded: iroha_sccp::NexusSccpMessageProofV1 =
             serde_json::from_slice(&bytes).expect("decode json bundle");
         assert_eq!(decoded, bundle);
 
-        let runtime_response = routing::handle_v1_sccp_governance_runtime_envelope(hex::encode(
-            bundle.commitment.message_id,
-        ))
+        let runtime_response = routing::handle_v1_sccp_message_runtime_envelope(
+            app.state.as_ref(),
+            hex::encode(bundle.commitment.message_id),
+        )
         .await
         .expect("runtime response");
         assert_eq!(
@@ -47075,7 +46908,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("runtime body");
         assert_eq!(
             runtime_bytes.as_ref(),
-            iroha_sccp::sccp_runtime_envelope_bytes_from_governance_bundle(&bundle)
+            iroha_sccp::sccp_runtime_envelope_bytes_from_message_bundle(&bundle)
                 .expect("runtime envelope")
                 .as_slice()
         );
@@ -47362,10 +47195,6 @@ pub(crate) mod tests_runtime_handlers {
             Some("/v1/sccp/proofs/message/{message_id}/runtime-scale")
         );
         assert_eq!(
-            decoded_json.governance_runtime_bundle_path.as_deref(),
-            Some("/v1/sccp/proofs/governance/{message_id}/runtime-scale")
-        );
-        assert_eq!(
             decoded_json.message_job_path,
             "/v1/sccp/jobs/message/{message_id}"
         );
@@ -47427,10 +47256,6 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             decoded_norito.message_runtime_bundle_path,
             decoded_json.message_runtime_bundle_path
-        );
-        assert_eq!(
-            decoded_norito.governance_runtime_bundle_path,
-            decoded_json.governance_runtime_bundle_path
         );
         assert_eq!(
             decoded_norito.message_job_path,
@@ -47560,7 +47385,6 @@ pub(crate) mod tests_runtime_handlers {
                 public_key_hex: None,
                 signature_b64: None,
                 burn_bundle: None,
-                governance_bundle: None,
                 message_bundle: Some(bundle_value),
                 creation_time_ms: Some(84),
             }),

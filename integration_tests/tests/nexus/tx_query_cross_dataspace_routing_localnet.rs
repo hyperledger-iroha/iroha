@@ -606,6 +606,22 @@ fn routed_json_response_is_transient(response: &RoutedJsonResponse) -> bool {
         && routed_json_empty_body_is_transient(response.status, response.body_text.as_bytes())
 }
 
+fn routed_submit_response_is_transient(response: &RoutedTransactionSubmitResponse) -> bool {
+    if routed_json_empty_body_is_transient(response.status, response.body_text.as_bytes()) {
+        return true;
+    }
+    if response.status == HttpStatusCode::NOT_FOUND
+        && response.body_text.is_empty()
+        && response.routed_by.as_deref() == Some("proxy")
+    {
+        return true;
+    }
+    matches!(
+        response.status,
+        HttpStatusCode::NOT_FOUND | HttpStatusCode::SERVICE_UNAVAILABLE
+    ) && response.body_text.contains("route_unavailable")
+}
+
 fn add_client_headers(
     client: &Client,
     mut request: reqwest::RequestBuilder,
@@ -858,7 +874,17 @@ async fn submit_transaction_and_expect_route(
     expected_dataspace_id: DataSpaceId,
     context: &str,
 ) -> Result<TransactionSubmissionReceipt> {
-    let response = submit_transaction_raw(submitter, transaction).await?;
+    let started = Instant::now();
+    let response = loop {
+        let response = submit_transaction_raw(submitter, transaction).await?;
+        if response.status == HttpStatusCode::ACCEPTED
+            || !routed_submit_response_is_transient(&response)
+            || started.elapsed() >= STATUS_WAIT_TIMEOUT
+        {
+            break response;
+        }
+        sleep(STATUS_POLL_INTERVAL).await;
+    };
     ensure!(
         response.status == HttpStatusCode::ACCEPTED,
         "{context}: expected 202 Accepted, observed {} body `{}`",
@@ -2313,5 +2339,47 @@ mod tests {
             routed_json_response(HttpStatusCode::GATEWAY_TIMEOUT, JsonValue::Null, "timeout");
 
         assert!(!routed_json_response_is_transient(&response));
+    }
+
+    #[test]
+    fn routed_submit_response_is_transient_for_route_unavailable() {
+        let response = RoutedTransactionSubmitResponse {
+            status: HttpStatusCode::NOT_FOUND,
+            receipt: None,
+            body_text: r#"{"error":"route_unavailable"}"#.to_owned(),
+            routed_by: Some("proxy".to_owned()),
+            route_lane_id: None,
+            route_dataspace_id: None,
+        };
+
+        assert!(super::routed_submit_response_is_transient(&response));
+    }
+
+    #[test]
+    fn routed_submit_response_is_not_transient_for_other_not_found() {
+        let response = RoutedTransactionSubmitResponse {
+            status: HttpStatusCode::NOT_FOUND,
+            receipt: None,
+            body_text: r#"{"error":"missing"}"#.to_owned(),
+            routed_by: Some("proxy".to_owned()),
+            route_lane_id: None,
+            route_dataspace_id: None,
+        };
+
+        assert!(!super::routed_submit_response_is_transient(&response));
+    }
+
+    #[test]
+    fn routed_submit_response_is_transient_for_empty_proxy_not_found() {
+        let response = RoutedTransactionSubmitResponse {
+            status: HttpStatusCode::NOT_FOUND,
+            receipt: None,
+            body_text: String::new(),
+            routed_by: Some("proxy".to_owned()),
+            route_lane_id: Some(DS2_LANE_INDEX.to_string()),
+            route_dataspace_id: Some(DS2_ID_U64.to_string()),
+        };
+
+        assert!(super::routed_submit_response_is_transient(&response));
     }
 }

@@ -37,13 +37,8 @@ pub const SCCP_STARK_FRI_PROOF_FAMILY_V1: &str = "stark-fri-v1";
 pub const SCCP_EVM_SECP256K1_PROOF_BACKEND_V1: &str = "evm-secp256k1-keccak-v1";
 /// Typed bridge-proof backend for SCCP burn bundles submitted to Iroha.
 pub const SCCP_BURN_BRIDGE_PROOF_BACKEND_V1: &str = "sccp/burn-bundle-v1";
-/// Typed bridge-proof backend for SCCP governance bundles submitted to Iroha.
-pub const SCCP_GOVERNANCE_BRIDGE_PROOF_BACKEND_V1: &str = "sccp/governance-bundle-v1";
 /// Manifest seed reserved for SCCP burn bundle bridge proofs.
 pub const SCCP_BURN_BRIDGE_PROOF_MANIFEST_SEED_V1: &str = "iroha:sccp:bridge-proof:burn:v1";
-/// Manifest seed reserved for SCCP governance bundle bridge proofs.
-pub const SCCP_GOVERNANCE_BRIDGE_PROOF_MANIFEST_SEED_V1: &str =
-    "iroha:sccp:bridge-proof:governance:v1";
 
 pub const SCCP_CODEC_TEXT_UTF8: u8 = 1;
 pub const SCCP_CODEC_EVM_HEX: u8 = 2;
@@ -78,7 +73,6 @@ pub const IROHA_CONSENSUS_PROTO_VERSION_V1: u32 = 1;
 const SCCP_HUB_LEAF_PREFIX_V1: &[u8] = b"sccp:hub:leaf:v1";
 const SCCP_HUB_NODE_PREFIX_V1: &[u8] = b"sccp:hub:node:v1";
 const SCCP_PAYLOAD_HASH_PREFIX_V1: &[u8] = b"sccp:payload:v1";
-const SCCP_PARLIAMENT_HASH_PREFIX_V1: &[u8] = b"sccp:parliament:v1";
 const SCCP_TRANSPARENT_STATEMENT_PREFIX_V1: &[u8] = b"sccp:transparent:statement:v1";
 const SCCP_DESTINATION_BINDING_PREFIX_V1: &[u8] = b"sccp:destination:binding:v1";
 const SCCP_TRANSPARENT_FASTPQ_DSID_PREFIX_V1: &[u8] = b"sccp:transparent:fastpq:dsid:v1";
@@ -301,31 +295,6 @@ mod serde_utils {
         }
     }
 
-    pub mod option_hex32 {
-        use super::{Deserialize, Deserializer, Serializer, String, decode_hex_fixed, encode_hex};
-
-        #[allow(clippy::ref_option)]
-        pub fn serialize<S>(value: &Option<[u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            match value {
-                Some(bytes) => serializer.serialize_some(&encode_hex(bytes)),
-                None => serializer.serialize_none(),
-            }
-        }
-
-        pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<[u8; 32]>, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            let value = Option::<String>::deserialize(deserializer)?;
-            value
-                .map(|text| decode_hex_fixed::<32>(&text).map_err(serde::de::Error::custom))
-                .transpose()
-        }
-    }
-
     pub mod bytes_hex {
         use super::{
             Deserialize, Deserializer, Serializer, String, Vec, decode_hex_vec, encode_hex,
@@ -475,24 +444,6 @@ pub struct TokenControlPayloadV1 {
     feature = "std",
     derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
 )]
-pub enum GovernancePayloadV1 {
-    Add(TokenAddPayloadV1),
-    Pause(TokenControlPayloadV1),
-    Resume(TokenControlPayloadV1),
-}
-
-impl GovernancePayloadV1 {
-    const ADD_DISCRIMINANT: u8 = 0;
-    const PAUSE_DISCRIMINANT: u8 = 1;
-    const RESUME_DISCRIMINANT: u8 = 2;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
 pub struct AssetRegisterPayloadV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -564,12 +515,18 @@ pub enum SccpPayloadV1 {
     AssetRegister(AssetRegisterPayloadV1),
     RouteActivate(RouteActivatePayloadV1),
     Transfer(TransferPayloadV1),
+    TokenAdd(TokenAddPayloadV1),
+    TokenPause(TokenControlPayloadV1),
+    TokenResume(TokenControlPayloadV1),
 }
 
 impl SccpPayloadV1 {
     const ASSET_REGISTER_DISCRIMINANT: u8 = 0;
     const ROUTE_ACTIVATE_DISCRIMINANT: u8 = 1;
     const TRANSFER_DISCRIMINANT: u8 = 2;
+    const TOKEN_ADD_DISCRIMINANT: u8 = 3;
+    const TOKEN_PAUSE_DISCRIMINANT: u8 = 4;
+    const TOKEN_RESUME_DISCRIMINANT: u8 = 5;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -602,8 +559,6 @@ pub struct SccpHubCommitmentV1 {
     pub message_id: H256,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::option_hex32"))]
-    pub parliament_certificate_hash: Option<H256>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -688,64 +643,6 @@ pub struct NexusBridgeFinalityProofV1 {
     pub commit_qc: NexusCommitQcV1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
-pub enum NexusParliamentSignatureSchemeV1 {
-    SimpleThreshold,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
-pub struct NexusParliamentSignatureV1 {
-    pub signer: String,
-    pub public_key: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
-    pub signature: Vec<u8>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
-pub struct NexusParliamentRosterMemberV1 {
-    pub signer: String,
-    pub public_keys: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
-pub struct NexusParliamentCertificateV1 {
-    pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub preimage_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub enactment_window_start: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub enactment_window_end: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
-    pub payload_bytes: Vec<u8>,
-    pub signature_scheme: NexusParliamentSignatureSchemeV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub roster_epoch: u64,
-    pub roster_members: Vec<NexusParliamentRosterMemberV1>,
-    pub required_signatures: u16,
-    pub signatures: Vec<NexusParliamentSignatureV1>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
@@ -759,25 +656,6 @@ pub struct NexusSccpBurnProofV1 {
     pub commitment: SccpHubCommitmentV1,
     pub merkle_proof: SccpMerkleProofV1,
     pub payload: BurnPayloadV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
-    pub finality_proof: Vec<u8>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
-pub struct NexusSccpGovernanceProofV1 {
-    pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub commitment_root: H256,
-    pub commitment: SccpHubCommitmentV1,
-    pub merkle_proof: SccpMerkleProofV1,
-    pub payload: GovernancePayloadV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
-    pub parliament_certificate: Vec<u8>,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub finality_proof: Vec<u8>,
 }
@@ -821,8 +699,6 @@ pub struct SccpRuntimeHubCommitmentV1 {
     pub message_id: H256,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::option_hex32"))]
-    pub parliament_certificate_hash: Option<H256>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -867,26 +743,6 @@ pub struct SccpRuntimeFinalityProofV1 {
     pub signature_count: u16,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SccpRuntimeParliamentCertificateV1 {
-    pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub preimage_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub enactment_window_start: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub enactment_window_end: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub roster_epoch: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub roster_hash: H256,
-    pub required_signatures: u16,
-    pub signature_count: u16,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub certificate_hash: H256,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SccpRuntimeProofEnvelopeV1 {
@@ -897,7 +753,6 @@ pub struct SccpRuntimeProofEnvelopeV1 {
     pub merkle_proof: SccpRuntimeMerkleProofV1,
     pub payload: SccpRuntimePayloadV1,
     pub finality_proof: SccpRuntimeFinalityProofV1,
-    pub parliament_certificate: Option<SccpRuntimeParliamentCertificateV1>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1073,6 +928,35 @@ pub struct SccpTransferProjectionV1 {
     pub route_id: SccpNormalizedCodecValueV1,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct SccpTokenAddProjectionV1 {
+    pub version: u8,
+    pub target_domain: u32,
+    pub nonce: u64,
+    pub sora_asset_id: H256,
+    pub decimals: u8,
+    pub name: [u8; 32],
+    pub symbol: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct SccpTokenControlProjectionV1 {
+    pub version: u8,
+    pub target_domain: u32,
+    pub nonce: u64,
+    pub sora_asset_id: H256,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
@@ -1083,6 +967,9 @@ pub enum SccpPayloadProjectionV1 {
     AssetRegister(SccpAssetRegisterProjectionV1),
     RouteActivate(SccpRouteActivateProjectionV1),
     Transfer(SccpTransferProjectionV1),
+    TokenAdd(SccpTokenAddProjectionV1),
+    TokenPause(SccpTokenControlProjectionV1),
+    TokenResume(SccpTokenControlProjectionV1),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1186,7 +1073,7 @@ pub enum SccpProofSecurityModelV1 {
     derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
 )]
 pub enum SccpAnchorGovernanceV1 {
-    SoraParliament,
+    CryptographicProof,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -1714,6 +1601,10 @@ pub fn sccp_counterparty_domain_for_message_payload(payload: &SccpPayloadV1) -> 
         SccpPayloadV1::Transfer(payload) => {
             sccp_counterparty_domain(payload.dest_domain, payload.source_domain)
         }
+        SccpPayloadV1::TokenAdd(payload) => Some(payload.target_domain),
+        SccpPayloadV1::TokenPause(payload) | SccpPayloadV1::TokenResume(payload) => {
+            Some(payload.target_domain)
+        }
     }
 }
 
@@ -1819,18 +1710,9 @@ pub fn sccp_burn_bridge_manifest_hash_v1() -> H256 {
 }
 
 #[cfg(feature = "std")]
-/// Return the reserved manifest hash for SCCP governance bundle bridge proofs.
-pub fn sccp_governance_bridge_manifest_hash_v1() -> H256 {
-    sccp_bridge_manifest_hash_for_seed(SCCP_GOVERNANCE_BRIDGE_PROOF_MANIFEST_SEED_V1)
-}
-
-#[cfg(feature = "std")]
 /// Return all manifest hashes reserved for typed SCCP bridge proof submissions.
 pub fn sccp_reserved_bridge_manifest_hashes_v1() -> Vec<H256> {
-    let mut hashes = vec![
-        sccp_burn_bridge_manifest_hash_v1(),
-        sccp_governance_bridge_manifest_hash_v1(),
-    ];
+    let mut hashes = vec![sccp_burn_bridge_manifest_hash_v1()];
     hashes.extend(
         sccp_proof_manifests_v1()
             .into_iter()
@@ -1855,7 +1737,7 @@ pub fn sccp_proof_security_model_v1() -> SccpProofSecurityModelV1 {
 }
 
 pub fn sccp_anchor_governance_v1() -> SccpAnchorGovernanceV1 {
-    SccpAnchorGovernanceV1::SoraParliament
+    SccpAnchorGovernanceV1::CryptographicProof
 }
 
 fn sccp_destination_verifier_plan_for_domain(domain: u32) -> Option<SccpDestinationVerifierPlanV1> {
@@ -1877,32 +1759,32 @@ fn sccp_destination_rollout_blockers_for_domain(domain: u32) -> Option<Vec<Strin
     let blockers = match domain {
         SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => vec![
             "immutable EVM verifier contract is not deployed for this SCCP lane".to_owned(),
-            "Sora Parliament anchor set is not approved for this SCCP lane".to_owned(),
+            "cryptographic trust anchor is not active for this SCCP lane".to_owned(),
             "Groth16/bn254 adapter proof submission is not wired into the SCCP relayer path"
                 .to_owned(),
         ],
         SCCP_DOMAIN_SOL => vec![
             "immutable Solana verifier program is not deployed for this SCCP lane".to_owned(),
-            "Sora Parliament anchor set is not approved for this SCCP lane".to_owned(),
+            "cryptographic trust anchor is not active for this SCCP lane".to_owned(),
             "native recursive verifier program submission is not wired into the SCCP relayer path"
                 .to_owned(),
         ],
         SCCP_DOMAIN_TON => vec![
             "immutable TON verifier contract is not deployed for this SCCP lane".to_owned(),
-            "Sora Parliament anchor set is not approved for this SCCP lane".to_owned(),
+            "cryptographic trust anchor is not active for this SCCP lane".to_owned(),
             "native recursive verifier contract submission is not wired into the SCCP relayer path"
                 .to_owned(),
         ],
         SCCP_DOMAIN_TRON => vec![
             "immutable TRON verifier contract is not deployed for this SCCP lane".to_owned(),
-            "Sora Parliament anchor set is not approved for this SCCP lane".to_owned(),
+            "cryptographic trust anchor is not active for this SCCP lane".to_owned(),
             "native recursive verifier contract submission is not wired into the SCCP relayer path"
                 .to_owned(),
         ],
         SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => vec![
             "immutable Substrate runtime verifier call is not deployed for this SCCP lane"
                 .to_owned(),
-            "Sora Parliament anchor set is not approved for this SCCP lane".to_owned(),
+            "cryptographic trust anchor is not active for this SCCP lane".to_owned(),
             "native recursive runtime-call submission is not wired into the SCCP relayer path"
                 .to_owned(),
         ],
@@ -1927,19 +1809,19 @@ pub fn sccp_destination_rollout_for_domain(domain: u32) -> Option<SccpDestinatio
 fn sccp_lane_disabled_reason_for_plan(plan: SccpDestinationVerifierPlanV1) -> &'static str {
     match plan {
         SccpDestinationVerifierPlanV1::EvmGroth16Bn254Adapter => {
-            "disabled until the immutable EVM Groth16/bn254 SCCP verifier and Sora Parliament anchors are live for this lane"
+            "disabled until the immutable EVM Groth16/bn254 SCCP verifier and cryptographic trust anchors are live for this lane"
         }
         SccpDestinationVerifierPlanV1::SolanaProgramNativeRecursive => {
-            "disabled until the immutable Solana recursive SCCP verifier and Sora Parliament anchors are live for this lane"
+            "disabled until the immutable Solana recursive SCCP verifier and cryptographic trust anchors are live for this lane"
         }
         SccpDestinationVerifierPlanV1::TonContractNativeRecursive => {
-            "disabled until the immutable TON recursive SCCP verifier and Sora Parliament anchors are live for this lane"
+            "disabled until the immutable TON recursive SCCP verifier and cryptographic trust anchors are live for this lane"
         }
         SccpDestinationVerifierPlanV1::TronContractNativeRecursive => {
-            "disabled until the immutable TRON recursive SCCP verifier and Sora Parliament anchors are live for this lane"
+            "disabled until the immutable TRON recursive SCCP verifier and cryptographic trust anchors are live for this lane"
         }
         SccpDestinationVerifierPlanV1::SubstrateRuntimeNativeRecursive => {
-            "disabled until the immutable Substrate runtime SCCP verifier and Sora Parliament anchors are live for this lane"
+            "disabled until the immutable Substrate runtime SCCP verifier and cryptographic trust anchors are live for this lane"
         }
         SccpDestinationVerifierPlanV1::Unknown => SCCP_PRODUCTION_DISABLED_REASON_V1,
     }
@@ -2001,7 +1883,7 @@ pub fn sccp_destination_binding_for_domain(domain: u32) -> Option<SccpDestinatio
     })
 }
 
-pub const SCCP_PRODUCTION_DISABLED_REASON_V1: &str = "disabled until immutable destination verifiers validate recursive SCCP proofs under Sora Parliament-governed trust anchors";
+pub const SCCP_PRODUCTION_DISABLED_REASON_V1: &str = "disabled until immutable destination verifiers validate recursive SCCP proofs under cryptographic trust anchors";
 
 pub fn sccp_lane_production_ready_for_domain(domain: u32) -> bool {
     sccp_destination_rollout_for_domain(domain).is_some_and(|rollout| {
@@ -2028,6 +1910,9 @@ pub fn sccp_message_payload_kind_keys_v1() -> Vec<String> {
         "asset_register".to_owned(),
         "route_activate".to_owned(),
         "transfer".to_owned(),
+        "token_add".to_owned(),
+        "token_pause".to_owned(),
+        "token_resume".to_owned(),
     ]
 }
 
@@ -2223,7 +2108,7 @@ fn sccp_proof_security_model_code(model: SccpProofSecurityModelV1) -> u8 {
 
 fn sccp_anchor_governance_code(governance: SccpAnchorGovernanceV1) -> u8 {
     match governance {
-        SccpAnchorGovernanceV1::SoraParliament => 1,
+        SccpAnchorGovernanceV1::CryptographicProof => 1,
     }
 }
 
@@ -2265,6 +2150,9 @@ pub fn sccp_message_payload_kind_key(payload: &SccpPayloadV1) -> &'static str {
         SccpPayloadV1::AssetRegister(_) => "asset_register",
         SccpPayloadV1::RouteActivate(_) => "route_activate",
         SccpPayloadV1::Transfer(_) => "transfer",
+        SccpPayloadV1::TokenAdd(_) => "token_add",
+        SccpPayloadV1::TokenPause(_) => "token_pause",
+        SccpPayloadV1::TokenResume(_) => "token_resume",
     }
 }
 
@@ -2320,6 +2208,33 @@ pub fn sccp_payload_projection(payload: &SccpPayloadV1) -> Option<SccpPayloadPro
                     payload.route_id_codec,
                     &payload.route_id,
                 )?,
+            },
+        )),
+        SccpPayloadV1::TokenAdd(payload) => Some(SccpPayloadProjectionV1::TokenAdd(
+            SccpTokenAddProjectionV1 {
+                version: payload.version,
+                target_domain: payload.target_domain,
+                nonce: payload.nonce,
+                sora_asset_id: payload.sora_asset_id,
+                decimals: payload.decimals,
+                name: payload.name,
+                symbol: payload.symbol,
+            },
+        )),
+        SccpPayloadV1::TokenPause(payload) => Some(SccpPayloadProjectionV1::TokenPause(
+            SccpTokenControlProjectionV1 {
+                version: payload.version,
+                target_domain: payload.target_domain,
+                nonce: payload.nonce,
+                sora_asset_id: payload.sora_asset_id,
+            },
+        )),
+        SccpPayloadV1::TokenResume(payload) => Some(SccpPayloadProjectionV1::TokenResume(
+            SccpTokenControlProjectionV1 {
+                version: payload.version,
+                target_domain: payload.target_domain,
+                nonce: payload.nonce,
+                sora_asset_id: payload.sora_asset_id,
             },
         )),
     }
@@ -4173,16 +4088,6 @@ fn push_vec(out: &mut Vec<u8>, value: &[u8]) {
     out.extend_from_slice(value);
 }
 
-fn push_option_h256(out: &mut Vec<u8>, value: Option<&H256>) {
-    match value {
-        Some(value) => {
-            push_u8(out, 1);
-            out.extend_from_slice(value);
-        }
-        None => push_u8(out, 0),
-    }
-}
-
 pub fn canonical_burn_payload_bytes(payload: &BurnPayloadV1) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + 4 + 4 + 8 + 32 + 16 + 32);
     push_u8(&mut out, payload.version);
@@ -4213,25 +4118,6 @@ pub fn canonical_token_control_payload_bytes(payload: &TokenControlPayloadV1) ->
     push_u32(&mut out, payload.target_domain);
     push_u64(&mut out, payload.nonce);
     out.extend_from_slice(&payload.sora_asset_id);
-    out
-}
-
-pub fn canonical_governance_payload_bytes(payload: &GovernancePayloadV1) -> Vec<u8> {
-    let mut out = Vec::new();
-    match payload {
-        GovernancePayloadV1::Add(payload) => {
-            push_u8(&mut out, GovernancePayloadV1::ADD_DISCRIMINANT);
-            out.extend_from_slice(&canonical_token_add_payload_bytes(payload));
-        }
-        GovernancePayloadV1::Pause(payload) => {
-            push_u8(&mut out, GovernancePayloadV1::PAUSE_DISCRIMINANT);
-            out.extend_from_slice(&canonical_token_control_payload_bytes(payload));
-        }
-        GovernancePayloadV1::Resume(payload) => {
-            push_u8(&mut out, GovernancePayloadV1::RESUME_DISCRIMINANT);
-            out.extend_from_slice(&canonical_token_control_payload_bytes(payload));
-        }
-    }
     out
 }
 
@@ -4293,6 +4179,18 @@ pub fn canonical_sccp_payload_bytes(payload: &SccpPayloadV1) -> Vec<u8> {
         SccpPayloadV1::Transfer(payload) => {
             push_u8(&mut out, SccpPayloadV1::TRANSFER_DISCRIMINANT);
             out.extend_from_slice(&canonical_transfer_payload_bytes(payload));
+        }
+        SccpPayloadV1::TokenAdd(payload) => {
+            push_u8(&mut out, SccpPayloadV1::TOKEN_ADD_DISCRIMINANT);
+            out.extend_from_slice(&canonical_token_add_payload_bytes(payload));
+        }
+        SccpPayloadV1::TokenPause(payload) => {
+            push_u8(&mut out, SccpPayloadV1::TOKEN_PAUSE_DISCRIMINANT);
+            out.extend_from_slice(&canonical_token_control_payload_bytes(payload));
+        }
+        SccpPayloadV1::TokenResume(payload) => {
+            push_u8(&mut out, SccpPayloadV1::TOKEN_RESUME_DISCRIMINANT);
+            out.extend_from_slice(&canonical_token_control_payload_bytes(payload));
         }
     }
     out
@@ -4390,6 +4288,51 @@ pub fn decode_canonical_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<SccpP
             route_id_codec: cursor.take_u8()?,
             route_id: cursor.take_vec()?,
         }),
+        SccpPayloadV1::TOKEN_ADD_DISCRIMINANT => SccpPayloadV1::TokenAdd(TokenAddPayloadV1 {
+            version: cursor.take_u8()?,
+            target_domain: cursor.take_u32()?,
+            nonce: cursor.take_u64()?,
+            sora_asset_id: {
+                let mut out = [0u8; 32];
+                out.copy_from_slice(cursor.take_exact(32)?);
+                out
+            },
+            decimals: cursor.take_u8()?,
+            name: {
+                let mut out = [0u8; 32];
+                out.copy_from_slice(cursor.take_exact(32)?);
+                out
+            },
+            symbol: {
+                let mut out = [0u8; 32];
+                out.copy_from_slice(cursor.take_exact(32)?);
+                out
+            },
+        }),
+        SccpPayloadV1::TOKEN_PAUSE_DISCRIMINANT => {
+            SccpPayloadV1::TokenPause(TokenControlPayloadV1 {
+                version: cursor.take_u8()?,
+                target_domain: cursor.take_u32()?,
+                nonce: cursor.take_u64()?,
+                sora_asset_id: {
+                    let mut out = [0u8; 32];
+                    out.copy_from_slice(cursor.take_exact(32)?);
+                    out
+                },
+            })
+        }
+        SccpPayloadV1::TOKEN_RESUME_DISCRIMINANT => {
+            SccpPayloadV1::TokenResume(TokenControlPayloadV1 {
+                version: cursor.take_u8()?,
+                target_domain: cursor.take_u32()?,
+                nonce: cursor.take_u64()?,
+                sora_asset_id: {
+                    let mut out = [0u8; 32];
+                    out.copy_from_slice(cursor.take_exact(32)?);
+                    out
+                },
+            })
+        }
         _ => return None,
     };
     cursor.is_finished().then_some(payload)
@@ -4437,6 +4380,10 @@ pub fn verify_sccp_payload_structure(payload: &SccpPayloadV1) -> bool {
                 && validate_sccp_codec_bytes(payload.recipient_codec, &payload.recipient)
                 && validate_sccp_codec_bytes(payload.route_id_codec, &payload.route_id)
         }
+        SccpPayloadV1::TokenAdd(payload) => payload.version == 1,
+        SccpPayloadV1::TokenPause(payload) | SccpPayloadV1::TokenResume(payload) => {
+            payload.version == 1
+        }
     }
 }
 
@@ -4447,12 +4394,11 @@ pub fn hub_commitment_from_sccp_payload(payload: &SccpPayloadV1) -> SccpHubCommi
         target_domain: sccp_message_target_domain(payload),
         message_id: sccp_message_id(payload),
         payload_hash: payload_hash(&canonical_sccp_payload_bytes(payload)),
-        parliament_certificate_hash: None,
     }
 }
 
 pub fn canonical_commitment_bytes(commitment: &SccpHubCommitmentV1) -> Vec<u8> {
-    let mut out = Vec::with_capacity(1 + 1 + 4 + 32 + 32 + 1 + 32);
+    let mut out = Vec::with_capacity(1 + 1 + 4 + 32 + 32);
     push_u8(&mut out, commitment.version);
     push_u8(
         &mut out,
@@ -4469,7 +4415,6 @@ pub fn canonical_commitment_bytes(commitment: &SccpHubCommitmentV1) -> Vec<u8> {
     push_u32(&mut out, commitment.target_domain);
     out.extend_from_slice(&commitment.message_id);
     out.extend_from_slice(&commitment.payload_hash);
-    push_option_h256(&mut out, commitment.parliament_certificate_hash.as_ref());
     out
 }
 
@@ -4501,23 +4446,6 @@ pub fn token_resume_message_id(payload: &TokenControlPayloadV1) -> H256 {
     )
 }
 
-pub fn governance_message_id(payload: &GovernancePayloadV1) -> H256 {
-    match payload {
-        GovernancePayloadV1::Add(payload) => token_add_message_id(payload),
-        GovernancePayloadV1::Pause(payload) => token_pause_message_id(payload),
-        GovernancePayloadV1::Resume(payload) => token_resume_message_id(payload),
-    }
-}
-
-pub fn governance_target_domain(payload: &GovernancePayloadV1) -> u32 {
-    match payload {
-        GovernancePayloadV1::Add(payload) => payload.target_domain,
-        GovernancePayloadV1::Pause(payload) | GovernancePayloadV1::Resume(payload) => {
-            payload.target_domain
-        }
-    }
-}
-
 pub fn asset_register_message_id(payload: &AssetRegisterPayloadV1) -> H256 {
     prefixed_keccak(
         SCCP_MSG_PREFIX_ASSET_REGISTER_V1,
@@ -4544,6 +4472,9 @@ pub fn sccp_message_id(payload: &SccpPayloadV1) -> H256 {
         SccpPayloadV1::AssetRegister(payload) => asset_register_message_id(payload),
         SccpPayloadV1::RouteActivate(payload) => route_activate_message_id(payload),
         SccpPayloadV1::Transfer(payload) => transfer_message_id(payload),
+        SccpPayloadV1::TokenAdd(payload) => token_add_message_id(payload),
+        SccpPayloadV1::TokenPause(payload) => token_pause_message_id(payload),
+        SccpPayloadV1::TokenResume(payload) => token_resume_message_id(payload),
     }
 }
 
@@ -4552,6 +4483,9 @@ pub fn sccp_message_kind(payload: &SccpPayloadV1) -> SccpHubMessageKind {
         SccpPayloadV1::AssetRegister(_) => SccpHubMessageKind::AssetRegister,
         SccpPayloadV1::RouteActivate(_) => SccpHubMessageKind::RouteActivate,
         SccpPayloadV1::Transfer(_) => SccpHubMessageKind::Transfer,
+        SccpPayloadV1::TokenAdd(_) => SccpHubMessageKind::TokenAdd,
+        SccpPayloadV1::TokenPause(_) => SccpHubMessageKind::TokenPause,
+        SccpPayloadV1::TokenResume(_) => SccpHubMessageKind::TokenResume,
     }
 }
 
@@ -4560,15 +4494,15 @@ pub fn sccp_message_target_domain(payload: &SccpPayloadV1) -> u32 {
         SccpPayloadV1::AssetRegister(payload) => payload.target_domain,
         SccpPayloadV1::RouteActivate(payload) => payload.target_domain,
         SccpPayloadV1::Transfer(payload) => payload.dest_domain,
+        SccpPayloadV1::TokenAdd(payload) => payload.target_domain,
+        SccpPayloadV1::TokenPause(payload) | SccpPayloadV1::TokenResume(payload) => {
+            payload.target_domain
+        }
     }
 }
 
 pub fn payload_hash(payload: &[u8]) -> H256 {
     prefixed_blake2b(SCCP_PAYLOAD_HASH_PREFIX_V1, payload)
-}
-
-pub fn parliament_certificate_hash(certificate: &[u8]) -> H256 {
-    prefixed_blake2b(SCCP_PARLIAMENT_HASH_PREFIX_V1, certificate)
 }
 
 pub fn commitment_leaf_hash(commitment: &SccpHubCommitmentV1) -> H256 {
@@ -4693,7 +4627,6 @@ fn runtime_commitment_from_hub(commitment: &SccpHubCommitmentV1) -> SccpRuntimeH
         target_domain: commitment.target_domain,
         message_id: commitment.message_id,
         payload_hash: commitment.payload_hash,
-        parliament_certificate_hash: commitment.parliament_certificate_hash,
     }
 }
 
@@ -4719,14 +4652,9 @@ fn runtime_payload_from_sccp_payload(payload: &SccpPayloadV1) -> SccpRuntimePayl
             SccpRuntimePayloadV1::RouteActivate(payload.clone())
         }
         SccpPayloadV1::Transfer(payload) => SccpRuntimePayloadV1::Transfer(payload.clone()),
-    }
-}
-
-fn runtime_payload_from_governance_payload(payload: &GovernancePayloadV1) -> SccpRuntimePayloadV1 {
-    match payload {
-        GovernancePayloadV1::Add(payload) => SccpRuntimePayloadV1::TokenAdd(*payload),
-        GovernancePayloadV1::Pause(payload) => SccpRuntimePayloadV1::TokenPause(*payload),
-        GovernancePayloadV1::Resume(payload) => SccpRuntimePayloadV1::TokenResume(*payload),
+        SccpPayloadV1::TokenAdd(payload) => SccpRuntimePayloadV1::TokenAdd(*payload),
+        SccpPayloadV1::TokenPause(payload) => SccpRuntimePayloadV1::TokenPause(*payload),
+        SccpPayloadV1::TokenResume(payload) => SccpRuntimePayloadV1::TokenResume(*payload),
     }
 }
 
@@ -4751,28 +4679,6 @@ pub fn sccp_runtime_validator_set_anchor_hash(qc: &NexusCommitQcV1) -> H256 {
     prefixed_blake2b(b"sccp:nexus:validator-set-anchor:v1", &out)
 }
 
-pub fn sccp_runtime_parliament_roster_anchor_hash(
-    certificate: &NexusParliamentCertificateV1,
-) -> H256 {
-    let mut out = Vec::new();
-    push_u64(&mut out, certificate.roster_epoch);
-    push_scale_compact(
-        &mut out,
-        u32::try_from(certificate.roster_members.len()).expect("roster length fits u32"),
-    );
-    for member in &certificate.roster_members {
-        push_scale_vec(&mut out, member.signer.as_bytes());
-        push_scale_compact(
-            &mut out,
-            u32::try_from(member.public_keys.len()).expect("member key length fits u32"),
-        );
-        for public_key in &member.public_keys {
-            push_scale_vec(&mut out, public_key.as_bytes());
-        }
-    }
-    prefixed_blake2b(b"sccp:nexus:parliament-roster-anchor:v1", &out)
-}
-
 fn runtime_finality_from_nexus_finality(
     finality: &NexusBridgeFinalityProofV1,
 ) -> Option<SccpRuntimeFinalityProofV1> {
@@ -4792,23 +4698,6 @@ fn runtime_finality_from_nexus_finality(
     })
 }
 
-fn runtime_certificate_from_nexus_certificate(
-    certificate: &NexusParliamentCertificateV1,
-    encoded_certificate: &[u8],
-) -> Option<SccpRuntimeParliamentCertificateV1> {
-    Some(SccpRuntimeParliamentCertificateV1 {
-        version: 1,
-        preimage_hash: certificate.preimage_hash,
-        enactment_window_start: certificate.enactment_window_start,
-        enactment_window_end: certificate.enactment_window_end,
-        roster_epoch: certificate.roster_epoch,
-        roster_hash: sccp_runtime_parliament_roster_anchor_hash(certificate),
-        required_signatures: certificate.required_signatures,
-        signature_count: u16::try_from(certificate.signatures.len()).ok()?,
-        certificate_hash: parliament_certificate_hash(encoded_certificate),
-    })
-}
-
 pub fn sccp_runtime_envelope_from_message_bundle(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<SccpRuntimeProofEnvelopeV1> {
@@ -4823,29 +4712,6 @@ pub fn sccp_runtime_envelope_from_message_bundle(
         merkle_proof: runtime_merkle_proof_from_hub(&bundle.merkle_proof),
         payload: runtime_payload_from_sccp_payload(&bundle.payload),
         finality_proof: runtime_finality_from_nexus_finality(&finality)?,
-        parliament_certificate: None,
-    })
-}
-
-pub fn sccp_runtime_envelope_from_governance_bundle(
-    bundle: &NexusSccpGovernanceProofV1,
-) -> Option<SccpRuntimeProofEnvelopeV1> {
-    if !verify_governance_bundle_structure(bundle) {
-        return None;
-    }
-    let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof)?;
-    let certificate = decode_nexus_parliament_certificate(&bundle.parliament_certificate)?;
-    Some(SccpRuntimeProofEnvelopeV1 {
-        version: 1,
-        commitment_root: bundle.commitment_root,
-        commitment: runtime_commitment_from_hub(&bundle.commitment),
-        merkle_proof: runtime_merkle_proof_from_hub(&bundle.merkle_proof),
-        payload: runtime_payload_from_governance_payload(&bundle.payload),
-        finality_proof: runtime_finality_from_nexus_finality(&finality)?,
-        parliament_certificate: Some(runtime_certificate_from_nexus_certificate(
-            &certificate,
-            &bundle.parliament_certificate,
-        )?),
     })
 }
 
@@ -4857,14 +4723,6 @@ pub fn sccp_runtime_envelope_bytes_from_message_bundle(
     ))
 }
 
-pub fn sccp_runtime_envelope_bytes_from_governance_bundle(
-    bundle: &NexusSccpGovernanceProofV1,
-) -> Option<Vec<u8>> {
-    Some(encode_sccp_runtime_proof_envelope(
-        &sccp_runtime_envelope_from_governance_bundle(bundle)?,
-    ))
-}
-
 pub fn encode_sccp_runtime_proof_envelope(envelope: &SccpRuntimeProofEnvelopeV1) -> Vec<u8> {
     let mut out = Vec::new();
     push_u8(&mut out, envelope.version);
@@ -4873,13 +4731,6 @@ pub fn encode_sccp_runtime_proof_envelope(envelope: &SccpRuntimeProofEnvelopeV1)
     push_runtime_merkle_proof(&mut out, &envelope.merkle_proof);
     push_runtime_payload(&mut out, &envelope.payload);
     push_runtime_finality(&mut out, &envelope.finality_proof);
-    match &envelope.parliament_certificate {
-        Some(certificate) => {
-            push_u8(&mut out, 1);
-            push_runtime_parliament_certificate(&mut out, certificate);
-        }
-        None => push_u8(&mut out, 0),
-    }
     out
 }
 
@@ -4889,13 +4740,6 @@ fn push_runtime_commitment(out: &mut Vec<u8>, commitment: &SccpRuntimeHubCommitm
     push_u32(out, commitment.target_domain);
     out.extend_from_slice(&commitment.message_id);
     out.extend_from_slice(&commitment.payload_hash);
-    match commitment.parliament_certificate_hash {
-        Some(hash) => {
-            push_u8(out, 1);
-            out.extend_from_slice(&hash);
-        }
-        None => push_u8(out, 0),
-    }
 }
 
 fn push_runtime_merkle_proof(out: &mut Vec<u8>, proof: &SccpRuntimeMerkleProofV1) {
@@ -4978,21 +4822,6 @@ fn push_runtime_finality(out: &mut Vec<u8>, finality: &SccpRuntimeFinalityProofV
     push_u16(out, finality.signature_count);
 }
 
-fn push_runtime_parliament_certificate(
-    out: &mut Vec<u8>,
-    certificate: &SccpRuntimeParliamentCertificateV1,
-) {
-    push_u8(out, certificate.version);
-    out.extend_from_slice(&certificate.preimage_hash);
-    push_u64(out, certificate.enactment_window_start);
-    push_u64(out, certificate.enactment_window_end);
-    push_u64(out, certificate.roster_epoch);
-    out.extend_from_slice(&certificate.roster_hash);
-    push_u16(out, certificate.required_signatures);
-    push_u16(out, certificate.signature_count);
-    out.extend_from_slice(&certificate.certificate_hash);
-}
-
 #[cfg(feature = "std")]
 pub fn decode_nexus_bridge_finality_proof(
     proof_bytes: &[u8],
@@ -5009,42 +4838,12 @@ pub fn decode_nexus_bridge_finality_proof(
 }
 
 #[cfg(feature = "std")]
-pub fn decode_nexus_parliament_certificate(
-    certificate_bytes: &[u8],
-) -> Option<NexusParliamentCertificateV1> {
-    norito::decode_from_bytes(certificate_bytes).ok()
-}
-
-#[cfg(not(feature = "std"))]
-pub fn decode_nexus_parliament_certificate(
-    certificate_bytes: &[u8],
-) -> Option<NexusParliamentCertificateV1> {
-    let _ = certificate_bytes;
-    None
-}
-
-#[cfg(feature = "std")]
 pub fn decode_nexus_sccp_burn_proof(proof_bytes: &[u8]) -> Option<NexusSccpBurnProofV1> {
     norito::decode_from_bytes(proof_bytes).ok()
 }
 
 #[cfg(not(feature = "std"))]
 pub fn decode_nexus_sccp_burn_proof(proof_bytes: &[u8]) -> Option<NexusSccpBurnProofV1> {
-    let _ = proof_bytes;
-    None
-}
-
-#[cfg(feature = "std")]
-pub fn decode_nexus_sccp_governance_proof(
-    proof_bytes: &[u8],
-) -> Option<NexusSccpGovernanceProofV1> {
-    norito::decode_from_bytes(proof_bytes).ok()
-}
-
-#[cfg(not(feature = "std"))]
-pub fn decode_nexus_sccp_governance_proof(
-    proof_bytes: &[u8],
-) -> Option<NexusSccpGovernanceProofV1> {
     let _ = proof_bytes;
     None
 }
@@ -5079,16 +4878,9 @@ pub fn recover_nexus_sccp_message_transparent_proof(
     backend: &str,
     proof_bytes: &[u8],
 ) -> Option<NexusSccpMessageTransparentProofV1> {
-    if let Some(proof) = decode_nexus_sccp_message_transparent_proof(proof_bytes) {
-        return (verify_nexus_sccp_message_transparent_proof_structure(&proof)
-            && proof.message_backend == backend)
-            .then_some(proof);
-    }
-
-    let counterparty_domain = sccp_counterparty_domain_from_backend(backend)?;
-    let bundle = decode_nexus_sccp_message_proof(proof_bytes)?;
-    let proof = build_nexus_sccp_message_transparent_proof(&bundle)?;
-    (proof.counterparty_domain == counterparty_domain && proof.message_backend == backend)
+    let proof = decode_nexus_sccp_message_transparent_proof(proof_bytes)?;
+    (verify_nexus_sccp_message_transparent_proof_structure(&proof)
+        && proof.message_backend == backend)
         .then_some(proof)
 }
 
@@ -5132,78 +4924,6 @@ pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityP
     signer_indices_from_bitmap(&qc.signers_bitmap, roster_len).is_some()
 }
 
-pub fn verify_nexus_parliament_certificate_structure(
-    certificate: &NexusParliamentCertificateV1,
-    governance_payload_encoded: &[u8],
-    proof_height: u64,
-) -> bool {
-    if certificate.version != 1
-        || certificate.payload_bytes.is_empty()
-        || certificate.signatures.is_empty()
-        || certificate.roster_members.is_empty()
-        || certificate.required_signatures == 0
-        || usize::from(certificate.required_signatures) > certificate.roster_members.len()
-        || certificate.enactment_window_start > certificate.enactment_window_end
-        || proof_height < certificate.enactment_window_start
-        || proof_height > certificate.enactment_window_end
-        || certificate.preimage_hash != payload_hash(governance_payload_encoded)
-    {
-        return false;
-    }
-
-    let mut seen_roster_members = Vec::with_capacity(certificate.roster_members.len());
-    for roster_member in &certificate.roster_members {
-        if roster_member.signer.is_empty() || roster_member.public_keys.is_empty() {
-            return false;
-        }
-        if seen_roster_members.contains(&roster_member.signer.as_str()) {
-            return false;
-        }
-        seen_roster_members.push(roster_member.signer.as_str());
-
-        let mut seen_public_keys = Vec::with_capacity(roster_member.public_keys.len());
-        for public_key in &roster_member.public_keys {
-            if public_key.is_empty() || seen_public_keys.contains(&public_key.as_str()) {
-                return false;
-            }
-            seen_public_keys.push(public_key.as_str());
-        }
-    }
-
-    let mut seen_signers = Vec::with_capacity(certificate.signatures.len());
-    for signature in &certificate.signatures {
-        if signature.signer.is_empty()
-            || signature.public_key.is_empty()
-            || signature.signature.is_empty()
-            || seen_signers.contains(&signature.signer.as_str())
-        {
-            return false;
-        }
-        seen_signers.push(signature.signer.as_str());
-
-        let Some(roster_member) = certificate
-            .roster_members
-            .iter()
-            .find(|member| member.signer == signature.signer)
-        else {
-            return false;
-        };
-        if !roster_member
-            .public_keys
-            .iter()
-            .any(|public_key| public_key == &signature.public_key)
-        {
-            return false;
-        }
-    }
-
-    match certificate.signature_scheme {
-        NexusParliamentSignatureSchemeV1::SimpleThreshold => {
-            certificate.signatures.len() >= usize::from(certificate.required_signatures)
-        }
-    }
-}
-
 pub fn nexus_commit_vote_preimage(chain_id: &str, certificate: &NexusCommitQcV1) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 1);
     let domain = iroha_consensus_domain(chain_id, "Vote", b"v1", &certificate.mode_tag);
@@ -5243,51 +4963,6 @@ pub fn verify_burn_bundle_structure(bundle: &NexusSccpBurnProofV1) -> bool {
         || bundle.commitment.message_id != burn_message_id(&bundle.payload)
         || bundle.commitment.payload_hash
             != payload_hash(&canonical_burn_payload_bytes(&bundle.payload))
-        || bundle.commitment.parliament_certificate_hash.is_some()
-    {
-        return false;
-    }
-    merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof) == bundle.commitment_root
-}
-
-pub fn verify_governance_bundle_structure(bundle: &NexusSccpGovernanceProofV1) -> bool {
-    if bundle.version != 1 || bundle.commitment.version != 1 {
-        return false;
-    }
-    let Some(finality_proof) = decode_nexus_bridge_finality_proof(&bundle.finality_proof) else {
-        return false;
-    };
-    if !verify_nexus_bridge_finality_proof_structure(&finality_proof)
-        || finality_proof.commitment_root != bundle.commitment_root
-    {
-        return false;
-    }
-    let Some(certificate) = decode_nexus_parliament_certificate(&bundle.parliament_certificate)
-    else {
-        return false;
-    };
-    if !verify_nexus_parliament_certificate_structure(
-        &certificate,
-        &canonical_governance_payload_bytes(&bundle.payload),
-        finality_proof.height,
-    ) {
-        return false;
-    }
-
-    let expected_kind = match bundle.payload {
-        GovernancePayloadV1::Add(_) => SccpHubMessageKind::TokenAdd,
-        GovernancePayloadV1::Pause(_) => SccpHubMessageKind::TokenPause,
-        GovernancePayloadV1::Resume(_) => SccpHubMessageKind::TokenResume,
-    };
-    let target_domain = governance_target_domain(&bundle.payload);
-    if !is_supported_domain(target_domain)
-        || bundle.commitment.kind != expected_kind
-        || bundle.commitment.target_domain != target_domain
-        || bundle.commitment.message_id != governance_message_id(&bundle.payload)
-        || bundle.commitment.payload_hash
-            != payload_hash(&canonical_governance_payload_bytes(&bundle.payload))
-        || bundle.commitment.parliament_certificate_hash
-            != Some(parliament_certificate_hash(&bundle.parliament_certificate))
     {
         return false;
     }
@@ -5315,7 +4990,6 @@ pub fn verify_message_bundle_structure(bundle: &NexusSccpMessageProofV1) -> bool
         || bundle.commitment.target_domain != target_domain
         || bundle.commitment.message_id != sccp_message_id(&bundle.payload)
         || bundle.commitment.payload_hash != payload_hash(&payload_bytes)
-        || bundle.commitment.parliament_certificate_hash.is_some()
     {
         return false;
     }
@@ -5440,38 +5114,6 @@ mod tests {
         .expect("encode finality proof")
     }
 
-    fn sample_parliament_certificate(payload: &GovernancePayloadV1) -> Vec<u8> {
-        to_bytes(&NexusParliamentCertificateV1 {
-            version: 1,
-            preimage_hash: payload_hash(&canonical_governance_payload_bytes(payload)),
-            enactment_window_start: 1,
-            enactment_window_end: 10,
-            payload_bytes: vec![9u8; 16],
-            signature_scheme: NexusParliamentSignatureSchemeV1::SimpleThreshold,
-            roster_epoch: 0,
-            roster_members: vec![NexusParliamentRosterMemberV1 {
-                signer:
-                    "i105:01:ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                        .to_owned(),
-                public_keys: vec![
-                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                        .to_owned(),
-                ],
-            }],
-            required_signatures: 1,
-            signatures: vec![NexusParliamentSignatureV1 {
-                signer:
-                    "i105:01:ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                        .to_owned(),
-                public_key:
-                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                        .to_owned(),
-                signature: vec![3u8; 64],
-            }],
-        })
-        .expect("encode parliament certificate")
-    }
-
     fn sample_message_bundle(payload: SccpPayloadV1) -> NexusSccpMessageProofV1 {
         let commitment = SccpHubCommitmentV1 {
             version: 1,
@@ -5479,7 +5121,6 @@ mod tests {
             target_domain: sccp_message_target_domain(&payload),
             message_id: sccp_message_id(&payload),
             payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
-            parliament_certificate_hash: None,
         };
         let commitment_root = commitment_leaf_hash(&commitment);
         NexusSccpMessageProofV1 {
@@ -5488,32 +5129,6 @@ mod tests {
             commitment,
             merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
             payload,
-            finality_proof: sample_finality_proof(commitment_root),
-        }
-    }
-
-    fn sample_governance_bundle(payload: GovernancePayloadV1) -> NexusSccpGovernanceProofV1 {
-        let parliament_certificate = sample_parliament_certificate(&payload);
-        let commitment = SccpHubCommitmentV1 {
-            version: 1,
-            kind: match &payload {
-                GovernancePayloadV1::Add(_) => SccpHubMessageKind::TokenAdd,
-                GovernancePayloadV1::Pause(_) => SccpHubMessageKind::TokenPause,
-                GovernancePayloadV1::Resume(_) => SccpHubMessageKind::TokenResume,
-            },
-            target_domain: governance_target_domain(&payload),
-            message_id: governance_message_id(&payload),
-            payload_hash: payload_hash(&canonical_governance_payload_bytes(&payload)),
-            parliament_certificate_hash: Some(parliament_certificate_hash(&parliament_certificate)),
-        };
-        let commitment_root = commitment_leaf_hash(&commitment);
-        NexusSccpGovernanceProofV1 {
-            version: 1,
-            commitment_root,
-            commitment,
-            merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
-            payload,
-            parliament_certificate,
             finality_proof: sample_finality_proof(commitment_root),
         }
     }
@@ -5535,7 +5150,6 @@ mod tests {
             target_domain: SCCP_DOMAIN_SORA,
             message_id: burn_message_id(&payload),
             payload_hash: payload_hash(&canonical_burn_payload_bytes(&payload)),
-            parliament_certificate_hash: None,
         };
         let commitment_root = commitment_leaf_hash(&commitment);
         let bundle = NexusSccpBurnProofV1 {
@@ -5547,36 +5161,6 @@ mod tests {
             finality_proof: sample_finality_proof(commitment_root),
         };
         assert!(verify_burn_bundle_structure(&bundle));
-    }
-
-    #[test]
-    fn governance_bundle_rejects_wrong_certificate_hash() {
-        let payload = GovernancePayloadV1::Pause(TokenControlPayloadV1 {
-            version: 1,
-            target_domain: SCCP_DOMAIN_SORA,
-            nonce: 3,
-            sora_asset_id: [7u8; 32],
-        });
-        let commitment = SccpHubCommitmentV1 {
-            version: 1,
-            kind: SccpHubMessageKind::TokenPause,
-            target_domain: SCCP_DOMAIN_SORA,
-            message_id: governance_message_id(&payload),
-            payload_hash: payload_hash(&canonical_governance_payload_bytes(&payload)),
-            parliament_certificate_hash: Some([9u8; 32]),
-        };
-        let commitment_root = commitment_leaf_hash(&commitment);
-        let parliament_certificate = sample_parliament_certificate(&payload);
-        let bundle = NexusSccpGovernanceProofV1 {
-            version: 1,
-            commitment_root,
-            commitment,
-            merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
-            payload,
-            parliament_certificate,
-            finality_proof: sample_finality_proof(commitment_root),
-        };
-        assert!(!verify_governance_bundle_structure(&bundle));
     }
 
     #[test]
@@ -5603,7 +5187,6 @@ mod tests {
         assert_eq!(envelope.version, 1);
         assert_eq!(envelope.commitment.kind, SccpRuntimeProofKindV1::Transfer);
         assert_eq!(envelope.commitment.message_id, bundle.commitment.message_id);
-        assert!(envelope.parliament_certificate.is_none());
         let finality =
             decode_nexus_bridge_finality_proof(&bundle.finality_proof).expect("decode finality");
         assert_eq!(envelope.finality_proof.epoch, finality.commit_qc.epoch);
@@ -5619,51 +5202,30 @@ mod tests {
     }
 
     #[test]
-    fn runtime_envelope_from_governance_bundle_exports_parliament_anchor_fields() {
-        let payload = GovernancePayloadV1::Pause(TokenControlPayloadV1 {
+    fn runtime_envelope_from_token_control_message_exports_scale_inputs_for_pallet() {
+        let payload = SccpPayloadV1::TokenPause(TokenControlPayloadV1 {
             version: 1,
             target_domain: SCCP_DOMAIN_SORA2,
             nonce: 10,
             sora_asset_id: [0x42; 32],
         });
-        let bundle = sample_governance_bundle(payload);
+        let bundle = sample_message_bundle(payload);
         let envelope =
-            sccp_runtime_envelope_from_governance_bundle(&bundle).expect("runtime envelope");
+            sccp_runtime_envelope_from_message_bundle(&bundle).expect("runtime envelope");
         assert_eq!(envelope.commitment.kind, SccpRuntimeProofKindV1::TokenPause);
         assert_eq!(
-            envelope.commitment.parliament_certificate_hash,
-            Some(parliament_certificate_hash(&bundle.parliament_certificate))
-        );
-        let certificate = decode_nexus_parliament_certificate(&bundle.parliament_certificate)
-            .expect("decode parliament certificate");
-        let runtime_certificate = envelope
-            .parliament_certificate
-            .expect("runtime parliament certificate");
-        assert_eq!(runtime_certificate.preimage_hash, certificate.preimage_hash);
-        assert_eq!(
-            runtime_certificate.roster_hash,
-            sccp_runtime_parliament_roster_anchor_hash(&certificate)
-        );
-        assert_eq!(runtime_certificate.signature_count, 1);
-        assert_eq!(
-            sccp_runtime_envelope_bytes_from_governance_bundle(&bundle),
+            sccp_runtime_envelope_bytes_from_message_bundle(&bundle),
             Some(encode_sccp_runtime_proof_envelope(&envelope))
         );
         let encoded = encode_sccp_runtime_proof_envelope(&envelope);
-        let expected_len = 1
-            + 32
-            + (1 + 1 + 4 + 32 + 32 + 1 + 32)
-            + 1
-            + (1 + 4 + 8 + 32)
-            + (1 + 8 + 8 + 32 + 32 + 32 + 2)
-            + 1
-            + (1 + 32 + 8 + 8 + 8 + 32 + 2 + 2 + 32);
+        let expected_len =
+            1 + 32 + (1 + 1 + 4 + 32 + 32) + (1 + 1 + 4 + 8 + 32) + (1 + 8 + 8 + 32 + 32 + 32 + 2);
         assert_eq!(encoded.len(), expected_len);
     }
 
     #[test]
-    fn governance_payload_canonical_encoding_preserves_discriminants() {
-        let add = GovernancePayloadV1::Add(TokenAddPayloadV1 {
+    fn token_control_payloads_are_ordinary_sccp_messages() {
+        let add = SccpPayloadV1::TokenAdd(TokenAddPayloadV1 {
             version: 1,
             target_domain: SCCP_DOMAIN_SORA,
             nonce: 1,
@@ -5672,13 +5234,13 @@ mod tests {
             name: [0x22; 32],
             symbol: [0x33; 32],
         });
-        let pause = GovernancePayloadV1::Pause(TokenControlPayloadV1 {
+        let pause = SccpPayloadV1::TokenPause(TokenControlPayloadV1 {
             version: 1,
             target_domain: SCCP_DOMAIN_ETH,
             nonce: 2,
             sora_asset_id: [0x44; 32],
         });
-        let resume = GovernancePayloadV1::Resume(TokenControlPayloadV1 {
+        let resume = SccpPayloadV1::TokenResume(TokenControlPayloadV1 {
             version: 1,
             target_domain: SCCP_DOMAIN_BSC,
             nonce: 3,
@@ -5686,12 +5248,18 @@ mod tests {
         });
 
         for (payload, discriminant) in [
-            (add, GovernancePayloadV1::ADD_DISCRIMINANT),
-            (pause, GovernancePayloadV1::PAUSE_DISCRIMINANT),
-            (resume, GovernancePayloadV1::RESUME_DISCRIMINANT),
+            (add, SccpPayloadV1::TOKEN_ADD_DISCRIMINANT),
+            (pause, SccpPayloadV1::TOKEN_PAUSE_DISCRIMINANT),
+            (resume, SccpPayloadV1::TOKEN_RESUME_DISCRIMINANT),
         ] {
-            let encoded = canonical_governance_payload_bytes(&payload);
+            assert!(verify_sccp_payload_structure(&payload));
+            let encoded = canonical_sccp_payload_bytes(&payload);
             assert_eq!(encoded.first(), Some(&discriminant));
+            let decoded =
+                decode_canonical_sccp_payload_bytes(&encoded).expect("decode token control");
+            assert_eq!(decoded, payload);
+            let bundle = sample_message_bundle(payload);
+            assert!(verify_message_bundle_structure(&bundle));
         }
     }
 
@@ -5712,7 +5280,6 @@ mod tests {
             target_domain: SCCP_DOMAIN_SORA,
             message_id: burn_message_id(&payload),
             payload_hash: payload_hash(&canonical_burn_payload_bytes(&payload)),
-            parliament_certificate_hash: None,
         };
         let commitment_root = commitment_leaf_hash(&commitment);
         let bundle = NexusSccpBurnProofV1 {
@@ -6173,7 +5740,7 @@ mod tests {
     }
 
     #[test]
-    fn transparent_message_proof_recovery_accepts_legacy_bundle_bytes() {
+    fn transparent_message_proof_recovery_rejects_raw_bundle_bytes() {
         let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
             source_domain: SCCP_DOMAIN_ETH,
@@ -6511,8 +6078,8 @@ mod tests {
     }
 
     #[test]
-    fn message_bundle_structure_rejects_commitment_kind_and_parliament_hash_tampering() {
-        let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
+    fn message_bundle_structure_rejects_commitment_kind_tampering() {
+        let mut bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
             source_domain: SCCP_DOMAIN_SORA,
             dest_domain: SCCP_DOMAIN_ETH,
@@ -6529,17 +6096,8 @@ mod tests {
             route_id: b"nexus:eth:xor".to_vec(),
         }));
 
-        let mut wrong_kind = bundle.clone();
-        wrong_kind.commitment.kind = SccpHubMessageKind::RouteActivate;
-        assert!(!verify_message_bundle_structure(&wrong_kind));
-
-        let mut unexpected_parliament_hash = bundle;
-        unexpected_parliament_hash
-            .commitment
-            .parliament_certificate_hash = Some([0x42; 32]);
-        assert!(!verify_message_bundle_structure(
-            &unexpected_parliament_hash
-        ));
+        bundle.commitment.kind = SccpHubMessageKind::RouteActivate;
+        assert!(!verify_message_bundle_structure(&bundle));
     }
 
     #[test]
@@ -6554,40 +6112,6 @@ mod tests {
         proof.commit_qc.signers_bitmap = vec![0b0000_0001];
         proof.commit_qc.validator_set_pops[0].clear();
         assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
-    }
-
-    #[test]
-    fn parliament_certificate_structure_rejects_duplicate_roster_and_signatures() {
-        let payload = GovernancePayloadV1::Pause(TokenControlPayloadV1 {
-            version: 1,
-            target_domain: SCCP_DOMAIN_SORA,
-            nonce: 32,
-            sora_asset_id: [0x44; 32],
-        });
-        let encoded_payload = canonical_governance_payload_bytes(&payload);
-        let certificate =
-            decode_nexus_parliament_certificate(&sample_parliament_certificate(&payload))
-                .expect("decode parliament certificate");
-
-        let mut duplicate_roster = certificate.clone();
-        duplicate_roster
-            .roster_members
-            .push(duplicate_roster.roster_members[0].clone());
-        assert!(!verify_nexus_parliament_certificate_structure(
-            &duplicate_roster,
-            &encoded_payload,
-            7
-        ));
-
-        let mut duplicate_signature = certificate;
-        duplicate_signature
-            .signatures
-            .push(duplicate_signature.signatures[0].clone());
-        assert!(!verify_nexus_parliament_certificate_structure(
-            &duplicate_signature,
-            &encoded_payload,
-            7
-        ));
     }
 
     #[test]

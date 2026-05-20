@@ -10,7 +10,7 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError, InvalidParameterError},
@@ -897,6 +897,10 @@ fn default_policy() -> PinPolicy {
 }
 
 fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
+    if tx.tx_call_hash.is_none() {
+        tx.tx_call_hash = Some(Hash::prehashed([0x91; Hash::LENGTH]));
+    }
+
     let alice = alice();
     let default_domain = DomainId::try_new(
         iroha_data_model::account::address::default_domain_name().as_ref(),

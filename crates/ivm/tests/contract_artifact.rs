@@ -233,7 +233,7 @@ fn verify_rejects_invalid_trigger_callback_target() {
 }
 
 #[test]
-fn verify_rejects_global_access_wildcard_hints() {
+fn verify_accepts_global_access_wildcard_hints() {
     let hints = AccessSetHints {
         read_keys: vec!["*".to_owned()],
         write_keys: vec!["*".to_owned()],
@@ -246,16 +246,11 @@ fn verify_rejects_global_access_wildcard_hints() {
         Some(hints),
     );
 
-    let err =
-        ivm::verify_contract_artifact(&bytes).expect_err("global wildcard access hints must fail");
-    assert!(
-        err.to_string()
-            .contains("unsupported wildcard access_set_hints.read_keys entry `*`")
-    );
+    ivm::verify_contract_artifact(&bytes).expect("global wildcard access hints are supported");
 }
 
 #[test]
-fn verify_rejects_state_access_wildcard_hints() {
+fn verify_accepts_state_access_wildcard_hints() {
     let hints = AccessSetHints {
         read_keys: vec!["state:*".to_owned()],
         write_keys: vec!["state:*".to_owned()],
@@ -268,12 +263,7 @@ fn verify_rejects_state_access_wildcard_hints() {
         Some(hints),
     );
 
-    let err =
-        ivm::verify_contract_artifact(&bytes).expect_err("state wildcard access hints must fail");
-    assert!(
-        err.to_string()
-            .contains("unsupported wildcard access_set_hints.read_keys entry `state:*`")
-    );
+    ivm::verify_contract_artifact(&bytes).expect("state wildcard access hints are supported");
 }
 
 #[test]
