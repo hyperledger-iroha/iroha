@@ -55,6 +55,9 @@ use crate::{
 pub type AccessKey = String;
 
 const AUTHORITY_ACCOUNT_KEY: &str = "account:$authority";
+const ACCOUNT_WILDCARD_KEY: &str = "account:*";
+const ASSET_WILDCARD_KEY: &str = "asset:*";
+const ASSET_DEF_WILDCARD_KEY: &str = "asset_def:*";
 
 /// Access set with separate read and write collections.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -791,6 +794,14 @@ fn access_set_from_hint_keys(
             return Some(());
         }
         if is_authority_placeholder_key(raw) {
+            state_keys.insert(raw.to_owned());
+            return Some(());
+        }
+        if raw == ACCOUNT_WILDCARD_KEY {
+            state_keys.insert(raw.to_owned());
+            return Some(());
+        }
+        if raw == ASSET_WILDCARD_KEY || raw == ASSET_DEF_WILDCARD_KEY {
             state_keys.insert(raw.to_owned());
             return Some(());
         }
@@ -1677,12 +1688,15 @@ fn key_rwa_detail(id: &RwaId, key: &Name) -> AccessKey {
 }
 
 fn add_account_r(set: &mut AccessSet, id: &AccountId) {
+    set.add_read(ACCOUNT_WILDCARD_KEY.to_owned());
     set.add_read(key_account(id));
 }
 fn add_domain_r(set: &mut AccessSet, id: &DomainId) {
     set.add_read(key_domain(id));
 }
 fn add_account_rw(set: &mut AccessSet, id: &AccountId) {
+    set.add_read(ACCOUNT_WILDCARD_KEY.to_owned());
+    set.add_write(ACCOUNT_WILDCARD_KEY.to_owned());
     let k = key_account(id);
     set.add_read(k.clone());
     set.add_write(k);
@@ -1705,6 +1719,8 @@ fn add_domain_detail_rw(set: &mut AccessSet, id: &DomainId, key: &Name) {
     set.add_write(d);
 }
 fn add_asset_def_rw(set: &mut AccessSet, id: &AssetDefinitionId) {
+    set.add_read(ASSET_DEF_WILDCARD_KEY.to_owned());
+    set.add_write(ASSET_DEF_WILDCARD_KEY.to_owned());
     if let Some(domain) = id.try_domain() {
         add_domain_r(set, domain);
     }
@@ -1713,6 +1729,7 @@ fn add_asset_def_rw(set: &mut AccessSet, id: &AssetDefinitionId) {
     set.add_write(k);
 }
 fn add_asset_def_r(set: &mut AccessSet, id: &AssetDefinitionId) {
+    set.add_read(ASSET_DEF_WILDCARD_KEY.to_owned());
     if let Some(domain) = id.try_domain() {
         add_domain_r(set, domain);
     }
@@ -1728,6 +1745,8 @@ fn add_asset_def_detail_rw(set: &mut AccessSet, id: &AssetDefinitionId, key: &Na
     set.add_write(d);
 }
 fn add_asset_rw(set: &mut AccessSet, id: &AssetId) {
+    set.add_read(ASSET_WILDCARD_KEY.to_owned());
+    set.add_write(ASSET_WILDCARD_KEY.to_owned());
     let k = key_asset(id);
     set.add_read(k.clone());
     set.add_write(k);
@@ -2489,6 +2508,35 @@ mod tests {
             .expect("expected dynamic write hint to normalize");
         assert!(set.read_keys.contains("state:Balances"));
         assert!(set.write_keys.contains("state:Balances"));
+    }
+
+    #[test]
+    fn access_set_hints_accept_coarse_dynamic_account_key() {
+        let reads = vec![ACCOUNT_WILDCARD_KEY.to_owned()];
+        let set = access_set_from_hint_keys(&reads, &[], &[], &[])
+            .expect("expected account wildcard hint to normalize");
+        assert!(set.read_keys.contains(ACCOUNT_WILDCARD_KEY));
+        assert!(!set.write_keys.contains(ACCOUNT_WILDCARD_KEY));
+
+        let writes = vec![ACCOUNT_WILDCARD_KEY.to_owned()];
+        let set = access_set_from_hint_keys(&[], &writes, &[], &[])
+            .expect("expected account wildcard write hint to normalize");
+        assert!(set.write_keys.contains(ACCOUNT_WILDCARD_KEY));
+    }
+
+    #[test]
+    fn access_set_hints_accept_coarse_dynamic_asset_keys() {
+        let reads = vec![
+            ASSET_WILDCARD_KEY.to_owned(),
+            ASSET_DEF_WILDCARD_KEY.to_owned(),
+        ];
+        let writes = reads.clone();
+        let set = access_set_from_hint_keys(&reads, &writes, &[], &[])
+            .expect("expected asset wildcard hints to normalize");
+        assert!(set.read_keys.contains(ASSET_WILDCARD_KEY));
+        assert!(set.write_keys.contains(ASSET_WILDCARD_KEY));
+        assert!(set.read_keys.contains(ASSET_DEF_WILDCARD_KEY));
+        assert!(set.write_keys.contains(ASSET_DEF_WILDCARD_KEY));
     }
 
     #[test]

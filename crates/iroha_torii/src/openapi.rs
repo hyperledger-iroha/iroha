@@ -10847,19 +10847,8 @@ fn openapi_schemas() -> Map {
     schemas.insert(
         "MultisigProposeInstructionInput".to_owned(),
         norito::json!({
-            "description": "Instruction input for multisig proposal creation. Send a JSON instruction object or a base64-encoded native Norito InstructionBox frame.",
-            "oneOf": [
-                {
-                    "type": "object",
-                    "description": "Structured JSON instruction object."
-                },
-                {
-                    "type": "string",
-                    "contentEncoding": "base64",
-                    "contentMediaType": "application/x-norito",
-                    "description": "Base64-encoded full InstructionBox Norito frame, not the concrete instruction payload alone."
-                }
-            ]
+            "type": "object",
+            "description": "Structured JSON InstructionBox object. For native Norito, send the entire MultisigProposeRequest body as application/x-norito; the JSON instructions field does not accept per-instruction Norito blobs."
         }),
     );
     schemas.insert(
@@ -12246,30 +12235,22 @@ mod tests {
             .get("MultisigProposeInstructionInput")
             .and_then(Value::as_object)
             .expect("instruction input schema");
-        let variants = instruction_input
-            .get("oneOf")
-            .and_then(Value::as_array)
-            .expect("instruction variants");
-        assert!(
-            variants.iter().any(|variant| {
-                variant
-                    .as_object()
-                    .and_then(|obj| obj.get("type"))
-                    .and_then(Value::as_str)
-                    == Some("object")
-            }),
-            "structured JSON instruction variant missing"
+        assert_eq!(
+            instruction_input.get("type").and_then(Value::as_str),
+            Some("object")
         );
         assert!(
-            variants.iter().any(|variant| {
-                variant.as_object().is_some_and(|obj| {
-                    obj.get("type").and_then(Value::as_str) == Some("string")
-                        && obj.get("contentEncoding").and_then(Value::as_str) == Some("base64")
-                        && obj.get("contentMediaType").and_then(Value::as_str)
-                            == Some("application/x-norito")
-                })
-            }),
-            "native Norito instruction variant missing"
+            !instruction_input.contains_key("oneOf"),
+            "JSON instructions must not advertise per-instruction Norito blobs"
+        );
+        assert!(
+            instruction_input
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(
+                    |description| description.contains("entire MultisigProposeRequest body")
+                ),
+            "instruction schema should direct native callers to whole-body Norito"
         );
     }
 

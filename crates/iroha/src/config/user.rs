@@ -16,7 +16,10 @@ use url::Url;
 use crate::{
     config::BasicAuth,
     crypto::{KeyPair, PrivateKey, PublicKey},
-    data_model::prelude::{AccountId, ChainId, DomainId},
+    data_model::{
+        name,
+        prelude::{AccountId, ChainId, DomainId},
+    },
 };
 
 /// Minimal allowed transaction time-to-live.
@@ -130,7 +133,7 @@ pub enum ParseError {
     #[error("`connect.queue_root` must not be empty")]
     EmptyConnectQueueRoot,
     /// Invalid account domain literal.
-    #[error("Account domain must use `domain.dataspace` format: `{value}`")]
+    #[error("Account domain must use `dataspace` or `domain.dataspace` format: `{value}`")]
     InvalidAccountDomain {
         /// Raw configured value.
         value: String,
@@ -138,6 +141,17 @@ pub enum ParseError {
 }
 
 type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
+
+fn valid_account_domain_scope_literal(value: &str) -> bool {
+    if value.trim().is_empty() || value.trim() != value {
+        return false;
+    }
+    if value.contains('.') {
+        DomainId::parse_fully_qualified(value).is_ok()
+    } else {
+        name::canonicalize_domain_label(value).is_ok()
+    }
+}
 
 impl Root {
     /// Validates user configuration for semantic errors and constructs a complete
@@ -296,7 +310,7 @@ impl Root {
 
         let (public_key, public_key_origin) = public_key.into_tuple();
         let (private_key, private_key_origin) = private_key.into_tuple();
-        if DomainId::parse_fully_qualified(&domain_literal).is_err() {
+        if !valid_account_domain_scope_literal(&domain_literal) {
             emitter.emit(Report::new(ParseError::InvalidAccountDomain {
                 value: domain_literal.clone(),
             }));
@@ -385,7 +399,7 @@ impl Root {
 /// Account parameters for building the default signer identity.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct Account {
-    /// Domain of the account.
+    /// Dataspace or domain.dataspace scope used for account alias operations.
     #[config(env = "ACCOUNT_DOMAIN")]
     pub domain: String,
     /// Public key of the account.
@@ -686,13 +700,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_bare_account_domain_without_panicking() {
+    fn parse_accepts_dataspace_account_domain_scope() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         root.account.domain = "wonderland".to_owned();
 
+        let config = root
+            .parse()
+            .expect("bare dataspace account scope should be accepted");
+        assert_eq!(config.chain.as_str(), "test-chain");
+    }
+
+    #[test]
+    fn parse_rejects_invalid_account_domain_scope_without_panicking() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        root.account.domain = "wonderland universal".to_owned();
+
         let err = root
             .parse()
-            .expect_err("bare account domain should be rejected");
+            .expect_err("invalid account scope should be rejected");
         let parse_errors: Vec<_> = err
             .frames()
             .filter_map(|frame| frame.downcast_ref::<ParseError>())
@@ -700,7 +725,7 @@ mod tests {
         assert!(
             parse_errors
                 .iter()
-                .any(|error| matches!(error, ParseError::InvalidAccountDomain { value } if value == "wonderland")),
+                .any(|error| matches!(error, ParseError::InvalidAccountDomain { value } if value == "wonderland universal")),
             "expected `ParseError::InvalidAccountDomain`, found {parse_errors:?}"
         );
     }

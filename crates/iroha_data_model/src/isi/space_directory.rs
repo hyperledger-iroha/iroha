@@ -11,6 +11,14 @@ isi! {
 
 impl crate::seal::Instruction for PublishSpaceDirectoryManifest {}
 
+impl PublishSpaceDirectoryManifest {
+    /// Construct a space-directory manifest publication instruction.
+    #[must_use]
+    pub fn new(manifest: AssetPermissionManifest) -> Self {
+        Self { manifest }
+    }
+}
+
 isi! {
     /// Revoke an existing Space Directory manifest for a UAID/dataspace pair.
     pub struct RevokeSpaceDirectoryManifest {

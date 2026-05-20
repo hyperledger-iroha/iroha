@@ -22976,7 +22976,7 @@ fn metadata_with_default_gas_asset(state: &CoreState) -> Metadata {
 #[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_RECEIPTS_DIR: &str = "contract_deploy_bundles";
 #[cfg(feature = "app_api")]
-const CONTRACT_BUNDLE_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+const CONTRACT_BUNDLE_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -25449,6 +25449,7 @@ async fn submit_contract_deploy_request(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     req: DeployContractDto,
+    deploy_nonce_override: Option<u64>,
     endpoint: &'static str,
 ) -> Result<DeployContractBundleContractReceiptDto> {
     use iroha_data_model::{
@@ -25481,7 +25482,10 @@ async fn submit_contract_deploy_request(
             .is_some_and(|candidate| world.contract_instances().get(candidate).is_some());
         (previous_contract_address, previous_contract_is_active)
     };
-    let deploy_nonce = contract_deploy_nonce_for_authority(&state, &authority)?;
+    let deploy_nonce = match deploy_nonce_override {
+        Some(deploy_nonce) => deploy_nonce,
+        None => contract_deploy_nonce_for_authority(&state, &authority)?,
+    };
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
         iroha_data_model::account::address::chain_discriminant(),
         &authority,
@@ -25715,12 +25719,6 @@ async fn execute_contract_bundle_request(
         return Ok(planned);
     }
 
-    // Init calls and assertions execute against the live chain state, so those
-    // bundle shapes still need to wait for alias activation before proceeding.
-    // Plain deploy receipts should return as soon as the deploy transaction is
-    // accepted into the queue.
-    let require_activation_wait = !req.init_calls.is_empty() || !req.assertions.is_empty();
-
     let mut receipt =
         load_contract_bundle_receipt(&planned.bundle_digest, &planned.chain_fingerprint)?
             .unwrap_or(planned);
@@ -25743,6 +25741,7 @@ async fn execute_contract_bundle_request(
             let contract_name = receipt.contracts[index].name.clone();
             let contract_alias = receipt.contracts[index].contract_alias.clone();
             let contract_address = receipt.contracts[index].contract_address.clone();
+            let deploy_nonce = receipt.contracts[index].deploy_nonce;
 
             let (already_bound, already_active) =
                 contract_alias_activation_state(state.as_ref(), &contract_alias, &contract_address);
@@ -25775,6 +25774,7 @@ async fn execute_contract_bundle_request(
                     contract_alias: contract.contract_alias.clone(),
                     lease_expiry_ms: contract.lease_expiry_ms,
                 },
+                Some(deploy_nonce),
                 "/v1/contracts/deploy-bundle",
             )
             .await
@@ -25791,28 +25791,28 @@ async fn execute_contract_bundle_request(
             };
             let response_contract_alias = response.contract_alias.clone();
             let response_contract_address = response.contract_address.clone();
+            let mut response = response;
+            response.name = contract_name.clone();
             receipt.contracts[index] = response;
             persist_contract_bundle_receipt(&receipt)?;
 
-            if require_activation_wait {
-                if let Err(err) = wait_for_contract_alias_target(
-                    state.clone(),
-                    &response_contract_alias,
-                    &response_contract_address,
-                )
-                .await
-                {
-                    mark_bundle_failure(
-                        &mut receipt,
-                        format!("activate contract `{contract_name}`: {err}"),
-                    );
-                    persist_contract_bundle_receipt(&receipt)?;
-                    return Err(err);
-                }
-
-                receipt.contracts[index].status = "deployed".to_owned();
+            if let Err(err) = wait_for_contract_alias_target(
+                state.clone(),
+                &response_contract_alias,
+                &response_contract_address,
+            )
+            .await
+            {
+                mark_bundle_failure(
+                    &mut receipt,
+                    format!("activate contract `{contract_name}`: {err}"),
+                );
                 persist_contract_bundle_receipt(&receipt)?;
+                return Err(err);
             }
+
+            receipt.contracts[index].status = "deployed".to_owned();
+            persist_contract_bundle_receipt(&receipt)?;
         }
 
         record_bundle_stage(&mut receipt, "deploy");
@@ -58261,7 +58261,9 @@ pub async fn handle_v1_accounts_onboard_multisig(
         auto_renew_instructions = instructions;
     }
 
+    let tx_metadata = metadata_with_default_gas_asset(app.state.as_ref());
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
+        .with_metadata(tx_metadata)
         .with_instructions({
             let mut instructions = vec![
                 InstructionBox::from(
