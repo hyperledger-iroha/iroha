@@ -2,8 +2,12 @@
 
 The `docs/i18n` directory centralizes configuration and tooling for the
 documentation localization workflow. English files remain the source of truth;
-translations live next to their source file using the pattern
-`<name>.<language-code>.<ext>` (for example `README.ja.md`).
+most translations live next to their source file using the pattern
+`<name>.<language-code>.<ext>` (for example `docs/source/README.ja.md`).
+Translations of repository-root documents are centralized under
+`docs/i18n/root/<language-code>/<name>.md` (for example
+`docs/i18n/root/ja/README.md`) so localized governance and readme companions do
+not crowd the repository root.
 
 ## Configuration
 
@@ -54,6 +58,10 @@ any paths that already contain a translation for the requested language, and
 creates a stub with metadata for translators. Use `--dry-run` to preview the
 planned changes or `--lang <code>` to target specific languages.
 
+For repository-root English documents matched by the manifest, the generated
+translation path is `docs/i18n/root/<language-code>/<name>.md`. For documents
+below `docs/`, translations continue to live next to the source file.
+
 ## Translating
 
 - Replace the stub text with the translated content and update the `status`
@@ -61,7 +69,8 @@ planned changes or `--lang <code>` to target specific languages.
   complete`).
 - Keep front matter keys intact so that tooling can track progress.
 - When a source document is moved or renamed, update the translation filename
-  accordingly.
+  accordingly. Root-document translations should remain under
+  `docs/i18n/root/<language-code>/`.
 - Treat all `needs-translation` stubs for Japanese, Hebrew, Spanish, Portuguese,
   French, Russian, Arabic, and Urdu as explicit work items; update both the body and
   metadata when a translation is completed or reviewed so the CI dry-run check stays clean.

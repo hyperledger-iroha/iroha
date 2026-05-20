@@ -2,6 +2,38 @@
 
 Last updated: 2026-05-20
 
+## 2026-05-20 LFDT governance feedback response
+
+- Added a root `SECURITY.md` aligned with the LF Decentralized Trust security
+  policy template, using LFDT security email plus GitHub private vulnerability
+  reporting as the approved intake paths and listing three initial Iroha
+  security triage maintainers.
+- Added README compliance badges for GitHub license, OpenSSF Best Practices
+  project 960, and OpenSSF Scorecard. Scorecard intentionally uses
+  `github.com/hyperledger/iroha` because the Scorecard API resolves that
+  redirected repository path while `github.com/hyperledger-iroha/iroha` is not
+  currently indexed.
+- Added a weekly/push OpenSSF Scorecard workflow that publishes SARIF and
+  public badge/API results with the required `security-events: write` and
+  `id-token: write` permissions.
+- Moved localized root Markdown companions into
+  `docs/i18n/root/<locale>/...`, kept English root files canonical, and updated
+  the i18n helper/tests so future root translations are generated under that
+  directory instead of back into the repository root.
+- Replaced the long public `roadmap.md` with a concise roadmap and moved the
+  detailed open-work backlog to `docs/source/engineering_backlog.md`.
+- Added `docs/source/community.md`, centering public community-building on the
+  official X account (`https://x.com/hl_iroha/`) and monthly X Spaces, with
+  links to LFDT, Telegram, Discord, and GitHub channels.
+- Validation:
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/scorecard.yml"); puts "scorecard yaml ok"'`
+  - `python3 -m pytest pytests/scripts/sync_docs_i18n_test.py`
+  - `python3 scripts/sync_docs_i18n.py --check` still reports the pre-existing
+    200 missing translation stubs for unrelated docs; this governance-response
+    pass does not add new missing i18n stubs.
+  - Badge URL checks returned HTTP 200/302 as expected for OpenSSF Best
+    Practices, OpenSSF Scorecard, and the GitHub license badge.
+
 ## 2026-05-20 WSV/Kura and query stabilization follow-up
 
 - Kept WSV recovery on the memory-only path and tightened the surrounding
@@ -59,6 +91,9 @@ Last updated: 2026-05-20
   bytes. The verifier only accepts typed `NexusSccpMessageTransparentProofV1`
   artifacts whose embedded OpenVerify/FASTPQ proof validates against the
   canonical SCCP statement.
+- Torii no longer has a test-only synthetic SCCP transparent-proof override.
+  Message submission with settlement data now follows the same proof gate as
+  production and rejects disabled lanes before settlement scaffolding.
 - Transfer payload validation now requires sender and recipient codecs to match
   the source and destination domain account codecs. Asset and route codec policy
   remains on the existing supported-codec checks for compatibility with current
@@ -80,6 +115,8 @@ Last updated: 2026-05-20
   race in those tests.
 - Raw-bundle recovery hardening was rechecked with
   `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib transparent -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_torii --lib sccp_lane_disabled -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_torii --lib bridge_message_submit_rejects_disabled_inbound_transfer_lane -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-sccp-proof cargo check -p iroha_core`,
   `CARGO_TARGET_DIR=target/codex-sccp-proof cargo check -p iroha_torii`,
   `cargo fmt --all -- --check`, and `git diff --check`.
@@ -184,6 +221,21 @@ Last updated: 2026-05-20
   `scripts/check_no_scale.sh`. Workspace test-target compilation is green with
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test --workspace --no-run`
   (CUDA helper crates fell back because `nvcc` is not installed on this host).
+
+## 2026-05-20 Soracloud Webapp Auth Smoke Stabilization
+
+- Hardened generated Soracloud webapp/PII auth login handling so missing,
+  expired, replayed, principal-mismatched, origin-mismatched, and
+  bad-signature challenges are rejected before acquiring the consume lock.
+  Successful logins still re-read and revalidate the challenge after acquiring
+  the lock before minting a session.
+- Extended generated multi-replica Node auth smoke request timeouts so loaded
+  Rust test runs do not kill healthy child servers mid shared-state file lock.
+- Focused validation is green with
+  `cargo test -p iroha_cli generated_webapp_auth_smoke_rejects_replay_and_supports_shared_sessions -- --nocapture`,
+  `cargo test -p iroha_cli auth_replay_lock_contention_is_fail_closed -- --nocapture`,
+  `cargo test -p iroha_cli generated_pii_app_auth_core_handlers_reject_login_auth_failures -- --nocapture`,
+  and `git diff --check`.
 
 ## 2026-05-20 Taira Browser Connect CORS Config
 

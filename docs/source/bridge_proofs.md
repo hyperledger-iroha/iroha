@@ -179,7 +179,7 @@ and may be empty for this runtime envelope path.
     - JavaScript: `ToriiClient.getSccpMessageProofJob(...)`.
   - current production behavior: this route rejects all live counterparty lanes
     because they are disabled until native recursive verification exists.
-- `GET /v1/sccp/proofs/message/{message_id}` now reconstructs the proof from committed blocks that contain `RecordSccpMessage` instructions and a non-null `sccp_commitment_root` in the finalized block header. The temporary in-memory bundle registry remains only as a fallback/test path.
+- `GET /v1/sccp/proofs/message/{message_id}` now reconstructs the proof from committed blocks that contain `RecordSccpMessage` instructions and a non-null `sccp_commitment_root` in the finalized block header. The in-memory bundle registry is retained only for unit tests and never bypasses typed artifact or finality verification.
 - Generic SCCP `message` payloads now enforce explicit v1 codec families during structural verification instead of accepting arbitrary nonzero codec ids:
   - `1`: generic UTF-8 logical identifiers;
   - `2`: EVM `0x`-prefixed 20-byte hex addresses;

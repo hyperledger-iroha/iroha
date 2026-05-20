@@ -46674,113 +46674,6 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
-    fn bridge_finalize_inbound_ivm_program(abi_version: u8) -> Vec<u8> {
-        let meta = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            vector_length: 0,
-            max_cycles: 0,
-            abi_version,
-        };
-        let interface = ivm::EmbeddedContractInterfaceV1 {
-            compiler_fingerprint: "torii-bridge-tests".to_owned(),
-            features_bitmap: 0,
-            access_set_hints: None,
-            kotoba: Vec::new(),
-            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
-                name: "finalize_inbound".to_owned(),
-                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
-                params: vec![
-                    iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
-                        name: "route".to_owned(),
-                        type_name: "Name".to_owned(),
-                    },
-                    iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
-                        name: "message_id".to_owned(),
-                        type_name: "Name".to_owned(),
-                    },
-                    iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
-                        name: "recipient".to_owned(),
-                        type_name: "AccountId".to_owned(),
-                    },
-                    iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
-                        name: "amount".to_owned(),
-                        type_name: "int".to_owned(),
-                    },
-                ],
-                return_type: None,
-                permission: None,
-                read_keys: Vec::new(),
-                write_keys: Vec::new(),
-                access_hints_complete: Some(true),
-                access_hints_skipped: Vec::new(),
-                triggers: Vec::new(),
-                entry_pc: 0,
-            }],
-            states: Vec::new(),
-        };
-        let mut out = meta.encode();
-        out.extend_from_slice(&interface.encode_section());
-        out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        out
-    }
-
-    fn install_contract_instance_with_code_for_test(
-        app: &mut SharedAppState,
-        authority: &AccountId,
-        authority_keypair: &KeyPair,
-        contract_address: &iroha_data_model::smart_contract::ContractAddress,
-        code: Vec<u8>,
-    ) {
-        let app_mut = Arc::get_mut(app).expect("unique app state");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique core state");
-        let mut block = state.block(BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
-        ));
-        let mut stx = block.transaction();
-
-        let register_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
-                .into();
-        Grant::account_permission(register_permission, authority.clone())
-            .execute(authority, &mut stx)
-            .expect("grant CanRegisterSmartContractCode");
-
-        let enact_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
-        Grant::account_permission(enact_permission, authority.clone())
-            .execute(authority, &mut stx)
-            .expect("grant CanEnactGovernance");
-
-        let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
-        let code_hash =
-            iroha_core::smartcontracts::code::register_code_bytes(authority, code, &mut stx)
-                .expect("register contract bytes");
-        assert_eq!(
-            verified.code_hash, code_hash,
-            "verified code hash must match stored bytes"
-        );
-        let manifest = verified.manifest.signed(authority_keypair);
-        iroha_core::smartcontracts::code::register_manifest(authority, manifest, &mut stx)
-            .expect("register manifest");
-        iroha_core::smartcontracts::code::activate_instance(
-            authority,
-            contract_address.clone(),
-            code_hash,
-            &mut stx,
-        )
-        .expect("activate instance");
-
-        stx.apply();
-        block.commit().expect("commit block");
-    }
-
     #[tokio::test]
     async fn sccp_burn_bundle_endpoint_roundtrips_json_and_norito() {
         routing::clear_sccp_bundles_for_tests();
@@ -47413,8 +47306,8 @@ pub(crate) mod tests_runtime_handlers {
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             asset_id: b"weth#eth".to_vec(),
             amount: 123,
-            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            sender: b"eth:bridge".to_vec(),
+            sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            sender: b"0x1111111111111111111111111111111111111111".to_vec(),
             recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             recipient: b"alice@universal".to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
@@ -47541,28 +47434,10 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn bridge_message_submit_prepares_ephemeral_settlement_contract_call() {
+    async fn bridge_message_submit_rejects_settlement_when_sccp_lane_disabled() {
         routing::clear_sccp_bundles_for_tests();
 
-        let authority_keypair = KeyPair::random();
-        let authority = AccountId::new(authority_keypair.public_key().clone());
-        let mut settlement_app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-        install_evm_da_receipt_signer_for_test(&mut settlement_app);
-        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
-            &authority,
-            1,
-            iroha_data_model::nexus::DataSpaceId::new(0),
-        )
-        .expect("contract address");
-        install_contract_instance_with_code_for_test(
-            &mut settlement_app,
-            &authority,
-            &authority_keypair,
-            &contract_address,
-            bridge_finalize_inbound_ivm_program(1),
-        );
-
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let route_name: Name = "eth:sora:weth".parse().expect("route name");
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -47573,17 +47448,17 @@ pub(crate) mod tests_runtime_handlers {
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             asset_id: b"weth#eth".to_vec(),
             amount: 55,
-            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            sender: b"eth:bridge".to_vec(),
+            sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            sender: b"0x1111111111111111111111111111111111111111".to_vec(),
             recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             recipient: authority.to_string().into_bytes(),
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: b"eth:sora:weth".to_vec(),
         });
-        let (bundle_app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
-        let _proof_override = routing::sccp_message_proof_override_guard_for_tests(message_id);
+        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        install_evm_da_receipt_signer_for_test(&mut app);
         let bundle_response = routing::handle_v1_sccp_message_bundle(
-            bundle_app.state.as_ref(),
+            app.state.as_ref(),
             hex::encode(message_id),
             None,
         )
@@ -47597,12 +47472,12 @@ pub(crate) mod tests_runtime_handlers {
         )
         .expect("bundle value");
 
-        let response = routing::handle_post_bridge_message_submit(
-            settlement_app.chain_id.clone(),
-            settlement_app.queue.clone(),
-            settlement_app.state.clone(),
-            &settlement_app.da_receipt_signer,
-            settlement_app.telemetry.clone(),
+        let err = match routing::handle_post_bridge_message_submit(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            &app.da_receipt_signer,
+            app.telemetry.clone(),
             crate::utils::extractors::JsonOnly(crate::routing::BridgeMessageSubmitDto {
                 authority: authority.clone(),
                 private_key: None,
@@ -47611,7 +47486,7 @@ pub(crate) mod tests_runtime_handlers {
                 message_bundle: bundle_value,
                 receipt_lane: Some(9),
                 settlement: Some(crate::routing::BridgeMessageSettlementDto {
-                    contract_address: Some(contract_address.clone()),
+                    contract_address: None,
                     contract_alias: None,
                     entrypoint: None,
                     payload: None,
@@ -47624,75 +47499,23 @@ pub(crate) mod tests_runtime_handlers {
             }),
         )
         .await
-        .expect("message submit response")
-        .into_response();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body");
-        let decoded = norito::json::from_str::<norito::json::Value>(
-            std::str::from_utf8(&body).expect("response utf8"),
-        )
-        .expect("response json");
-        let object = decoded.as_object().expect("response object");
-
-        assert_eq!(
-            object
-                .get("submitted")
-                .and_then(norito::json::Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            object
-                .get("settlement_contract_address")
-                .and_then(norito::json::Value::as_str),
-            Some(contract_address.as_ref())
-        );
-        assert_eq!(
-            object
-                .get("settlement_entrypoint")
-                .and_then(norito::json::Value::as_str),
-            Some("finalize_inbound")
-        );
-        assert_eq!(
-            object
-                .get("settlement_route")
-                .and_then(norito::json::Value::as_str),
-            Some(route_name.as_ref())
-        );
+        {
+            Err(err) => err,
+            Ok(_) => panic!("disabled SCCP lane must reject settlement submit"),
+        };
         assert!(
-            object
-                .get("transaction_scaffold_b64")
-                .and_then(norito::json::Value::as_str)
-                .is_some(),
-            "expected a transaction scaffold when no signing material is supplied"
+            query_conversion_message(&err)
+                .is_some_and(|message| message.contains("transparent proof consumption"))
         );
 
         routing::clear_sccp_bundles_for_tests();
     }
 
     #[tokio::test]
-    async fn bridge_message_submit_derives_settlement_route_from_transfer_bundle() {
+    async fn bridge_message_submit_rejects_derived_settlement_route_when_sccp_lane_disabled() {
         routing::clear_sccp_bundles_for_tests();
 
-        let authority_keypair = KeyPair::random();
-        let authority = AccountId::new(authority_keypair.public_key().clone());
-        let mut settlement_app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-        install_evm_da_receipt_signer_for_test(&mut settlement_app);
-        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
-            &authority,
-            1,
-            iroha_data_model::nexus::DataSpaceId::new(0),
-        )
-        .expect("contract address");
-        install_contract_instance_with_code_for_test(
-            &mut settlement_app,
-            &authority,
-            &authority_keypair,
-            &contract_address,
-            bridge_finalize_inbound_ivm_program(1),
-        );
-
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let route_name: Name = "eth:sora:weth".parse().expect("route name");
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -47703,17 +47526,17 @@ pub(crate) mod tests_runtime_handlers {
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             asset_id: b"weth#eth".to_vec(),
             amount: 55,
-            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            sender: b"eth:bridge".to_vec(),
+            sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            sender: b"0x1111111111111111111111111111111111111111".to_vec(),
             recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             recipient: authority.to_string().into_bytes(),
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: route_name.as_ref().as_bytes().to_vec(),
         });
-        let (bundle_app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
-        let _proof_override = routing::sccp_message_proof_override_guard_for_tests(message_id);
+        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        install_evm_da_receipt_signer_for_test(&mut app);
         let bundle_response = routing::handle_v1_sccp_message_bundle(
-            bundle_app.state.as_ref(),
+            app.state.as_ref(),
             hex::encode(message_id),
             None,
         )
@@ -47727,12 +47550,12 @@ pub(crate) mod tests_runtime_handlers {
         )
         .expect("bundle value");
 
-        let response = routing::handle_post_bridge_message_submit(
-            settlement_app.chain_id.clone(),
-            settlement_app.queue.clone(),
-            settlement_app.state.clone(),
-            &settlement_app.da_receipt_signer,
-            settlement_app.telemetry.clone(),
+        let err = match routing::handle_post_bridge_message_submit(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            &app.da_receipt_signer,
+            app.telemetry.clone(),
             crate::utils::extractors::JsonOnly(crate::routing::BridgeMessageSubmitDto {
                 authority: authority.clone(),
                 private_key: None,
@@ -47741,7 +47564,7 @@ pub(crate) mod tests_runtime_handlers {
                 message_bundle: bundle_value,
                 receipt_lane: Some(9),
                 settlement: Some(crate::routing::BridgeMessageSettlementDto {
-                    contract_address: Some(contract_address.clone()),
+                    contract_address: None,
                     contract_alias: None,
                     entrypoint: None,
                     payload: None,
@@ -47754,22 +47577,13 @@ pub(crate) mod tests_runtime_handlers {
             }),
         )
         .await
-        .expect("message submit response")
-        .into_response();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body");
-        let decoded = norito::json::from_str::<norito::json::Value>(
-            std::str::from_utf8(&body).expect("response utf8"),
-        )
-        .expect("response json");
-        let object = decoded.as_object().expect("response object");
-
-        assert_eq!(
-            object
-                .get("settlement_route")
-                .and_then(norito::json::Value::as_str),
-            Some(route_name.as_ref())
+        {
+            Err(err) => err,
+            Ok(_) => panic!("disabled SCCP lane must reject derived settlement submit"),
+        };
+        assert!(
+            query_conversion_message(&err)
+                .is_some_and(|message| message.contains("transparent proof consumption"))
         );
 
         routing::clear_sccp_bundles_for_tests();

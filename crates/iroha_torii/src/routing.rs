@@ -109,7 +109,7 @@ use crate::api_version::{self, ApiVersion};
 use core::fmt;
 use std::{
     cmp::{Ordering, Reverse},
-    collections::{BTreeMap, BTreeSet, BinaryHeap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque},
     num::NonZeroUsize,
     panic::AssertUnwindSafe,
     sync::OnceLock,
@@ -6133,111 +6133,6 @@ fn sccp_message_manifest_for_bundle(
     })
 }
 
-#[cfg(test)]
-static SCCP_MESSAGE_PROOF_OVERRIDE_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
-    LazyLock::new(|| std::sync::Mutex::new(()));
-
-#[cfg(test)]
-static SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS: LazyLock<RwLock<HashSet<[u8; 32]>>> =
-    LazyLock::new(|| RwLock::new(HashSet::new()));
-
-#[cfg(test)]
-/// Serialize SCCP message-proof override tests and temporarily allow synthetic
-/// transparent proof generation for the selected message bundle.
-pub(crate) fn sccp_message_proof_override_guard_for_tests(message_id: [u8; 32]) -> impl Drop {
-    struct Guard {
-        _guard: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS
-                .write()
-                .expect("SCCP message proof override registry poisoned")
-                .clear();
-        }
-    }
-
-    let guard = SCCP_MESSAGE_PROOF_OVERRIDE_TEST_LOCK
-        .lock()
-        .expect("SCCP message proof override lock poisoned");
-    SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS
-        .write()
-        .expect("SCCP message proof override registry poisoned")
-        .insert(message_id);
-    Guard { _guard: guard }
-}
-
-#[cfg(test)]
-fn sccp_message_proof_override_enabled_for_tests(message_id: [u8; 32]) -> bool {
-    SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS
-        .read()
-        .expect("SCCP message proof override registry poisoned")
-        .contains(&message_id)
-}
-
-#[cfg(test)]
-#[derive(Encode)]
-struct SyntheticSccpTransparentProofArtifactV1 {
-    version: u8,
-    counterparty_domain: u32,
-    message_id: [u8; 32],
-    payload_hash: [u8; 32],
-}
-
-#[cfg(test)]
-fn synthetic_bridge_proof_from_sccp_message_bundle_for_tests(
-    bundle: &NexusSccpMessageProofV1,
-) -> Option<Result<iroha_data_model::bridge::BridgeProof>> {
-    if !sccp_message_proof_override_enabled_for_tests(bundle.commitment.message_id) {
-        return None;
-    }
-
-    let (backend, manifest_hash, counterparty_domain) =
-        match sccp_message_backend_descriptor(&bundle.payload) {
-            Ok(descriptor) => descriptor,
-            Err(err) => return Some(Err(err)),
-        };
-
-    let finality = match decode_nexus_bridge_finality_proof(&bundle.finality_proof) {
-        Some(finality) => finality,
-        None => {
-            return Some(Err(conversion_error(
-                "SCCP message bundle finality proof could not be decoded".to_owned(),
-            )));
-        }
-    };
-    let artifact = SyntheticSccpTransparentProofArtifactV1 {
-        version: 1,
-        counterparty_domain,
-        message_id: bundle.commitment.message_id,
-        payload_hash: bundle.commitment.payload_hash,
-    };
-    let proof_bytes = match to_bytes(&artifact) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            return Some(Err(conversion_error(format!(
-                "failed to encode synthetic SCCP transparent proof artifact: {err}"
-            ))));
-        }
-    };
-
-    Some(Ok(iroha_data_model::bridge::BridgeProof {
-        range: iroha_data_model::bridge::BridgeProofRange {
-            start_height: finality.height,
-            end_height: finality.height,
-        },
-        manifest_hash,
-        payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
-            iroha_data_model::bridge::BridgeTransparentProof {
-                proof: iroha_data_model::proof::ProofBox::new(backend, proof_bytes),
-                recursion_depth: Some(0),
-            },
-        ),
-        pinned: false,
-    }))
-}
-
 fn sccp_message_lane_disabled_message(
     bundle: &NexusSccpMessageProofV1,
     target: &str,
@@ -6282,10 +6177,6 @@ fn bridge_proof_from_sccp_message_bundle(
         return Err(conversion_error(
             "SCCP message bundle failed structural verification".to_owned(),
         ));
-    }
-    #[cfg(test)]
-    if let Some(result) = synthetic_bridge_proof_from_sccp_message_bundle_for_tests(bundle) {
-        return result;
     }
     if let Some(message) =
         sccp_message_lane_disabled_message(bundle, "transparent proof consumption")
@@ -22671,7 +22562,7 @@ fn metadata_with_default_gas_asset(state: &CoreState) -> Metadata {
 #[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_RECEIPTS_DIR: &str = "contract_deploy_bundles";
 #[cfg(feature = "app_api")]
-const CONTRACT_BUNDLE_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+const CONTRACT_BUNDLE_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -25141,6 +25032,7 @@ async fn submit_contract_deploy_request(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     req: DeployContractDto,
+    deploy_nonce_override: Option<u64>,
     endpoint: &'static str,
 ) -> Result<DeployContractBundleContractReceiptDto> {
     use iroha_data_model::{
@@ -25173,7 +25065,10 @@ async fn submit_contract_deploy_request(
             .is_some_and(|candidate| world.contract_instances().get(candidate).is_some());
         (previous_contract_address, previous_contract_is_active)
     };
-    let deploy_nonce = contract_deploy_nonce_for_authority(&state, &authority)?;
+    let deploy_nonce = match deploy_nonce_override {
+        Some(deploy_nonce) => deploy_nonce,
+        None => contract_deploy_nonce_for_authority(&state, &authority)?,
+    };
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
         iroha_data_model::account::address::chain_discriminant(),
         &authority,
@@ -25407,12 +25302,6 @@ async fn execute_contract_bundle_request(
         return Ok(planned);
     }
 
-    // Init calls and assertions execute against the live chain state, so those
-    // bundle shapes still need to wait for alias activation before proceeding.
-    // Plain deploy receipts should return as soon as the deploy transaction is
-    // accepted into the queue.
-    let require_activation_wait = !req.init_calls.is_empty() || !req.assertions.is_empty();
-
     let mut receipt =
         load_contract_bundle_receipt(&planned.bundle_digest, &planned.chain_fingerprint)?
             .unwrap_or(planned);
@@ -25435,6 +25324,7 @@ async fn execute_contract_bundle_request(
             let contract_name = receipt.contracts[index].name.clone();
             let contract_alias = receipt.contracts[index].contract_alias.clone();
             let contract_address = receipt.contracts[index].contract_address.clone();
+            let deploy_nonce = receipt.contracts[index].deploy_nonce;
 
             let (already_bound, already_active) =
                 contract_alias_activation_state(state.as_ref(), &contract_alias, &contract_address);
@@ -25467,6 +25357,7 @@ async fn execute_contract_bundle_request(
                     contract_alias: contract.contract_alias.clone(),
                     lease_expiry_ms: contract.lease_expiry_ms,
                 },
+                Some(deploy_nonce),
                 "/v1/contracts/deploy-bundle",
             )
             .await
@@ -25483,28 +25374,28 @@ async fn execute_contract_bundle_request(
             };
             let response_contract_alias = response.contract_alias.clone();
             let response_contract_address = response.contract_address.clone();
+            let mut response = response;
+            response.name = contract_name.clone();
             receipt.contracts[index] = response;
             persist_contract_bundle_receipt(&receipt)?;
 
-            if require_activation_wait {
-                if let Err(err) = wait_for_contract_alias_target(
-                    state.clone(),
-                    &response_contract_alias,
-                    &response_contract_address,
-                )
-                .await
-                {
-                    mark_bundle_failure(
-                        &mut receipt,
-                        format!("activate contract `{contract_name}`: {err}"),
-                    );
-                    persist_contract_bundle_receipt(&receipt)?;
-                    return Err(err);
-                }
-
-                receipt.contracts[index].status = "deployed".to_owned();
+            if let Err(err) = wait_for_contract_alias_target(
+                state.clone(),
+                &response_contract_alias,
+                &response_contract_address,
+            )
+            .await
+            {
+                mark_bundle_failure(
+                    &mut receipt,
+                    format!("activate contract `{contract_name}`: {err}"),
+                );
                 persist_contract_bundle_receipt(&receipt)?;
+                return Err(err);
             }
+
+            receipt.contracts[index].status = "deployed".to_owned();
+            persist_contract_bundle_receipt(&receipt)?;
         }
 
         record_bundle_stage(&mut receipt, "deploy");
@@ -57953,7 +57844,9 @@ pub async fn handle_v1_accounts_onboard_multisig(
         auto_renew_instructions = instructions;
     }
 
+    let tx_metadata = metadata_with_default_gas_asset(app.state.as_ref());
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
+        .with_metadata(tx_metadata)
         .with_instructions({
             let mut instructions = vec![
                 InstructionBox::from(
