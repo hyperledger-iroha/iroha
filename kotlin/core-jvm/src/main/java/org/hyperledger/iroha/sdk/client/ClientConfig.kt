@@ -23,6 +23,7 @@ class ClientConfig private constructor(builder: Builder) {
     private val sorafsGatewayUri: URI = builder.sorafsGatewayUri ?: builder.baseUri
     private val requestTimeout: Duration = builder.requestTimeout
     private val defaultHeaders: Map<String, String> = Collections.unmodifiableMap(LinkedHashMap(builder.defaultHeaders))
+    private val wireFormatPreference: WireFormatPreference = builder.wireFormatPreference
     private val observers: List<ClientObserver>
     private val retryPolicy: RetryPolicy = builder.retryPolicy
     private val pendingQueue: PendingTransactionQueue? = builder.pendingQueue
@@ -56,6 +57,8 @@ class ClientConfig private constructor(builder: Builder) {
     fun requestTimeout(): Duration = requestTimeout
     /** Headers that will be applied to every Torii request. */
     fun defaultHeaders(): Map<String, String> = defaultHeaders
+    /** Wire-format preference used for dual-format Torii routes. */
+    fun wireFormatPreference(): WireFormatPreference = wireFormatPreference
     /** Registered observers that receive request lifecycle callbacks. */
     fun observers(): List<ClientObserver> = observers
     fun retryPolicy(): RetryPolicy = retryPolicy
@@ -78,7 +81,8 @@ class ClientConfig private constructor(builder: Builder) {
         val nonTelemetryObservers = observers.filter { it !is TelemetryObserver }
         return Builder()
             .setBaseUri(baseUri).setSorafsGatewayUri(sorafsGatewayUri).setRequestTimeout(requestTimeout)
-            .setDefaultHeaders(defaultHeaders).setObservers(nonTelemetryObservers).setRetryPolicy(retryPolicy)
+            .setDefaultHeaders(defaultHeaders).setWireFormatPreference(wireFormatPreference)
+            .setObservers(nonTelemetryObservers).setRetryPolicy(retryPolicy)
             .setPendingQueue(pendingQueue).setExportOptions(exportOptions).setNoritoRpcFlowController(noritoRpcFlowController)
             .setTelemetryOptions(telemetryOptions).setTelemetrySink(TelemetryExportStatusSink.unwrap(telemetrySink))
             .setTelemetryExporterName(telemetryExporterName).setNetworkContextProvider(networkContextProvider)
@@ -98,7 +102,7 @@ class ClientConfig private constructor(builder: Builder) {
         NoritoRpcClient.builder().setBaseUri(baseUri).setTimeout(requestTimeout).defaultHeaders(defaultHeaders)
             .observers(observers).setTelemetryOptions(telemetryOptions).setTelemetrySink(telemetrySink)
             .setNetworkContextProvider(networkContextProvider).setDeviceProfileProvider(deviceProfileProvider)
-            .setFlowController(noritoRpcFlowController)
+            .setFlowController(noritoRpcFlowController).setWireFormatPreference(wireFormatPreference)
 
     fun toOfflineToriiClient(executor: HttpTransportExecutor): OfflineToriiClient =
         OfflineToriiClient.builder().executor(executor).baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers).build()
@@ -119,6 +123,7 @@ class ClientConfig private constructor(builder: Builder) {
         internal var sorafsGatewayUri: URI? = null
         internal var requestTimeout: Duration = Duration.ofSeconds(10)
         internal val defaultHeaders = LinkedHashMap<String, String>()
+        internal var wireFormatPreference: WireFormatPreference = WireFormatPreference.NORITO_PREFERRED
         internal val observers = ArrayList<ClientObserver>()
         internal var retryPolicy: RetryPolicy = RetryPolicy.none()
         internal var pendingQueue: PendingTransactionQueue? = null
@@ -138,6 +143,7 @@ class ClientConfig private constructor(builder: Builder) {
         fun putDefaultHeader(name: String, value: String): Builder { defaultHeaders[name] = value; return this }
         fun clearDefaultHeaders(): Builder { defaultHeaders.clear(); return this }
         fun setDefaultHeaders(headers: Map<String, String>?): Builder { clearDefaultHeaders(); headers?.forEach { (k, v) -> putDefaultHeader(k, v) }; return this }
+        fun setWireFormatPreference(preference: WireFormatPreference): Builder { this.wireFormatPreference = preference; return this }
         fun addObserver(observer: ClientObserver): Builder { observers.add(observer); return this }
         fun clearObservers(): Builder { observers.clear(); return this }
         fun setObservers(observers: List<ClientObserver>?): Builder { clearObservers(); observers?.forEach { addObserver(it) }; return this }

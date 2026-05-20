@@ -37,6 +37,7 @@ public final class ClientConfig {
   private final URI sorafsGatewayUri;
   private final Duration requestTimeout;
   private final Map<String, String> defaultHeaders;
+  private final WireFormatPreference wireFormatPreference;
   private final List<ClientObserver> observers;
   private final RetryPolicy retryPolicy;
   private final PendingTransactionQueue pendingQueue;
@@ -57,6 +58,7 @@ public final class ClientConfig {
         builder.sorafsGatewayUri != null ? builder.sorafsGatewayUri : builder.baseUri;
     this.requestTimeout = builder.requestTimeout;
     this.defaultHeaders = Collections.unmodifiableMap(new LinkedHashMap<>(builder.defaultHeaders));
+    this.wireFormatPreference = builder.wireFormatPreference;
     final List<ClientObserver> observerList = new ArrayList<>(builder.observers);
     final String resolvedExporterName = builder.resolveTelemetryExporterName();
     final TelemetrySink instrumentedSink =
@@ -115,6 +117,7 @@ public final class ClientConfig {
         .setSorafsGatewayUri(sorafsGatewayUri)
         .setRequestTimeout(requestTimeout)
         .setDefaultHeaders(defaultHeaders)
+        .setWireFormatPreference(wireFormatPreference)
         .setObservers(nonTelemetryObservers)
         .setRetryPolicy(retryPolicy)
         .setPendingQueue(pendingQueue)
@@ -136,6 +139,11 @@ public final class ClientConfig {
   /** Headers that will be applied to every Torii request. */
   public Map<String, String> defaultHeaders() {
     return defaultHeaders;
+  }
+
+  /** Wire-format preference used for dual-format Torii routes. */
+  public WireFormatPreference wireFormatPreference() {
+    return wireFormatPreference;
   }
 
   /** Registered observers that receive request lifecycle callbacks. */
@@ -182,6 +190,7 @@ public final class ClientConfig {
             .setBaseUri(baseUri)
             .setTimeout(requestTimeout)
             .defaultHeaders(defaultHeaders)
+            .setWireFormatPreference(wireFormatPreference)
             .observers(observers)
             .setTelemetryOptions(telemetryOptions)
             .setTelemetrySink(telemetrySink)
@@ -284,6 +293,7 @@ public final class ClientConfig {
     private URI sorafsGatewayUri;
     private Duration requestTimeout = Duration.ofSeconds(10);
     private final Map<String, String> defaultHeaders = new LinkedHashMap<>();
+    private WireFormatPreference wireFormatPreference = WireFormatPreference.NORITO_PREFERRED;
     private final List<ClientObserver> observers = new ArrayList<>();
     private RetryPolicy retryPolicy = RetryPolicy.none();
     private PendingTransactionQueue pendingQueue;
@@ -333,6 +343,11 @@ public final class ClientConfig {
       if (headers != null) {
         headers.forEach(this::putDefaultHeader);
       }
+      return this;
+    }
+
+    public Builder setWireFormatPreference(final WireFormatPreference preference) {
+      this.wireFormatPreference = Objects.requireNonNull(preference, "preference");
       return this;
     }
 

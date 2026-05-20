@@ -18,7 +18,8 @@ internal object ToriiRequestBuilder {
         baseUri: URI,
         transaction: SignedTransaction,
         timeout: Duration?,
-        extraHeaders: Map<String, String>?
+        extraHeaders: Map<String, String>?,
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
     ): TransportRequest {
         val target = resolve(baseUri, SUBMIT_PATH)
         val norito: ByteArray
@@ -38,7 +39,7 @@ internal object ToriiRequestBuilder {
             .setUri(target)
             .setMethod("POST")
             .addHeader("Content-Type", "application/x-norito")
-            .addHeader("Accept", "application/x-norito, application/json")
+            .addHeader("Accept", acceptHeader)
             .setBody(norito)
         applyHeaders(builder, extraHeaders)
         applyTimeout(builder, timeout)
@@ -46,11 +47,30 @@ internal object ToriiRequestBuilder {
     }
 
     @JvmStatic
+    fun buildSubmitJsonRequest(
+        baseUri: URI,
+        encodedVersionedTransactionJson: ByteArray,
+        timeout: Duration?,
+        extraHeaders: Map<String, String>?,
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
+    ): TransportRequest =
+        buildJsonIngressRequest(
+            baseUri,
+            SUBMIT_PATH,
+            encodedVersionedTransactionJson,
+            timeout,
+            extraHeaders,
+            acceptHeader,
+            "encodedVersionedTransactionJson",
+        )
+
+    @JvmStatic
     fun buildSubmitEntrypointRequest(
         baseUri: URI,
         encodedVersionedEntrypoint: ByteArray,
         timeout: Duration?,
-        extraHeaders: Map<String, String>?
+        extraHeaders: Map<String, String>?,
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
     ): TransportRequest {
         require(encodedVersionedEntrypoint.isNotEmpty()) {
             "encodedVersionedEntrypoint must not be empty"
@@ -68,12 +88,30 @@ internal object ToriiRequestBuilder {
             .setUri(target)
             .setMethod("POST")
             .addHeader("Content-Type", "application/x-norito")
-            .addHeader("Accept", "application/x-norito, application/json")
+            .addHeader("Accept", acceptHeader)
             .setBody(body)
         applyHeaders(builder, extraHeaders)
         applyTimeout(builder, timeout)
         return builder.build()
     }
+
+    @JvmStatic
+    fun buildSubmitEntrypointJsonRequest(
+        baseUri: URI,
+        encodedVersionedEntrypointJson: ByteArray,
+        timeout: Duration?,
+        extraHeaders: Map<String, String>?,
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
+    ): TransportRequest =
+        buildJsonIngressRequest(
+            baseUri,
+            SUBMIT_ENTRYPOINT_PATH,
+            encodedVersionedEntrypointJson,
+            timeout,
+            extraHeaders,
+            acceptHeader,
+            "encodedVersionedEntrypointJson",
+        )
 
     @JvmStatic
     fun buildStatusRequest(
@@ -96,6 +134,36 @@ internal object ToriiRequestBuilder {
             .setUri(target)
             .setMethod("GET")
             .addHeader("Accept", "application/json")
+        applyHeaders(builder, extraHeaders)
+        applyTimeout(builder, timeout)
+        return builder.build()
+    }
+
+    private fun buildJsonIngressRequest(
+        baseUri: URI,
+        path: String,
+        bodyBytes: ByteArray,
+        timeout: Duration?,
+        extraHeaders: Map<String, String>?,
+        acceptHeader: String,
+        bodyName: String,
+    ): TransportRequest {
+        require(bodyBytes.isNotEmpty()) { "$bodyName must not be empty" }
+        val target = resolve(baseUri, path)
+        val body = bodyBytes.copyOf()
+        TransportSecurity.requireHttpRequestAllowed(
+            "HttpClientTransport",
+            baseUri,
+            target,
+            extraHeaders,
+            body,
+        )
+        val builder = TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Accept", acceptHeader)
+            .setBody(body)
         applyHeaders(builder, extraHeaders)
         applyTimeout(builder, timeout)
         return builder.build()

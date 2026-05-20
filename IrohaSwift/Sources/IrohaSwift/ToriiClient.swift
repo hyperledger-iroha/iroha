@@ -9440,6 +9440,13 @@ public struct ToriiMultisigContractCallResponse: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         ok = try container.decode(Bool.self, forKey: .ok)
+        guard ok else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .ok,
+                in: container,
+                debugDescription: "ok must be true"
+            )
+        }
         let resolved = try container.decode(String.self, forKey: .resolvedMultisigAccountId)
         resolvedMultisigAccountId = try normalizeToriiAccountIdQueryValue(
             resolved,
@@ -11337,6 +11344,26 @@ extension ToriiClientError: LocalizedError {
     }
 }
 
+public enum ToriiWireFormatPreference: Sendable, Equatable {
+    case noritoPreferred
+    case jsonPreferred
+    case noritoOnly
+    case jsonOnly
+
+    public var acceptHeader: String {
+        switch self {
+        case .noritoPreferred:
+            return "application/x-norito, application/json;q=0.8"
+        case .jsonPreferred:
+            return "application/json, application/x-norito;q=0.8"
+        case .noritoOnly:
+            return "application/x-norito"
+        case .jsonOnly:
+            return "application/json"
+        }
+    }
+}
+
 public protocol ToriiTransactionSubmitting: AnyObject {
     func submitTransaction(data: Data,
                            mode: PipelineEndpointMode,
@@ -11419,6 +11446,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public let baseURL: URL
     /// Default HTTP headers applied to every Torii request.
     public let defaultHeaders: [String: String]
+    /// Wire-format preference used for dual-format Torii routes.
+    public let wireFormatPreference: ToriiWireFormatPreference
     private let session: URLSession
     private let serverClockCacheKey: String
     private var statusState = ToriiStatusState()
@@ -11428,7 +11457,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private var observedServerClock: ObservedServerClock?
     private static let defaultListPageSize = 100
 
-    public init(baseURL: URL, session: URLSession = .shared, defaultHeaders: [String: String] = [:]) {
+    public init(baseURL: URL,
+                session: URLSession = .shared,
+                defaultHeaders: [String: String] = [:],
+                wireFormatPreference: ToriiWireFormatPreference = .noritoPreferred) {
         // Normalize to directory URL for correct relative URL resolution.
         // Without trailing slash, URL(string:relativeTo:) replaces the last path component
         // instead of appending (per RFC 3986).
@@ -11436,14 +11468,19 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         self.serverClockCacheKey = Self.serverClockCacheKey(for: self.baseURL)
         self.session = session
         self.defaultHeaders = ToriiClientAuthentication.normalizedHeaders(defaultHeaders)
+        self.wireFormatPreference = wireFormatPreference
     }
 
     public convenience init(
         baseURL: URL,
         session: URLSession = .shared,
-        authentication: ToriiClientAuthentication
+        authentication: ToriiClientAuthentication,
+        wireFormatPreference: ToriiWireFormatPreference = .noritoPreferred
     ) {
-        self.init(baseURL: baseURL, session: session, defaultHeaders: authentication.headers)
+        self.init(baseURL: baseURL,
+                  session: session,
+                  defaultHeaders: authentication.headers,
+                  wireFormatPreference: wireFormatPreference)
     }
 
     /// Invalidates the underlying URLSession and cancels all outstanding tasks.
@@ -14895,6 +14932,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                                  idempotencyKey: idempotencyKey)
     }
 
+    public func submitTransaction(jsonData: Data,
+                                  mode: PipelineEndpointMode = .pipeline,
+                                  idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
+        try await submitTransactionPayload(path: pipelineEndpoints(for: mode).submit,
+                                           data: jsonData,
+                                           contentType: "application/json",
+                                           idempotencyKey: idempotencyKey)
+    }
+
     public func submitTransactionEntrypoint(data: Data,
                                             idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
         try await submitNoritoTransactionPayload(path: "/v1/pipeline/transaction-entrypoints",
@@ -14902,13 +14948,31 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                                  idempotencyKey: idempotencyKey)
     }
 
+    public func submitTransactionEntrypoint(jsonData: Data,
+                                            idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
+        try await submitTransactionPayload(path: "/v1/pipeline/transaction-entrypoints",
+                                           data: jsonData,
+                                           contentType: "application/json",
+                                           idempotencyKey: idempotencyKey)
+    }
+
     private func submitNoritoTransactionPayload(path: String,
                                                 data: Data,
                                                 idempotencyKey: String?) async throws -> ToriiSubmitTransactionResponse? {
+        try await submitTransactionPayload(path: path,
+                                           data: data,
+                                           contentType: "application/x-norito",
+                                           idempotencyKey: idempotencyKey)
+    }
+
+    private func submitTransactionPayload(path: String,
+                                          data: Data,
+                                          contentType: String,
+                                          idempotencyKey: String?) async throws -> ToriiSubmitTransactionResponse? {
         try await ensureDataModelValidation()
         var headers: [String: String] = [
-            "Content-Type": "application/x-norito",
-            "Accept": "application/x-norito, application/json"
+            "Content-Type": contentType,
+            "Accept": wireFormatPreference.acceptHeader
         ]
         if let key = idempotencyKey, !key.isEmpty {
             headers["Idempotency-Key"] = key

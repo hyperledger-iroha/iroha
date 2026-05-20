@@ -8705,7 +8705,7 @@ async fn handler_peers(
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/peers").await?;
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -22557,8 +22557,8 @@ async fn handler_soracloud_status(
     }
 
     let format =
-        match crate::utils::negotiate_response_format(accept.as_ref().map(|value| &value.0)) {
-            Ok(format) => format,
+        match crate::utils::negotiate_json_only_response(accept.as_ref().map(|value| &value.0)) {
+            Ok(()) => ResponseFormat::Json,
             Err(response) => return Ok(response),
         };
 
@@ -30611,10 +30611,12 @@ async fn handler_pipeline_transaction_status(
     AxQuery(query): AxQuery<PipelineStatusQuery>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(format) => format,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(format) => format,
+            Err(resp) => return Ok(resp),
+        };
     let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
     let hash_raw = query
         .hash
@@ -40639,10 +40641,20 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
-    fn versioned_signed_transaction_for_test(
+    fn versioned_signed_for_test(
         tx: &SignedTransaction,
     ) -> JsonOrNoritoVersioned<SignedTransaction> {
         JsonOrNoritoVersioned(tx.clone())
+    }
+
+    fn versioned_entrypoint_for_test(
+        entrypoint: TransactionEntrypoint,
+    ) -> JsonOrNoritoVersioned<TransactionEntrypoint> {
+        JsonOrNoritoVersioned(entrypoint)
+    }
+
+    fn versioned_query_for_test(query: SignedQuery) -> JsonOrNoritoVersioned<SignedQuery> {
+        JsonOrNoritoVersioned(query)
     }
 
     struct CountingRouteRouter {
@@ -40724,7 +40736,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             headers.clone(),
             None,
-            versioned_signed_transaction_for_test(&tx1),
+            versioned_signed_for_test(&tx1),
         )
         .await
         .expect("accepted");
@@ -40759,7 +40771,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app),
             headers,
             None,
-            versioned_signed_transaction_for_test(&tx2),
+            versioned_signed_for_test(&tx2),
         )
         .await
         {
@@ -40799,7 +40811,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             headers.clone(),
             None,
-            versioned_signed_transaction_for_test(&tx1),
+            versioned_signed_for_test(&tx1),
         )
         .await
         .expect("first token-keyed transaction accepted")
@@ -40810,7 +40822,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app),
             headers,
             None,
-            versioned_signed_transaction_for_test(&tx2),
+            versioned_signed_for_test(&tx2),
         )
         .await
         {
@@ -40835,7 +40847,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            versioned_signed_transaction_for_test(&transaction),
+            versioned_signed_for_test(&transaction),
         )
         .await
         .expect("accepted")
@@ -40868,7 +40880,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            JsonOrNoritoVersioned(entrypoint),
+            versioned_entrypoint_for_test(entrypoint),
         )
         .await
         .expect("accepted")
@@ -40908,7 +40920,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            JsonOrNoritoVersioned(entrypoint),
+            versioned_entrypoint_for_test(entrypoint),
         )
         .await
         .expect("accepted")
@@ -40959,7 +40971,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             headers.clone(),
             None,
-            JsonOrNoritoVersioned(TransactionEntrypoint::External(tx1)),
+            versioned_entrypoint_for_test(TransactionEntrypoint::External(tx1)),
         )
         .await
         .expect("first token-keyed entrypoint accepted")
@@ -40970,7 +40982,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app),
             headers,
             None,
-            JsonOrNoritoVersioned(TransactionEntrypoint::External(tx2)),
+            versioned_entrypoint_for_test(TransactionEntrypoint::External(tx2)),
         )
         .await
         {
@@ -41003,7 +41015,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app),
             headers,
             None,
-            versioned_signed_transaction_for_test(&transaction),
+            versioned_signed_for_test(&transaction),
         )
         .await
         .expect("accepted")
@@ -41251,7 +41263,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            versioned_signed_transaction_for_test(&tx),
+            versioned_signed_for_test(&tx),
         )
         .await
         {
@@ -41331,7 +41343,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            versioned_signed_transaction_for_test(&tx1),
+            versioned_signed_for_test(&tx1),
         )
         .await
         .expect("first transaction should be accepted")
@@ -41343,7 +41355,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            versioned_signed_transaction_for_test(&tx2),
+            versioned_signed_for_test(&tx2),
         )
         .await
         .expect("second transaction should not be rejected")
@@ -41373,7 +41385,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            versioned_signed_transaction_for_test(&tx1),
+            versioned_signed_for_test(&tx1),
         )
         .await
         .expect("first transaction should be accepted")
@@ -41398,7 +41410,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            versioned_signed_transaction_for_test(&tx2),
+            versioned_signed_for_test(&tx2),
         )
         .await
         .expect("second transaction should not be age-shed")
@@ -41432,7 +41444,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            versioned_signed_transaction_for_test(&tx1),
+            versioned_signed_for_test(&tx1),
         )
         .await
         .expect("first transaction should be accepted")
@@ -41443,7 +41455,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            versioned_signed_transaction_for_test(&tx2),
+            versioned_signed_for_test(&tx2),
         )
         .await
         {
@@ -41486,7 +41498,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            versioned_signed_transaction_for_test(&tx1),
+            versioned_signed_for_test(&tx1),
         )
         .await
         .expect("first transaction should be accepted")
@@ -41508,7 +41520,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             HeaderMap::new(),
             None,
-            versioned_signed_transaction_for_test(&tx2),
+            versioned_signed_for_test(&tx2),
         )
         .await
         .expect("second transaction should not be age-shed")
@@ -42437,7 +42449,7 @@ pub(crate) mod tests_runtime_handlers {
             crate::loopback_connect_info(),
             None,
             crate::NoritoQuery(QueryOptions::default()),
-            JsonOrNoritoVersioned(signed_find_triggers_query_for_test(authority, &key_pair)),
+            versioned_query_for_test(signed_find_triggers_query_for_test(authority, &key_pair)),
         )
         .await
         .expect("find triggers query should execute")
@@ -42472,7 +42484,7 @@ pub(crate) mod tests_runtime_handlers {
             crate::loopback_connect_info(),
             None,
             crate::NoritoQuery(QueryOptions::default()),
-            JsonOrNoritoVersioned(signed_find_active_trigger_ids_query_for_test(
+            versioned_query_for_test(signed_find_active_trigger_ids_query_for_test(
                 authority, &key_pair,
             )),
         )
@@ -44659,6 +44671,17 @@ pub(crate) mod tests_runtime_handlers {
         .expect("ok")
         .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let peer_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("peers body");
+        let peers: HashSet<Peer> = norito::json::from_slice(&peer_bytes).expect("peers JSON");
+        assert!(peers.is_empty());
 
         // health
         // For ConnectInfo we can pass a dummy loopback address by constructing the extractor arg manually is not possible here.

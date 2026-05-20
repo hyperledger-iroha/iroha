@@ -344,6 +344,8 @@ Completed history lives in `status.md`. This file should only track unfinished w
     Also cover the new multisig propose helper work on Windows: the focused
     tests should include
     `ToriiClientTests.ProposeMultisigAsyncPostsNativeNoritoInstructionFrames`
+    plus malformed-response cases for invalid or empty `signing_message_b64`,
+    false `ok`, negative `creation_time_ms`, and malformed hash metadata,
     and `NoritoCodecTests.EncodeWithSchemaHashUsesProvidedSchemaHash`, and the
     review should confirm `TransactionInstruction.EncodeInstructionBoxBase64`
     emits `InstructionBox` frames suitable for `/v1/multisig/propose`.

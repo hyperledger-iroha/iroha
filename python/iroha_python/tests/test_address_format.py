@@ -193,6 +193,43 @@ def test_propose_multisig_inherited_helper_rejects_malformed_response() -> None:
         )
 
 
+def test_propose_multisig_inherited_helper_rejects_false_ok_response() -> None:
+    session = RecordingSession()
+    session._response = StubResponse(
+        payload={
+            "ok": False,
+            "resolved_multisig_account_id": "ops@universal",
+        }
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="ok"):
+        client.propose_multisig(
+            multisig_account_alias="ops@universal",
+            signer_account_id="signer@universal",
+            instructions=[b"\x01"],
+        )
+
+
+def test_propose_multisig_inherited_helper_rejects_empty_signing_message() -> None:
+    session = RecordingSession()
+    session._response = StubResponse(
+        payload={
+            "ok": True,
+            "resolved_multisig_account_id": "ops@universal",
+            "signing_message_b64": "",
+        }
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="empty bytes"):
+        client.propose_multisig(
+            multisig_account_alias="ops@universal",
+            signer_account_id="signer@universal",
+            instructions=[b"\x01"],
+        )
+
+
 def test_propose_multisig_inherited_helper_rejects_negative_response_time() -> None:
     session = RecordingSession()
     session._response = StubResponse(

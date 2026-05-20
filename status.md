@@ -277,13 +277,54 @@ Last updated: 2026-05-19
 - A public-testnet-shaped strict localnet variant now starts from three base
   lanes, expands to elastic lane `3`, waits for expansion status quorum before
   contraction, and verifies scale-in quorum without retiring base lanes `0..2`.
+- Client transaction submission now requests JSON for the compatibility
+  `/v1/node/capabilities` probe, so Torii deployments that default negotiated
+  endpoints to Norito no longer fail the submit path with JSON decode errors.
+- Additional negative/adversarial coverage now rejects scale-in with a
+  public-profile window shortfall or zero direct-call window even when metrics
+  are ideal, verifies exact threshold inclusivity, sanitizes malformed
+  autoscale ratios, covers p95 and zero-cooldown boundaries, rejects spoofed
+  autoscale-managed lane metadata, requires a valid autoscale-created-height
+  marker before a managed lane can be retired, rejects
+  alias-spoofed managed lanes, refuses managed-lane retirement below the
+  configured `min_lanes` floor, prevents autoscale scale-out from filling
+  missing base-lane IDs, rejects counter rollback/truncated transition
+  snapshots, rejects transition-only strict status gates, rejects stale
+  baseline expansion signals without lane progress, rejects wrong-lane,
+  wrong-storage-lane, prefix-spoofed storage-lane, or partial-quorum
+  public-profile expansion signals, and rejects contraction if any base lane
+  lacks active capacity or elastic lane `3` still has governance, commitment,
+  relay, or validator residue.
 - Focused validation is green with
-  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_core --lib autoscale -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_core --lib autoscale -- --nocapture`
+  (`23 passed`),
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha --lib get_node_capabilities_json_requests_json_accept -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha --lib submit_transaction_uses_norito_content_type_header_and_signed_transaction_payload -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::tests:: -- --nocapture`
+  (`46 passed`),
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_core --lib lane_lifecycle -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-autoscale-params/iroha-test-network cargo build -p irohad --bin iroha3d`,
   and the single-cycle, repeated-cycle, strict, and public-profile strict
   localnet autoscale tests in `integration_tests --test nexus_and_streaming`
-  using the freshly built `iroha3d` binary.
+  using the freshly built `iroha3d` binary. The single-cycle localnet path was
+  rerun after the client compatibility fix and passed in 244.50s.
+- Torii response negotiation/OpenAPI follow-up validation is green with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_torii --lib response_format_tests -- --nocapture`
+  (`3 passed`),
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_torii --lib openapi::tests:: -- --nocapture`
+  (`25 passed`),
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_torii --lib da_ingest_error_response_negotiates_error_envelopes -- --nocapture`,
+  and
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_torii --lib negotiate_json_only -- --nocapture`
+  (`2 passed`).
+- Hygiene is green with
+  `rustfmt --edition 2024 --check crates/iroha/src/client.rs crates/iroha_core/src/state.rs integration_tests/tests/nexus/autoscale_localnet.rs`,
+  `cargo fmt --all -- --check`, and `git diff --check`. The Rust workspace
+  builds with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo build --workspace`
+  (43m44s; optional CUDA kernels were skipped because `nvcc` is not installed).
+- Kotlin/Java SDK Gradle validation was attempted, but this host has no Java
+  runtime visible to `/usr/libexec/java_home` or `./gradlew`.
 
 ## 2026-05-19 Torii queue default headroom
 
@@ -11962,7 +12003,23 @@ Last updated: 2026-05-19
   the Torii handler boundary (`public_key_hex` and `signature_b64`) and rejects
   empty-but-valid base64 `signing_message_b64` values in the Rust client
   response validator.
+- A fifth adversarial pass now rejects unknown JSON instruction object shapes,
+  valid-but-mismatched detached public keys, and present-but-empty
+  `signing_message_b64` values across Swift, Kotlin/JVM, Java Android, Python,
+  and JavaScript tests. Kotlin/JVM and Java Android response parsing now treats
+  an empty optional base64 field as malformed instead of silently collapsing it
+  to an absent field. The Torii focused compile corridor also now matches the
+  current `JsonOrNoritoVersioned` handler signature, and
+  `TransactionEntrypoint` relies on its manual Norito JSON implementation
+  instead of a stale derive.
+- A sixth adversarial pass now rejects `ok: false` multisig success envelopes
+  across Rust, Swift, Kotlin/JVM, Java Android, Python, JavaScript, and C#
+  client/parser tests. Torii handler coverage now also rejects blank detached
+  signature credentials, valid-base64 but forged detached signatures, negative
+  JSON scalar fields, and `null` instruction entries before proposal material
+  is accepted.
 - Focused validation passed:
+  - `cargo fmt --all`
   - `cargo test -p iroha_torii --lib multisig_propose_documents_native_norito_request_body -- --nocapture`
   - `cargo test -p iroha_torii --lib multisig_generic_propose --features app_api -- --nocapture`
   - `cargo test -p iroha --lib post_multisig_propose -- --nocapture`
@@ -11974,6 +12031,7 @@ Last updated: 2026-05-19
   - `node --test --test-name-pattern "proposeMultisig" test/toriiClient.test.js`
   - `python3 -m compileall python/iroha_torii_client`
   - `python3 -m compileall python/iroha_python/src/iroha_python python/iroha_python/tests/test_address_format.py`
+  - `git diff --check`
 - Python focused validation could not run because the local Python 3.14
   environment does not have `pytest` installed (`No module named pytest`).
 - C# focused validation is now green with the local .NET 8.0.419 SDK at

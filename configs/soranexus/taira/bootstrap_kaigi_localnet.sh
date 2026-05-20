@@ -36,6 +36,21 @@ need_cmd() {
   fi
 }
 
+torii_json_get() {
+  local url="$1"
+  curl -sf -H 'Accept: application/json' "$url" | python3 -c '
+import sys
+
+payload = sys.stdin.buffer.read()
+for marker in (b"{\"", b"["):
+    index = payload.find(marker)
+    if index >= 0:
+        sys.stdout.buffer.write(payload[index:])
+        raise SystemExit(0)
+sys.stdout.buffer.write(payload)
+'
+}
+
 discover_peer_configs() {
   PEER_CONFIGS=()
   local path
@@ -734,7 +749,7 @@ done
 
 echo "waiting for Kaigi relay metadata"
 for _ in {1..60}; do
-  relay_json="$(curl -sf 'http://127.0.0.1:29080/v1/kaigi/relays' || true)"
+  relay_json="$(torii_json_get 'http://127.0.0.1:29080/v1/kaigi/relays' || true)"
   if [[ -n "$relay_json" ]] && [[ "$(jq -r '.total // 0' <<<"$relay_json")" -ge "${#PEER_PUBLIC_KEYS[@]}" ]]; then
     break
   fi
@@ -742,7 +757,7 @@ for _ in {1..60}; do
 done
 
 echo "kaigi relays:"
-curl -sf "http://127.0.0.1:29080/v1/kaigi/relays" | jq .
+torii_json_get "http://127.0.0.1:29080/v1/kaigi/relays" | jq .
 
 echo "kaigi health snapshot:"
-curl -sf "http://127.0.0.1:29080/v1/kaigi/relays/health" | jq .
+torii_json_get "http://127.0.0.1:29080/v1/kaigi/relays/health" | jq .

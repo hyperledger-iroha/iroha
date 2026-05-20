@@ -17,6 +17,19 @@ public interface IrohaClient {
   CompletableFuture<ClientResponse> submitTransaction(SignedTransaction transaction);
 
   /**
+   * Submits a version-tagged SignedTransaction encoded as canonical Norito JSON.
+   *
+   * <p>This helper is for callers that already have the direct Torii JSON ingress envelope.
+   */
+  default CompletableFuture<ClientResponse> submitTransactionJson(
+      final byte[] encodedVersionedTransactionJson) {
+    final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new UnsupportedOperationException("submitTransactionJson not supported"));
+    return future;
+  }
+
+  /**
    * Submits an already versioned Norito transaction entrypoint to the node.
    *
    * <p>This is intended for sealed commitment/reveal entrypoints and other non-legacy transaction
@@ -27,6 +40,15 @@ public interface IrohaClient {
     final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
     future.completeExceptionally(
         new UnsupportedOperationException("submitTransactionEntrypoint not supported"));
+    return future;
+  }
+
+  /** Submits a version-tagged TransactionEntrypoint encoded as canonical Norito JSON. */
+  default CompletableFuture<ClientResponse> submitTransactionEntrypointJson(
+      final byte[] encodedVersionedEntrypointJson) {
+    final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new UnsupportedOperationException("submitTransactionEntrypointJson not supported"));
     return future;
   }
 

@@ -17470,6 +17470,14 @@ test("proposeMultisig rejects malformed success responses", async () => {
   await assert.rejects(
     () =>
       clientWithResponse({
+        ok: false,
+        resolved_multisig_account_id: FIXTURE_ALICE_ID,
+      }).proposeMultisig(request),
+    /ok/,
+  );
+  await assert.rejects(
+    () =>
+      clientWithResponse({
         ok: true,
         resolved_multisig_account_id: FIXTURE_ALICE_ID,
         instructions_hash: "aa",
@@ -17482,6 +17490,15 @@ test("proposeMultisig rejects malformed success responses", async () => {
         ok: true,
         resolved_multisig_account_id: FIXTURE_ALICE_ID,
         signing_message_b64: "not base64",
+      }).proposeMultisig(request),
+    /signing_message_b64/,
+  );
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        ok: true,
+        resolved_multisig_account_id: FIXTURE_ALICE_ID,
+        signing_message_b64: "",
       }).proposeMultisig(request),
     /signing_message_b64/,
   );

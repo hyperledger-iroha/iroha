@@ -42,6 +42,7 @@ class NoritoRpcClient private constructor(builder: Builder) {
     private val transportExecutor: HttpTransportExecutor = builder.transportExecutor ?: PlatformHttpTransportExecutor.createDefault()
     private val observers: List<ClientObserver>
     private val flowController: NoritoRpcFlowController = builder.flowController ?: NoritoRpcFlowController.unlimited()
+    private val wireFormatPreference: WireFormatPreference = builder.wireFormatPreference
     private val deviceProfileEmitted = AtomicBoolean(false)
 
     init {
@@ -53,6 +54,8 @@ class NoritoRpcClient private constructor(builder: Builder) {
     }
 
     fun baseUri(): URI = baseUri
+
+    fun wireFormatPreference(): WireFormatPreference = wireFormatPreference
 
     fun call(path: String, payload: ByteArray?): ByteArray = call(path, payload, null)
 
@@ -85,7 +88,7 @@ class NoritoRpcClient private constructor(builder: Builder) {
                 val elapsedMillis = elapsedMillis(startNano)
                 if (response.statusCode < 200 || response.statusCode >= 300) {
                     val message = "Norito RPC request failed with status ${response.statusCode}" +
-                        if (response.body.isEmpty()) "" else ": ${String(response.body, StandardCharsets.UTF_8)}"
+                        responseBodyDetail(response.body)
                     val error = NoritoRpcException(message)
                     notifyFailure(request, error)
                     emitRpcCallTelemetry(request, response.statusCode, "failure", error.javaClass.simpleName, elapsedMillis)
@@ -185,7 +188,7 @@ class NoritoRpcClient private constructor(builder: Builder) {
         val merged = LinkedHashMap(defaultHeaders)
         options.headers.forEach { (k, v) -> merged[k] = v }
         if (findHeader(merged, "Content-Type") == null) merged["Content-Type"] = DEFAULT_CONTENT_TYPE
-        applyAcceptHeader(merged, options)
+        applyAcceptHeader(merged, options, wireFormatPreference)
         return merged
     }
 
@@ -212,6 +215,7 @@ class NoritoRpcClient private constructor(builder: Builder) {
         internal var transportExecutor: HttpTransportExecutor? = null
         internal val observers = ArrayList<ClientObserver>()
         internal var flowController: NoritoRpcFlowController? = NoritoRpcFlowController.unlimited()
+        internal var wireFormatPreference: WireFormatPreference = WireFormatPreference.NORITO_PREFERRED
 
         fun setBaseUri(baseUri: URI): Builder { this.baseUri = baseUri; return this }
         fun setTimeout(timeout: Duration?): Builder { this.timeout = if (timeout == null) null else if (timeout.isNegative) Duration.ZERO else timeout; return this }
@@ -226,11 +230,12 @@ class NoritoRpcClient private constructor(builder: Builder) {
         fun observers(observers: List<ClientObserver>?): Builder { this.observers.clear(); observers?.forEach { addObserver(it) }; return this }
         fun setFlowController(flowController: NoritoRpcFlowController): Builder { this.flowController = flowController; return this }
         fun setMaxConcurrentRequests(maxConcurrentRequests: Int): Builder { this.flowController = NoritoRpcFlowController.semaphore(maxConcurrentRequests); return this }
+        fun setWireFormatPreference(preference: WireFormatPreference): Builder { this.wireFormatPreference = preference; return this }
         fun build(): NoritoRpcClient = NoritoRpcClient(this)
     }
 
     companion object {
-        const val DEFAULT_ACCEPT = "application/x-norito"
+        @JvmField val DEFAULT_ACCEPT: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
         private const val DEFAULT_CONTENT_TYPE = "application/x-norito"
         private const val RPC_CALL_SIGNAL = "android.norito_rpc.call"
         private const val REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure"
@@ -248,19 +253,34 @@ class NoritoRpcClient private constructor(builder: Builder) {
             return if (hosts.isNullOrEmpty()) "" else hosts[0].trim()
         }
 
+        private fun responseBodyDetail(body: ByteArray): String {
+            if (body.isEmpty()) return ""
+            val text = String(body, StandardCharsets.UTF_8).trim()
+            if (text.isNotEmpty() && text.all { !it.isISOControl() || it == '\n' || it == '\r' || it == '\t' }) {
+                return ": $text"
+            }
+            val limit = minOf(body.size, 256)
+            val hex = body.copyOfRange(0, limit).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            return if (body.size > limit) ": body_hex=$hex..." else ": body_hex=$hex"
+        }
+
         private fun findHeader(headers: Map<String, String>, needle: String): String? {
             for (name in headers.keys) if (name.equals(needle, ignoreCase = true)) return name
             return null
         }
 
-        private fun applyAcceptHeader(headers: MutableMap<String, String>, options: NoritoRpcRequestOptions) {
+        private fun applyAcceptHeader(
+            headers: MutableMap<String, String>,
+            options: NoritoRpcRequestOptions,
+            wireFormatPreference: WireFormatPreference
+        ) {
             if (options.acceptConfigured) {
                 val currentKey = findHeader(headers, "Accept")
                 if (options.accept == null) { if (currentKey != null) headers.remove(currentKey) }
                 else { if (currentKey != null) headers[currentKey] = options.accept else headers["Accept"] = options.accept }
                 return
             }
-            if (findHeader(headers, "Accept") == null) headers["Accept"] = DEFAULT_ACCEPT
+            if (findHeader(headers, "Accept") == null) headers["Accept"] = wireFormatPreference.acceptHeader()
         }
 
         private fun appendQueryParameters(target: URI, params: Map<String, String>): URI {

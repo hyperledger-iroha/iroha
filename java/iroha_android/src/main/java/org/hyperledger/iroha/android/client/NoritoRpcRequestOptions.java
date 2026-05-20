@@ -126,6 +126,11 @@ public final class NoritoRpcRequestOptions {
       return this;
     }
 
+    /** Overrides the Accept header using a named wire-format preference. */
+    public Builder accept(final WireFormatPreference preference) {
+      return accept(Objects.requireNonNull(preference, "preference").acceptHeader());
+    }
+
     public NoritoRpcRequestOptions build() {
       return new NoritoRpcRequestOptions(this);
     }

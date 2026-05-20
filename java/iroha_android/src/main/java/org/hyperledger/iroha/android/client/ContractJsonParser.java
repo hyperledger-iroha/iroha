@@ -136,8 +136,11 @@ public final class ContractJsonParser {
   public static MultisigResponse parseMultisigResponse(final byte[] payload) {
     final Map<String, Object> root =
         expectObject(parse(payload, "multisig response"), "multisig response");
+    if (!Boolean.TRUE.equals(root.get("ok"))) {
+      throw new IllegalStateException("multisig response.ok must be true");
+    }
     return new MultisigResponse(
-        Boolean.TRUE.equals(root.get("ok")),
+        true,
         requiredString(root.get("resolved_multisig_account_id"), "multisig response.resolved_multisig_account_id"),
         optionalBoolean(root.get("submitted"), "multisig response.submitted"),
         optionalString(root.get("proposal_id")),
@@ -260,9 +263,12 @@ public final class ContractJsonParser {
   }
 
   private static String optionalBase64(final Object value, final String path) {
-    final String literal = optionalString(value);
-    if (literal == null) {
+    if (value == null) {
       return null;
+    }
+    final String literal = (value instanceof String ? (String) value : String.valueOf(value)).trim();
+    if (literal.isEmpty()) {
+      throw new IllegalStateException(path + " must be a non-empty base64 string");
     }
     final byte[] decoded;
     try {

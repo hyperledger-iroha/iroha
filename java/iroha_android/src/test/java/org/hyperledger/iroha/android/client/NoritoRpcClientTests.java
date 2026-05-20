@@ -75,8 +75,8 @@ public final class NoritoRpcClientTests {
       assert recorded.body().length == requestPayload.length : "Payload should be forwarded";
       assert "application/x-norito".equals(recorded.header("Content-Type"))
           : "Content-Type should default to application/x-norito";
-      assert "application/x-norito".equals(recorded.header("Accept"))
-          : "Accept should default to application/x-norito";
+      assert WireFormatPreference.NORITO_PREFERRED.acceptHeader().equals(recorded.header("Accept"))
+          : "Accept should default to Norito-preferred negotiation";
       assert "sample-token".equals(recorded.header("X-Test-Token"))
           : "Default headers must be preserved";
     }
@@ -94,7 +94,7 @@ public final class NoritoRpcClientTests {
       final NoritoRpcRequestOptions options =
           NoritoRpcRequestOptions.builder()
               .method("GET")
-              .accept(null)
+              .accept((String) null)
               .putHeader("X-Telemetry-Key", "sample")
               .putQueryParameter("version", "1")
               .timeout(Duration.ofSeconds(2))
