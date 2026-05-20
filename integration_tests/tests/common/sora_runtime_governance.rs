@@ -104,7 +104,12 @@ async fn wait_for_ready_torii_peer(
         for idx in (0..network.peers().len()).rev() {
             let peer = &network.peers()[idx];
             let status_url = format!("{}/status", peer.torii_url());
-            match http.get(&status_url).send().await {
+            match http
+                .get(&status_url)
+                .header("Accept", "application/json")
+                .send()
+                .await
+            {
                 Ok(response) if response.status().is_success() => return Ok(idx),
                 Ok(response) => {
                     last_error = format!(
@@ -696,7 +701,12 @@ pub async fn wait_for_tx_applied(
     let mut last_error = String::new();
 
     loop {
-        match http.get(status_url.clone()).send().await {
+        match http
+            .get(status_url.clone())
+            .header("Accept", "application/json")
+            .send()
+            .await
+        {
             Ok(response)
                 if response.status() == reqwest::StatusCode::OK
                     || response.status() == reqwest::StatusCode::ACCEPTED =>
@@ -773,7 +783,12 @@ pub async fn wait_for_tx_rejected(
     let mut last_error = String::new();
 
     loop {
-        match http.get(status_url.clone()).send().await {
+        match http
+            .get(status_url.clone())
+            .header("Accept", "application/json")
+            .send()
+            .await
+        {
             Ok(response)
                 if response.status() == reqwest::StatusCode::OK
                     || response.status() == reqwest::StatusCode::ACCEPTED =>

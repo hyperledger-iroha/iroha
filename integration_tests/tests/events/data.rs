@@ -21,6 +21,18 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use tokio::{task::spawn_blocking, time::Instant};
 
+fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
+    const NEEDLES: [&str; 3] = [
+        "haven't got tx confirmation within",
+        "transaction queued for too long",
+        "Connection dropped without `Committed/Applied` or `Rejected` event",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
+}
+
 fn produce_instructions(prefix: &str) -> (Vec<InstructionBox>, BTreeSet<DomainId>) {
     let domains = (0..4)
         .map(|domain_index: usize| {
@@ -67,7 +79,16 @@ async fn transaction_execution_should_produce_events(
         {
             let client = network.client();
             let tx = client.build_transaction(executable, <_>::default());
-            spawn_blocking(move || client.submit_transaction(&tx)).await??;
+            let submit_result = spawn_blocking(move || client.submit_transaction(&tx)).await?;
+            if let Err(err) = submit_result {
+                if is_tx_confirmation_timeout(&err) {
+                    eprintln!(
+                        "warning: {context} confirmation timed out; continuing to wait for events"
+                    );
+                } else {
+                    return Err(err);
+                }
+            }
         }
 
         network

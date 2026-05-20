@@ -5,8 +5,13 @@ use std::{convert::TryFrom as _, str::FromStr as _, time::Duration};
 
 use eyre::{Report, Result};
 use integration_tests::sandbox;
-use iroha_core::zk::test_utils::halo2_fixture_envelope;
-use iroha_data_model::proof::{ProofId, ProofStatus};
+use iroha_core::zk::{hash_vk, test_utils::halo2_fixture_envelope};
+use iroha_data_model::{
+    confidential::ConfidentialStatus,
+    isi::verifying_keys,
+    proof::{ProofId, ProofStatus, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+    zk::BackendTag,
+};
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use reqwest::Client as HttpClient;
 use sha2::{Digest as ShaDigest, Sha256};
@@ -16,6 +21,46 @@ fn compute_proof_hash(backend: &str, bytes: &[u8]) -> [u8; 32] {
     h.update(backend.as_bytes());
     h.update(bytes);
     h.finalize().into()
+}
+
+fn vk_record(
+    circuit_id: &str,
+    backend: BackendTag,
+    curve: &str,
+    vk_box: VerifyingKeyBox,
+    schema_hash: [u8; 32],
+) -> VerifyingKeyRecord {
+    let mut record = VerifyingKeyRecord::new(
+        1,
+        circuit_id.to_owned(),
+        backend,
+        curve,
+        schema_hash,
+        hash_vk(&vk_box),
+    );
+    record.vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32");
+    record.max_proof_bytes = 1_048_576;
+    record.gas_schedule_id = Some("proof_query_test".to_owned());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+    record
+}
+
+fn halo2_verifying_key_registration() -> verifying_keys::RegisterVerifyingKey {
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+    let vk_box = fixture
+        .vk_box("halo2/ipa")
+        .expect("proof fixture embeds verifier key bytes");
+    verifying_keys::RegisterVerifyingKey {
+        id: VerifyingKeyId::new("halo2/ipa", "proof_vk"),
+        record: vk_record(
+            "halo2/ipa:tiny-add",
+            BackendTag::Halo2IpaPasta,
+            "pallas",
+            vk_box,
+            fixture.schema_hash,
+        ),
+    }
 }
 
 fn parse_hex32(input: &str) -> Option<[u8; 32]> {
@@ -183,9 +228,11 @@ async fn fetch_proof_snapshot(url: reqwest::Url) -> Result<(String, [u8; 32], Pr
 async fn submit_proof_and_query_record() -> Result<()> {
     // Start a minimal network
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_config_layer(|layer| {
-            layer.write(["zk", "halo2", "enabled"], true);
-        }),
+        NetworkBuilder::new()
+            .with_genesis_instruction(halo2_verifying_key_registration())
+            .with_config_layer(|layer| {
+                layer.write(["zk", "halo2", "enabled"], true);
+            }),
         stringify!(submit_proof_and_query_record),
     )
     .await?

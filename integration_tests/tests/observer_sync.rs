@@ -288,8 +288,15 @@ fn observer_node_catches_up() -> Result<()> {
             &*ALICE_ID,
             limit
         );
-        let body =
-            rt.block_on(async { reqwest::Client::new().get(url).send().await?.text().await })?;
+        let body = rt.block_on(async {
+            reqwest::Client::new()
+                .get(url)
+                .header("Accept", "application/json")
+                .send()
+                .await?
+                .text()
+                .await
+        })?;
         let parsed: JsonValue = norito::json::from_str(&body)?;
         let (items, total) = match parsed {
             JsonValue::Object(m) => {
@@ -482,7 +489,17 @@ fn observer_node_catches_up() -> Result<()> {
             .block_on(async { p.status().await })
             .expect("peer status");
         let url = format!("{}/status", p.torii_url());
-        let txt = rt.block_on(async { reqwest::get(url).await.unwrap().text().await.unwrap() });
+        let txt = rt.block_on(async {
+            reqwest::Client::new()
+                .get(url)
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        });
         let jv: JsonValue = norito::json::from_str(&txt)?;
         let blocks = jv
             .as_object()
@@ -506,7 +523,17 @@ fn observer_node_catches_up() -> Result<()> {
             .block_on(async { observer.status().await })
             .expect("observer status");
         let url = format!("{}/status", observer.torii_url());
-        let txt = rt.block_on(async { reqwest::get(url).await.unwrap().text().await.unwrap() });
+        let txt = rt.block_on(async {
+            reqwest::Client::new()
+                .get(url)
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        });
         let jv: JsonValue = norito::json::from_str(&txt)?;
         let blocks = jv
             .as_object()

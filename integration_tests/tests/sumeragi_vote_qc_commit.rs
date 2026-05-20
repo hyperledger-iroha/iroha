@@ -100,7 +100,11 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
         let telemetry_url = client.torii_url.join("v1/sumeragi/telemetry")?;
         rt.block_on(async {
             let http = HttpClient::new();
-            let resp = http.get(telemetry_url.clone()).send().await?;
+            let resp = http
+                .get(telemetry_url.clone())
+                .header("Accept", "application/json")
+                .send()
+                .await?;
             if !resp.status().is_success() {
                 eyre::bail!("telemetry endpoint returned {}", resp.status());
             }

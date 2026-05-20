@@ -13,6 +13,57 @@ Last updated: 2026-05-20
 - Focused validation is green with
   `cargo test -p iroha_config torii_cors_parse --lib`.
 
+## 2026-05-19 C# SDK validation and clippy closure
+
+- Finished the previously blocked C# SDK validation with the local .NET 8.0.419
+  SDK at `$HOME/.dotnet/dotnet`. The focused multisig/Norito helper coverage is
+  now included in the green C# unit suite, including
+  `ToriiClientTests.ProposeMultisigAsyncPostsNativeNoritoInstructionFrames` and
+  `NoritoCodecTests.EncodeWithSchemaHashUsesProvidedSchemaHash`.
+- The C# live Torii smoke now treats 404s from optional deployment-specific
+  contract metadata and SoraFS denylist endpoints as "surface unavailable" while
+  still validating them when present. `csharp/README.md` now documents those
+  live-smoke reads as conditional, matching the current public Taira deployment.
+- The final strict clippy pass over the touched Rust crates exposed existing
+  `ivm` lint drift in vector helpers. The `ivm` cleanup is mechanical only:
+  iterator fills replace range-index writes, and x86 SIMD transmutes now spell
+  out their source and target types.
+- C# validation commands passed from `csharp/`:
+  `$HOME/.dotnet/dotnet restore Hyperledger.Iroha.Sdk.sln`;
+  `$HOME/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+  (143 tests);
+  `$HOME/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+  (143 unit tests plus two integration-project tests with
+  `IROHA_CSHARP_RUN_LIVE_TESTS` unset);
+  `$HOME/.dotnet/dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore`;
+  `$HOME/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build`;
+  `$HOME/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build`;
+  and
+  `IROHA_CSHARP_RUN_LIVE_TESTS=1 IROHA_CSHARP_TORII_BASE_URL=https://taira.sora.org timeout 120s $HOME/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.IntegrationTests/Hyperledger.Iroha.Sdk.IntegrationTests.csproj -c Release --no-build`
+  against public Taira (two tests, including the live read-only smoke).
+- Additional Rust validation passed:
+  `cargo fmt --package ivm --package iroha_crypto --package iroha_data_model -- --check`,
+  `cargo test -p ivm bn254_vec --lib -- --nocapture`, `cargo test -p ivm --test
+  vector_ops -- --nocapture`, and `cargo clippy -p iroha_crypto -p
+  iroha_data_model --features sm --all-targets -- -D warnings`.
+  A final repository-wide `cargo fmt --all -- --check` is green after applying
+  the corresponding `cargo fmt --all` formatting pass, and `git diff --check`
+  is clean.
+
+## 2026-05-19 SM acceleration and transaction JSON build hygiene
+
+- Removed the redundant JSON derives from `TransactionEntrypoint`; its manual
+  Norito JSON writer/reader remains the JSON contract and no longer trips the
+  derive enum tag validation.
+- Made the SM acceleration test-disable guard compose every acceleration guard
+  available to the current build, removed unused non-NEON block-operation stubs,
+  and cfg-gated the private `NeonPolicy::Auto` variant to aarch64 NEON builds.
+- Focused validation is green with
+  `cargo fmt --package iroha_crypto --package iroha_data_model`,
+  `cargo test -p iroha_data_model transaction_entrypoint_json_roundtrip -- --nocapture`,
+  `cargo test -p iroha_crypto --features sm sm3_digest_fallback_produces_expected_bytes -- --nocapture`, and
+  `cargo test -p iroha_crypto --features sm sm4_block_encrypt_fallback_matches_reference_vector -- --nocapture`.
+
 ## 2026-05-19 IVM CUDA vector boundary adversarial hardening
 
 - Hardened the CUDA vector helper entry points so zero-length `f32`, `u32`, and
@@ -11994,5 +12045,7 @@ Last updated: 2026-05-20
   - `git diff --check`
 - Python focused validation could not run because the local Python 3.14
   environment does not have `pytest` installed (`No module named pytest`).
-- C# focused validation could not run because this environment does not have
-  the `dotnet` CLI installed.
+- C# focused validation is now green with the local .NET 8.0.419 SDK at
+  `$HOME/.dotnet/dotnet`; the C# unit suite covers the multisig native Norito
+  instruction-frame helper, schema-hash helper, malformed success response, and
+  negative timestamp response cases.

@@ -30334,13 +30334,31 @@ main().catch((error) => {
         .expect("write api bundle");
 
         let draft_response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/apps/deploy".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&draft_response).expect("encode app deploy draft response"),
-            },
-        )]));
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/sorafs/pin/register".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "ok": true }))
+                        .expect("encode public discovery pin register response"),
+                },
+            ),
+            (
+                "/v1/sorafs/storage/pin".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "app-infra-bundle" }))
+                        .expect("encode storage pin response"),
+                },
+            ),
+            (
+                "/v1/soracloud/apps/deploy".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&draft_response).expect("encode app deploy draft response"),
+                },
+            ),
+        ]));
 
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());

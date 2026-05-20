@@ -655,6 +655,17 @@ function coerceRejectionReason(value) {
   return text ? text : null;
 }
 
+function assertNonBlankString(value, context) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must be a non-empty string`,
+      context,
+    );
+  }
+  return value.trim();
+}
+
 function normalizeStatusSet(input, defaultStatuses) {
   if (!input) {
     return new Set(defaultStatuses.map((status) => String(status)));

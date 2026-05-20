@@ -2868,7 +2868,7 @@ mod sorafs_permission_tests {
     };
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-        CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
+        CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanRegisterSorafsPin,
         CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
         CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
@@ -2954,12 +2954,14 @@ mod sorafs_permission_tests {
         instruction: T,
         visit: impl Fn(&mut MockExecutor, &T),
     ) {
-        let mut executor = MockExecutor::new(false);
-        visit(&mut executor, &instruction);
-        assert!(
-            executor.verdict().is_err(),
-            "expected denial without permission"
-        );
+        with_mock_permissions(vec![PermissionObject::from(CanRegisterSorafsPin)], || {
+            let mut executor = MockExecutor::new(false);
+            visit(&mut executor, &instruction);
+            assert!(
+                executor.verdict().is_err(),
+                "expected denial without permission"
+            );
+        });
     }
 
     fn assert_allowed_without_permission<T: Clone>(

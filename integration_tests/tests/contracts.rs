@@ -143,7 +143,12 @@ async fn wait_for_tx_applied(
     let mut last_error = String::new();
 
     loop {
-        match http.get(status_url.clone()).send().await {
+        match http
+            .get(status_url.clone())
+            .header("Accept", "application/json")
+            .send()
+            .await
+        {
             Ok(response)
                 if response.status() == reqwest::StatusCode::OK
                     || response.status() == reqwest::StatusCode::ACCEPTED =>

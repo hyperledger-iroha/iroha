@@ -3607,7 +3607,10 @@ impl Client {
             &self.torii_url,
             &format!("v1/sumeragi/vrf/penalties/{epoch}"),
         );
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi vrf penalties: {} {}",
@@ -3624,7 +3627,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_vrf_epoch_json(&self, epoch: u64) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, &format!("v1/sumeragi/vrf/epoch/{epoch}"));
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi vrf epoch: {} {}",
@@ -3641,7 +3647,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_leader_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/leader");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi leader: {} {}",
@@ -3658,7 +3667,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_params_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/params");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi params: {} {}",
@@ -3685,7 +3697,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_collectors_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/collectors");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi collectors: {} {}",
@@ -3732,8 +3747,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_pacemaker_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/pacemaker");
-        let resp =
-            self.send_builder(self.operator_signed_request(HttpMethod::GET, url, Vec::new()))?;
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi pacemaker: {} {}",
@@ -3750,8 +3767,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_phases_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/phases");
-        let resp =
-            self.send_builder(self.operator_signed_request(HttpMethod::GET, url, Vec::new()))?;
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi phases: {} {}",
@@ -3768,7 +3787,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_telemetry_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/telemetry");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi telemetry: {} {}",
@@ -3785,8 +3807,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_rbc_status_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/rbc");
-        let resp =
-            self.send_builder(self.operator_signed_request(HttpMethod::GET, url, Vec::new()))?;
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi rbc status: {} {}",
@@ -3803,7 +3827,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_rbc_sessions_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/rbc/sessions");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi rbc sessions: {} {}",
@@ -3820,7 +3847,10 @@ impl Client {
     /// Returns an error if the request fails or the response is non-OK/invalid JSON.
     pub fn get_sumeragi_evidence_count_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence/count");
-        let response = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let response = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         let value =
             Self::parse_json_ok_response(&response, "Failed to get sumeragi evidence count")?;
         Ok(value)
@@ -3835,7 +3865,9 @@ impl Client {
         filter: &SumeragiEvidenceListFilter<'_>,
     ) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence");
-        let req = filter.apply(self.default_request(HttpMethod::GET, url));
+        let req = filter
+            .apply(self.default_request(HttpMethod::GET, url))
+            .header("Accept", APPLICATION_JSON);
         let response = self.send_builder(req)?;
         let value =
             Self::parse_json_ok_response(&response, "Failed to get sumeragi evidence list")?;
@@ -3881,7 +3913,8 @@ impl Client {
         let response = self.send_builder(
             // Evidence submission is an operator endpoint guarded by operator signatures.
             self.operator_signed_request(HttpMethod::POST, url, body)
-                .header("Content-Type", APPLICATION_JSON),
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
         )?;
         let value = Self::parse_evidence_post_response(&response)?;
         Ok(value)
@@ -5390,6 +5423,7 @@ mod evidence_http_tests {
             headers.get("content-type"),
             Some(&"application/json".to_owned())
         );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
         let payload: norito::json::Value =
             norito::json::from_slice(&snapshot.body).expect("json body");
         let map = payload.as_object().expect("payload object");
@@ -6230,6 +6264,93 @@ mod evidence_http_tests {
             }),
             "request should set Accept: application/json"
         );
+    }
+
+    #[test]
+    fn runtime_and_node_json_requests_set_accept_json() {
+        fn assert_json_accept(store: &SnapshotStore, expected_path: &str) {
+            let snapshot = store
+                .lock()
+                .expect("snapshot lock")
+                .first()
+                .cloned()
+                .expect("request snapshot");
+            assert_eq!(snapshot.url.path(), expected_path);
+            assert!(
+                snapshot.headers.iter().any(|(name, value)| {
+                    name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
+                }),
+                "request should set Accept: application/json"
+            );
+        }
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client
+                .get_runtime_abi_active_json()
+                .expect("runtime ABI active JSON")
+        });
+        assert_json_accept(&store, "/v1/runtime/abi/active");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client
+                .get_runtime_abi_hash_json()
+                .expect("runtime ABI hash JSON")
+        });
+        assert_json_accept(&store, "/v1/runtime/abi/hash");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client
+                .get_node_capabilities_json_for_compatibility()
+                .expect("compatibility node capabilities JSON")
+        });
+        assert_json_accept(&store, "/v1/node/capabilities");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client
+                .get_node_capabilities_json()
+                .expect("node capabilities JSON")
+        });
+        assert_json_accept(&store, "/v1/node/capabilities");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url())
+                .get_sumeragi_collectors_json()
+                .expect("Sumeragi collectors JSON")
+        });
+        assert_json_accept(&store, "/v1/sumeragi/collectors");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url())
+                .get_sumeragi_evidence_count_json()
+                .expect("Sumeragi evidence count JSON")
+        });
+        assert_json_accept(&store, "/v1/sumeragi/evidence/count");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            let filter = SumeragiEvidenceListFilter::default();
+            client_with_base_url(base_url())
+                .get_sumeragi_evidence_list_json(&filter)
+                .expect("Sumeragi evidence list JSON")
+        });
+        assert_json_accept(&store, "/v1/sumeragi/evidence");
     }
 
     #[test]
@@ -17720,6 +17841,12 @@ mod tests {
                 .expect("request snapshot");
             assert_eq!(snapshot.method, HttpMethod::GET);
             assert_eq!(snapshot.url.path(), path);
+            assert!(
+                snapshot.headers.iter().any(|(name, value)| {
+                    name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
+                }),
+                "request should set Accept: application/json"
+            );
             assert!(
                 snapshot
                     .headers
