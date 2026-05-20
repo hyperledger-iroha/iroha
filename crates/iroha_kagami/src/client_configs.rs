@@ -39,8 +39,8 @@ pub struct Args {
     /// Output directory for generated client configs (default: <base-config-dir>/clients).
     #[arg(long, value_name = "DIR")]
     out_dir: Option<PathBuf>,
-    /// Fully qualified account domain for generated client configs.
-    #[arg(long, default_value = "acme.universal", value_name = "DOMAIN")]
+    /// Account scope for generated client configs (`dataspace` or `domain.dataspace`).
+    #[arg(long, default_value = "acme.universal", value_name = "SCOPE")]
     domain: String,
     /// Seed prefix for deterministic key generation (`<prefix>-<name>`).
     #[arg(long, default_value = "demo", value_name = "SEED")]
@@ -325,6 +325,27 @@ web_login = "demo"
         assert_eq!(
             basic_auth.get("password").and_then(toml::Value::as_str),
             Some("secret")
+        );
+    }
+
+    #[test]
+    fn render_client_config_accepts_dataspace_account_scope() {
+        let base = BaseConfig {
+            chain: "demo-chain".to_owned(),
+            torii_url: "http://127.0.0.1:8080/".to_owned(),
+            basic_auth: None,
+        };
+        let key_pair = KeyPair::from_seed(b"demo-sender".to_vec(), Algorithm::Ed25519);
+        let rendered = render_client_config(&base, "cbuae", &key_pair);
+        let value: toml::Value = toml::from_str(&rendered).expect("parse rendered config");
+
+        let account = value
+            .get("account")
+            .and_then(toml::Value::as_table)
+            .expect("account");
+        assert_eq!(
+            account.get("domain").and_then(toml::Value::as_str),
+            Some("cbuae")
         );
     }
 

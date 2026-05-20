@@ -12247,7 +12247,9 @@ mod tests {
             instruction_input
                 .get("description")
                 .and_then(Value::as_str)
-                .is_some_and(|description| description.contains("entire MultisigProposeRequest body")),
+                .is_some_and(
+                    |description| description.contains("entire MultisigProposeRequest body")
+                ),
             "instruction schema should direct native callers to whole-body Norito"
         );
     }
