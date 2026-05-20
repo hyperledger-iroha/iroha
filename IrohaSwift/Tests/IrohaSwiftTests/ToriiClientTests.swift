@@ -2613,6 +2613,40 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(payload?.signature, "deadbeef")
     }
 
+    func testSubmitTransactionResponseDecodesCanonicalJsonReceiptFields() throws {
+        let body = """
+        {
+          "payload": {
+            "tx_hash": "abc",
+            "entrypoint_hash": "entry",
+            "signed_transaction_hash": "signed",
+            "submitted_at_ms": "1",
+            "submitted_at_height": "2",
+            "signer": {
+              "algorithm": "ed25519",
+              "payload": "node-key"
+            }
+          },
+          "signature": {
+            "algorithm": "ed25519",
+            "payload": "receipt-signature"
+          }
+        }
+        """.data(using: .utf8)!
+
+        let receipt = try JSONDecoder().decode(ToriiSubmitTransactionResponse.self, from: body)
+
+        XCTAssertEqual(receipt.hash, "abc")
+        XCTAssertEqual(receipt.payload.entrypointHash, "entry")
+        XCTAssertEqual(receipt.payload.signedTransactionHash, "signed")
+        XCTAssertEqual(receipt.payload.signerValue["algorithm"], .string("ed25519"))
+        XCTAssertEqual(receipt.payload.signerValue["payload"], .string("node-key"))
+        XCTAssertEqual(receipt.signatureValue["algorithm"], .string("ed25519"))
+        XCTAssertEqual(receipt.signatureValue["payload"], .string("receipt-signature"))
+        XCTAssertEqual(receipt.payload.signer, #"{"algorithm":"ed25519","payload":"node-key"}"#)
+        XCTAssertEqual(receipt.signature, #"{"algorithm":"ed25519","payload":"receipt-signature"}"#)
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitTransactionJsonUsesConfiguredWirePreference() async throws {
         StubURLProtocol.handler = { request in
@@ -6630,6 +6664,7 @@ final class ToriiClientTests: XCTestCase {
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/node/capabilities")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             return (response, payload)
         }
@@ -10059,14 +10094,14 @@ id: 88
         }
     }
 
-    func testProposeMultisigEncodesNativeNoritoInstructions() throws {
+    func testProposeMultisigEncodesStructuredJsonInstructions() throws {
         let expectation = expectation(description: "propose multisig")
-        let instructionBytes = Data([0x4e, 0x52, 0x54, 0x30, 0x01, 0x02, 0x03])
         let proposalId = String(repeating: "a", count: 64)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -10076,8 +10111,8 @@ id: 88
             XCTAssertEqual(json["signer_account_id"] as? String, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
             XCTAssertEqual(json["creation_time_ms"] as? Int, 123)
             XCTAssertEqual(json["fee_sponsor"] as? String, "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
-            let instructions = json["instructions"] as? [String]
-            XCTAssertEqual(instructions, [instructionBytes.base64EncodedString()])
+            let instructions = json["instructions"] as? [[String: Any]]
+            XCTAssertEqual(instructions?.first?["kind"] as? String, "Transfer")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -10093,7 +10128,9 @@ id: 88
             signerAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             creationTimeMs: 123,
             feeSponsor: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-            noritoInstructionBoxBytes: [instructionBytes]
+            instructions: [
+                try ToriiMultisigProposeInstruction(object: ["kind": .string("Transfer")])
+            ]
         )
         makeClient().proposeMultisig(request) { result in
             switch result {
@@ -10111,8 +10148,51 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
-    func testProposeMultisigInstructionRejectsInvalidBase64() {
-        XCTAssertThrowsError(try ToriiMultisigProposeInstruction(base64: "not base64")) { error in
+    func testProposeMultisigSendsWholeNoritoDtoBody() {
+        let expectation = expectation(description: "propose multisig native body")
+        let proposalId = String(repeating: "b", count: 64)
+        let noritoBody = Data([0x4e, 0x52, 0x54, 0x30, 0x01, 0x02, 0x03])
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertEqual(self.bodyData(from: request), noritoBody)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"ok":true,"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)"}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        makeClient().proposeMultisig(noritoBody: noritoBody) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertTrue(response.ok)
+                XCTAssertEqual(response.proposalId, proposalId)
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testProposeMultisigInstructionRejectsPerInstructionNoritoBlobs() {
+        XCTAssertThrowsError(try ToriiMultisigProposeInstruction(base64: "AQID")) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+        XCTAssertThrowsError(try ToriiMultisigProposeInstruction(noritoInstructionBoxBytes: Data([0x4e, 0x52, 0x54, 0x30]))) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+        XCTAssertThrowsError(try ToriiMultisigProposeInstruction(json: .string("AQID"))) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
             }
@@ -10127,7 +10207,7 @@ id: 88
         }
 
         let signer = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
-        let instruction = try! ToriiMultisigProposeInstruction(base64: "AQID")
+        let instruction = try! ToriiMultisigProposeInstruction(object: ["kind": .string("Transfer")])
         let ambiguousSelectorRequest = ToriiMultisigProposeRequest(
             selector: ToriiMultisigAccountSelector(
                 multisigAccountId: signer,
@@ -10156,7 +10236,7 @@ id: 88
 
     func testProposeMultisigRejectsMalformedResponseFields() {
         let expectation = expectation(description: "propose multisig malformed response")
-        let instruction = try! ToriiMultisigProposeInstruction(base64: "AQID")
+        let instruction = try! ToriiMultisigProposeInstruction(object: ["kind": .string("Transfer")])
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
             let response = HTTPURLResponse(url: request.url!,
@@ -10190,7 +10270,7 @@ id: 88
 
     func testProposeMultisigRejectsFalseOkResponse() {
         let expectation = expectation(description: "propose multisig false ok response")
-        let instruction = try! ToriiMultisigProposeInstruction(base64: "AQID")
+        let instruction = try! ToriiMultisigProposeInstruction(object: ["kind": .string("Transfer")])
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
             let response = HTTPURLResponse(url: request.url!,
@@ -10224,7 +10304,7 @@ id: 88
 
     func testProposeMultisigRejectsEmptySigningMessageResponse() {
         let expectation = expectation(description: "propose multisig empty signing message")
-        let instruction = try! ToriiMultisigProposeInstruction(base64: "AQID")
+        let instruction = try! ToriiMultisigProposeInstruction(object: ["kind": .string("Transfer")])
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
             let response = HTTPURLResponse(url: request.url!,
@@ -10258,7 +10338,7 @@ id: 88
 
     func testProposeMultisigRejectsNegativeResponseCreationTime() {
         let expectation = expectation(description: "propose multisig negative creation time")
-        let instruction = try! ToriiMultisigProposeInstruction(base64: "AQID")
+        let instruction = try! ToriiMultisigProposeInstruction(object: ["kind": .string("Transfer")])
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
             let response = HTTPURLResponse(url: request.url!,

@@ -1277,6 +1277,13 @@ fn lower_entrypoint_wrapper(
         Some(load_entrypoint_payload(&mut ctx, test_mode))
     };
 
+    let pass_through_json_payload = func.param_types.len() == 1
+        && !func.param_types[0].is_state
+        && matches!(
+            semantic::resolve_struct_type(&func.param_types[0].ty),
+            Type::Json
+        );
+
     let mut args = Vec::with_capacity(func.param_types.len());
     for param in &func.param_types {
         if param.is_state {
@@ -1290,6 +1297,10 @@ fn lower_entrypoint_wrapper(
         let payload = payload.ok_or_else(|| {
             format!("internal error: missing payload for entrypoint parameter `{param_name}`")
         })?;
+        if pass_through_json_payload {
+            args.push(payload);
+            continue;
+        }
         let key = ctx.new_temp();
         ctx.current_instr(Instr::DataRef {
             dest: key,
@@ -5808,6 +5819,42 @@ mod tests {
         assert!(
             saw_get_trigger,
             "wrapper should still fall back to host trigger input"
+        );
+    }
+
+    #[test]
+    fn single_json_entrypoint_receives_whole_payload() {
+        let src = r#"
+            seiyaku Demo {
+                kotoage fn run(ev: Json) { let _payload = ev; }
+            }
+        "#;
+        let prog = parse(src).expect("parse single json entrypoint");
+        let typed = analyze(&prog).expect("analyze single json entrypoint");
+        let ir =
+            lower_with_cap_and_test_mode(&typed, 2, false).expect("lower single json entrypoint");
+        let wrapper = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "run")
+            .expect("wrapper function");
+
+        let mut saw_get_trigger = false;
+        let mut saw_json_field_decode = false;
+        for block in &wrapper.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    Instr::GetTriggerEvent { .. } => saw_get_trigger = true,
+                    Instr::JsonGetJson { .. } => saw_json_field_decode = true,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(saw_get_trigger, "wrapper should load the trigger payload");
+        assert!(
+            !saw_json_field_decode,
+            "single Json entrypoints should receive the whole payload, not payload.ev"
         );
     }
 

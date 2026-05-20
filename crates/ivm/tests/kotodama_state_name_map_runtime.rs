@@ -266,6 +266,25 @@ fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
 }
 
 #[test]
+fn durable_name_to_blob_map_write_from_json_hex_roundtrip() {
+    let src = r#"
+        seiyaku C {
+            state Foo: Map<Name, Blob>;
+
+            fn main() {
+                let ev = json("{\"value_hex\":\"68656c6c6f\"}");
+                let key = name("alice");
+                Foo[key] = ev.get_blob_hex(name("value_hex"));
+                assert(Foo.contains(key));
+                assert(Foo[key] == blob("hello"));
+            }
+        }
+    "#;
+
+    run_program(src);
+}
+
+#[test]
 fn durable_name_map_key_survives_function_call() {
     let src = r#"
         seiyaku C {

@@ -2698,9 +2698,16 @@ mod tests {
         },
         block::BlockHeader,
         domain::DomainId,
-        isi::{AddSignatory, RemoveSignatory, SetAccountQuorum},
+        events::execute_trigger::ExecuteTriggerEventFilter,
+        isi::{AddSignatory, ExecuteTrigger, Grant, RemoveSignatory, SetAccountQuorum},
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
+        permission::Permission,
         prelude::{Domain, InstructionBox, Register},
+        transaction::{Executable, IvmBytecode},
+        trigger::{
+            Trigger,
+            action::{Action, Repeats},
+        },
     };
     use iroha_executor_data_model::isi::multisig::{
         DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigCancel, MultisigPropose,
@@ -5297,6 +5304,160 @@ seiyaku TriggerDispatch {
         let approve = MultisigApprove::new(multisig_id.clone(), instructions_hash);
         execute_approve(&mut state_transaction, &signer2_id, &approve)
             .expect("signatory approve without roles");
+    }
+
+    #[test]
+    fn multisig_approve_executes_staged_mint_like_trigger_with_json_args() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-staged-mint-json-args"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+        let domain_id: DomainId = DomainId::try_new("staged", "universal").unwrap();
+
+        let signer1 = KeyPair::random();
+        let signer2 = KeyPair::random();
+        let signer1_id = new_account_id(&signer1);
+        let signer2_id = new_account_id(&signer2);
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&signer1_id, &mut state_transaction)
+            .expect("domain registration");
+        register_account_in_domain(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            &signer1_id,
+            "register signer1",
+        );
+        register_account_in_domain(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            &signer2_id,
+            "register signer2",
+        );
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
+            quorum: NonZeroU16::new(2).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        let multisig_id = register_multisig_account(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            &spec,
+            "register multisig account",
+        );
+        Grant::account_permission(
+            Permission::new("staged_mint_request_run".into(), Json::new(())),
+            multisig_id.clone(),
+        )
+        .execute(&signer1_id, &mut state_transaction)
+        .expect("grant staged mint permission");
+
+        let src = format!(
+            r#"
+            seiyaku StagedMintRequest {{
+              register_trigger staged_mint_like {{
+                call run;
+                on execute trigger "staged_mint_like";
+                authority "{multisig_id}";
+              }}
+
+              state Requests_requested_by_actor: Map<Name, Blob>;
+              state ToAccount: Map<Name, AccountId>;
+              state Amount: Map<Name, int>;
+              state ProposalStatus: Map<Name, int>;
+              state CreatedAtMs: Map<Name, int>;
+              state ExpiresAtMs: Map<Name, int>;
+
+              fn run_impl(ev: Json) {{
+                let request_id = ev.get_name(name("request_id"));
+                assert(!ProposalStatus.contains(request_id), "mint request already exists");
+                let action = ev.get_name(name("action"));
+                assert(action == name("create"), "unsupported staged mint action");
+                let asset_id = ev.get_asset_definition_id(name("asset_id"));
+                let expected_asset = asset_definition!("66owaQmAQMuHxPzxUN3bqZ6FJfDa");
+                assert(asset_id == expected_asset, "unsupported asset definition");
+                let to_account_id = ev.get_account_id(name("to_account_id"));
+                assert(to_account_id == authority(), "mint destination account mismatch");
+                let amount_i64 = ev.get_int(name("amount_i64"));
+                let requested_by_actor = ev.get_blob_hex(name("requested_by_actor_hex"));
+                let created_at_ms = ev.get_int(name("created_at_ms"));
+                let expires_at_ms = ev.get_int(name("expires_at_ms"));
+                assert(amount_i64 > 0, "invalid amount");
+
+                Requests_requested_by_actor[request_id] = requested_by_actor;
+                ToAccount[request_id] = to_account_id;
+                Amount[request_id] = amount_i64;
+                ProposalStatus[request_id] = 1;
+                CreatedAtMs[request_id] = created_at_ms;
+                ExpiresAtMs[request_id] = expires_at_ms;
+              }}
+
+              kotoage fn run(ev: Json) permission(staged_mint_request_run) {{
+                run_impl(ev);
+              }}
+            }}
+            "#,
+            multisig_id = multisig_id,
+        );
+        let program = ivm::KotodamaCompiler::new()
+            .compile_source(&src)
+            .expect("compile staged mint-like contract");
+        let bytecode = IvmBytecode::from_compiled(program);
+        let trigger_id: iroha_data_model::trigger::TriggerId = "staged_mint_like".parse().unwrap();
+        Register::trigger(Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Executable::Ivm(bytecode),
+                Repeats::Indefinitely,
+                multisig_id.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(multisig_id.clone()),
+            ),
+        ))
+        .execute(&signer1_id, &mut state_transaction)
+        .expect("register staged mint-like trigger");
+
+        let args_json = format!(
+            r#"{{
+                "action":"create",
+                "request_id":"mrtest",
+                "asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+                "to_account_id":"{multisig_id}",
+                "amount_i64":111,
+                "requested_by_actor_hex":"7b226163746f72223a226f70657261746f7231227d",
+                "created_at_ms":1779225455574,
+                "expires_at_ms":1779311855574
+            }}"#,
+            multisig_id = multisig_id,
+        );
+        let instructions = vec![InstructionBox::from(
+            ExecuteTrigger::new(trigger_id).with_args(Json::from_string_unchecked(args_json)),
+        )];
+        let instructions_hash = HashOf::new(&instructions);
+        execute_propose(
+            &mut state_transaction,
+            &signer1_id,
+            &MultisigPropose::new(multisig_id.clone(), instructions, None),
+        )
+        .expect("signatory propose staged mint");
+
+        execute_approve(
+            &mut state_transaction,
+            &signer2_id,
+            &MultisigApprove::new(multisig_id.clone(), instructions_hash),
+        )
+        .expect("signatory approve should execute staged mint trigger");
     }
 
     #[test]

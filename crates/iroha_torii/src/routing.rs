@@ -58261,7 +58261,9 @@ pub async fn handle_v1_accounts_onboard_multisig(
         auto_renew_instructions = instructions;
     }
 
+    let tx_metadata = metadata_with_default_gas_asset(app.state.as_ref());
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
+        .with_metadata(tx_metadata)
         .with_instructions({
             let mut instructions = vec![
                 InstructionBox::from(

@@ -628,10 +628,12 @@ public enum ToriiIdentifierNormalization: String, Codable, Sendable {
 
 public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
     public let policyId: String
+    public let programId: String
     public let owner: String
     public let active: Bool
     public let normalization: ToriiIdentifierNormalization
     public let resolverPublicKey: String
+    public let outputOpeningPublicKey: String
     public let backend: String
     public let inputEncryption: String?
     public let inputEncryptionPublicParameters: String?
@@ -642,10 +644,12 @@ public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case policyId = "policy_id"
+        case programId = "program_id"
         case owner
         case active
         case normalization
         case resolverPublicKey = "resolver_public_key"
+        case outputOpeningPublicKey = "output_opening_public_key"
         case backend
         case inputEncryption = "input_encryption"
         case inputEncryptionPublicParameters = "input_encryption_public_parameters"
@@ -653,6 +657,36 @@ public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
         case ramFheProfile = "ram_fhe_profile"
         case proofVerifier = "proof_verifier"
         case note
+    }
+
+    public init(policyId: String,
+                programId: String = "",
+                owner: String,
+                active: Bool,
+                normalization: ToriiIdentifierNormalization,
+                resolverPublicKey: String,
+                outputOpeningPublicKey: String = "",
+                backend: String,
+                inputEncryption: String?,
+                inputEncryptionPublicParameters: String?,
+                inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters?,
+                ramFheProfile: ToriiIdentifierRamFheProfile?,
+                proofVerifier: ToriiRamLfeProofVerifierMetadata?,
+                note: String?) {
+        self.policyId = policyId
+        self.programId = programId
+        self.owner = owner
+        self.active = active
+        self.normalization = normalization
+        self.resolverPublicKey = resolverPublicKey
+        self.outputOpeningPublicKey = outputOpeningPublicKey
+        self.backend = backend
+        self.inputEncryption = inputEncryption
+        self.inputEncryptionPublicParameters = inputEncryptionPublicParameters
+        self.inputEncryptionPublicParametersDecoded = inputEncryptionPublicParametersDecoded
+        self.ramFheProfile = ramFheProfile
+        self.proofVerifier = proofVerifier
+        self.note = note
     }
 }
 
@@ -1790,6 +1824,7 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
     public let programId: String
     public let opaqueHash: String
     public let receiptHash: String
+    public let outputCiphertext: String
     public let outputHash: String
     public let associatedDataHash: String
     public let executedAtMs: UInt64
@@ -1797,11 +1832,13 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
     public let backend: String
     public let verificationMode: String
     public let receipt: ToriiRamLfeExecutionReceipt
+    public let outputOpening: ToriiRamLfeOutputOpening
 
     private enum CodingKeys: String, CodingKey {
         case programId = "program_id"
         case opaqueHash = "opaque_hash"
         case receiptHash = "receipt_hash"
+        case outputCiphertext = "output_ciphertext"
         case outputHash = "output_hash"
         case associatedDataHash = "associated_data_hash"
         case executedAtMs = "executed_at_ms"
@@ -1809,6 +1846,7 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
         case backend
         case verificationMode = "verification_mode"
         case receipt
+        case outputOpening = "output_opening"
     }
 }
 
@@ -9144,22 +9182,38 @@ public struct ToriiMultisigAccountSelector: Encodable, Sendable, Equatable {
 }
 
 public struct ToriiMultisigProposeInstruction: Encodable, Sendable, Equatable {
-    public let base64: String
+    public let json: ToriiJSONValue
 
-    public init(noritoInstructionBoxBytes: Data) throws {
-        guard !noritoInstructionBoxBytes.isEmpty else {
-            throw ToriiClientError.invalidPayload("instruction bytes must be non-empty.")
+    public init(json: ToriiJSONValue) throws {
+        guard case .object = json else {
+            throw ToriiClientError.invalidPayload(
+                "multisig propose JSON instructions must be structured InstructionBox objects. Use proposeMultisig(noritoBody:) for a native application/x-norito MultisigProposeDto body."
+            )
         }
-        self.base64 = noritoInstructionBoxBytes.base64EncodedString()
+        self.json = json
     }
 
+    public init(object: [String: ToriiJSONValue]) throws {
+        try self.init(json: .object(object))
+    }
+
+    @available(*, deprecated, message: "Per-instruction Norito blobs are not a Torii request format. Send a whole application/x-norito MultisigProposeDto body with proposeMultisig(noritoBody:).")
+    public init(noritoInstructionBoxBytes: Data) throws {
+        throw ToriiClientError.invalidPayload(
+            "per-instruction Norito blobs are not supported inside JSON multisig proposals; send a whole application/x-norito MultisigProposeDto body with proposeMultisig(noritoBody:)."
+        )
+    }
+
+    @available(*, deprecated, message: "Per-instruction Norito blobs are not a Torii request format. Send a whole application/x-norito MultisigProposeDto body with proposeMultisig(noritoBody:).")
     public init(base64: String) throws {
-        self.base64 = try ToriiRequestValidation.normalizedBase64(base64, field: "instructions")
+        throw ToriiClientError.invalidPayload(
+            "per-instruction Norito blobs are not supported inside JSON multisig proposals; send a whole application/x-norito MultisigProposeDto body with proposeMultisig(noritoBody:)."
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        try container.encode(base64)
+        try container.encode(json)
     }
 }
 
@@ -9195,15 +9249,9 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 creationTimeMs: UInt64? = nil,
                 feeSponsor: String? = nil,
                 noritoInstructionBoxBytes: [Data]) throws {
-        self.init(selector: selector,
-                  signerAccountId: signerAccountId,
-                  publicKeyHex: publicKeyHex,
-                  signatureB64: signatureB64,
-                  creationTimeMs: creationTimeMs,
-                  feeSponsor: feeSponsor,
-                  instructions: try noritoInstructionBoxBytes.map {
-                      try ToriiMultisigProposeInstruction(noritoInstructionBoxBytes: $0)
-                  })
+        throw ToriiClientError.invalidPayload(
+            "per-instruction Norito blobs are not supported inside JSON multisig proposals; send a whole application/x-norito MultisigProposeDto body with proposeMultisig(noritoBody:)."
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -10577,23 +10625,180 @@ public struct ToriiGovernanceUnlockStatsResponse: Decodable, Sendable {
 public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
     public struct Payload: Decodable, Sendable {
         public let txHash: String
+        public let entrypointHash: String?
+        public let signedTransactionHash: String?
         public let submittedAtMs: UInt64
         public let submittedAtHeight: UInt64
         public let signer: String
+        public let signerValue: ToriiJSONValue
 
         private enum CodingKeys: String, CodingKey {
             case txHash = "tx_hash"
+            case entrypointHash = "entrypoint_hash"
+            case signedTransactionHash = "signed_transaction_hash"
             case submittedAtMs = "submitted_at_ms"
             case submittedAtHeight = "submitted_at_height"
             case signer
+        }
+
+        public init(txHash: String,
+                    submittedAtMs: UInt64,
+                    submittedAtHeight: UInt64,
+                    signer: String,
+                    entrypointHash: String? = nil,
+                    signedTransactionHash: String? = nil,
+                    signerValue: ToriiJSONValue? = nil) {
+            self.txHash = txHash
+            self.entrypointHash = entrypointHash
+            self.signedTransactionHash = signedTransactionHash
+            self.submittedAtMs = submittedAtMs
+            self.submittedAtHeight = submittedAtHeight
+            self.signer = signer
+            self.signerValue = signerValue ?? .string(signer)
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            txHash = try ToriiSubmitTransactionResponse.decodeReceiptFieldString(
+                from: container,
+                key: .txHash,
+                field: "payload.tx_hash"
+            )
+            entrypointHash = try ToriiSubmitTransactionResponse.decodeOptionalReceiptFieldString(
+                from: container,
+                key: .entrypointHash,
+                field: "payload.entrypoint_hash"
+            )
+            signedTransactionHash = try ToriiSubmitTransactionResponse.decodeOptionalReceiptFieldString(
+                from: container,
+                key: .signedTransactionHash,
+                field: "payload.signed_transaction_hash"
+            )
+            submittedAtMs = try ToriiSubmitTransactionResponse.decodeReceiptUInt64(
+                from: container,
+                key: .submittedAtMs,
+                field: "payload.submitted_at_ms"
+            )
+            submittedAtHeight = try ToriiSubmitTransactionResponse.decodeReceiptUInt64(
+                from: container,
+                key: .submittedAtHeight,
+                field: "payload.submitted_at_height"
+            )
+            signerValue = try container.decode(ToriiJSONValue.self, forKey: .signer)
+            signer = try ToriiSubmitTransactionResponse.receiptFieldString(
+                signerValue,
+                field: "payload.signer",
+                codingPath: container.codingPath + [CodingKeys.signer]
+            )
         }
     }
 
     public let payload: Payload
     public let signature: String
+    public let signatureValue: ToriiJSONValue
+
+    private enum CodingKeys: String, CodingKey {
+        case payload
+        case signature
+    }
+
+    public init(payload: Payload,
+                signature: String,
+                signatureValue: ToriiJSONValue? = nil) {
+        self.payload = payload
+        self.signature = signature
+        self.signatureValue = signatureValue ?? .string(signature)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        payload = try container.decode(Payload.self, forKey: .payload)
+        signatureValue = try container.decode(ToriiJSONValue.self, forKey: .signature)
+        signature = try Self.receiptFieldString(
+            signatureValue,
+            field: "signature",
+            codingPath: container.codingPath + [CodingKeys.signature]
+        )
+    }
 
     /// Convenience accessor for transaction hash.
     public var hash: String { payload.txHash }
+
+    private static func decodeReceiptFieldString<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        key: K,
+        field: String
+    ) throws -> String {
+        let value = try container.decode(ToriiJSONValue.self, forKey: key)
+        return try receiptFieldString(
+            value,
+            field: field,
+            codingPath: container.codingPath + [key]
+        )
+    }
+
+    private static func decodeOptionalReceiptFieldString<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        key: K,
+        field: String
+    ) throws -> String? {
+        guard container.contains(key), try !container.decodeNil(forKey: key) else {
+            return nil
+        }
+        return try decodeReceiptFieldString(from: container, key: key, field: field)
+    }
+
+    private static func decodeReceiptUInt64<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        key: K,
+        field: String
+    ) throws -> UInt64 {
+        if let value = try? container.decode(UInt64.self, forKey: key) {
+            return value
+        }
+        if let string = try? container.decode(String.self, forKey: key) {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value = UInt64(trimmed) {
+                return value
+            }
+        }
+        throw DecodingError.dataCorrupted(
+            .init(codingPath: container.codingPath + [key],
+                  debugDescription: "\(field) must be an unsigned integer")
+        )
+    }
+
+    private static func receiptFieldString(_ value: ToriiJSONValue,
+                                           field: String,
+                                           codingPath: [CodingKey]) throws -> String {
+        if case let .string(string) = value {
+            return string
+        }
+        guard value != .null else {
+            throw DecodingError.valueNotFound(
+                ToriiJSONValue.self,
+                .init(codingPath: codingPath,
+                      debugDescription: "\(field) must not be null")
+            )
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        do {
+            let data = try encoder.encode(value)
+            if let string = String(data: data, encoding: .utf8) {
+                return string
+            }
+        } catch {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: codingPath,
+                      debugDescription: "\(field) could not be encoded as JSON: \(error)")
+            )
+        }
+        throw DecodingError.dataCorrupted(
+            .init(codingPath: codingPath,
+                  debugDescription: "\(field) could not be encoded as UTF-8 JSON")
+        )
+    }
 }
 
 public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
@@ -11327,7 +11532,7 @@ extension ToriiClientError: LocalizedError {
             }
             return "Torii responded with HTTP status \(code) (\(suffix))."
         case .decoding(let error):
-            return "Failed to decode Torii response: \(error.localizedDescription)"
+            return "Failed to decode Torii response: \(Self.describeDecodingError(error))"
         case .invalidPayload(let reason):
             return "Torii response payload was invalid: \(reason)"
         case let .dataModelMismatch(expected, actual):
@@ -11340,6 +11545,27 @@ extension ToriiClientError: LocalizedError {
                 return "Torii signed transaction schema hash mismatch (expected \(expected), got \(actual))."
             }
             return "Torii signed transaction schema hash mismatch (expected \(expected), missing on node)."
+        }
+    }
+
+    static func describeDecodingError(_ error: Swift.Error) -> String {
+        func path(_ codingPath: [CodingKey]) -> String {
+            let joined = codingPath.map(\.stringValue).joined(separator: ".")
+            return joined.isEmpty ? "<root>" : joined
+        }
+
+        switch error {
+        case let DecodingError.keyNotFound(key, context):
+            let fullPath = path(context.codingPath + [key])
+            return "missing key \(fullPath): \(context.debugDescription)"
+        case let DecodingError.typeMismatch(type, context):
+            return "type mismatch at \(path(context.codingPath)); expected \(type): \(context.debugDescription)"
+        case let DecodingError.valueNotFound(type, context):
+            return "missing value at \(path(context.codingPath)); expected \(type): \(context.debugDescription)"
+        case let DecodingError.dataCorrupted(context):
+            return "data corrupted at \(path(context.codingPath)): \(context.debugDescription)"
+        default:
+            return String(describing: error)
         }
     }
 }
@@ -12347,6 +12573,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func proposeMultisig(_ requestBody: ToriiMultisigProposeRequest,
                                 completion: @escaping (Result<ToriiMultisigResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.proposeMultisig(requestBody) }
+    }
+
+    @discardableResult
+    public func proposeMultisig(noritoBody: Data,
+                                completion: @escaping (Result<ToriiMultisigResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.proposeMultisig(noritoBody: noritoBody) }
     }
 
     @discardableResult
@@ -14121,7 +14353,26 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
-                                      headers: ["Content-Type": "application/json"])
+                                      headers: [
+                                          "Content-Type": "application/json",
+                                          "Accept": "application/json"
+                                      ])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiMultisigResponse.self, from: data)
+    }
+
+    public func proposeMultisig(noritoBody: Data) async throws -> ToriiMultisigResponse {
+        guard !noritoBody.isEmpty else {
+            throw ToriiClientError.invalidPayload("noritoBody must be a non-empty MultisigProposeDto frame.")
+        }
+        let request = try makeRequest(path: "/v1/multisig/propose",
+                                      method: .post,
+                                      queryItems: nil,
+                                      body: noritoBody,
+                                      headers: [
+                                          "Content-Type": "application/x-norito",
+                                          "Accept": "application/json"
+                                      ])
         let data = try await data(for: request)
         return try decodeJSON(ToriiMultisigResponse.self, from: data)
     }
@@ -14241,13 +14492,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getNodeCapabilities() async throws -> ToriiNodeCapabilities {
-        let request = try makeRequest(path: "/v1/node/capabilities")
+        let request = try makeRequest(path: "/v1/node/capabilities",
+                                      headers: ["Accept": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiNodeCapabilities.self, from: data)
     }
 
     private func getNodeCapabilitiesForSubmitValidation() async throws -> ToriiNodeCapabilities {
-        let request = try makeRequest(path: "/v1/node/capabilities")
+        let request = try makeRequest(path: "/v1/node/capabilities",
+                                      headers: ["Accept": "application/json"])
         let (data, response) = try await send(request)
         try ensureStatus(response, equals: 200, responseBody: data)
         if data.isEmpty {
@@ -14990,9 +15243,27 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                   let jsonData = jsonString.data(using: .utf8) else {
                 throw ToriiClientError.invalidPayload("failed to decode Norito receipt")
             }
-            return try decodeJSON(ToriiSubmitTransactionResponse.self, from: jsonData)
+            do {
+                return try decodeJSON(ToriiSubmitTransactionResponse.self, from: jsonData)
+            } catch let error as ToriiClientError {
+                if case let .decoding(underlying) = error {
+                    throw ToriiClientError.invalidPayload(
+                        "transaction receipt decode failed; body=\(responseBodyPreview(jsonData)); reason=\(ToriiClientError.describeDecodingError(underlying))"
+                    )
+                }
+                throw error
+            }
         }
-        return try decodeJSON(ToriiSubmitTransactionResponse.self, from: responseData)
+        do {
+            return try decodeJSON(ToriiSubmitTransactionResponse.self, from: responseData)
+        } catch let error as ToriiClientError {
+            if case let .decoding(underlying) = error {
+                throw ToriiClientError.invalidPayload(
+                    "transaction receipt decode failed; body=\(responseBodyPreview(responseData)); reason=\(ToriiClientError.describeDecodingError(underlying))"
+                )
+            }
+            throw error
+        }
     }
 
     public func getTransactionStatus(hashHex: String,

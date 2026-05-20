@@ -17293,10 +17293,21 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let definition = self
             .asset_definition(id.definition())
             .map_err(Error::from)?;
+        let requested_dataspace = match id.scope() {
+            AssetBalanceScope::Dataspace(dataspace) => Some(*dataspace),
+            AssetBalanceScope::Global => None,
+        };
+        let ambient_dataspace = self.current_dataspace_id;
+        let compatible_requested_dataspace =
+            requested_dataspace.filter(|requested| match ambient_dataspace {
+                None => true,
+                Some(ambient) => ambient == DataSpaceId::UNIVERSAL || ambient == *requested,
+            });
         let expected_scope = match definition.balance_scope_policy() {
             AssetBalancePolicy::Global => AssetBalanceScope::Global,
             AssetBalancePolicy::DataspaceRestricted => dataspace_hint
-                .or(self.current_dataspace_id)
+                .or(compatible_requested_dataspace)
+                .or(ambient_dataspace)
                 .map(AssetBalanceScope::Dataspace)
                 .ok_or_else(|| {
                     Error::InvariantViolation(
