@@ -2,6 +2,21 @@
 
 Last updated: 2026-05-20
 
+## 2026-05-20 Soracloud Webapp Auth Smoke Stabilization
+
+- Hardened generated Soracloud webapp/PII auth login handling so missing,
+  expired, replayed, principal-mismatched, origin-mismatched, and
+  bad-signature challenges are rejected before acquiring the consume lock.
+  Successful logins still re-read and revalidate the challenge after acquiring
+  the lock before minting a session.
+- Extended generated multi-replica Node auth smoke request timeouts so loaded
+  Rust test runs do not kill healthy child servers mid shared-state file lock.
+- Focused validation is green with
+  `cargo test -p iroha_cli generated_webapp_auth_smoke_rejects_replay_and_supports_shared_sessions -- --nocapture`,
+  `cargo test -p iroha_cli auth_replay_lock_contention_is_fail_closed -- --nocapture`,
+  `cargo test -p iroha_cli generated_pii_app_auth_core_handlers_reject_login_auth_failures -- --nocapture`,
+  and `git diff --check`.
+
 ## 2026-05-20 Taira Browser Connect CORS Config
 
 - Enabled explicit Torii CORS config in the checked-in Sora Taira validator

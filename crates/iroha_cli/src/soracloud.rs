@@ -16815,6 +16815,52 @@ function verifyEd25519Signature(publicKeyHex, signatureHex, message) {
   return crypto.verify(null, Buffer.from(message, "utf8"), verifierKey, signature.bytes);
 }
 
+function sendLoginChallengeFailureIfInvalid(req, res, challengeId, challenge, publicKey, nowMs) {
+  if (!challenge || typeof challenge !== "object") {
+    const expiredMarker = stateGet(challengeExpiredStateKey(challengeId));
+    if (expiredMarker && typeof expiredMarker === "object") {
+      sendAuthError(res, 401, "AUTH_CHALLENGE_EXPIRED", "challenge expired");
+      return true;
+    }
+    sendAuthError(res, 401, "AUTH_CHALLENGE_NOT_FOUND", "challenge not found");
+    return true;
+  }
+
+  const expiresAt = Number(challenge.expires_at_unix_ms);
+  if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) {
+    statePut(challengeExpiredStateKey(challengeId), {
+      schema_version: AUTH_STATE_SCHEMA_VERSION,
+      challenge_id: challengeId,
+      expires_at_unix_ms: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : nowMs,
+      marked_at_unix_ms: nowMs
+    });
+    stateDelete(challengeStateKey(challengeId));
+    sendAuthError(res, 401, "AUTH_CHALLENGE_EXPIRED", "challenge expired");
+    return true;
+  }
+  if (challenge.used_at_unix_ms !== null && challenge.used_at_unix_ms !== undefined) {
+    sendAuthError(res, 401, "AUTH_CHALLENGE_REPLAYED", "challenge already used");
+    return true;
+  }
+  if (!timingSafeEqualText(challenge.public_key, publicKey)) {
+    sendAuthError(
+      res,
+      401,
+      "AUTH_CHALLENGE_PRINCIPAL_MISMATCH",
+      "challenge principal mismatch"
+    );
+    return true;
+  }
+
+  const currentOrigin = requestOrigin(req);
+  if (challenge.origin && !timingSafeEqualText(challenge.origin, currentOrigin)) {
+    sendAuthError(res, 401, "AUTH_ORIGIN_MISMATCH", "request origin mismatch");
+    return true;
+  }
+
+  return false;
+}
+
 function cleanupExpiredAuthRecords(nowMs = Date.now()) {
   for (const [key, challenge] of stateEntries(AUTH_CHALLENGE_PREFIX)) {
     if (isChallengeExpiredStateKey(key)) {
@@ -17059,6 +17105,21 @@ async function handleAuthLogin(req, res, capabilityMap) {
     const challengeId = requireTrimmedString(body.challenge_id, "challenge_id");
     const signature = requireTrimmedString(body.signature, "signature");
     cleanupExpiredAuthRecords();
+
+    const challengeKey = challengeStateKey(challengeId);
+    let nowMs = Date.now();
+    let challenge = stateGet(challengeKey);
+    if (sendLoginChallengeFailureIfInvalid(req, res, challengeId, challenge, publicKey, nowMs)) {
+      return;
+    }
+
+    let canonicalMessage = canonicalChallengeMessage(challenge);
+    let signatureValid = verifyEd25519Signature(publicKey, signature, canonicalMessage);
+    if (!signatureValid) {
+      sendAuthError(res, 401, "AUTH_SIGNATURE_INVALID", "signature verification failed");
+      return;
+    }
+
     const consumeLock = acquireChallengeConsumeLock(challengeId);
     if (!consumeLock) {
       sendAuthError(res, 401, "AUTH_CHALLENGE_REPLAYED", "challenge already used");
@@ -17066,52 +17127,14 @@ async function handleAuthLogin(req, res, capabilityMap) {
     }
 
     try {
-      const challengeKey = challengeStateKey(challengeId);
-      const challenge = stateGet(challengeKey);
-      if (!challenge || typeof challenge !== "object") {
-        const expiredMarker = stateGet(challengeExpiredStateKey(challengeId));
-        if (expiredMarker && typeof expiredMarker === "object") {
-          sendAuthError(res, 401, "AUTH_CHALLENGE_EXPIRED", "challenge expired");
-          return;
-        }
-        sendAuthError(res, 401, "AUTH_CHALLENGE_NOT_FOUND", "challenge not found");
+      nowMs = Date.now();
+      challenge = stateGet(challengeKey);
+      if (sendLoginChallengeFailureIfInvalid(req, res, challengeId, challenge, publicKey, nowMs)) {
         return;
       }
 
-      const nowMs = Date.now();
-      if (Number(challenge.expires_at_unix_ms) <= nowMs) {
-        statePut(challengeExpiredStateKey(challengeId), {
-          schema_version: AUTH_STATE_SCHEMA_VERSION,
-          challenge_id: challengeId,
-          expires_at_unix_ms: Number(challenge.expires_at_unix_ms),
-          marked_at_unix_ms: nowMs
-        });
-        stateDelete(challengeKey);
-        sendAuthError(res, 401, "AUTH_CHALLENGE_EXPIRED", "challenge expired");
-        return;
-      }
-      if (challenge.used_at_unix_ms !== null && challenge.used_at_unix_ms !== undefined) {
-        sendAuthError(res, 401, "AUTH_CHALLENGE_REPLAYED", "challenge already used");
-        return;
-      }
-      if (!timingSafeEqualText(challenge.public_key, publicKey)) {
-        sendAuthError(
-          res,
-          401,
-          "AUTH_CHALLENGE_PRINCIPAL_MISMATCH",
-          "challenge principal mismatch"
-        );
-        return;
-      }
-
-      const currentOrigin = requestOrigin(req);
-      if (challenge.origin && !timingSafeEqualText(challenge.origin, currentOrigin)) {
-        sendAuthError(res, 401, "AUTH_ORIGIN_MISMATCH", "request origin mismatch");
-        return;
-      }
-
-      const canonicalMessage = canonicalChallengeMessage(challenge);
-      const signatureValid = verifyEd25519Signature(publicKey, signature, canonicalMessage);
+      canonicalMessage = canonicalChallengeMessage(challenge);
+      signatureValid = verifyEd25519Signature(publicKey, signature, canonicalMessage);
       if (!signatureValid) {
         sendAuthError(res, 401, "AUTH_SIGNATURE_INVALID", "signature verification failed");
         return;
@@ -32358,7 +32381,7 @@ import path from "node:path";
 
 const SERVER_PATH = __SERVER_PATH__;
 const STATE_FILE = __STATE_FILE__;
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 60000;
 const REPLICA_LOGS_BY_PORT = new Map();
 
 function assert(condition, message) {
@@ -32873,6 +32896,24 @@ async function main() {
     .sign(null, Buffer.from(challenge.body.message, "utf8"), privateKey)
     .toString("hex");
 
+  const { publicKey: otherPublicKey } = crypto.generateKeyPairSync("ed25519");
+  const otherPublicKeyHex = publicKeyHexFromSpki(
+    otherPublicKey.export({ format: "der", type: "spki" })
+  );
+  const principalMismatch = await jsonRequest(port, "POST", "/api/auth/login", {
+    public_key: otherPublicKeyHex,
+    challenge_id: challenge.body.challenge_id,
+    signature: "00".repeat(64)
+  });
+  assert(
+    principalMismatch.status === 401,
+    `principal mismatch should fail before challenge-lock acquisition: ${JSON.stringify(principalMismatch)}`
+  );
+  assert(
+    principalMismatch.body?.code === "AUTH_CHALLENGE_PRINCIPAL_MISMATCH",
+    `unexpected principal mismatch code: ${JSON.stringify(principalMismatch.body)}`
+  );
+
   const blockedByLock = await jsonRequest(port, "POST", "/api/auth/login", {
     public_key: publicKeyHex,
     challenge_id: challenge.body.challenge_id,
@@ -33075,6 +33116,24 @@ async function main() {
   const signature = crypto
     .sign(null, Buffer.from(challenge.body.message, "utf8"), privateKey)
     .toString("hex");
+
+  const { publicKey: otherPublicKey } = crypto.generateKeyPairSync("ed25519");
+  const otherPublicKeyHex = publicKeyHexFromSpki(
+    otherPublicKey.export({ format: "der", type: "spki" })
+  );
+  const principalMismatch = await jsonRequest(port, "POST", "/pii/api/auth/login", {
+    public_key: otherPublicKeyHex,
+    challenge_id: challenge.body.challenge_id,
+    signature: "00".repeat(64)
+  });
+  assert(
+    principalMismatch.status === 401,
+    `principal mismatch should fail before challenge-lock acquisition: ${JSON.stringify(principalMismatch)}`
+  );
+  assert(
+    principalMismatch.body?.code === "AUTH_CHALLENGE_PRINCIPAL_MISMATCH",
+    `unexpected principal mismatch code: ${JSON.stringify(principalMismatch.body)}`
+  );
 
   const blockedByLock = await jsonRequest(port, "POST", "/pii/api/auth/login", {
     public_key: publicKeyHex,
@@ -33425,7 +33484,7 @@ import net from "node:net";
 const SERVER_PATH = __SERVER_PATH__;
 const FORWARDED_PROTO = "https";
 const FORWARDED_HOST = "pii-auth.example.internal";
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 60000;
 
 function assert(condition, message) {
   if (!condition) {
@@ -33691,7 +33750,7 @@ import net from "node:net";
 
 const SERVER_PATH = __SERVER_PATH__;
 const STATE_FILE = __STATE_FILE__;
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 60000;
 
 function assert(condition, message) {
   if (!condition) {
@@ -34874,7 +34933,7 @@ import path from "node:path";
 
 const SERVER_PATH = __SERVER_PATH__;
 const STATE_FILE = __STATE_FILE__;
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 60000;
 
 function assert(condition, message) {
   if (!condition) {
