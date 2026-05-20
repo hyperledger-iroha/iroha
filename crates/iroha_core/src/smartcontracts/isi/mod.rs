@@ -209,6 +209,8 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::vpn::RefundExpiredVpnLease>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudService>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::UpgradeSoracloudService>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudAppInfra>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RollbackSoracloudService>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudServiceConfig>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::DeleteSoracloudServiceConfig>,

@@ -5675,6 +5675,59 @@ test("waitForIsoMessageStatus forwards retryProfile to status polls", async () =
   assert.deepEqual(retryProfiles, ["iso-wait", "iso-wait"]);
 });
 
+test("ToriiClient submits Soracloud app infra mutations", async () => {
+  const calls = [];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 500 }),
+  });
+  client._request = async (method, path, init = {}) => {
+    calls.push({ method, path, init });
+    return createResponse({
+      status: 200,
+      jsonData: { ok: true },
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const request = {
+    manifest: { app_name: "hayahi" },
+    provenance: { signer: "signer", signature: "ABCD" },
+  };
+  assert.deepEqual(await client.deploySoracloudAppInfra(request), { ok: true });
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].path, "/v1/soracloud/apps/deploy");
+  assert.deepEqual(JSON.parse(calls[0].init.body), request);
+
+  assert.deepEqual(await client.upgradeSoracloudAppInfra(request), { ok: true });
+  assert.equal(calls[1].path, "/v1/soracloud/apps/upgrade");
+});
+
+test("ToriiClient fetches Soracloud app infra status", async () => {
+  const calls = [];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 500 }),
+  });
+  client._request = async (method, path, init = {}) => {
+    calls.push({ method, path, init });
+    return createResponse({
+      status: 200,
+      jsonData: { app_count: 1 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  assert.deepEqual(
+    await client.getSoracloudAppInfraStatus({ appName: "hayahi", auditLimit: 3 }),
+    { app_count: 1 },
+  );
+  assert.equal(calls[0].path, "/v1/soracloud/apps/status");
+  assert.deepEqual(calls[0].init.params, { app_name: "hayahi", audit_limit: 3 });
+
+  await client.getSoracloudNamedAppInfraStatus("hayahi app", { auditLimit: "2" });
+  assert.equal(calls[1].path, "/v1/soracloud/apps/hayahi%20app/status");
+  assert.deepEqual(calls[1].init.params, { audit_limit: 2 });
+});
+
 test("waitForIsoMessageStatus throws when no terminal status is observed", async () => {
   const fetchImpl = async () =>
     createResponse({
@@ -16998,6 +17051,26 @@ test("registerContractCode posts manifest JSON", async () => {
     manifest: {
       codeHash: "a".repeat(64),
       compilerFingerprint: "rustc",
+      accessSetHints: {
+        readKeys: ["account:alice"],
+        writeKeys: ["contract:foo"],
+        dynamicReads: [
+          {
+            baseKey: "state:Balances",
+            keyType: "AccountId",
+            boundKind: "take",
+            maxKeys: 4,
+          },
+        ],
+        dynamicWrites: [
+          {
+            base_key: "state:Votes",
+            key_type: "ReferendumId",
+            bound_kind: "range",
+            max_keys: "2",
+          },
+        ],
+      },
       entrypoints: [
         { name: "upgrade_ledger", kind: "Kaizen", permission: "can_upgrade" },
       ],
@@ -17026,7 +17099,26 @@ test("registerContractCode posts manifest JSON", async () => {
       compiler_fingerprint: "rustc",
       abi_hash: null,
       features_bitmap: null,
-      access_set_hints: null,
+      access_set_hints: {
+        read_keys: ["account:alice"],
+        write_keys: ["contract:foo"],
+        dynamic_reads: [
+          {
+            base_key: "state:Balances",
+            key_type: "AccountId",
+            bound_kind: "take",
+            max_keys: 4,
+          },
+        ],
+        dynamic_writes: [
+          {
+            base_key: "state:Votes",
+            key_type: "ReferendumId",
+            bound_kind: "range",
+            max_keys: 2,
+          },
+        ],
+      },
       entrypoints: [
         { name: "upgrade_ledger", kind: "Kaizen", permission: "can_upgrade" },
       ],

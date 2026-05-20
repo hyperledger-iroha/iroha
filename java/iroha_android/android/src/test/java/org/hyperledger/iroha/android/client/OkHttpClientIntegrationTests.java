@@ -77,7 +77,8 @@ public final class OkHttpClientIntegrationTests {
       assertEquals("/v1/pipeline/transactions", submit.getPath());
       assertEquals("POST", submit.getMethod());
       assertEquals("application/x-norito", submit.getHeader("Content-Type"));
-      assertEquals("application/x-norito, application/json", submit.getHeader("Accept"));
+      assertEquals(
+          WireFormatPreference.NORITO_PREFERRED.acceptHeader(), submit.getHeader("Accept"));
       final byte[] submitBody = submit.getBody().readByteArray();
       assertArrayEquals(SignedTransactionEncoder.encodeVersioned(transaction), submitBody);
 

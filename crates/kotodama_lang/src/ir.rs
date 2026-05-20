@@ -543,6 +543,10 @@ pub enum Instr {
     CurrentTimeMs {
         dest: Temp,
     },
+    /// Load the current trusted host block height into `dest`.
+    BlockHeight {
+        dest: Temp,
+    },
     /// Resolve a canonical account alias string to the current AccountId.
     ResolveAccountAlias {
         dest: Temp,
@@ -3681,6 +3685,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "current_time_ms" => {
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::CurrentTimeMs { dest: t });
+                    t
+                }
+                "block_height" => {
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::BlockHeight { dest: t });
                     t
                 }
                 "trigger_event" => {

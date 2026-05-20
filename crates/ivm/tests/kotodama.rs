@@ -654,6 +654,19 @@ fn compile_emits_current_time_syscall() {
 }
 
 #[test]
+fn compile_emits_block_height_syscall() {
+    let src = r#"fn f() { let height = block_height(); }"#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let code_region = &code[off..];
+    let want = encoding::wide::encode_syscallx(syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT).to_le_bytes();
+    assert!(
+        code_region.windows(want.len()).any(|window| window == want),
+        "SYSVAR_BLOCK_HEIGHT syscall not found"
+    );
+}
+
+#[test]
 fn compile_emits_resolve_account_alias_syscall() {
     let src = r#"fn f() { let a = resolve_account_alias("banking@centralbank"); }"#;
     let code = Compiler::new().compile_source(src).expect("compile");

@@ -19,17 +19,22 @@ use crate::{
     soracloud::{
         AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
         FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SecretEnvelopeV1,
-        SoraDeploymentBundleV1, SoraHfResourceProfileV1, SoraInrouHostCapabilityRecordV1,
-        SoraInrouReplicaRuntimeStateV1, SoraModelHostCapabilityRecordV1,
-        SoraModelHostViolationKindV1, SoraPrivateUploadedModelExecutionReceiptV1,
-        SoraRuntimeReceiptV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-        SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraUploadedModelBundleV1,
+        SoraAppInfraManifestV1, SoraDeploymentBundleV1, SoraHfResourceProfileV1,
+        SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
+        SoraModelHostCapabilityRecordV1, SoraModelHostViolationKindV1,
+        SoraPrivateUploadedModelExecutionReceiptV1, SoraRuntimeReceiptV1,
+        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
+        SoraStateMutationOperationV1, SoraUploadedModelBundleV1,
     },
     sorafs::pin_registry::StorageClass,
 };
 
 fn encoded_order<T: Encode>(left: &T, right: &T) -> Ordering {
     left.encode().cmp(&right.encode())
+}
+
+fn decode_flags() -> u8 {
+    norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
 
 /// Admit a brand new Soracloud service deployment.
@@ -81,6 +86,108 @@ pub struct UpgradeSoracloudService {
 impl crate::seal::Instruction for UpgradeSoracloudService {}
 
 impl PartialOrd for UpgradeSoracloudService {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Admit a brand new Soracloud app-level infrastructure topology.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct DeploySoracloudAppInfra {
+    /// App topology manifest being admitted.
+    pub manifest: SoraAppInfraManifestV1,
+    /// Provenance attestation over the app topology payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for DeploySoracloudAppInfra {}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for DeploySoracloudAppInfra {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let manifest = super::decode_aos_canonical_field::<SoraAppInfraManifestV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let provenance = super::decode_aos_canonical_field::<ManifestProvenance>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                manifest,
+                provenance,
+            },
+            offset,
+        ))
+    }
+}
+
+impl PartialOrd for DeploySoracloudAppInfra {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Admit an upgraded Soracloud app-level infrastructure topology.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct UpgradeSoracloudAppInfra {
+    /// App topology manifest being admitted.
+    pub manifest: SoraAppInfraManifestV1,
+    /// Provenance attestation over the app topology payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for UpgradeSoracloudAppInfra {}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for UpgradeSoracloudAppInfra {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let manifest = super::decode_aos_canonical_field::<SoraAppInfraManifestV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let provenance = super::decode_aos_canonical_field::<ManifestProvenance>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                manifest,
+                provenance,
+            },
+            offset,
+        ))
+    }
+}
+
+impl PartialOrd for UpgradeSoracloudAppInfra {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }

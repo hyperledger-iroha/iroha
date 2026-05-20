@@ -11,13 +11,23 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{account::NewAccount, prelude::*};
-use ivm::{IVM, KotodamaCompiler, verify_contract_artifact};
+use ivm::{
+    IVM, KotodamaCompiler, ProgramMetadata,
+    kotodama::compiler::{CompilerMode, CompilerOptions},
+};
 use mv::storage::StorageReadOnly;
 use std::sync::Arc;
 
 fn fixture_account(hex_public_key: &str) -> AccountId {
     let public_key = hex_public_key.parse().expect("public key");
     AccountId::new(public_key)
+}
+
+fn pointer_abi_test_compiler() -> KotodamaCompiler {
+    KotodamaCompiler::new_with_options(CompilerOptions {
+        mode: CompilerMode::Test,
+        ..CompilerOptions::default()
+    })
 }
 
 #[test]
@@ -161,7 +171,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
         }}
     "#
     );
-    let program = KotodamaCompiler::new()
+    let program = pointer_abi_test_compiler()
         .compile_source(&src)
         .expect("compile pointer state transfer");
 
@@ -264,7 +274,7 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     let authority =
         fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
 
-    let write_program = KotodamaCompiler::new()
+    let write_program = pointer_abi_test_compiler()
         .compile_source(&write_src)
         .expect("compile writer");
     let mut write_vm = IVM::new(50_000_000);
@@ -282,7 +292,7 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
             .insert(path, stored);
     }
 
-    let read_program = KotodamaCompiler::new()
+    let read_program = pointer_abi_test_compiler()
         .compile_source(&read_src)
         .expect("compile reader");
     let mut read_vm = IVM::new(50_000_000);
@@ -337,7 +347,7 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
         }
     "#;
 
-    let write_program = KotodamaCompiler::new()
+    let write_program = pointer_abi_test_compiler()
         .compile_source(&write_src)
         .expect("compile writer");
     let mut write_vm = IVM::new(50_000_000);
@@ -355,7 +365,7 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
             .insert(path, stored);
     }
 
-    let read_program = KotodamaCompiler::new()
+    let read_program = pointer_abi_test_compiler()
         .compile_source(read_src)
         .expect("compile reader");
     let mut read_vm = IVM::new(50_000_000);
@@ -414,7 +424,7 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     "#
     );
 
-    let write_program = KotodamaCompiler::new()
+    let write_program = pointer_abi_test_compiler()
         .compile_source(&write_src)
         .expect("compile writer");
     let mut write_vm = IVM::new(50_000_000);
@@ -432,7 +442,7 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
             .insert(path, stored);
     }
 
-    let read_program = KotodamaCompiler::new()
+    let read_program = pointer_abi_test_compiler()
         .compile_source(&read_src)
         .expect("compile reader");
     let mut read_vm = IVM::new(50_000_000);
@@ -490,22 +500,24 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
           }
         }
     "#;
-    let program = KotodamaCompiler::new()
+    let program = pointer_abi_test_compiler()
         .compile_source(source)
         .expect("compile dlmm_pool");
-    let artifact = verify_contract_artifact(&program).expect("verify contract artifact");
+    let artifact = ProgramMetadata::parse(&program).expect("parse contract artifact");
+    let contract_interface = artifact
+        .contract_interface
+        .as_ref()
+        .expect("contract interface");
     let prefix_len = (artifact.code_offset - artifact.header_len) as u64;
     let init_pool_pc = prefix_len
-        + artifact
-            .contract_interface
+        + contract_interface
             .entrypoints
             .iter()
             .find(|entry| entry.name == "init_pool")
             .expect("init_pool entrypoint")
             .entry_pc;
     let seed_bin_pc = prefix_len
-        + artifact
-            .contract_interface
+        + contract_interface
             .entrypoints
             .iter()
             .find(|entry| entry.name == "seed_bin")

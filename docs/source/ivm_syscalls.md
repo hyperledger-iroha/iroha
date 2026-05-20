@@ -40,6 +40,7 @@ Canonical syscall table (subset)
 | 0xA2 | CREATE_NFTS_FOR_ALL_USERS  | –                                                                       | `u64=count` | `G_create_nfts_for_all`      | Helper; feature‑gated |
 | 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64`                                                         | `u64=prev`  | `G_set_depth`                | Admin; feature‑gated |
 | 0xA4 | GET_AUTHORITY              | – (host writes result)                                                  | `&AccountId`| `G_get_auth`                 | Host writes pointer to current authority into `r10` |
+| 0xA8 | CURRENT_TIME_MS            | –                                                                       | `u64=unix_time_ms` | `G_sysvar`             | Kotodama `current_time_ms()` |
 | 0xF7 | GET_MERKLE_PATH            | `addr:u64`, `out_ptr:u64`, optional `root_out:u64`                      | `u64=len`   | `G_mpath + len`             | Writes path (leaf→root) and optional root bytes |
 | 0xFA | GET_MERKLE_COMPACT         | `addr:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]` |
 | 0xFF | GET_REGISTER_MERKLE_COMPACT| `reg_index:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | Same compact layout for register commitment |
@@ -52,6 +53,7 @@ Gas enforcement
 Notes
 - All pointer arguments reference Norito TLV envelopes in the INPUT region and are validated on first dereference (`E_NORITO_INVALID` on error).
 - All mutations are applied via Iroha’s standard executor (through `CoreHost`), not directly by the VM.
+- Kotodama `block_height()` lowers to the existing extended `SYSVAR_BLOCK_HEIGHT` syscall (`0x010021`) and returns the host-provided block height as an integer.
 - Exact gas constants (`G_*`) are defined by the active gas schedule; see `ivm.md`.
 
 Errors

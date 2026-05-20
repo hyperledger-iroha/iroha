@@ -144,6 +144,18 @@ pub const SORA_SERVICE_LEASE_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceAuditEventV1`].
 pub const SORA_SERVICE_AUDIT_EVENT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraAppStaticSiteBindingV1`].
+pub const SORA_APP_STATIC_SITE_BINDING_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraAppInfraServiceRefV1`].
+pub const SORA_APP_INFRA_SERVICE_REF_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraAppRouteProjectionV1`].
+pub const SORA_APP_ROUTE_PROJECTION_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraAppInfraManifestV1`].
+pub const SORA_APP_INFRA_MANIFEST_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraAppInfraStateV1`].
+pub const SORA_APP_INFRA_STATE_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraAppInfraAuditEventV1`].
+pub const SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1: u16 = 1;
 
 const SORA_STORAGE_BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
 const SORA_NETWORK_BYTES_PER_MIB: u64 = 1024 * 1024;
@@ -221,6 +233,12 @@ pub enum SoracloudManifestError {
     DuplicateLeaseVolume {
         /// Duplicate lease-volume identifier.
         volume: Name,
+    },
+    /// App infrastructure manifests cannot reference the same service twice.
+    #[error("sora app infra manifest includes duplicate service `{service}`")]
+    DuplicateAppService {
+        /// Duplicate service identifier.
+        service: Name,
     },
     /// Service manifests cannot define duplicate handler names.
     #[error("sora service manifest includes duplicate handler `{handler}`")]
@@ -9366,6 +9384,474 @@ impl SoraAgentApartmentAuditEventV1 {
     }
 }
 
+fn validate_optional_nonempty(
+    manifest: &'static str,
+    field: &'static str,
+    value: Option<&str>,
+) -> Result<(), SoracloudManifestError> {
+    if matches!(value, Some(value) if value.trim().is_empty()) {
+        return Err(SoracloudManifestError::EmptyField { manifest, field });
+    }
+    Ok(())
+}
+
+fn validate_public_url(
+    manifest: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoracloudManifestError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(SoracloudManifestError::EmptyField { manifest, field });
+    }
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must start with http:// or https://".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_absolute_path(
+    manifest: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoracloudManifestError> {
+    if value.trim().is_empty() {
+        return Err(SoracloudManifestError::EmptyField { manifest, field });
+    }
+    if !value.starts_with('/') {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must start with `/`".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Lifecycle action recorded for an app-level Soracloud topology transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+pub enum SoraAppInfraActionV1 {
+    /// First-time admission of an app topology.
+    Deploy,
+    /// Upgrade of an already admitted app topology.
+    Upgrade,
+}
+
+/// Static-site binding attached to a Soracloud app.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraAppStaticSiteBindingV1 {
+    /// Schema version; must equal [`SORA_APP_STATIC_SITE_BINDING_VERSION_V1`].
+    pub schema_version: u16,
+    /// Public URL exposed to browsers.
+    pub public_url: String,
+    /// Optional content-addressed site CID.
+    #[norito(default)]
+    pub content_cid: Option<String>,
+    /// Optional static-site manifest digest.
+    #[norito(default)]
+    pub manifest_digest_hex: Option<String>,
+    /// URL path where static content is mounted.
+    pub mount_path: String,
+    /// Optional API base path consumed by the static frontend.
+    #[norito(default)]
+    pub api_base_path: Option<String>,
+}
+
+impl SoraAppStaticSiteBindingV1 {
+    /// Validate static-site binding fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when version or URL/path fields are malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORA_APP_STATIC_SITE_BINDING_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "sora app static site binding",
+                expected: SORA_APP_STATIC_SITE_BINDING_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        validate_public_url(
+            "sora app static site binding",
+            "public_url",
+            &self.public_url,
+        )?;
+        validate_absolute_path(
+            "sora app static site binding",
+            "mount_path",
+            &self.mount_path,
+        )?;
+        if let Some(api_base_path) = self.api_base_path.as_ref() {
+            validate_absolute_path(
+                "sora app static site binding",
+                "api_base_path",
+                api_base_path,
+            )?;
+        }
+        validate_optional_nonempty(
+            "sora app static site binding",
+            "content_cid",
+            self.content_cid.as_deref(),
+        )?;
+        validate_optional_nonempty(
+            "sora app static site binding",
+            "manifest_digest_hex",
+            self.manifest_digest_hex.as_deref(),
+        )
+    }
+}
+
+/// Route projection exposed by a service inside an app topology.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraAppRouteProjectionV1 {
+    /// Schema version; must equal [`SORA_APP_ROUTE_PROJECTION_VERSION_V1`].
+    pub schema_version: u16,
+    /// Public host name when the route is externally reachable.
+    #[norito(default)]
+    pub public_host: Option<String>,
+    /// Public or internal path prefix.
+    pub path_prefix: String,
+    /// Optional internal service URL routed by Soracloud.
+    #[norito(default)]
+    pub internal_url: Option<String>,
+}
+
+impl SoraAppRouteProjectionV1 {
+    /// Validate app route projection fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when version or route fields are malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORA_APP_ROUTE_PROJECTION_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "sora app route projection",
+                expected: SORA_APP_ROUTE_PROJECTION_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        validate_absolute_path(
+            "sora app route projection",
+            "path_prefix",
+            &self.path_prefix,
+        )?;
+        validate_optional_nonempty(
+            "sora app route projection",
+            "public_host",
+            self.public_host.as_deref(),
+        )?;
+        validate_optional_nonempty(
+            "sora app route projection",
+            "internal_url",
+            self.internal_url.as_deref(),
+        )
+    }
+}
+
+/// Reference to an admitted Soracloud service revision in an app topology.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraAppInfraServiceRefV1 {
+    /// Schema version; must equal [`SORA_APP_INFRA_SERVICE_REF_VERSION_V1`].
+    pub schema_version: u16,
+    /// Service name.
+    pub service_name: Name,
+    /// Admitted service revision.
+    pub service_version: String,
+    /// Hash of the service manifest for the referenced revision.
+    pub service_manifest_hash: Hash,
+    /// Hash of the container manifest for the referenced revision.
+    pub container_manifest_hash: Hash,
+    /// Expected execution plane for the referenced service.
+    pub execution_plane: SoraServiceExecutionPlaneV1,
+    /// Expected container runtime for the referenced service.
+    pub runtime: SoraContainerRuntimeV1,
+    /// Routes projected from this service into the app.
+    #[norito(default)]
+    pub routes: Vec<SoraAppRouteProjectionV1>,
+    /// Optional persistent lease-volume names the app topology depends on.
+    #[norito(default)]
+    pub lease_volumes: Vec<Name>,
+    /// Optional shard identifier for horizontally sharded app services.
+    #[norito(default)]
+    pub shard: Option<String>,
+}
+
+impl SoraAppInfraServiceRefV1 {
+    /// Validate service reference fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when version, revision, or routes are malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORA_APP_INFRA_SERVICE_REF_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "sora app infra service ref",
+                expected: SORA_APP_INFRA_SERVICE_REF_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.service_version.trim().is_empty() {
+            return Err(SoracloudManifestError::EmptyField {
+                manifest: "sora app infra service ref",
+                field: "service_version",
+            });
+        }
+        validate_optional_nonempty("sora app infra service ref", "shard", self.shard.as_deref())?;
+        let mut route_paths = BTreeSet::new();
+        for route in &self.routes {
+            route.validate()?;
+            if !route_paths.insert((route.public_host.clone(), route.path_prefix.clone())) {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "sora app infra service ref",
+                    field: "routes",
+                    reason: format!(
+                        "duplicate route projection for host {:?} and path `{}`",
+                        route.public_host, route.path_prefix
+                    ),
+                });
+            }
+        }
+        let mut volumes = BTreeSet::new();
+        for volume in &self.lease_volumes {
+            if !volumes.insert(volume.clone()) {
+                return Err(SoracloudManifestError::DuplicateLeaseVolume {
+                    volume: volume.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Canonical app-level Soracloud infrastructure manifest.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraAppInfraManifestV1 {
+    /// Schema version; must equal [`SORA_APP_INFRA_MANIFEST_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable application name.
+    pub app_name: Name,
+    /// Application topology revision.
+    pub app_version: String,
+    /// Public URL for the application.
+    pub public_url: String,
+    /// Optional static-site binding.
+    #[norito(default)]
+    pub static_site: Option<SoraAppStaticSiteBindingV1>,
+    /// Authoritative service topology.
+    pub services: Vec<SoraAppInfraServiceRefV1>,
+}
+
+impl SoraAppInfraManifestV1 {
+    /// Compute the canonical app-infra manifest hash.
+    #[must_use]
+    pub fn manifest_hash(&self) -> Hash {
+        Hash::new(Encode::encode(self))
+    }
+
+    /// Validate app topology invariants.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the topology is malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORA_APP_INFRA_MANIFEST_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "sora app infra manifest",
+                expected: SORA_APP_INFRA_MANIFEST_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.app_version.trim().is_empty() {
+            return Err(SoracloudManifestError::EmptyField {
+                manifest: "sora app infra manifest",
+                field: "app_version",
+            });
+        }
+        validate_public_url("sora app infra manifest", "public_url", &self.public_url)?;
+        if self.services.is_empty() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora app infra manifest",
+                field: "services",
+                reason: "at least one service reference is required".to_string(),
+            });
+        }
+        if let Some(static_site) = self.static_site.as_ref() {
+            static_site.validate()?;
+        }
+        let mut service_names = BTreeSet::new();
+        for service in &self.services {
+            service.validate()?;
+            if !service_names.insert(service.service_name.clone()) {
+                return Err(SoracloudManifestError::DuplicateAppService {
+                    service: service.service_name.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Authoritative app-level Soracloud infrastructure state.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraAppInfraStateV1 {
+    /// Schema version; must equal [`SORA_APP_INFRA_STATE_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable application name.
+    pub app_name: Name,
+    /// Active app topology revision.
+    pub current_app_version: String,
+    /// Hash of the active app topology.
+    pub current_manifest_hash: Hash,
+    /// Number of admitted app topology revisions.
+    pub revision_count: u32,
+    /// Audit sequence that deployed this topology.
+    pub deployed_sequence: u64,
+    /// Audit sequence that last updated this topology.
+    pub updated_sequence: u64,
+    /// Active app topology manifest.
+    pub manifest: SoraAppInfraManifestV1,
+}
+
+impl SoraAppInfraStateV1 {
+    /// Validate app topology state.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the state is inconsistent.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORA_APP_INFRA_STATE_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "sora app infra state",
+                expected: SORA_APP_INFRA_STATE_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        self.manifest.validate()?;
+        if self.app_name != self.manifest.app_name {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora app infra state",
+                field: "app_name",
+                reason: "must match embedded manifest app_name".to_string(),
+            });
+        }
+        if self.current_app_version != self.manifest.app_version {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora app infra state",
+                field: "current_app_version",
+                reason: "must match embedded manifest app_version".to_string(),
+            });
+        }
+        if self.current_manifest_hash != self.manifest.manifest_hash() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora app infra state",
+                field: "current_manifest_hash",
+                reason: "must match embedded manifest hash".to_string(),
+            });
+        }
+        if self.revision_count == 0 || self.deployed_sequence == 0 || self.updated_sequence == 0 {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora app infra state",
+                field: "sequence",
+                reason: "revision_count and audit sequences must be greater than zero".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Audit record for an authoritative Soracloud app topology event.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraAppInfraAuditEventV1 {
+    /// Schema version; must equal [`SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1`].
+    pub schema_version: u16,
+    /// Monotonic audit/event sequence.
+    pub sequence: u64,
+    /// App topology action.
+    pub action: SoraAppInfraActionV1,
+    /// Application affected by the transition.
+    pub app_name: Name,
+    /// Previous active app version, when applicable.
+    #[norito(default)]
+    pub from_version: Option<String>,
+    /// Resulting active app version.
+    pub to_version: String,
+    /// Hash of the admitted app topology.
+    pub app_manifest_hash: Hash,
+    /// Number of service refs in the topology.
+    pub service_count: u32,
+    /// Provenance signer that authorized the topology transition.
+    pub signer: PublicKey,
+}
+
+impl SoraAppInfraAuditEventV1 {
+    /// Validate app topology audit records.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when event fields are malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "sora app infra audit event",
+                expected: SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.sequence == 0 {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora app infra audit event",
+                field: "sequence",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.to_version.trim().is_empty() {
+            return Err(SoracloudManifestError::EmptyField {
+                manifest: "sora app infra audit event",
+                field: "to_version",
+            });
+        }
+        if self.service_count == 0 {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora app infra audit event",
+                field: "service_count",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        validate_optional_nonempty(
+            "sora app infra audit event",
+            "from_version",
+            self.from_version.as_deref(),
+        )
+    }
+}
+
 /// Audit record for an authoritative Soracloud lifecycle event.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -10399,6 +10885,19 @@ pub fn encode_bundle_provenance_payload(
     norito::to_bytes(bundle)
 }
 
+/// Encode the canonical provenance signature payload for app-level infrastructure manifests.
+///
+/// The payload layout is the canonical Norito encoding of
+/// [`SoraAppInfraManifestV1`].
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_app_infra_provenance_payload(
+    manifest: &SoraAppInfraManifestV1,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(manifest)
+}
+
 /// Encode the canonical provenance signature payload for deployment bundles plus inline materials.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -11280,6 +11779,44 @@ mod tests {
         name.parse().expect("valid name")
     }
 
+    fn sample_app_infra_service(name: &str) -> SoraAppInfraServiceRefV1 {
+        SoraAppInfraServiceRefV1 {
+            schema_version: SORA_APP_INFRA_SERVICE_REF_VERSION_V1,
+            service_name: sample_name(name),
+            service_version: "1.0.0".to_string(),
+            service_manifest_hash: sample_hash(10),
+            container_manifest_hash: sample_hash(11),
+            execution_plane: SoraServiceExecutionPlaneV1::HttpService,
+            runtime: SoraContainerRuntimeV1::Inrou,
+            routes: vec![SoraAppRouteProjectionV1 {
+                schema_version: SORA_APP_ROUTE_PROJECTION_VERSION_V1,
+                public_host: Some("app.example.test".to_string()),
+                path_prefix: "/api".to_string(),
+                internal_url: Some("soracloud://app_api:8080/api".to_string()),
+            }],
+            lease_volumes: vec![sample_name("app_data")],
+            shard: Some("SORACLOUD_SHARD_ID=0;SORACLOUD_SHARD_COUNT=1".to_string()),
+        }
+    }
+
+    fn sample_app_infra_manifest() -> SoraAppInfraManifestV1 {
+        SoraAppInfraManifestV1 {
+            schema_version: SORA_APP_INFRA_MANIFEST_VERSION_V1,
+            app_name: sample_name("sample_app"),
+            app_version: "1.0.0".to_string(),
+            public_url: "https://app.example.test".to_string(),
+            static_site: Some(SoraAppStaticSiteBindingV1 {
+                schema_version: SORA_APP_STATIC_SITE_BINDING_VERSION_V1,
+                public_url: "https://app.example.test".to_string(),
+                content_cid: Some("bafyapp".to_string()),
+                manifest_digest_hex: Some("a".repeat(64)),
+                mount_path: "/".to_string(),
+                api_base_path: Some("/api".to_string()),
+            }),
+            services: vec![sample_app_infra_service("app_api")],
+        }
+    }
+
     fn sample_signer() -> PublicKey {
         KeyPair::random().public_key().clone()
     }
@@ -11292,6 +11829,41 @@ mod tests {
     fn sample_asset_definition_id(asset_definition_id: &str) -> AssetDefinitionId {
         AssetDefinitionId::parse_address_literal(asset_definition_id)
             .expect("sample asset definition id literal should parse")
+    }
+
+    #[test]
+    fn app_infra_manifest_validation_rejects_duplicate_services() {
+        let mut manifest = sample_app_infra_manifest();
+        manifest.services.push(sample_app_infra_service("app_api"));
+        let error = manifest
+            .validate()
+            .expect_err("duplicate app service must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::DuplicateAppService { service }
+                if service == sample_name("app_api")
+        ));
+    }
+
+    #[test]
+    fn app_infra_manifest_hash_and_provenance_are_canonical() {
+        let manifest = sample_app_infra_manifest();
+        manifest
+            .validate()
+            .expect("sample app infra manifest must validate");
+        assert_eq!(manifest.services[0].routes[0].path_prefix, "/api");
+        assert_eq!(
+            manifest.services[0].lease_volumes[0],
+            sample_name("app_data")
+        );
+        assert_eq!(
+            manifest.manifest_hash(),
+            Hash::new(Encode::encode(&manifest))
+        );
+        assert_eq!(
+            encode_app_infra_provenance_payload(&manifest).expect("encode app infra provenance"),
+            norito::to_bytes(&manifest).expect("encode canonical manifest")
+        );
     }
 
     fn sample_model_provenance_ref() -> SoraModelProvenanceRefV1 {

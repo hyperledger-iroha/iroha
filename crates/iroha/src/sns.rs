@@ -9,11 +9,14 @@ use eyre::Result;
 
 use crate::{
     client::{Client, ResponseReport, join_torii_url},
-    data_model::sns::{
-        ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
-        FreezeNameRequestV1, GovernanceHookV1, NameRecordV1, RegisterNameRequestV1,
-        RegisterNameResponseV1, RenewNameRequestV1, SuffixId, SuffixPolicyV1,
-        TransferNameRequestV1, UpdateControllersRequestV1,
+    data_model::{
+        metadata::Metadata,
+        sns::{
+            ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
+            FreezeNameRequestV1, GovernanceHookV1, NameRecordV1, RegisterNameRequestV1,
+            RegisterNameResponseV1, RenewNameRequestV1, SuffixId, SuffixPolicyV1,
+            TransferNameRequestV1, UpdateControllersRequestV1,
+        },
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
 };
@@ -109,12 +112,25 @@ impl<'a> SnsApi<'a> {
     ///
     /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
     pub fn register(&self, payload: &RegisterNameRequestV1) -> Result<RegisterNameResponseV1> {
+        self.register_with_metadata(payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to register a name with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn register_with_metadata(
+        &self,
+        payload: &RegisterNameRequestV1,
+        metadata: Metadata,
+    ) -> Result<RegisterNameResponseV1> {
         let namespace = SnsNamespacePath::from_suffix_id(payload.selector.suffix_id)?;
         let literal = payload.selector.normalized_label().to_owned();
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::RegisterSnsName::new(
-                payload.clone(),
-            ))?;
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::RegisterSnsName::new(payload.clone()),
+            metadata,
+        )?;
         let name_record = self.get_committed_name(namespace, &literal)?;
         Ok(RegisterNameResponseV1 { name_record })
     }
@@ -177,15 +193,41 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
     ) -> Result<NameRecordV1> {
+        self.get_committed_name_matching(namespace, literal, |_| true, "committed record")
+    }
+
+    fn get_committed_name_matching<F>(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        mut predicate: F,
+        context: &str,
+    ) -> Result<NameRecordV1>
+    where
+        F: FnMut(&NameRecordV1) -> bool,
+    {
         let deadline = Instant::now() + COMMITTED_NAME_READ_TIMEOUT;
-        let mut last_response = self.get_name_response(namespace, literal)?;
 
-        while retryable_name_lookup_status(last_response.status()) && Instant::now() < deadline {
+        loop {
+            let response = self.get_name_response(namespace, literal)?;
+            if retryable_name_lookup_status(response.status()) {
+                if Instant::now() >= deadline {
+                    return Self::decode_name_response(&response);
+                }
+            } else {
+                let record = Self::decode_name_response(&response)?;
+                if predicate(&record) {
+                    return Ok(record);
+                }
+                if Instant::now() >= deadline {
+                    return Err(eyre::eyre!(
+                        "timed out waiting for SNS registration `{literal}` to reach {context}; last_record={record:?}"
+                    ));
+                }
+            }
+
             thread::sleep(COMMITTED_NAME_READ_INTERVAL);
-            last_response = self.get_name_response(namespace, literal)?;
         }
-
-        Self::decode_name_response(&last_response)
     }
 
     /// Submit a consensus transaction to renew a name.
@@ -199,13 +241,36 @@ impl<'a> SnsApi<'a> {
         literal: &str,
         payload: &RenewNameRequestV1,
     ) -> Result<NameRecordV1> {
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::RenewSnsName::new(
+        self.renew_with_metadata(namespace, literal, payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to renew a name with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn renew_with_metadata(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &RenewNameRequestV1,
+        metadata: Metadata,
+    ) -> Result<NameRecordV1> {
+        let previous = self.get_name(namespace, literal)?;
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::RenewSnsName::new(
                 namespace.suffix_id(),
                 literal,
                 payload.clone(),
-            ))?;
-        self.get_committed_name(namespace, literal)
+            ),
+            metadata,
+        )?;
+        self.get_committed_name_matching(
+            namespace,
+            literal,
+            |record| record.expires_at_ms > previous.expires_at_ms,
+            "renewed expiry",
+        )
     }
 
     /// Submit a consensus transaction to transfer a name.
@@ -219,13 +284,35 @@ impl<'a> SnsApi<'a> {
         literal: &str,
         payload: &TransferNameRequestV1,
     ) -> Result<NameRecordV1> {
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::TransferSnsName::new(
+        self.transfer_with_metadata(namespace, literal, payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to transfer a name with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn transfer_with_metadata(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &TransferNameRequestV1,
+        metadata: Metadata,
+    ) -> Result<NameRecordV1> {
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::TransferSnsName::new(
                 namespace.suffix_id(),
                 literal,
                 payload.clone(),
-            ))?;
-        self.get_committed_name(namespace, literal)
+            ),
+            metadata,
+        )?;
+        self.get_committed_name_matching(
+            namespace,
+            literal,
+            |record| record.owner == payload.new_owner,
+            "transferred owner",
+        )
     }
 
     /// Submit a consensus transaction to replace name controllers.
@@ -239,12 +326,29 @@ impl<'a> SnsApi<'a> {
         literal: &str,
         payload: &UpdateControllersRequestV1,
     ) -> Result<NameRecordV1> {
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::UpdateSnsNameControllers::new(
+        self.update_controllers_with_metadata(namespace, literal, payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to replace name controllers with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn update_controllers_with_metadata(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &UpdateControllersRequestV1,
+        metadata: Metadata,
+    ) -> Result<NameRecordV1> {
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::UpdateSnsNameControllers::new(
                 namespace.suffix_id(),
                 literal,
                 payload.clone(),
-            ))?;
+            ),
+            metadata,
+        )?;
         self.get_committed_name(namespace, literal)
     }
 
@@ -259,12 +363,29 @@ impl<'a> SnsApi<'a> {
         literal: &str,
         payload: &FreezeNameRequestV1,
     ) -> Result<NameRecordV1> {
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::FreezeSnsName::new(
+        self.freeze_with_metadata(namespace, literal, payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to freeze a name with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn freeze_with_metadata(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &FreezeNameRequestV1,
+        metadata: Metadata,
+    ) -> Result<NameRecordV1> {
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::FreezeSnsName::new(
                 namespace.suffix_id(),
                 literal,
                 payload.clone(),
-            ))?;
+            ),
+            metadata,
+        )?;
         self.get_committed_name(namespace, literal)
     }
 
@@ -279,12 +400,29 @@ impl<'a> SnsApi<'a> {
         literal: &str,
         payload: &GovernanceHookV1,
     ) -> Result<NameRecordV1> {
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::UnfreezeSnsName::new(
+        self.unfreeze_with_metadata(namespace, literal, payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to unfreeze a name with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn unfreeze_with_metadata(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &GovernanceHookV1,
+        metadata: Metadata,
+    ) -> Result<NameRecordV1> {
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::UnfreezeSnsName::new(
                 namespace.suffix_id(),
                 literal,
                 payload.clone(),
-            ))?;
+            ),
+            metadata,
+        )?;
         self.get_committed_name(namespace, literal)
     }
 }

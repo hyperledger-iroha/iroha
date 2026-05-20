@@ -292,11 +292,6 @@ fn validate_access_keys(
                 "{owner} contains an empty {field} entry"
             )));
         }
-        if key == "*" || key == "state:*" {
-            return Err(ContractArtifactError::invalid(format!(
-                "{owner} contains unsupported wildcard {field} entry `{key}`"
-            )));
-        }
     }
     Ok(())
 }

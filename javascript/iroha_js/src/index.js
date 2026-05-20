@@ -77,11 +77,15 @@ export {
   buildCanonicalJsonRequest,
 } from "./canonicalRequest.js";
 export {
+  assembleSoracloudAppInfraRequest,
   assembleSoracloudHfDeployRequest,
+  buildSoracloudAppInfraDraft,
   buildSoracloudPrivateUploadedModelExecuteRequest,
   buildSoracloudPrivateUploadedModelReceiptQuery,
   buildSoracloudHfDeployDraft,
+  deploySoracloudAppInfraInstruction,
   privateUploadedModelReceiptInstruction,
+  upgradeSoracloudAppInfraInstruction,
 } from "./soracloud.js";
 export {
   buildTouchManifest,

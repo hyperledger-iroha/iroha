@@ -26,7 +26,8 @@ use iroha_data_model::{
     soracloud::{
         DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheExecutionPolicyV1, FheJobOperationV1,
         FheJobSpecV1, FheParamSetV1, FheSchemeV1, SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
-        SORA_AGENT_APARTMENT_RECORD_VERSION_V1, SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
+        SORA_AGENT_APARTMENT_RECORD_VERSION_V1, SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
+        SORA_APP_INFRA_STATE_VERSION_V1, SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
         SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
         SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
         SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
@@ -44,12 +45,13 @@ use iroha_data_model::{
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
         SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentPersistentStateV1,
         SoraAgentRuntimeStatusV1, SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1,
-        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1,
-        SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
-        SoraHfPlacementStatusV1, SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1,
-        SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
-        SoraHfSharedLeasePoolV1, SoraHfSharedLeaseQueuedWindowV1, SoraHfSharedLeaseStatusV1,
-        SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraInrouGuestIsaV1,
+        SoraAppInfraActionV1, SoraAppInfraAuditEventV1, SoraAppInfraManifestV1,
+        SoraAppInfraStateV1, SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1,
+        SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
+        SoraHfPlacementRecordV1, SoraHfPlacementStatusV1, SoraHfResourceProfileV1,
+        SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1,
+        SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseQueuedWindowV1,
+        SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraInrouGuestIsaV1,
         SoraInrouHostCapabilityRecordV1, SoraInrouReplicaPlacementV1,
         SoraInrouReplicaRuntimeStateV1, SoraInrouRuntimeBackendV1,
         SoraInrouServicePlacementRecordV1, SoraModelArtifactActionV1,
@@ -71,7 +73,8 @@ use iroha_data_model::{
         encode_agent_message_send_provenance_payload,
         encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
         encode_agent_wallet_approve_provenance_payload,
-        encode_agent_wallet_spend_provenance_payload, encode_decryption_request_provenance_payload,
+        encode_agent_wallet_spend_provenance_payload, encode_app_infra_provenance_payload,
+        encode_decryption_request_provenance_payload,
         encode_delete_service_config_provenance_payload,
         encode_delete_service_secret_provenance_payload, encode_fhe_job_run_provenance_payload,
         encode_hf_shared_lease_join_provenance_payload,
@@ -482,6 +485,26 @@ fn verify_bundle_provenance(
         .signature
         .verify(&provenance.signer, &payload)
         .map_err(|_| invalid_parameter("bundle provenance signature verification failed"))?;
+    Ok(())
+}
+
+fn verify_app_infra_provenance(
+    authority: &AccountId,
+    manifest: &SoraAppInfraManifestV1,
+    provenance: &ManifestProvenance,
+) -> Result<(), InstructionExecutionError> {
+    if authority.signatory() != &provenance.signer {
+        return Err(invalid_parameter(
+            "app infra provenance signer must match the transaction authority",
+        ));
+    }
+    let payload = encode_app_infra_provenance_payload(manifest).map_err(|err| {
+        invalid_parameter(format!("failed to encode app infra provenance: {err}"))
+    })?;
+    provenance
+        .signature
+        .verify(&provenance.signer, &payload)
+        .map_err(|_| invalid_parameter("app infra provenance signature verification failed"))?;
     Ok(())
 }
 
@@ -1083,6 +1106,13 @@ pub(crate) fn next_soracloud_audit_sequence(state_transaction: &StateTransaction
         state_transaction
             .world
             .soracloud_service_audit_events
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        state_transaction
+            .world
+            .soracloud_app_infra_audit_events
             .iter()
             .map(|(sequence, _event)| *sequence)
             .max()
@@ -2145,6 +2175,34 @@ fn record_deployment_state(
         .world
         .soracloud_service_deployments
         .insert(state.service_name.clone(), state);
+    Ok(())
+}
+
+fn record_app_infra_audit_event(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    event: SoraAppInfraAuditEventV1,
+) -> Result<(), InstructionExecutionError> {
+    event
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    state_transaction
+        .world
+        .soracloud_app_infra_audit_events
+        .insert(event.sequence, event);
+    Ok(())
+}
+
+fn record_app_infra_state(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    state: SoraAppInfraStateV1,
+) -> Result<(), InstructionExecutionError> {
+    state
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    state_transaction
+        .world
+        .soracloud_app_infra_states
+        .insert(state.app_name.clone(), state);
     Ok(())
 }
 
@@ -5118,6 +5176,184 @@ impl Execute for isi::UpgradeSoracloudService {
             self.initial_service_secrets,
             self.provenance,
             SoraServiceLifecycleActionV1::Upgrade,
+        )
+    }
+}
+
+fn admit_app_infra(
+    authority: &AccountId,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    manifest: SoraAppInfraManifestV1,
+    provenance: ManifestProvenance,
+    action: SoraAppInfraActionV1,
+) -> Result<(), InstructionExecutionError> {
+    require_soracloud_permission(authority, state_transaction)?;
+    verify_app_infra_provenance(authority, &manifest, &provenance)?;
+    manifest
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+
+    let app_name = manifest.app_name.clone();
+    let existing = state_transaction
+        .world
+        .soracloud_app_infra_states
+        .get(&app_name)
+        .cloned();
+    match (action, existing.as_ref()) {
+        (SoraAppInfraActionV1::Deploy, Some(_)) => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("app `{app_name}` infrastructure is already deployed").into(),
+            ));
+        }
+        (SoraAppInfraActionV1::Upgrade, None) => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "app `{app_name}` infrastructure must be deployed before it can be upgraded"
+                )
+                .into(),
+            ));
+        }
+        _ => {}
+    }
+
+    for service_ref in &manifest.services {
+        let deployment = state_transaction
+            .world
+            .soracloud_service_deployments
+            .get(&service_ref.service_name)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "app `{app_name}` references missing service `{}`",
+                        service_ref.service_name
+                    )
+                    .into(),
+                )
+            })?;
+        if deployment.current_service_version != service_ref.service_version {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "app `{app_name}` references service `{}` version `{}`, but active version is `{}`",
+                    service_ref.service_name,
+                    service_ref.service_version,
+                    deployment.current_service_version
+                )
+                .into(),
+            ));
+        }
+        if deployment.current_service_manifest_hash != service_ref.service_manifest_hash {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "app `{app_name}` service `{}` manifest hash does not match active deployment",
+                    service_ref.service_name
+                )
+                .into(),
+            ));
+        }
+        if deployment.current_container_manifest_hash != service_ref.container_manifest_hash {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "app `{app_name}` service `{}` container hash does not match active deployment",
+                    service_ref.service_name
+                )
+                .into(),
+            ));
+        }
+        let bundle = load_admitted_bundle(
+            state_transaction,
+            &service_ref.service_name,
+            &service_ref.service_version,
+        )?;
+        if bundle.service.execution_plane != service_ref.execution_plane {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "app `{app_name}` service `{}` execution plane does not match admitted revision",
+                    service_ref.service_name
+                )
+                .into(),
+            ));
+        }
+        if bundle.container.runtime != service_ref.runtime {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "app `{app_name}` service `{}` runtime does not match admitted revision",
+                    service_ref.service_name
+                )
+                .into(),
+            ));
+        }
+    }
+
+    let sequence = next_soracloud_audit_sequence(state_transaction);
+    let previous_version = existing
+        .as_ref()
+        .map(|state| state.current_app_version.clone());
+    let manifest_hash = manifest.manifest_hash();
+    let revision_count = existing
+        .as_ref()
+        .map_or(1, |state| state.revision_count.saturating_add(1));
+    let deployed_sequence = existing
+        .as_ref()
+        .map_or(sequence, |state| state.deployed_sequence);
+
+    record_app_infra_state(
+        state_transaction,
+        SoraAppInfraStateV1 {
+            schema_version: SORA_APP_INFRA_STATE_VERSION_V1,
+            app_name: app_name.clone(),
+            current_app_version: manifest.app_version.clone(),
+            current_manifest_hash: manifest_hash,
+            revision_count,
+            deployed_sequence,
+            updated_sequence: sequence,
+            manifest: manifest.clone(),
+        },
+    )?;
+
+    record_app_infra_audit_event(
+        state_transaction,
+        SoraAppInfraAuditEventV1 {
+            schema_version: SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
+            sequence,
+            action,
+            app_name,
+            from_version: previous_version,
+            to_version: manifest.app_version,
+            app_manifest_hash: manifest_hash,
+            service_count: u32::try_from(manifest.services.len()).unwrap_or(u32::MAX),
+            signer: provenance.signer,
+        },
+    )
+}
+
+impl Execute for isi::DeploySoracloudAppInfra {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        admit_app_infra(
+            authority,
+            state_transaction,
+            self.manifest,
+            self.provenance,
+            SoraAppInfraActionV1::Deploy,
+        )
+    }
+}
+
+impl Execute for isi::UpgradeSoracloudAppInfra {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        admit_app_infra(
+            authority,
+            state_transaction,
+            self.manifest,
+            self.provenance,
+            SoraAppInfraActionV1::Upgrade,
         )
     }
 }

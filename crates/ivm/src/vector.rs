@@ -4152,8 +4152,8 @@ fn sha256_compress_x86_shani(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
         }
         // Second vector: arbitrary 64-byte pattern to exercise schedule ops.
         let mut blk2 = [0u8; 64];
-        for i in 0..64 {
-            blk2[i] = (i as u8).wrapping_mul(37).wrapping_add(13);
+        for (i, byte) in blk2.iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(37).wrapping_add(13);
         }
         sha256_compress_scalar_ref(&mut st_scalar, &blk2);
         unsafe { sha256_compress_x86_shani_impl(&mut st_hw, &blk2) };
@@ -4951,14 +4951,14 @@ pub fn vadd32(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
                 let vb = _mm256_castsi128_si256(_mm_loadu_si128(b.as_ptr() as *const __m128i));
                 let vr = _mm256_add_epi32(va, vb);
                 let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute(out128);
+                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
             }
             SimdChoice::Sse2 => {
                 use std::arch::x86_64::*;
                 let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
                 let vb = _mm_loadu_si128(b.as_ptr() as *const __m128i);
                 let vr = _mm_add_epi32(va, vb);
-                return std::mem::transmute(vr);
+                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
             }
             _ => {}
         }
@@ -5023,14 +5023,14 @@ pub fn vadd64(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
                 let vb = _mm256_castsi128_si256(_mm_loadu_si128(b.as_ptr() as *const __m128i));
                 let vr = _mm256_add_epi64(va, vb);
                 let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute(out128);
+                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
             }
             SimdChoice::Sse2 => {
                 use std::arch::x86_64::*;
                 let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
                 let vb = _mm_loadu_si128(b.as_ptr() as *const __m128i);
                 let vr = _mm_add_epi64(va, vb);
-                return std::mem::transmute(vr);
+                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
             }
             _ => {}
         }
@@ -5088,14 +5088,14 @@ pub fn vand(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
                 let vb = _mm256_castsi128_si256(_mm_loadu_si128(b.as_ptr() as *const __m128i));
                 let vr = _mm256_and_si256(va, vb);
                 let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute(out128);
+                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
             }
             SimdChoice::Sse2 => {
                 use std::arch::x86_64::*;
                 let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
                 let vb = _mm_loadu_si128(b.as_ptr() as *const __m128i);
                 let vr = _mm_and_si128(va, vb);
-                return std::mem::transmute(vr);
+                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
             }
             _ => {}
         }
@@ -5136,14 +5136,14 @@ pub fn vxor(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
                 let vb = _mm256_castsi128_si256(_mm_loadu_si128(b.as_ptr() as *const __m128i));
                 let vr = _mm256_xor_si256(va, vb);
                 let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute(out128);
+                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
             }
             SimdChoice::Sse2 => {
                 use std::arch::x86_64::*;
                 let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
                 let vb = _mm_loadu_si128(b.as_ptr() as *const __m128i);
                 let vr = _mm_xor_si128(va, vb);
-                return std::mem::transmute(vr);
+                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
             }
             _ => {}
         }
@@ -5184,14 +5184,14 @@ pub fn vor(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
                 let vb = _mm256_castsi128_si256(_mm_loadu_si128(b.as_ptr() as *const __m128i));
                 let vr = _mm256_or_si256(va, vb);
                 let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute(out128);
+                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
             }
             SimdChoice::Sse2 => {
                 use std::arch::x86_64::*;
                 let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
                 let vb = _mm_loadu_si128(b.as_ptr() as *const __m128i);
                 let vr = _mm_or_si128(va, vb);
-                return std::mem::transmute(vr);
+                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
             }
             _ => {}
         }
@@ -5225,7 +5225,7 @@ pub fn vrot32(a: [u32; 4], k: u32) -> [u32; 4] {
                 let right = _mm256_srl_epi32(va, _mm_cvtsi32_si128((32 - k) as i32));
                 let vr = _mm256_or_si256(left, right);
                 let out128 = _mm256_castsi256_si128(vr);
-                return std::mem::transmute(out128);
+                return std::mem::transmute::<__m128i, [u32; 4]>(out128);
             }
             SimdChoice::Sse2 => {
                 use std::arch::x86_64::*;
@@ -5234,7 +5234,7 @@ pub fn vrot32(a: [u32; 4], k: u32) -> [u32; 4] {
                 let left = _mm_sll_epi32(va, sh);
                 let right = _mm_srl_epi32(va, _mm_cvtsi32_si128((32 - k) as i32));
                 let vr = _mm_or_si128(left, right);
-                return std::mem::transmute(vr);
+                return std::mem::transmute::<__m128i, [u32; 4]>(vr);
             }
             _ => {}
         }

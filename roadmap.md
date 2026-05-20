@@ -338,6 +338,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
     Confirm the canonical Norito schema-hash test, transaction-builder goldens,
     faucet PoW vectors, and URL escaping expectations pass unchanged; record the
     Windows result in `status.md`.
+    Repo-local Linux validation and the read-only public Taira live smoke are
+    green as of 2026-05-19; this item is now specifically the external
+    Windows-host rerun.
     Also cover the new multisig propose helper work on Windows: the focused
     tests should include
     `ToriiClientTests.ProposeMultisigAsyncPostsNativeNoritoInstructionFrames`

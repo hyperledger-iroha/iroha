@@ -712,6 +712,113 @@ if [[ -n "$LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS" ]]; then
   done
 fi
 
+echo "Applying localnet faucet gas admission in peer configs..."
+for cfg in "$OUT_DIR"/peer*.toml; do
+  [[ -f "$cfg" ]] || continue
+  "$PYTHON_BIN" - "$cfg" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+lines = path.read_text().splitlines()
+
+
+def extract_config_value(section_name: str, key: str) -> str | None:
+    in_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_section = stripped.strip("[]") == section_name
+            continue
+        if not in_section or not stripped.startswith(f"{key} "):
+            continue
+        _, raw = stripped.split("=", 1)
+        raw = raw.strip()
+        if raw.startswith('"') and raw.endswith('"'):
+            return raw[1:-1]
+        return raw
+    return None
+
+
+asset = (
+    extract_config_value("torii.faucet", "asset_definition_id")
+    or extract_config_value("nexus.fees", "fee_asset_id")
+)
+if not asset:
+    sys.exit("could not find localnet faucet or Nexus fee asset id")
+
+pipeline_start = None
+for index, line in enumerate(lines):
+    if line.strip() == "[pipeline.gas]":
+        pipeline_start = index
+        break
+
+if pipeline_start is None:
+    lines.extend(["", "[pipeline.gas]", f'accepted_assets = ["{asset}"]'])
+else:
+    pipeline_end = len(lines)
+    for index in range(pipeline_start + 1, len(lines)):
+        stripped = lines[index].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            pipeline_end = index
+            break
+
+    accepted_index = None
+    for index in range(pipeline_start + 1, pipeline_end):
+        if lines[index].strip().startswith("accepted_assets"):
+            accepted_index = index
+            break
+
+    if accepted_index is None:
+        lines.insert(pipeline_start + 1, f'accepted_assets = ["{asset}"]')
+    elif asset not in lines[accepted_index]:
+        match = re.search(r"\[(.*)\]", lines[accepted_index])
+        if match:
+            prefix = lines[accepted_index].split("[", 1)[0]
+            current = match.group(1).strip()
+            next_items = f'{current}, "{asset}"' if current else f'"{asset}"'
+            lines[accepted_index] = f"{prefix}[{next_items}]"
+        else:
+            lines[accepted_index] = f'accepted_assets = ["{asset}"]'
+
+unit_table_has_asset = False
+in_unit_table = False
+current_unit_has_asset = False
+for line in lines + ["[end]"]:
+    stripped = line.strip()
+    if stripped == "[[pipeline.gas.units_per_gas]]":
+        if in_unit_table and current_unit_has_asset:
+            unit_table_has_asset = True
+        in_unit_table = True
+        current_unit_has_asset = False
+        continue
+    if stripped.startswith("[") and stripped.endswith("]"):
+        if in_unit_table and current_unit_has_asset:
+            unit_table_has_asset = True
+        in_unit_table = False
+        current_unit_has_asset = False
+        continue
+    if in_unit_table and stripped.startswith("asset ") and asset in stripped:
+        current_unit_has_asset = True
+
+if not unit_table_has_asset:
+    lines.extend(
+        [
+            "",
+            "[[pipeline.gas.units_per_gas]]",
+            f'asset = "{asset}"',
+            "units_per_gas = 0",
+            'twap_local_per_xor = "1"',
+            'liquidity_profile = "tier1"',
+            'volatility_class = "stable"',
+        ]
+    )
+
+path.write_text("\n".join(lines) + "\n")
+PY
+done
+
 echo "Starting Iroha peers..."
 cd "$OUT_DIR"
 chmod +x start.sh stop.sh
@@ -778,7 +885,7 @@ for ((i = 1; i <= MODE_TAG_TIMEOUT_SECS; i++)); do
   MODE_TAG="$(
     { curl -s --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
         "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/sumeragi/status" 2>/dev/null || true; } \
-      | sed -n 's/.*"mode_tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      | LC_ALL=C sed -n 's/.*"mode_tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
       | head -n1
   )"
   if [[ -n "$MODE_TAG" ]]; then

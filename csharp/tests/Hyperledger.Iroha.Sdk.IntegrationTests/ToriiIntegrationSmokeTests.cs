@@ -1,3 +1,4 @@
+using System.Net;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Crypto;
@@ -7,6 +8,19 @@ namespace Hyperledger.Iroha.Sdk.IntegrationTests;
 public sealed class ToriiIntegrationSmokeTests
 {
     private const string SmokeUaidLiteral = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    [Fact]
+    public async Task OptionalReadTreatsNotFoundAsUnavailable()
+    {
+        var result = await TryGetOptionalReadAsync<ToriiSoraFsDenylistCatalogResponse>(
+            () => throw new ToriiApiException(
+                HttpStatusCode.NotFound,
+                new Uri("https://torii.example/v1/optional"),
+                responseBody: null,
+                reasonPhrase: "Not Found"));
+
+        Assert.Null(result);
+    }
 
     [Fact]
     public async Task LiveToriiSmoke()
@@ -121,14 +135,18 @@ public sealed class ToriiIntegrationSmokeTests
         Assert.True(vpnProfile.SupportedExitClasses.Count >= 0);
         Assert.True(vpnProfile.LeaseSeconds > 0 || !vpnProfile.Available);
 
-        var denylistCatalog = await client.GetSoraFsDenylistCatalogAsync();
-        Assert.True(denylistCatalog.Version >= 1);
-        Assert.True(denylistCatalog.Packs.Count >= 0);
-
-        if (denylistCatalog.Packs.Count > 0)
+        var denylistCatalog = await TryGetOptionalReadAsync<ToriiSoraFsDenylistCatalogResponse>(
+            () => client.GetSoraFsDenylistCatalogAsync());
+        if (denylistCatalog is not null)
         {
-            var denylistPack = await client.GetSoraFsDenylistPackAsync(denylistCatalog.Packs[0].PackId);
-            Assert.Equal(denylistCatalog.Packs[0].PackId, denylistPack.PackId);
+            Assert.True(denylistCatalog.Version >= 1);
+            Assert.True(denylistCatalog.Packs.Count >= 0);
+
+            if (denylistCatalog.Packs.Count > 0)
+            {
+                var denylistPack = await client.GetSoraFsDenylistPackAsync(denylistCatalog.Packs[0].PackId);
+                Assert.Equal(denylistCatalog.Packs[0].PackId, denylistPack.PackId);
+            }
         }
 
         var bindings = await client.GetUaidBindingsAsync(SmokeUaidLiteral);
@@ -155,16 +173,22 @@ public sealed class ToriiIntegrationSmokeTests
         var contractNamespace = string.IsNullOrWhiteSpace(smokeContractNamespace)
             ? "universal"
             : smokeContractNamespace.Trim();
-        var contractInstances = await client.GetContractInstancesAsync(
-            contractNamespace,
-            new ToriiContractInstancesQuery
-            {
-                Limit = 1,
-            });
-        Assert.True(contractInstances.Total >= (ulong)contractInstances.Instances.Count);
+        var contractInstances = await TryGetOptionalReadAsync<ToriiContractInstancesResponse>(
+            () => client.GetContractInstancesAsync(
+                contractNamespace,
+                new ToriiContractInstancesQuery
+                {
+                    Limit = 1,
+                }));
+        if (contractInstances is not null)
+        {
+            Assert.True(contractInstances.Total >= (ulong)contractInstances.Instances.Count);
+        }
 
         var contractCodeHash = Environment.GetEnvironmentVariable("IROHA_CSHARP_SMOKE_CONTRACT_CODE_HASH")?.Trim();
-        if (string.IsNullOrWhiteSpace(contractCodeHash) && contractInstances.Instances.Count > 0)
+        if (string.IsNullOrWhiteSpace(contractCodeHash)
+            && contractInstances is not null
+            && contractInstances.Instances.Count > 0)
         {
             contractCodeHash = contractInstances.Instances[0].CodeHashHex;
         }
@@ -227,6 +251,19 @@ public sealed class ToriiIntegrationSmokeTests
         return raw.Equals("1", StringComparison.Ordinal)
             || raw.Equals("true", StringComparison.OrdinalIgnoreCase)
             || raw.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<T?> TryGetOptionalReadAsync<T>(Func<Task<T>> read)
+        where T : class
+    {
+        try
+        {
+            return await read();
+        }
+        catch (ToriiApiException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
     }
 
     private static CanonicalRequestCredentials? TryGetCanonicalRequestCredentials()

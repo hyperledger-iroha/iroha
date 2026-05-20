@@ -22,6 +22,7 @@ import org.hyperledger.iroha.android.client.AccountAliasResolution;
 import org.hyperledger.iroha.android.client.ClientConfig;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
+import org.hyperledger.iroha.android.client.WireFormatPreference;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -91,7 +92,8 @@ public final class HttpClientTransportOkHttpTests {
       assertEquals("/v1/pipeline/transactions", recorded.getPath());
       assertEquals("POST", recorded.getMethod());
       assertEquals("application/x-norito", recorded.getHeader("Content-Type"));
-      assertEquals("application/x-norito, application/json", recorded.getHeader("Accept"));
+      assertEquals(
+          WireFormatPreference.NORITO_PREFERRED.acceptHeader(), recorded.getHeader("Accept"));
       assertEquals("ok", recorded.getHeader("X-Test"));
       assertArrayEquals(SignedTransactionEncoder.encodeVersioned(tx), recorded.getBody().readByteArray());
     }

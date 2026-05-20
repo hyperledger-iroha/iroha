@@ -6,6 +6,7 @@ const REJECTED_SIGNING_SECRET_FIELDS = [
   "private_key_hex",
 ];
 const PROVENANCE_SCHEMA = "soracloud.hf.deploy.provenance.v1";
+const APP_INFRA_PROVENANCE_SCHEMA = "soracloud.app.infra.provenance.v1";
 const HF_DEPLOY_PAYLOAD_FIELDS = new Set([
   "repo_id",
   "revision",
@@ -19,6 +20,10 @@ const HF_DEPLOY_PAYLOAD_FIELDS = new Set([
 ]);
 const PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID =
   "iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt";
+export const SORACLOUD_APP_INFRA_DEPLOY_WIRE_ID =
+  "iroha_data_model::isi::soracloud::DeploySoracloudAppInfra";
+export const SORACLOUD_APP_INFRA_UPGRADE_WIRE_ID =
+  "iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra";
 const PRIVATE_UPLOADED_MODEL_COUNT_MODES = new Set(["bounded", "exact"]);
 
 function rejectSoracloudSigningSecrets(input) {
@@ -224,9 +229,9 @@ function normalizeQuantizedCpuModel(input) {
   };
 }
 
-function canonicalSigningPayload(label, payload) {
+function canonicalSigningPayload(label, payload, schema = PROVENANCE_SCHEMA) {
   return {
-    schema: PROVENANCE_SCHEMA,
+    schema,
     label,
     payload: cloneCanonical(payload),
   };
@@ -409,6 +414,206 @@ export function buildSoracloudHfDeployDraft(input = {}) {
   return { payload, provenancePayloads };
 }
 
+function normalizeStringMap(value, field) {
+  if (value == null) {
+    return {};
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${field} must be an object`);
+  }
+  rejectSoracloudSigningSecrets(value);
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => {
+      if (typeof key !== "string" || key.trim() === "") {
+        throw new TypeError(`${field} keys must be non-empty strings`);
+      }
+      if (typeof entry !== "string") {
+        throw new TypeError(`${field}.${key} must be a string`);
+      }
+      return [key.trim(), entry];
+    }),
+  );
+}
+
+function normalizeRouteSpec(route, field) {
+  rejectSoracloudSigningSecrets(route);
+  if (route == null || typeof route !== "object" || Array.isArray(route)) {
+    throw new TypeError(`${field} must be an object`);
+  }
+  const path = requireString(route, "path");
+  const publicHost = optionalString(route, "publicHost") ?? optionalString(route, "public_host");
+  const internalUrl = optionalString(route, "internalUrl") ?? optionalString(route, "internal_url");
+  return {
+    schema_version: 1,
+    public_host: publicHost,
+    path_prefix: path,
+    internal_url: internalUrl,
+  };
+}
+
+function normalizeLeaseVolumeSpec(volume, field) {
+  rejectSoracloudSigningSecrets(volume);
+  if (volume == null || typeof volume !== "object" || Array.isArray(volume)) {
+    throw new TypeError(`${field} must be an object`);
+  }
+  const temperature = optionalString(volume, "temperature") ?? "hot";
+  if (!["hot", "warm", "cold"].includes(temperature)) {
+    throw new TypeError(`${field}.temperature must be hot, warm, or cold`);
+  }
+  normalizeSafePositiveIntegerValue(
+    volume.maxTotalBytes ?? volume.max_total_bytes ?? 1,
+    `${field}.maxTotalBytes`,
+  );
+  return requireString(volume, "name");
+}
+
+function normalizeAppStaticSite(input) {
+  const site = input?.staticSite ?? input?.static_site;
+  if (site === undefined || site === null) {
+    return undefined;
+  }
+  rejectSoracloudSigningSecrets(site);
+  if (typeof site !== "object" || Array.isArray(site)) {
+    throw new TypeError("staticSite must be an object");
+  }
+  const payload = {
+    schema_version: 1,
+    public_url: requireString(site, "publicUrl"),
+    mount_path: optionalString(site, "mountPath") ?? "/",
+  };
+  const contentCid = optionalString(site, "contentCid") ?? optionalString(site, "content_cid");
+  if (contentCid !== undefined) {
+    payload.content_cid = contentCid;
+  }
+  const manifestDigestHex =
+    optionalString(site, "manifestDigestHex") ?? optionalString(site, "manifest_digest_hex");
+  if (manifestDigestHex !== undefined) {
+    payload.manifest_digest_hex = manifestDigestHex;
+  }
+  const apiBasePath = optionalString(site, "apiBasePath") ?? optionalString(site, "api_base_path");
+  if (apiBasePath !== undefined) {
+    payload.api_base_path = apiBasePath;
+  }
+  return payload;
+}
+
+function normalizeServiceRuntime(value, field) {
+  const runtime = value ?? "Inrou";
+  if (!["Inrou", "Ivm"].includes(runtime)) {
+    throw new TypeError(`${field} must be Inrou or Ivm`);
+  }
+  return runtime;
+}
+
+function normalizeExecutionPlane(value, field) {
+  const executionPlane = value ?? "HttpService";
+  if (executionPlane === "Ivm") {
+    return "DeterministicService";
+  }
+  if (!["HttpService", "DeterministicService"].includes(executionPlane)) {
+    throw new TypeError(`${field} must be HttpService or DeterministicService`);
+  }
+  return executionPlane;
+}
+
+function normalizeServiceSpec(service, index) {
+  rejectSoracloudSigningSecrets(service);
+  if (service == null || typeof service !== "object" || Array.isArray(service)) {
+    throw new TypeError(`services[${index}] must be an object`);
+  }
+  const serviceName = requireString(service, "name");
+  const serviceVersion =
+    optionalString(service, "serviceVersion") ??
+    optionalString(service, "service_version") ??
+    optionalString(service, "version");
+  if (serviceVersion === undefined) {
+    throw new TypeError(`services[${index}].serviceVersion must be a non-empty string`);
+  }
+  const runtime = normalizeServiceRuntime(optionalString(service, "runtime"), `services[${index}].runtime`);
+  const executionPlane = normalizeExecutionPlane(
+    optionalString(service, "executionPlane") ?? optionalString(service, "execution_plane"),
+    `services[${index}].executionPlane`,
+  );
+  const routes = (service.routes ?? []).map((route, routeIndex) =>
+    normalizeRouteSpec(route, `services[${index}].routes[${routeIndex}]`),
+  );
+  const leaseVolumes = (service.leaseVolumes ?? service.lease_volumes ?? []).map(
+    (volume, volumeIndex) =>
+      normalizeLeaseVolumeSpec(volume, `services[${index}].leaseVolumes[${volumeIndex}]`),
+  );
+  const base = {
+    schema_version: 1,
+    service_name: serviceName,
+    service_version: serviceVersion,
+    service_manifest_hash:
+      optionalString(service, "serviceManifestHash") ??
+      optionalString(service, "service_manifest_hash") ??
+      requireString(service, "serviceManifestHash"),
+    container_manifest_hash:
+      optionalString(service, "containerManifestHash") ??
+      optionalString(service, "container_manifest_hash") ??
+      requireString(service, "containerManifestHash"),
+    execution_plane: executionPlane,
+    runtime,
+    routes,
+    lease_volumes: leaseVolumes,
+  };
+  const shards = service.shards;
+  if (shards === undefined || shards === null) {
+    return [base];
+  }
+  rejectSoracloudSigningSecrets(shards);
+  if (typeof shards !== "object" || Array.isArray(shards)) {
+    throw new TypeError(`services[${index}].shards must be an object`);
+  }
+  const count = normalizeSafePositiveIntegerValue(shards.count, `services[${index}].shards.count`);
+  const shardIdEnv = optionalString(shards, "shardIdEnv") ?? "SORACLOUD_SHARD_ID";
+  const shardCountEnv = optionalString(shards, "shardCountEnv") ?? "SORACLOUD_SHARD_COUNT";
+  return Array.from({ length: count }, (_, shardIndex) => ({
+    ...base,
+    service_name: `${serviceName}_${String(shardIndex).padStart(2, "0")}`,
+    shard: `${shardIdEnv}=${shardIndex};${shardCountEnv}=${count}`,
+  }));
+}
+
+/**
+ * Build an unsigned Soracloud decentralized app-infra draft.
+ *
+ * This helper normalizes a multi-service topology that future apps can submit
+ * through Iroha/Soracloud tooling without hand-expanding worker shards.
+ *
+ * @param {{ appName: string, appVersion?: string, publicUrl: string, staticSite?: Record<string, unknown>, services: Array<Record<string, unknown>> }} input
+ * @returns {{ payload: Record<string, unknown>, provenancePayloads: { deploy: Record<string, unknown>, services: Record<string, unknown>[] } }}
+ */
+export function buildSoracloudAppInfraDraft(input = {}) {
+  rejectSoracloudSigningSecrets(input);
+  const services = normalizeArray(input, "services")
+    .flatMap((service, index) => normalizeServiceSpec(service, index));
+  if (services.length === 0) {
+    throw new TypeError("services must contain at least one service");
+  }
+  const payload = {
+    schema_version: 1,
+    app_name: requireString(input, "appName"),
+    app_version: optionalString(input, "appVersion") ?? "dev",
+    public_url: requireString(input, "publicUrl"),
+    services,
+  };
+  const staticSite = normalizeAppStaticSite(input);
+  if (staticSite !== undefined) {
+    payload.static_site = staticSite;
+  }
+  return {
+    payload,
+    provenancePayloads: {
+      deploy: canonicalSigningPayload("app_infra_deploy", payload, APP_INFRA_PROVENANCE_SCHEMA),
+      services: services.map((service) =>
+        canonicalSigningPayload("app_infra_service", service, APP_INFRA_PROVENANCE_SCHEMA),
+      ),
+    },
+  };
+}
+
 function requireProvenance(provenances, field) {
   rejectSoracloudSigningSecrets(provenances);
   if (
@@ -440,7 +645,13 @@ function requireProvenance(provenances, field) {
   };
 }
 
-function requireDraftSigningPayload(draft, field, label, expectedPayload) {
+function requireDraftSigningPayload(
+  draft,
+  field,
+  label,
+  expectedPayload,
+  expectedSchema = PROVENANCE_SCHEMA,
+) {
   if (
     !Object.hasOwn(draft, "provenancePayloads") ||
     draft.provenancePayloads == null ||
@@ -458,7 +669,7 @@ function requireDraftSigningPayload(draft, field, label, expectedPayload) {
     !Object.hasOwn(signingPayload, "schema") ||
     !Object.hasOwn(signingPayload, "label") ||
     !Object.hasOwn(signingPayload, "payload") ||
-    signingPayload.schema !== PROVENANCE_SCHEMA ||
+    signingPayload.schema !== expectedSchema ||
     signingPayload.label !== label ||
     typeof signingPayload.payload !== "object" ||
     signingPayload.payload == null ||
@@ -478,6 +689,85 @@ function requireDraftSigningPayload(draft, field, label, expectedPayload) {
   if (!deepEqualCanonical(signingPayload.payload, expectedPayload)) {
     throw new TypeError(`draft provenancePayloads.${field} payload must match draft payload`);
   }
+}
+
+function requireAppInfraDraftPayloadShape(payload) {
+  if (
+    payload == null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    payload.schema_version !== 1 ||
+    typeof payload.app_name !== "string" ||
+    payload.app_name.trim() === "" ||
+    typeof payload.app_version !== "string" ||
+    payload.app_version.trim() === "" ||
+    typeof payload.public_url !== "string" ||
+    payload.public_url.trim() === "" ||
+    !Array.isArray(payload.services) ||
+    payload.services.length === 0
+  ) {
+    throw new TypeError("draft payload must be a canonical Soracloud app infra manifest");
+  }
+}
+
+/**
+ * Assemble an app-infra deploy/upgrade request from a draft and external provenance.
+ *
+ * @param {{ payload: Record<string, unknown>, provenancePayloads?: Record<string, unknown> }} draft
+ * @param {{ deploy: { signer: string, signature: string } }} provenances
+ * @param {{ deployServices?: unknown[], upgradeServices?: unknown[] }} [options]
+ * @returns {{ manifest: Record<string, unknown>, provenance: { signer: string, signature: string }, deploy_services: unknown[], upgrade_services: unknown[] }}
+ */
+export function assembleSoracloudAppInfraRequest(draft, provenances = {}, options = {}) {
+  rejectSoracloudSigningSecrets(draft);
+  rejectSoracloudSigningSecrets(options);
+  if (
+    draft == null ||
+    typeof draft !== "object" ||
+    Array.isArray(draft) ||
+    !Object.hasOwn(draft, "payload")
+  ) {
+    throw new TypeError("draft payload is required");
+  }
+  requireAppInfraDraftPayloadShape(draft.payload);
+  requireDraftSigningPayload(
+    draft,
+    "deploy",
+    "app_infra_deploy",
+    draft.payload,
+    APP_INFRA_PROVENANCE_SCHEMA,
+  );
+  const deployServices = options.deployServices ?? options.deploy_services ?? [];
+  const upgradeServices = options.upgradeServices ?? options.upgrade_services ?? [];
+  if (!Array.isArray(deployServices) || !Array.isArray(upgradeServices)) {
+    throw new TypeError("deployServices and upgradeServices must be arrays when provided");
+  }
+  return {
+    deploy_services: deployServices,
+    upgrade_services: upgradeServices,
+    manifest: cloneCanonical(draft.payload),
+    provenance: requireProvenance(provenances, "deploy"),
+  };
+}
+
+export function deploySoracloudAppInfraInstruction(manifest, provenance) {
+  return {
+    wire_id: SORACLOUD_APP_INFRA_DEPLOY_WIRE_ID,
+    payload: {
+      manifest: cloneCanonical(manifest),
+      provenance: cloneCanonical(provenance),
+    },
+  };
+}
+
+export function upgradeSoracloudAppInfraInstruction(manifest, provenance) {
+  return {
+    wire_id: SORACLOUD_APP_INFRA_UPGRADE_WIRE_ID,
+    payload: {
+      manifest: cloneCanonical(manifest),
+      provenance: cloneCanonical(provenance),
+    },
+  };
 }
 
 /**

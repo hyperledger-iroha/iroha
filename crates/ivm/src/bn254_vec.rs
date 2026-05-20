@@ -195,11 +195,11 @@ unsafe fn add_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
     }
 
     let mut carry = 0u64;
-    for i in 0..4 {
-        let partial = tmp[i];
+    for (i, limb) in tmp.iter_mut().enumerate() {
+        let partial = *limb;
         let carry_ab = (partial < a.0[i]) as u64;
         let (sum_with_carry, carry_prev) = partial.overflowing_add(carry);
-        tmp[i] = sum_with_carry;
+        *limb = sum_with_carry;
         carry = carry_ab | (carry_prev as u64);
     }
     if geq(&tmp, &MODULUS) {
@@ -227,11 +227,11 @@ unsafe fn sub_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
     }
 
     let mut borrow = 0u64;
-    for i in 0..4 {
-        let partial = tmp[i];
+    for (i, limb) in tmp.iter_mut().enumerate() {
+        let partial = *limb;
         let borrow_ab = (a.0[i] < b.0[i]) as u64;
         let (adjusted, borrow_prev) = partial.overflowing_sub(borrow);
-        tmp[i] = adjusted;
+        *limb = adjusted;
         borrow = borrow_ab | (borrow_prev as u64);
     }
     if borrow != 0 {

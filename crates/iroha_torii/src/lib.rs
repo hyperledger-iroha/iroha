@@ -8705,7 +8705,7 @@ async fn handler_peers(
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/peers").await?;
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -30611,10 +30611,12 @@ async fn handler_pipeline_transaction_status(
     AxQuery(query): AxQuery<PipelineStatusQuery>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(format) => format,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(format) => format,
+            Err(resp) => return Ok(resp),
+        };
     let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
     let hash_raw = query
         .hash
@@ -34545,6 +34547,22 @@ impl Torii {
                 )
                 .route("/v1/soracloud/deploy", post(soracloud::handle_deploy))
                 .route("/v1/soracloud/upgrade", post(soracloud::handle_upgrade))
+                .route(
+                    "/v1/soracloud/apps/deploy",
+                    post(soracloud::handle_app_deploy),
+                )
+                .route(
+                    "/v1/soracloud/apps/upgrade",
+                    post(soracloud::handle_app_upgrade),
+                )
+                .route(
+                    "/v1/soracloud/apps/status",
+                    get(soracloud::handle_app_status),
+                )
+                .route(
+                    "/v1/soracloud/apps/{app_name}/status",
+                    get(soracloud::handle_named_app_status),
+                )
                 .route("/v1/soracloud/rollback", post(soracloud::handle_rollback))
                 .route("/v1/soracloud/rollout", post(soracloud::handle_rollout))
                 .route(
@@ -44669,6 +44687,17 @@ pub(crate) mod tests_runtime_handlers {
         .expect("ok")
         .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let peer_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("peers body");
+        let peers: HashSet<Peer> = norito::json::from_slice(&peer_bytes).expect("peers JSON");
+        assert!(peers.is_empty());
 
         // health
         // For ConnectInfo we can pass a dummy loopback address by constructing the extractor arg manually is not possible here.

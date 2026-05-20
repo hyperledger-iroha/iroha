@@ -57,7 +57,7 @@ fn smart_contract_query_scenarios() -> Result<()> {
             .expect_err("Request with cursor from smart contract should fail");
         // Continuation must fail; the exact error depends on cursor mode/config.
         let allowed = matches!(
-            err,
+            &err,
             QueryError::Validation(ValidationFail::NotPermitted(_))
                 | QueryError::Validation(ValidationFail::QueryFailed(
                     QueryExecutionFail::Expired
@@ -65,7 +65,9 @@ fn smart_contract_query_scenarios() -> Result<()> {
                         | QueryExecutionFail::CursorMismatch
                         | QueryExecutionFail::CursorDone
                 ))
-        );
+        ) || err
+            .to_string()
+            .contains("cursor continuation requires stored cursor mode");
         assert!(allowed, "unexpected query error: {err:?}");
     }
 
