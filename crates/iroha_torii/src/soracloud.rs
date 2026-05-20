@@ -48,6 +48,7 @@ use iroha_data_model::{
         SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraAgentApartmentActionV1,
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
         SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentRuntimeStatusV1,
+        SoraAppInfraAuditEventV1, SoraAppInfraManifestV1, SoraAppInfraStateV1,
         SoraCertifiedResponsePolicyV1, SoraConfigExportV1, SoraContainerRuntimeV1,
         SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
         SoraHfModelFormatV1, SoraHfPlacementRecordV1, SoraHfResourceProfileV1,
@@ -72,8 +73,9 @@ use iroha_data_model::{
         encode_agent_message_send_provenance_payload,
         encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
         encode_agent_wallet_approve_provenance_payload,
-        encode_agent_wallet_spend_provenance_payload, encode_bundle_provenance_payload,
-        encode_ciphertext_query_provenance_payload, encode_decryption_request_provenance_payload,
+        encode_agent_wallet_spend_provenance_payload, encode_app_infra_provenance_payload,
+        encode_bundle_provenance_payload, encode_ciphertext_query_provenance_payload,
+        encode_decryption_request_provenance_payload,
         encode_delete_service_config_provenance_payload,
         encode_delete_service_secret_provenance_payload, encode_fhe_job_run_provenance_payload,
         encode_hf_shared_lease_join_provenance_payload,
@@ -321,6 +323,37 @@ pub(crate) struct SignedBundleRequest {
     pub authority: Option<AccountId>,
     #[norito(default)]
     pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedAppInfraRequest {
+    #[norito(default)]
+    pub deploy_services: Vec<SignedBundleRequest>,
+    #[norito(default)]
+    pub upgrade_services: Vec<SignedBundleRequest>,
+    pub manifest: SoraAppInfraManifestV1,
+    pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub authority: Option<AccountId>,
+    #[norito(default)]
+    pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize)]
+pub(crate) struct AppInfraStatusQuery {
+    #[norito(default)]
+    pub app_name: Option<String>,
+    #[norito(default)]
+    pub audit_limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, NoritoSerialize)]
+pub(crate) struct AppInfraStatusResponse {
+    pub schema_version: u16,
+    pub app_count: u32,
+    pub audit_event_count: u32,
+    pub apps: Vec<SoraAppInfraStateV1>,
+    pub recent_audit_events: Vec<SoraAppInfraAuditEventV1>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -4317,6 +4350,52 @@ fn verify_bundle_signature(request: &SignedBundleRequest) -> Result<(), Soraclou
             SoracloudError::unauthorized("bundle provenance signature verification failed")
         })?;
     Ok(())
+}
+
+fn verify_app_infra_signature(request: &SignedAppInfraRequest) -> Result<(), SoracloudError> {
+    request
+        .manifest
+        .validate()
+        .map_err(|err| SoracloudError::bad_request(err.to_string()))?;
+    let payload = encode_app_infra_provenance_payload(&request.manifest).map_err(|err| {
+        SoracloudError::internal(format!("failed to encode app infra payload: {err}"))
+    })?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized("app infra provenance signature verification failed")
+        })?;
+    Ok(())
+}
+
+fn app_service_bundle_instruction(
+    request: SignedBundleRequest,
+    mode: MutationMode,
+    app_signer: &PublicKey,
+) -> Result<InstructionBox, SoracloudError> {
+    if &request.provenance.signer != app_signer {
+        return Err(SoracloudError::unauthorized(
+            "app infra service bundle signer must match the app infra provenance signer",
+        ));
+    }
+    verify_bundle_signature(&request)?;
+    admit_scr_host_bundle(&request.bundle)?;
+    Ok(match mode {
+        MutationMode::Deploy => InstructionBox::from(isi::soracloud::DeploySoracloudService {
+            bundle: request.bundle,
+            initial_service_configs: request.initial_service_configs,
+            initial_service_secrets: request.initial_service_secrets,
+            provenance: request.provenance,
+        }),
+        MutationMode::Upgrade => InstructionBox::from(isi::soracloud::UpgradeSoracloudService {
+            bundle: request.bundle,
+            initial_service_configs: request.initial_service_configs,
+            initial_service_secrets: request.initial_service_secrets,
+            provenance: request.provenance,
+        }),
+    })
 }
 
 fn encode_bundle_signature_payload(
@@ -9768,6 +9847,59 @@ pub(crate) fn control_plane_snapshot(
     }
 }
 
+fn authoritative_app_infra_status_response(
+    app: &SharedAppState,
+    app_name: Option<&str>,
+    audit_limit: usize,
+) -> Result<AppInfraStatusResponse, SoracloudError> {
+    let app_filter = app_name
+        .map(str::parse::<Name>)
+        .transpose()
+        .map_err(|err| SoracloudError::bad_request(format!("invalid app_name: {err}")))?;
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let mut apps = world
+        .soracloud_app_infra_states()
+        .iter()
+        .filter(|(_name, state)| {
+            app_filter
+                .as_ref()
+                .is_none_or(|filter| filter == &state.app_name)
+        })
+        .map(|(_name, state)| state.clone())
+        .collect::<Vec<_>>();
+    apps.sort_by(|left, right| left.app_name.as_ref().cmp(right.app_name.as_ref()));
+    if app_filter.is_some() && apps.is_empty() {
+        return Err(SoracloudError::not_found(format!(
+            "app `{}` not found in authoritative Soracloud app infra state",
+            app_name.unwrap_or_default()
+        )));
+    }
+
+    let limit = audit_limit.max(1).min(MAX_AUDIT_LIMIT);
+    let mut recent_audit_events = world
+        .soracloud_app_infra_audit_events()
+        .iter()
+        .filter(|(_sequence, event)| {
+            app_filter
+                .as_ref()
+                .is_none_or(|filter| filter == &event.app_name)
+        })
+        .map(|(_sequence, event)| event.clone())
+        .collect::<Vec<_>>();
+    recent_audit_events.sort_by_key(|event| std::cmp::Reverse(event.sequence));
+    recent_audit_events.truncate(limit);
+
+    Ok(AppInfraStatusResponse {
+        schema_version: CONTROL_PLANE_SCHEMA_VERSION,
+        app_count: u32::try_from(apps.len()).unwrap_or(u32::MAX),
+        audit_event_count: u32::try_from(world.soracloud_app_infra_audit_events().iter().count())
+            .unwrap_or(u32::MAX),
+        apps,
+        recent_audit_events,
+    })
+}
+
 pub(crate) async fn handle_deploy(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
@@ -9874,6 +10006,194 @@ pub(crate) async fn handle_upgrade(
     .await
     {
         Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_app_deploy(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<SignedAppInfraRequest>,
+) -> Response {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/apps/deploy").await
+    {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_app_infra_signature(&request) {
+        return err.into_response();
+    }
+    let SignedAppInfraRequest {
+        deploy_services,
+        upgrade_services,
+        manifest,
+        provenance,
+        authority,
+        private_key,
+    } = request;
+    let signer =
+        match require_soracloud_mutation_signer(&headers, &provenance, authority, private_key) {
+            Ok(signer) => signer,
+            Err(err) => return err.into_response(),
+        };
+
+    let app_signer = provenance.signer.clone();
+    let app_name = manifest.app_name.to_string();
+    let mut instructions = Vec::new();
+    for service_request in deploy_services {
+        match app_service_bundle_instruction(service_request, MutationMode::Deploy, &app_signer) {
+            Ok(instruction) => instructions.push(instruction),
+            Err(err) => return err.into_response(),
+        }
+    }
+    for service_request in upgrade_services {
+        match app_service_bundle_instruction(service_request, MutationMode::Upgrade, &app_signer) {
+            Ok(instruction) => instructions.push(instruction),
+            Err(err) => return err.into_response(),
+        }
+    }
+    instructions.push(InstructionBox::from(
+        isi::soracloud::DeploySoracloudAppInfra {
+            manifest,
+            provenance,
+        },
+    ));
+
+    match submit_confirm_and_respond_instructions(
+        &app,
+        signer,
+        instructions,
+        "/v1/soracloud/apps/deploy",
+        move |app, _baseline| {
+            authoritative_app_infra_status_response(app, Some(&app_name), DEFAULT_AUDIT_LIMIT)
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_app_upgrade(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<SignedAppInfraRequest>,
+) -> Response {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/apps/upgrade").await
+    {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_app_infra_signature(&request) {
+        return err.into_response();
+    }
+    let SignedAppInfraRequest {
+        deploy_services,
+        upgrade_services,
+        manifest,
+        provenance,
+        authority,
+        private_key,
+    } = request;
+    let signer =
+        match require_soracloud_mutation_signer(&headers, &provenance, authority, private_key) {
+            Ok(signer) => signer,
+            Err(err) => return err.into_response(),
+        };
+
+    let app_signer = provenance.signer.clone();
+    let app_name = manifest.app_name.to_string();
+    let mut instructions = Vec::new();
+    for service_request in deploy_services {
+        match app_service_bundle_instruction(service_request, MutationMode::Deploy, &app_signer) {
+            Ok(instruction) => instructions.push(instruction),
+            Err(err) => return err.into_response(),
+        }
+    }
+    for service_request in upgrade_services {
+        match app_service_bundle_instruction(service_request, MutationMode::Upgrade, &app_signer) {
+            Ok(instruction) => instructions.push(instruction),
+            Err(err) => return err.into_response(),
+        }
+    }
+    instructions.push(InstructionBox::from(
+        isi::soracloud::UpgradeSoracloudAppInfra {
+            manifest,
+            provenance,
+        },
+    ));
+
+    match submit_confirm_and_respond_instructions(
+        &app,
+        signer,
+        instructions,
+        "/v1/soracloud/apps/upgrade",
+        move |app, _baseline| {
+            authoritative_app_infra_status_response(app, Some(&app_name), DEFAULT_AUDIT_LIMIT)
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_app_status(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoQuery(query): NoritoQuery<AppInfraStatusQuery>,
+) -> Response {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/apps/status").await
+    {
+        return err.into_response();
+    }
+
+    match authoritative_app_infra_status_response(
+        &app,
+        query.app_name.as_deref(),
+        query.audit_limit.unwrap_or(DEFAULT_AUDIT_LIMIT),
+    ) {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_named_app_status(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(app_name): Path<String>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoQuery(query): NoritoQuery<AppInfraStatusQuery>,
+) -> Response {
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/apps/{app_name}/status",
+    )
+    .await
+    {
+        return err.into_response();
+    }
+
+    match authoritative_app_infra_status_response(
+        &app,
+        Some(&app_name),
+        query.audit_limit.unwrap_or(DEFAULT_AUDIT_LIMIT),
+    ) {
+        Ok(response) => JsonBody(response).into_response(),
         Err(err) => err.into_response(),
     }
 }

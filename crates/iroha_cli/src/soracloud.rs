@@ -9,8 +9,7 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
-    env,
-    fs, io,
+    env, fs, io,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
@@ -33,18 +32,20 @@ use iroha::{
         smart_contract::manifest::ManifestProvenance,
         soracloud::{
             AgentApartmentManifestV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
-            CanonicalRequestWitnessV1,
-            SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_INROU_MANIFEST_VERSION_V1,
-            SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
-            SecretEnvelopeV1, SoraArtifactDistributionPolicyV1, SoraArtifactKindV1,
-            SoraArtifactRefV1, SoraCertifiedResponsePolicyV1, SoraContainerManifestV1,
-            SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
-            SoraHfModelFormatV1, SoraInrouGuestOsV1, SoraInrouManifestV1, SoraLeaseVolumeBindingV1,
-            SoraLeaseVolumeKindV1, SoraMailboxContractV1, SoraModelHostCapabilityRecordV1,
-            SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
-            SoraPublishedInrouGuestImageArtifactV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-            SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-            SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
+            CanonicalRequestWitnessV1, SORA_APP_INFRA_MANIFEST_VERSION_V1,
+            SORA_APP_INFRA_SERVICE_REF_VERSION_V1, SORA_APP_ROUTE_PROJECTION_VERSION_V1,
+            SORA_APP_STATIC_SITE_BINDING_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            SORA_INROU_MANIFEST_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+            SORA_STATE_BINDING_VERSION_V1, SecretEnvelopeV1, SoraAppInfraManifestV1,
+            SoraAppInfraServiceRefV1, SoraAppRouteProjectionV1, SoraAppStaticSiteBindingV1,
+            SoraArtifactDistributionPolicyV1, SoraArtifactKindV1, SoraArtifactRefV1,
+            SoraCertifiedResponsePolicyV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
+            SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraInrouGuestOsV1,
+            SoraInrouManifestV1, SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1,
+            SoraMailboxContractV1, SoraModelHostCapabilityRecordV1, SoraNetworkAllowlistEntryV1,
+            SoraNetworkPolicyV1, SoraPublishedInrouGuestImageArtifactV1, SoraRouteTargetV1,
+            SoraRouteVisibilityV1, SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
+            SoraServiceHandlerV1, SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
             SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
             encode_agent_artifact_allow_provenance_payload,
             encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
@@ -53,7 +54,7 @@ use iroha::{
             encode_agent_message_send_provenance_payload,
             encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
             encode_agent_wallet_approve_provenance_payload,
-            encode_agent_wallet_spend_provenance_payload,
+            encode_agent_wallet_spend_provenance_payload, encode_app_infra_provenance_payload,
             encode_bundle_with_materials_provenance_payload,
             encode_delete_service_config_provenance_payload,
             encode_delete_service_secret_provenance_payload,
@@ -82,9 +83,7 @@ use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
-use iroha_crypto::{
-    Hash, KeyPair, Signature,
-};
+use iroha_crypto::{Hash, KeyPair, Signature};
 use iroha_primitives::json::Json;
 use norito::{
     json::{self, JsonDeserialize, JsonSerialize},
@@ -98,8 +97,8 @@ use reqwest::{
 use sha2::{Digest as _, Sha256};
 use sorafs_car::{CarBuildPlan, CarChunk, CarWriter};
 use sorafs_manifest::{
-    ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder,
-    ManifestV1, MetadataEntry, PinPolicy, StorageClass as ManifestStorageClass, chunker_registry,
+    ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
+    MetadataEntry, PinPolicy, StorageClass as ManifestStorageClass, chunker_registry,
 };
 use tiny_keccak::{Hasher as _, Sha3};
 
@@ -1223,7 +1222,7 @@ impl AppInitArgs {
         container.lifecycle.healthcheck_path = Some("/healthz".to_owned());
 
         service.service_name = api_service_name.clone();
-        service.service_version = self.app_version;
+        service.service_version = self.app_version.clone();
         service.route = Some(SoraRouteTargetV1 {
             host: host.clone(),
             path_prefix: "/api".to_owned(),
@@ -1260,6 +1259,7 @@ impl AppInitArgs {
         let manifest = SoracloudAppManifestV1 {
             schema_version: SORACLOUD_APP_MANIFEST_VERSION_V1,
             app_name: self.app_name,
+            app_version: Some(self.app_version.clone()),
             public_url: public_url.clone(),
             static_site: Some(SoracloudAppStaticSiteV1 {
                 dist_dir: static_site_dist_dir,
@@ -1334,6 +1334,7 @@ impl AppInitArgs {
         let manifest = SoracloudAppManifestV1 {
             schema_version: SORACLOUD_APP_MANIFEST_VERSION_V1,
             app_name: self.app_name.clone(),
+            app_version: Some(self.app_version),
             public_url: public_url.clone(),
             static_site: Some(SoracloudAppStaticSiteV1 {
                 dist_dir: static_site_dist_dir,
@@ -1486,6 +1487,8 @@ impl AppDeployArgs {
         )?;
         let mut static_site_binding_attached = false;
         let mut services = Vec::with_capacity(manifest.services.len());
+        let mut signed_service_requests = Vec::with_capacity(manifest.services.len());
+        let mut app_infra_bundles = Vec::with_capacity(manifest.services.len());
         let mut hosted_http_service_count = 0_u32;
         let mut deterministic_service_count = 0_u32;
         for service in manifest.services.iter() {
@@ -1615,17 +1618,18 @@ impl AppDeployArgs {
                     .map(|path| resolve_manifest_path(&manifest_dir, path))
                     .as_deref(),
             )?;
-            let response = run_service_bundle_mutation(
-                mode,
-                bundle,
+            let (request_bundle, signature_mode) =
+                prepare_endpoint_compatible_bundle(bundle, &torii_url)?;
+            let request = signed_bundle_request(
+                request_bundle,
                 initial_service_configs,
                 initial_service_secrets,
-                &torii_url,
-                self.api_token.as_deref(),
-                self.timeout_secs,
-                authority,
+                Some(authority),
                 key_pair,
+                signature_mode,
             )?;
+            app_infra_bundles.push(request.bundle.clone());
+            signed_service_requests.push(request);
             let mut notes = Vec::new();
             if is_hosted_http {
                 notes.push(
@@ -1658,7 +1662,9 @@ impl AppDeployArgs {
                 published_public_discovery,
                 published_bundle,
                 published_inrou_guest_images,
-                response,
+                response: norito::json!({
+                    "action": "PendingAppInfraMutation"
+                }),
                 notes,
             });
         }
@@ -1670,6 +1676,57 @@ impl AppDeployArgs {
 
         let has_mixed_planes = hosted_http_service_count > 0 && deterministic_service_count > 0;
         let mut notes = Vec::new();
+        let app_infra_manifest = build_app_infra_manifest(
+            &manifest,
+            static_site_publication.as_ref(),
+            &app_infra_bundles,
+        )?;
+        let app_infra_manifest_hash = app_infra_manifest.manifest_hash();
+        let app_infra_request = signed_app_infra_request(
+            mode,
+            app_infra_manifest,
+            signed_service_requests.clone(),
+            key_pair,
+        )?;
+        let app_infra_response = match run_app_infra_mutation(
+            mode,
+            &app_infra_request,
+            &torii_url,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        ) {
+            Ok(response) => {
+                for service in &mut services {
+                    service.response = response.clone();
+                }
+                notes.push(
+                    "app mutation submitted the canonical app-level Soracloud infra request"
+                        .to_owned(),
+                );
+                Some(response)
+            }
+            Err(error) if should_fallback_app_infra_to_service_level(&error) => {
+                notes.push(format!(
+                    "app-level Soracloud infra endpoint was unavailable; fell back to service-level {} mutations",
+                    mode.label_lowercase()
+                ));
+                for (service, request) in services.iter_mut().zip(signed_service_requests.iter()) {
+                    service.response = run_signed_service_bundle_mutation(
+                        mode,
+                        request,
+                        &torii_url,
+                        self.api_token.as_deref(),
+                        self.timeout_secs,
+                    )?;
+                }
+                None
+            }
+            Err(error) => {
+                return Err(
+                    error.wrap_err("failed to submit canonical app-level Soracloud infra mutation")
+                );
+            }
+        };
         if static_site_publication.is_some() {
             notes.push(
                 "app mutation published the configured static site before mutating services"
@@ -1698,6 +1755,8 @@ impl AppDeployArgs {
             published_static_site: static_site_publication,
             frontend,
             synced_manifests,
+            app_infra_manifest_hash: Some(app_infra_manifest_hash),
+            app_infra_response,
             services,
             routes,
             notes,
@@ -1747,12 +1806,61 @@ impl AppStatusArgs {
                 &service_manifest,
             )?;
         }
-        let (endpoint, payload) = fetch_torii_soracloud_status(
-            require_torii_url(self.torii_url.as_deref())?,
-            None,
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let app_status_attempt = fetch_torii_soracloud_app_infra_status(
+            torii_url,
+            Some(&manifest.app_name),
             self.api_token.as_deref(),
             self.timeout_secs,
-        )?;
+        );
+        let (endpoint, app_infra_status, source, payload, service_status_note) =
+            match app_status_attempt {
+                Ok((endpoint, app_payload)) => {
+                    let service_status = fetch_torii_soracloud_status(
+                        torii_url,
+                        None,
+                        self.api_token.as_deref(),
+                        self.timeout_secs,
+                    );
+                    match service_status {
+                        Ok((_, service_payload)) => (
+                            endpoint,
+                            Some(app_payload),
+                            "torii_app_infra".to_owned(),
+                            service_payload,
+                            None,
+                        ),
+                        Err(error) => (
+                            endpoint,
+                            Some(app_payload),
+                            "torii_app_infra".to_owned(),
+                            norito::json!({}),
+                            Some(format!(
+                                "service-level detail status was unavailable after app-level status: {error:#}"
+                            )),
+                        ),
+                    }
+                }
+                Err(error) if should_fallback_app_infra_to_service_level(&error) => {
+                    let (endpoint, service_payload) = fetch_torii_soracloud_status(
+                        torii_url,
+                        None,
+                        self.api_token.as_deref(),
+                        self.timeout_secs,
+                    )?;
+                    (
+                        endpoint,
+                        None,
+                        "torii_control_plane".to_owned(),
+                        service_payload,
+                        Some(
+                            "app-level Soracloud infra status endpoint was unavailable; fell back to service-level status"
+                                .to_owned(),
+                        ),
+                    )
+                }
+                Err(error) => return Err(error),
+            };
         let control_plane_services = payload
             .get("control_plane")
             .and_then(norito::json::Value::as_object)
@@ -1855,6 +1963,9 @@ impl AppStatusArgs {
                     .to_owned(),
             );
         }
+        if let Some(note) = service_status_note {
+            notes.push(note);
+        }
 
         Ok(AppStatusOutput {
             app_name: manifest.app_name,
@@ -1863,13 +1974,14 @@ impl AppStatusArgs {
             hostname: root.hostname,
             workspace_dir: root.workspace_dir,
             workspace_scripts: root.workspace_scripts,
-            source: "torii_control_plane".to_owned(),
+            source,
             torii_endpoint: Some(endpoint),
             static_site: manifest.static_site,
             frontend,
             has_mixed_planes,
             hosted_http_service_count,
             deterministic_service_count,
+            app_infra_status,
             services,
             routes,
             notes,
@@ -2172,6 +2284,29 @@ impl AppDoctorArgs {
                     .collect::<Vec<_>>()
                     .join("; ")
             },
+        );
+
+        let app_infra_bundles = service_manifest_summaries
+            .iter()
+            .map(|(_, container, service)| SoraDeploymentBundleV1 {
+                schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+                container: container.clone(),
+                service: service.clone(),
+            })
+            .collect::<Vec<_>>();
+        let app_infra_check = build_app_infra_manifest(&manifest, None, &app_infra_bundles);
+        push_check(
+            "app_infra_manifest",
+            app_infra_check.is_ok(),
+            app_infra_check
+                .map(|manifest| {
+                    format!(
+                        "canonical app infra manifest hash={} services={}",
+                        manifest.manifest_hash(),
+                        manifest.services.len()
+                    )
+                })
+                .unwrap_or_else(|error| format!("{error:#}")),
         );
 
         let ok = failing_checks.is_empty();
@@ -6552,6 +6687,9 @@ impl StatusOutput {
 struct SoracloudAppManifestV1 {
     schema_version: u16,
     app_name: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    app_version: Option<String>,
     public_url: String,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -6571,6 +6709,13 @@ impl SoracloudAppManifestV1 {
         }
         if self.app_name.trim().is_empty() {
             return Err(eyre!("app manifest field `app_name` must not be empty"));
+        }
+        if let Some(app_version) = self.app_version.as_deref()
+            && app_version.trim().is_empty()
+        {
+            return Err(eyre!(
+                "app manifest field `app_version` must not be empty when provided"
+            ));
         }
         if !(self.public_url.starts_with("https://") || self.public_url.starts_with("http://")) {
             return Err(eyre!(
@@ -6727,6 +6872,12 @@ struct AppMutationOutput {
     frontend: Option<AppLocalFrontendPlanOutput>,
     #[norito(default)]
     synced_manifests: Vec<SyncManifestEntryOutput>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    app_infra_manifest_hash: Option<Hash>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    app_infra_response: Option<norito::json::Value>,
     services: Vec<AppServiceMutationOutput>,
     #[norito(default)]
     routes: Vec<AppLocalRoutePlanOutput>,
@@ -6976,6 +7127,9 @@ struct AppStatusOutput {
     has_mixed_planes: bool,
     hosted_http_service_count: u32,
     deterministic_service_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    app_infra_status: Option<norito::json::Value>,
     services: Vec<AppServiceStatusOutput>,
     #[norito(default)]
     routes: Vec<AppLocalRoutePlanOutput>,
@@ -7517,6 +7671,20 @@ struct SignedBundleRequest {
     initial_service_configs: BTreeMap<String, Json>,
     #[norito(default)]
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedAppInfraRequest {
+    #[norito(default)]
+    deploy_services: Vec<SignedBundleRequest>,
+    #[norito(default)]
+    upgrade_services: Vec<SignedBundleRequest>,
+    manifest: SoraAppInfraManifestV1,
     provenance: ManifestProvenance,
     #[norito(default)]
     authority: Option<AccountId>,
@@ -8463,11 +8631,6 @@ fn run_service_bundle_mutation(
     authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<norito::json::Value> {
-    let service_name = bundle.service.service_name.to_string();
-    let endpoint_path = match mode {
-        MutationMode::Deploy => "v1/soracloud/deploy",
-        MutationMode::Upgrade => "v1/soracloud/upgrade",
-    };
     let (request_bundle, signature_mode) = prepare_endpoint_compatible_bundle(bundle, torii_url)?;
     let request = signed_bundle_request(
         request_bundle,
@@ -8477,6 +8640,21 @@ fn run_service_bundle_mutation(
         key_pair,
         signature_mode,
     )?;
+    run_signed_service_bundle_mutation(mode, &request, torii_url, api_token, timeout_secs)
+}
+
+fn run_signed_service_bundle_mutation(
+    mode: MutationMode,
+    request: &SignedBundleRequest,
+    torii_url: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<norito::json::Value> {
+    let service_name = request.bundle.service.service_name.to_string();
+    let endpoint_path = match mode {
+        MutationMode::Deploy => "v1/soracloud/deploy",
+        MutationMode::Upgrade => "v1/soracloud/upgrade",
+    };
     let request_value = if soracloud_endpoint_requires_legacy_inrou_json(torii_url) {
         let mut value = json::to_value(&request)
             .wrap_err("failed to encode soracloud mutation request payload")?;
@@ -8508,6 +8686,41 @@ fn run_service_bundle_mutation(
             MutationMode::Upgrade => "Upgrade",
         },
     )
+}
+
+fn run_app_infra_mutation(
+    mode: MutationMode,
+    request: &SignedAppInfraRequest,
+    torii_url: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<norito::json::Value> {
+    let endpoint_path = match mode {
+        MutationMode::Deploy => "v1/soracloud/apps/deploy",
+        MutationMode::Upgrade => "v1/soracloud/apps/upgrade",
+    };
+    let (endpoint, mut payload) =
+        post_torii_soracloud_mutation(torii_url, endpoint_path, request, api_token, timeout_secs)?;
+    if let Some(root) = payload.as_object_mut() {
+        root.insert(
+            "app_infra_endpoint".to_owned(),
+            json::Value::String(endpoint),
+        );
+        root.insert(
+            "app_infra_manifest_hash".to_owned(),
+            json::to_value(&request.manifest.manifest_hash())?,
+        );
+    }
+    Ok(payload)
+}
+
+fn should_fallback_app_infra_to_service_level(error: &Report) -> bool {
+    let detail = format!("{error:#}").to_ascii_lowercase();
+    detail.contains("/v1/soracloud/apps/")
+        && (detail.contains("404")
+            || detail.contains("405")
+            || detail.contains("not found")
+            || detail.contains("unknown"))
 }
 
 fn prepare_endpoint_compatible_bundle(
@@ -8939,7 +9152,9 @@ fn encode_sorafs_manifest_for_storage(manifest: &ManifestV1) -> Result<(Vec<u8>,
             .encode_legacy_norito()
             .wrap_err("failed to encode legacy SoraFS manifest")?
     } else {
-        manifest.encode().wrap_err("failed to encode SoraFS manifest")?
+        manifest
+            .encode()
+            .wrap_err("failed to encode SoraFS manifest")?
     };
     let manifest_digest = blake3::hash(&manifest_bytes);
     Ok((manifest_bytes, manifest_digest))
@@ -8980,7 +9195,9 @@ fn attach_sorafs_release_governance(
 fn sorafs_pin_manifest_registered(client: &Client, manifest_digest_hex: &str) -> Result<bool> {
     let response = client
         .get_sorafs_pin_manifest(manifest_digest_hex)
-        .wrap_err_with(|| format!("failed to query SoraFS pin registry for {manifest_digest_hex}"))?;
+        .wrap_err_with(|| {
+            format!("failed to query SoraFS pin registry for {manifest_digest_hex}")
+        })?;
     match response.status() {
         iroha::http::StatusCode::OK => Ok(true),
         iroha::http::StatusCode::NOT_FOUND => Ok(false),
@@ -9052,7 +9269,9 @@ fn post_sorafs_storage_pin_after_paid_registration(
     loop {
         let response = client
             .post_sorafs_storage_pin(manifest_bytes, payload, files)
-            .wrap_err_with(|| format!("failed to upload {description} bundle into SoraFS storage"))?;
+            .wrap_err_with(|| {
+                format!("failed to upload {description} bundle into SoraFS storage")
+            })?;
         if !storage_pin_missing_paid_record_is_retryable(response.status(), response.body()) {
             return Ok(response);
         }
@@ -9158,8 +9377,9 @@ fn publish_public_service_discovery(
         .wrap_err("failed to build public discovery manifest")?;
     let manifest = attach_sorafs_release_governance(manifest, key_pair)
         .wrap_err("failed to attach public discovery governance proof")?;
-    let (manifest_bytes, _stored_manifest_digest) = encode_sorafs_manifest_for_storage(&manifest)
-        .wrap_err("failed to encode public discovery manifest")?;
+    let (manifest_bytes, _stored_manifest_digest) =
+        encode_sorafs_manifest_for_storage(&manifest)
+            .wrap_err("failed to encode public discovery manifest")?;
     let manifest_digest = manifest
         .digest()
         .wrap_err("failed to compute public discovery canonical manifest digest")?;
@@ -9408,8 +9628,9 @@ fn publish_app_static_site(
         .wrap_err("failed to build app static site manifest")?;
     let manifest = attach_sorafs_release_governance(manifest, key_pair)
         .wrap_err("failed to attach app static site governance proof")?;
-    let (manifest_bytes, _stored_manifest_digest) = encode_sorafs_manifest_for_storage(&manifest)
-        .wrap_err("failed to encode app static site manifest")?;
+    let (manifest_bytes, _stored_manifest_digest) =
+        encode_sorafs_manifest_for_storage(&manifest)
+            .wrap_err("failed to encode app static site manifest")?;
     let manifest_digest = manifest
         .digest()
         .wrap_err("failed to compute app static site canonical manifest digest")?;
@@ -9553,8 +9774,9 @@ fn publish_sorafs_directory_artifact(
         .wrap_err_with(|| format!("failed to build {description} manifest"))?;
     let manifest = attach_sorafs_release_governance(manifest, key_pair)
         .wrap_err_with(|| format!("failed to attach {description} governance proof"))?;
-    let (manifest_bytes, _stored_manifest_digest) = encode_sorafs_manifest_for_storage(&manifest)
-        .wrap_err_with(|| format!("failed to encode {description} manifest"))?;
+    let (manifest_bytes, _stored_manifest_digest) =
+        encode_sorafs_manifest_for_storage(&manifest)
+            .wrap_err_with(|| format!("failed to encode {description} manifest"))?;
     let manifest_digest = manifest
         .digest()
         .wrap_err_with(|| format!("failed to compute {description} canonical manifest digest"))?;
@@ -9659,8 +9881,13 @@ fn publish_sorafs_file_artifact(
         .wrap_err_with(|| format!("failed to read {description} `{}`", input_file.display()))?;
     let payload_hash = Hash::new(&payload);
     let descriptor = chunker_registry::default_descriptor();
-    let plan = CarBuildPlan::single_file_with_profile(&payload, descriptor.profile)
-        .map_err(|err| eyre!("failed to package {description} `{}`: {err}", input_file.display()))?;
+    let plan =
+        CarBuildPlan::single_file_with_profile(&payload, descriptor.profile).map_err(|err| {
+            eyre!(
+                "failed to package {description} `{}`: {err}",
+                input_file.display()
+            )
+        })?;
     let writer = CarWriter::new(&plan, &payload)
         .wrap_err_with(|| format!("failed to prepare {description} CAR writer"))?;
     let mut sink = io::sink();
@@ -9691,8 +9918,9 @@ fn publish_sorafs_file_artifact(
         .wrap_err_with(|| format!("failed to build {description} manifest"))?;
     let manifest = attach_sorafs_release_governance(manifest, key_pair)
         .wrap_err_with(|| format!("failed to attach {description} governance proof"))?;
-    let (manifest_bytes, _stored_manifest_digest) = encode_sorafs_manifest_for_storage(&manifest)
-        .wrap_err_with(|| format!("failed to encode {description} manifest"))?;
+    let (manifest_bytes, _stored_manifest_digest) =
+        encode_sorafs_manifest_for_storage(&manifest)
+            .wrap_err_with(|| format!("failed to encode {description} manifest"))?;
     let manifest_digest = manifest
         .digest()
         .wrap_err_with(|| format!("failed to compute {description} canonical manifest digest"))?;
@@ -9860,7 +10088,9 @@ fn publish_inrou_guest_image_artifacts(
         }
         member_paths = member_paths
             .into_iter()
-            .map(|member_path| validate_local_inrou_member(&inrou_dir, &format!("/inrou/{member_path}")))
+            .map(|member_path| {
+                validate_local_inrou_member(&inrou_dir, &format!("/inrou/{member_path}"))
+            })
             .collect::<Result<Vec<_>>>()?;
 
         let staged_artifact = SoracloudTempDir::new("iroha-inrou-guest-image-artifact")
@@ -10012,6 +10242,161 @@ fn signed_bundle_request(
         authority: None,
         private_key: None,
     })
+}
+
+fn signed_app_infra_request(
+    mode: MutationMode,
+    manifest: SoraAppInfraManifestV1,
+    services: Vec<SignedBundleRequest>,
+    key_pair: &KeyPair,
+) -> Result<SignedAppInfraRequest> {
+    let payload = encode_app_infra_provenance_payload(&manifest)
+        .wrap_err("failed to encode app infra manifest payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &payload);
+    let (deploy_services, upgrade_services) = match mode {
+        MutationMode::Deploy => (services, Vec::new()),
+        MutationMode::Upgrade => (Vec::new(), services),
+    };
+    Ok(SignedAppInfraRequest {
+        deploy_services,
+        upgrade_services,
+        manifest,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
+fn build_app_infra_manifest(
+    app_manifest: &SoracloudAppManifestV1,
+    static_site_publication: Option<&AppStaticSitePublishOutput>,
+    bundles: &[SoraDeploymentBundleV1],
+) -> Result<SoraAppInfraManifestV1> {
+    let mut services = Vec::with_capacity(bundles.len());
+    for bundle in bundles {
+        services.push(build_app_infra_service_ref(bundle)?);
+    }
+    let app_version = derive_app_infra_version(app_manifest, &services);
+    let manifest = SoraAppInfraManifestV1 {
+        schema_version: SORA_APP_INFRA_MANIFEST_VERSION_V1,
+        app_name: app_manifest
+            .app_name
+            .parse()
+            .wrap_err("app manifest field `app_name` is not a valid Iroha name")?,
+        app_version,
+        public_url: app_manifest.public_url.clone(),
+        static_site: build_app_infra_static_site_binding(app_manifest, static_site_publication),
+        services,
+    };
+    manifest
+        .validate()
+        .wrap_err("app infra manifest failed canonical validation")?;
+    Ok(manifest)
+}
+
+fn derive_app_infra_version(
+    app_manifest: &SoracloudAppManifestV1,
+    services: &[SoraAppInfraServiceRefV1],
+) -> String {
+    if let Some(app_version) = app_manifest
+        .app_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return app_version.to_owned();
+    }
+    let service_versions = services
+        .iter()
+        .map(|service| service.service_version.as_str())
+        .collect::<BTreeSet<_>>();
+    if service_versions.len() == 1
+        && let Some(version) = service_versions.iter().next()
+    {
+        return (*version).to_owned();
+    }
+    format!("services-{}", Hash::new(Encode::encode(&services.to_vec())))
+}
+
+fn build_app_infra_static_site_binding(
+    app_manifest: &SoracloudAppManifestV1,
+    static_site_publication: Option<&AppStaticSitePublishOutput>,
+) -> Option<SoraAppStaticSiteBindingV1> {
+    app_manifest
+        .static_site
+        .as_ref()
+        .map(|static_site| SoraAppStaticSiteBindingV1 {
+            schema_version: SORA_APP_STATIC_SITE_BINDING_VERSION_V1,
+            public_url: static_site_publication
+                .map(|publication| publication.public_url.clone())
+                .unwrap_or_else(|| app_manifest.public_url.clone()),
+            content_cid: static_site_publication.map(|publication| publication.content_cid.clone()),
+            manifest_digest_hex: static_site_publication
+                .map(|publication| publication.manifest_digest_hex.clone()),
+            mount_path: static_site.mount_path.clone(),
+            api_base_path: static_site.api_base_path.clone(),
+        })
+}
+
+fn build_app_infra_service_ref(
+    bundle: &SoraDeploymentBundleV1,
+) -> Result<SoraAppInfraServiceRefV1> {
+    let service = &bundle.service;
+    let routes = service
+        .route
+        .as_ref()
+        .map(|route| {
+            vec![SoraAppRouteProjectionV1 {
+                schema_version: SORA_APP_ROUTE_PROJECTION_VERSION_V1,
+                public_host: (route.visibility == SoraRouteVisibilityV1::Public)
+                    .then(|| route.host.clone()),
+                path_prefix: route.path_prefix.clone(),
+                internal_url: Some(format!(
+                    "soracloud://{}:{}{}",
+                    service.service_name, route.service_port, route.path_prefix
+                )),
+            }]
+        })
+        .unwrap_or_default();
+    let lease_volumes = service
+        .lease_volumes
+        .iter()
+        .map(|volume| volume.volume_name.clone())
+        .collect::<Vec<_>>();
+
+    Ok(SoraAppInfraServiceRefV1 {
+        schema_version: SORA_APP_INFRA_SERVICE_REF_VERSION_V1,
+        service_name: service.service_name.clone(),
+        service_version: service.service_version.clone(),
+        service_manifest_hash: bundle.service_manifest_hash(),
+        container_manifest_hash: bundle.container_manifest_hash(),
+        execution_plane: service.execution_plane,
+        runtime: bundle.container.runtime,
+        routes,
+        lease_volumes,
+        shard: app_service_shard_label(&bundle.container),
+    })
+}
+
+fn app_service_shard_label(container: &SoraContainerManifestV1) -> Option<String> {
+    let mut entries = [
+        "HAYAHI_CRAWLER_SHARD_ID",
+        "HAYAHI_CRAWLER_SHARD_COUNT",
+        "SORACLOUD_SHARD_ID",
+        "SORACLOUD_SHARD_COUNT",
+    ]
+    .into_iter()
+    .filter_map(|key| container.env.get(key).map(|value| format!("{key}={value}")))
+    .collect::<Vec<_>>();
+    if entries.is_empty() {
+        None
+    } else {
+        entries.sort();
+        Some(entries.join(";"))
+    }
 }
 
 fn parse_service_material_name_arg(flag_name: &str, value: &str) -> Result<String> {
@@ -11501,10 +11886,9 @@ fn signed_uploaded_model_register_request(
         provenance_attestation_hash: finalize.provenance_attestation_hash,
     };
 
-    let bundle_encoded = encode_uploaded_model_bundle_register_provenance_payload(
-        payload.bundle.clone(),
-    )
-    .wrap_err("failed to encode uploaded model register bundle signature payload")?;
+    let bundle_encoded =
+        encode_uploaded_model_bundle_register_provenance_payload(payload.bundle.clone())
+            .wrap_err("failed to encode uploaded model register bundle signature payload")?;
     let finalize_encoded = encode_uploaded_model_finalize_provenance_payload(
         payload.bundle.service_name.as_ref(),
         payload.model_name.as_str(),
@@ -12481,6 +12865,63 @@ fn fetch_torii_soracloud_status(
     let mut payload: norito::json::Value =
         json::from_slice(&body).wrap_err("failed to decode Torii soracloud status JSON payload")?;
     filter_soracloud_status_payload(&mut payload, service_name);
+    Ok((endpoint.to_string(), payload))
+}
+
+fn fetch_torii_soracloud_app_infra_status(
+    torii_url: &str,
+    app_name: Option<&str>,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
+    if let Some(app_name) = app_name.map(str::trim).filter(|value| !value.is_empty()) {
+        let app_name = app_name
+            .parse::<Name>()
+            .map(|name| name.to_string())
+            .wrap_err("invalid app name for /v1/soracloud/apps/{app_name}/status")?;
+        endpoint = endpoint
+            .join(&format!("v1/soracloud/apps/{app_name}/status"))
+            .wrap_err(
+                "failed to derive /v1/soracloud/apps/{app_name}/status URL from --torii-url",
+            )?;
+    } else {
+        endpoint = endpoint
+            .join("v1/soracloud/apps/status")
+            .wrap_err("failed to derive /v1/soracloud/apps/status URL from --torii-url")?;
+    }
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud app infra status")?;
+
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii app infra status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/apps/status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii soracloud app infra status JSON payload")?;
     Ok((endpoint.to_string(), payload))
 }
 
@@ -20152,6 +20593,7 @@ mod tests {
         let manifest = SoracloudAppManifestV1 {
             schema_version: SORACLOUD_APP_MANIFEST_VERSION_V1,
             app_name: "travel_ops".to_owned(),
+            app_version: Some("1.0.0".to_owned()),
             public_url: "https://travel-ops.sora".to_owned(),
             static_site: Some(SoracloudAppStaticSiteV1 {
                 dist_dir: "frontend/dist".to_owned(),
@@ -20284,21 +20726,18 @@ mod tests {
                                 .push(request);
                             let routed_response = routes.get(&path).cloned();
                             let pin_registry_response = if routed_response.is_none() {
-                                mock_sorafs_pin_registry_response(
-                                    &path,
-                                    &registered_pin_manifests,
-                                )
+                                mock_sorafs_pin_registry_response(&path, &registered_pin_manifests)
                             } else {
                                 None
                             };
                             let request_matched =
                                 routed_response.is_some() || pin_registry_response.is_some();
-                            let response = routed_response
-                                .or(pin_registry_response)
-                                .unwrap_or(MockHttpResponse {
+                            let response = routed_response.or(pin_registry_response).unwrap_or(
+                                MockHttpResponse {
                                     content_type: "text/plain",
                                     body: b"not found".to_vec(),
-                                });
+                                },
+                            );
                             let status = if request_matched {
                                 "200 OK"
                             } else {
@@ -20744,10 +21183,7 @@ process.exit(1);
         let mut env_values = BTreeMap::from([
             ("AUTH_MODE".to_owned(), "strict".to_owned()),
             ("AUTH_CAPABILITY_MAP_JSON".to_owned(), "{}".to_owned()),
-            (
-                "AUTH_CHALLENGE_TTL_SECS".to_owned(),
-                "120".to_owned(),
-            ),
+            ("AUTH_CHALLENGE_TTL_SECS".to_owned(), "120".to_owned()),
             (
                 "AUTH_REQUIRE_EXTERNAL_SHARED_STATE".to_owned(),
                 "0".to_owned(),
@@ -20786,7 +21222,10 @@ __SETUP_BEFORE_IMPORT__
 await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 "#
         .to_owned();
-        script = script.replace("__CORE_MODULE_PATH__", &js_string_literal(&core_module_path));
+        script = script.replace(
+            "__CORE_MODULE_PATH__",
+            &js_string_literal(&core_module_path),
+        );
         script = script.replace("__ENV_ASSIGNMENTS__", &env_assignments);
         script = script.replace("__SETUP_BEFORE_IMPORT__", setup_before_import);
         script = script.replace("__SCENARIO__", scenario);
@@ -23997,8 +24436,9 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         let authority = AccountId::new(key_pair.public_key().clone());
         let bundle = sample_uploaded_model_bundle();
         let finalize = sample_uploaded_model_finalize_payload();
-        let request = signed_uploaded_model_register_request(bundle, finalize, &authority, &key_pair)
-            .expect("signed uploaded-model register request");
+        let request =
+            signed_uploaded_model_register_request(bundle, finalize, &authority, &key_pair)
+                .expect("signed uploaded-model register request");
         let bundle_payload = encode_uploaded_model_bundle_register_provenance_payload(
             request.payload.bundle.clone(),
         )
@@ -24141,7 +24581,10 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             5,
         )
         .expect_err("missing uploaded-model identifier must fail locally");
-        assert!(err.to_string().contains("--model-id or --model-name is required"));
+        assert!(
+            err.to_string()
+                .contains("--model-id or --model-name is required")
+        );
     }
 
     #[test]
@@ -27916,10 +28359,16 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
         write_json(&live_container_path, &live_container).expect("write live container manifest");
         fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
         fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
-        fs::write(dir.join("services/live/build/live-api.tgz"), b"release-live-bundle")
-            .expect("write live bundle");
-        fs::write(dir.join("services/vault/build/vault-api.to"), b"release-vault-bundle")
-            .expect("write vault bundle");
+        fs::write(
+            dir.join("services/live/build/live-api.tgz"),
+            b"release-live-bundle",
+        )
+        .expect("write live bundle");
+        fs::write(
+            dir.join("services/vault/build/vault-api.to"),
+            b"release-vault-bundle",
+        )
+        .expect("write vault bundle");
         SyncManifestsArgs {
             app_manifest: Some(dir.join("app_manifest.json")),
             container: PathBuf::from(DEFAULT_CONTAINER_MANIFEST),
@@ -27991,10 +28440,14 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
             .expect("live service output");
         assert!(live_service.published_bundle.is_some());
         assert_eq!(live_service.published_inrou_guest_images.len(), 2);
-        assert!(live_service
-            .published_inrou_guest_images
-            .iter()
-            .all(|artifact| artifact.note.contains("reused a prepublished Inrou guest-image artifact")));
+        assert!(
+            live_service
+                .published_inrou_guest_images
+                .iter()
+                .all(|artifact| artifact
+                    .note
+                    .contains("reused a prepublished Inrou guest-image artifact"))
+        );
         let storage_pin_requests = server
             .requests()
             .iter()
@@ -28985,6 +29438,7 @@ main().catch((error) => {
         let manifest = SoracloudAppManifestV1 {
             schema_version: SORACLOUD_APP_MANIFEST_VERSION_V1,
             app_name: "travel_ops".to_owned(),
+            app_version: Some("1.0.0".to_owned()),
             public_url: "https://travel-ops.sora".to_owned(),
             static_site: Some(SoracloudAppStaticSiteV1 {
                 dist_dir: "frontend/dist".to_owned(),
@@ -29849,6 +30303,91 @@ main().catch((error) => {
         assert!(
             server.requests().is_empty(),
             "preflight mismatch should fail before any Soracloud or Sorafs network mutation"
+        );
+    }
+
+    #[test]
+    fn app_deploy_uses_app_level_infra_endpoint_when_available() {
+        let dir = temp_dir("app_deploy_app_infra_endpoint");
+        AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
+            overwrite: false,
+        }
+        .run()
+        .expect("single-api init should succeed");
+
+        let manifest_path = dir.join("app_manifest.json");
+        let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
+        manifest.static_site = None;
+        write_json(&manifest_path, &manifest).expect("write app manifest without static site");
+        fs::create_dir_all(dir.join("services/api/build")).expect("create api build dir");
+        fs::write(
+            dir.join("services/api/build/api-service.to"),
+            b"app-infra-deploy-bundle",
+        )
+        .expect("write api bundle");
+
+        let draft_response = norito::json!({ "tx_instructions": [] });
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/soracloud/apps/deploy".to_owned(),
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&draft_response).expect("encode app deploy draft response"),
+            },
+        )]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = AppDeployArgs {
+            manifest: manifest_path,
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(MutationMode::Deploy, &authority, &key_pair)
+        .expect("app deploy should use app infra endpoint");
+
+        assert!(output.app_infra_manifest_hash.is_some());
+        assert!(output.app_infra_response.is_some());
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| { note.contains("canonical app-level Soracloud infra request") })
+        );
+        let requests = server.requests();
+        assert!(requests.iter().any(|request| {
+            request.method == "POST" && request.path == "/v1/soracloud/apps/deploy"
+        }));
+        assert!(
+            !requests.iter().any(|request| {
+                request.method == "POST" && request.path == "/v1/soracloud/deploy"
+            })
+        );
+        let app_request = requests
+            .iter()
+            .find(|request| request.path == "/v1/soracloud/apps/deploy")
+            .expect("app infra deploy request should be captured");
+        let body: norito::json::Value =
+            json::from_slice(&app_request.body).expect("decode app deploy request");
+        assert_eq!(
+            body.get("deploy_services")
+                .and_then(norito::json::Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            body.get("manifest")
+                .and_then(|manifest| manifest.get("app_version"))
+                .and_then(norito::json::Value::as_str),
+            Some("1.0.0")
         );
     }
 

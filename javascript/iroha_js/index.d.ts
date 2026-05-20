@@ -5536,9 +5536,24 @@ export interface SubmitIsoMessageOptions {
   wait?: IsoMessageWaitOptions;
 }
 
+export interface ContractDynamicAccessHintInput {
+  baseKey?: string;
+  base_key?: string;
+  keyType?: string;
+  key_type?: string;
+  boundKind?: string;
+  bound_kind?: string;
+  maxKeys?: NumericLike;
+  max_keys?: NumericLike;
+}
+
 export interface ContractAccessSetHintsInput {
   readKeys?: ReadonlyArray<string>;
   writeKeys?: ReadonlyArray<string>;
+  dynamicReads?: ReadonlyArray<ContractDynamicAccessHintInput>;
+  dynamic_reads?: ReadonlyArray<ContractDynamicAccessHintInput>;
+  dynamicWrites?: ReadonlyArray<ContractDynamicAccessHintInput>;
+  dynamic_writes?: ReadonlyArray<ContractDynamicAccessHintInput>;
 }
 
 export interface ContractEntrypointInput {
@@ -7360,6 +7375,21 @@ export declare class ToriiClient {
   getConfigurationTyped(): Promise<ToriiConfigurationSnapshot | null>;
   getConfidentialGasSchedule(): Promise<ConfidentialGasSchedule | null>;
   getStatusSnapshot(options?: { signal?: AbortSignal }): Promise<ToriiStatusSnapshot>;
+  deploySoracloudAppInfra(
+    request: SoracloudAppInfraRequest | Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
+  upgradeSoracloudAppInfra(
+    request: SoracloudAppInfraRequest | Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
+  getSoracloudAppInfraStatus(
+    options?: { appName?: string; auditLimit?: NumericLike; signal?: AbortSignal },
+  ): Promise<unknown>;
+  getSoracloudNamedAppInfraStatus(
+    appName: string,
+    options?: { auditLimit?: NumericLike; signal?: AbortSignal },
+  ): Promise<unknown>;
   getNetworkTimeNow(
     options?: { signal?: AbortSignal },
   ): Promise<ToriiNetworkTimeNow>;
@@ -9334,9 +9364,110 @@ export interface SoracloudHfDeployRequest {
   generated_apartment_provenance?: SoracloudManifestProvenance;
 }
 
+export interface SoracloudAppInfraRouteInput {
+  path: string;
+  publicHost?: string;
+  public_host?: string;
+  internalUrl?: string;
+  internal_url?: string;
+}
+
+export interface SoracloudAppInfraLeaseVolumeInput {
+  name: string;
+  mountPath: string;
+  maxTotalBytes: NumericLike;
+  temperature?: "hot" | "warm" | "cold";
+}
+
+export interface SoracloudAppInfraShardInput {
+  count: NumericLike;
+  shardIdEnv?: string;
+  shardCountEnv?: string;
+}
+
+export interface SoracloudAppInfraServiceInput {
+  name: string;
+  version?: string;
+  serviceVersion?: string;
+  service_version?: string;
+  serviceManifestHash?: string;
+  service_manifest_hash?: string;
+  containerManifestHash?: string;
+  container_manifest_hash?: string;
+  runtime?: "Inrou" | "Ivm";
+  executionPlane?: "HttpService" | "DeterministicService" | "Ivm";
+  execution_plane?: "HttpService" | "DeterministicService" | "Ivm";
+  routes?: ReadonlyArray<SoracloudAppInfraRouteInput>;
+  leaseVolumes?: ReadonlyArray<SoracloudAppInfraLeaseVolumeInput>;
+  lease_volumes?: ReadonlyArray<SoracloudAppInfraLeaseVolumeInput>;
+  shards?: SoracloudAppInfraShardInput;
+}
+
+export interface SoracloudAppInfraStaticSiteInput {
+  publicUrl: string;
+  contentCid?: string;
+  content_cid?: string;
+  manifestDigestHex?: string;
+  manifest_digest_hex?: string;
+  mountPath?: string;
+  apiBasePath?: string;
+  api_base_path?: string;
+}
+
+export interface SoracloudAppInfraDraftInput {
+  appName: string;
+  appVersion?: string;
+  publicUrl: string;
+  staticSite?: SoracloudAppInfraStaticSiteInput;
+  static_site?: SoracloudAppInfraStaticSiteInput;
+  services: ReadonlyArray<SoracloudAppInfraServiceInput>;
+}
+
+export interface SoracloudAppInfraDraft {
+  payload: Record<string, unknown> & {
+    schema_version: 1;
+    app_name: string;
+    app_version: string;
+    public_url: string;
+    static_site?: Record<string, unknown>;
+    services: Array<Record<string, unknown>>;
+  };
+  provenancePayloads: {
+    deploy: Record<string, unknown>;
+    services: Array<Record<string, unknown>>;
+  };
+}
+
 export function buildSoracloudHfDeployDraft(
   input: SoracloudHfDeployDraftInput,
 ): SoracloudHfDeployDraft;
+
+export function buildSoracloudAppInfraDraft(
+  input: SoracloudAppInfraDraftInput,
+): SoracloudAppInfraDraft;
+
+export interface SoracloudAppInfraRequest {
+  deploy_services: unknown[];
+  upgrade_services: unknown[];
+  manifest: SoracloudAppInfraDraft["payload"];
+  provenance: SoracloudManifestProvenance;
+}
+
+export function assembleSoracloudAppInfraRequest(
+  draft: SoracloudAppInfraDraft,
+  provenances: { deploy: SoracloudManifestProvenance },
+  options?: { deployServices?: unknown[]; upgradeServices?: unknown[] },
+): SoracloudAppInfraRequest;
+
+export function deploySoracloudAppInfraInstruction(
+  manifest: Record<string, unknown>,
+  provenance: SoracloudManifestProvenance,
+): { wire_id: string; payload: Record<string, unknown> };
+
+export function upgradeSoracloudAppInfraInstruction(
+  manifest: Record<string, unknown>,
+  provenance: SoracloudManifestProvenance,
+): { wire_id: string; payload: Record<string, unknown> };
 
 export function assembleSoracloudHfDeployRequest(
   draft: SoracloudHfDeployDraft,

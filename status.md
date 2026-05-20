@@ -1,6 +1,17 @@
 # Status
 
-Last updated: 2026-05-19
+Last updated: 2026-05-20
+
+## 2026-05-20 Taira Browser Connect CORS Config
+
+- Enabled explicit Torii CORS config in the checked-in Sora Taira validator
+  template for the SoraSwap local dev origin and common IPFS gateway origins,
+  so browser-hosted SoraSwap can register IrohaConnect sessions directly
+  against Taira without introducing a proxy dependency.
+- Enabled the same local dev CORS policy in the kagami `iroha3-taira` sample
+  config for `http://127.0.0.1:3000` and `http://localhost:3000`.
+- Focused validation is green with
+  `cargo test -p iroha_config torii_cors_parse --lib`.
 
 ## 2026-05-19 IVM CUDA vector boundary adversarial hardening
 

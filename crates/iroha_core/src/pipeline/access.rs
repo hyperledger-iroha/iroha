@@ -767,8 +767,12 @@ fn access_set_from_hint_keys(
                   canonical: &mut Vec<CanonicalStateKey>,
                   state_keys: &mut BTreeSet<String>|
      -> Option<()> {
+        if raw == "*" {
+            state_keys.insert(raw.to_owned());
+            return Some(());
+        }
         if let Some(rest) = raw.strip_prefix("state:") {
-            if rest.is_empty() || rest == "*" {
+            if rest.is_empty() {
                 return None;
             }
             state_keys.insert(raw.to_owned());
@@ -2514,16 +2518,18 @@ mod tests {
     fn access_set_hints_reject_unknown_keys() {
         let reads = vec!["perm.account:historical-scoped-literal:can_transfer".to_owned()];
         assert!(access_set_from_hint_keys(&reads, &[], &[], &[]).is_none());
-        let reads = vec!["state:*".to_owned()];
-        assert!(access_set_from_hint_keys(&reads, &[], &[], &[]).is_none());
-        let reads = vec!["*".to_owned()];
-        assert!(access_set_from_hint_keys(&reads, &[], &[], &[]).is_none());
     }
 
     #[test]
-    fn access_set_hints_reject_global_wildcard() {
+    fn access_set_hints_accept_wildcards() {
         let reads = vec!["*".to_owned()];
-        assert!(access_set_from_hint_keys(&reads, &[], &[], &[]).is_none());
+        let set = access_set_from_hint_keys(&reads, &[], &[], &[]).expect("global wildcard hint");
+        assert!(set.read_keys.contains("*"));
+
+        let writes = vec!["state:*".to_owned()];
+        let set =
+            access_set_from_hint_keys(&[], &writes, &[], &[]).expect("state wildcard hint");
+        assert!(set.write_keys.contains("state:*"));
     }
 
     #[test]

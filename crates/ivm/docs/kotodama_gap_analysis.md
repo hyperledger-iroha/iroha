@@ -14,7 +14,7 @@ Paths for reference:
 ## Summary
 - The current implementation parses and lowers both free and contract functions (including `seiyaku`, `kotoage`, `hajimari`, and `kaizen` items), performs type checking for ints/bools/strings/pointer-ABI handles/structs/maps, and emits full multi-function IVM bytecode with durable `state` overlays when ABI v1 is selected. ✔
 - Contract-level localization (`kotoba { ... }`) is parsed, validated for duplicates/empties, and emitted into manifest translation tables for tooling. ✔
-- Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus compiler-generated per-entrypoint permission/read/write hints. Static ISI keys, literal map keys, dynamic map paths, and bounded dynamic state-map iteration are represented without production wildcard hints. Manual `#[access(...)]` annotations are rejected, and production compilation fails when opaque host access would require a wildcard fallback. ✔
+- Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus compiler-generated per-entrypoint permission/read/write hints. Static ISI keys, literal map keys, dynamic map paths, and bounded dynamic state-map iteration are represented precisely when possible. Manual `#[access(...)]` annotations are rejected; opaque dynamic ledger access may emit compiler-owned wildcard hints so the scheduler can use its dynamic prepass or conservative serialization path. ✔
 - The compiler scans emitted bytecode for ZK/vector opcodes, auto-enables header bits, and rejects `meta` feature requests that do not match actual opcode usage. ✔
 - Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalar types (mantissa+scale) restricted to unsigned, scale‑0 values. Decimal literals are rejected in v1; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Conversions to/from `int` are checked at runtime (range‑limited, non‑negative). Trigger declarations (`register_trigger`) now parse time/execute/data filters plus deterministic approved block/transaction pipeline filters, lower structured data-trigger blocks into manifest `EventFilterBox` values, support explicit trigger authority overrides, attach metadata to entrypoint manifests, and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are rejected. ✔
 
@@ -49,7 +49,7 @@ Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does
   - Emitted bytecode is scanned for ZK/vector opcodes; header bits are auto-enabled and mismatched `meta` requests are rejected.
 - Missing:
   - Cross-contract callback wiring (`call domain::fn`) is recorded but currently rejected by runtime tooling.
-- Access-set hints now include static ISI WSV keys, literal map keys, dynamic map paths via map-level conflict keys, and bounded dynamic state-map iteration descriptors. Manual access annotations and production wildcard fallbacks are no longer part of the release language.
+- Access-set hints now include static ISI WSV keys, literal map keys, dynamic map paths via map-level conflict keys, and bounded dynamic state-map iteration descriptors. Manual access annotations are no longer part of the release language; compiler-owned wildcard fallbacks remain available for dynamic ledger helper calls that cannot be described precisely yet.
 
 ## Samples vs. Implementation
 Modern samples compile, but the following grammar-level expectations remain unmet:
@@ -62,7 +62,7 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 
 1) Metadata + manifest parity
 - Done: compiler-generated hints cover static ISI targets, literal state paths, dynamic map-level state keys, and bounded dynamic state-map iteration descriptors.
-- Done: production compilation rejects incomplete access derivation instead of emitting wildcard manifests.
+- Done: production artifacts carry compiler-generated access metadata, using compiler-owned wildcard manifests for dynamic ledger access that cannot be derived precisely yet.
 
 2) Permission and trigger plumbing
 - Done: extend trigger DSL support to data filters, deterministic approved block/transaction pipeline filters, and explicit authority overrides.
@@ -73,8 +73,8 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Teach the type checker how to reason about Norito pointer wrappers (`Json`, `Blob`, `NoritoBytes`) beyond simple assignment so builders from the grammar work without manual casts.
 
 4) Access hints and host integration
-- Done: production artifacts must carry complete compiler-generated access metadata.
-- Next: add precise descriptors for remaining opaque helper syscalls so they can compile in production without falling back to test-mode wildcard diagnostics.
+- Done: production artifacts must carry compiler-generated access metadata, with wildcard fallbacks limited to compiler-diagnosed dynamic ledger access.
+- Next: add precise descriptors for remaining opaque helper syscalls to reduce wildcard fallback use.
 - Keep warning when `create_trigger` specs cannot be decoded for access hints (lint already covers non-literal trigger specs).
 
 5) Tooling separation
@@ -85,7 +85,7 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Emit a compiler hint when literal trigger specs cannot be decoded for access hints.
 
 ## Known Limitations to Call Out in Docs
-- Access hints cover static ISI targets, dynamic map paths via map-level keys, and bounded dynamic state-map iteration. Opaque helper syscalls remain test-mode-only until they have precise compiler-derived access descriptors.
+- Access hints cover static ISI targets, dynamic map paths via map-level keys, and bounded dynamic state-map iteration. Opaque dynamic ledger helper syscalls may still use compiler-owned wildcard hints until they have precise compiler-derived access descriptors.
 - Entrypoint manifests emit complete hints for production artifacts.
 - Meta feature flags (`zk`, `vector`, `features`) are validated against emitted opcodes; requesting features that are unused now fails compilation.
 - Numeric aliases (e.g., `fixed_u128`) are distinct `Numeric` types; v1 restricts them to unsigned integers (scale = 0), rejecting fractional values and decimal literals.

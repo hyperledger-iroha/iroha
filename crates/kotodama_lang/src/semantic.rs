@@ -4503,6 +4503,20 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Int,
                     })
                 }
+                "block_height" => {
+                    if !arg_typed.is_empty() {
+                        return Err(SemanticError {
+                            message: "block_height expects no arguments".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: vec![],
+                        },
+                        ty: Type::Int,
+                    })
+                }
                 "resolve_account_alias" => {
                     if arg_typed.len() != 1
                         || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))

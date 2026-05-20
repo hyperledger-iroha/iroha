@@ -2,11 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  assembleSoracloudAppInfraRequest,
   assembleSoracloudHfDeployRequest,
+  buildSoracloudAppInfraDraft,
   buildSoracloudHfDeployDraft,
   buildSoracloudPrivateUploadedModelExecuteRequest,
   buildSoracloudPrivateUploadedModelReceiptQuery,
+  deploySoracloudAppInfraInstruction,
   privateUploadedModelReceiptInstruction,
+  upgradeSoracloudAppInfraInstruction,
 } from "../src/index.js";
 
 const CANONICAL_XOR_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
@@ -88,6 +92,124 @@ test("buildSoracloudHfDeployDraft returns unsigned payloads", () => {
   assert.equal(
     draft.provenancePayloads.generatedApartment.payload.apartment_name,
     "all_minilm_agent",
+  );
+});
+
+test("buildSoracloudAppInfraDraft expands sharded decentralized app services", () => {
+  const draft = buildSoracloudAppInfraDraft({
+    appName: "hayahi",
+    appVersion: "2026.05.20",
+    metadata: { purpose: "owned-data-plane" },
+    services: [
+      {
+        name: "hayahi_live",
+        serviceVersion: "2026.05.20",
+        serviceManifestHash: "hash-live-service",
+        containerManifestHash: "hash-live-container",
+        runtime: "Inrou",
+        executionPlane: "HttpService",
+        routes: [{ path: "/api/v1", publicHost: "hayahi.sora" }],
+      },
+      {
+        name: "hayahi_data",
+        serviceVersion: "2026.05.20",
+        serviceManifestHash: "hash-data-service",
+        containerManifestHash: "hash-data-container",
+        runtime: "Inrou",
+        executionPlane: "HttpService",
+        leaseVolumes: [
+          {
+            name: "owned_data",
+            mountPath: "/var/lib/hayahi/data",
+            maxTotalBytes: 536870912,
+            temperature: "hot",
+          },
+        ],
+      },
+      {
+        name: "hayahi_crawler",
+        serviceVersion: "2026.05.20",
+        serviceManifestHash: "hash-crawler-service",
+        containerManifestHash: "hash-crawler-container",
+        runtime: "Inrou",
+        executionPlane: "HttpService",
+        shards: {
+          count: 8,
+          shardIdEnv: "HAYAHI_CRAWLER_SHARD_ID",
+          shardCountEnv: "HAYAHI_CRAWLER_SHARD_COUNT",
+        },
+      },
+    ],
+    publicUrl: "https://hayahi.sora.org",
+    staticSite: {
+      publicUrl: "https://hayahi.sora.org",
+      contentCid: "bafyhayahi",
+      mountPath: "/",
+      apiBasePath: "/api",
+    },
+  });
+
+  assert.equal(draft.payload.app_name, "hayahi");
+  assert.equal(draft.payload.public_url, "https://hayahi.sora.org");
+  assert.equal(draft.payload.static_site.content_cid, "bafyhayahi");
+  assert.equal(draft.payload.services.length, 10);
+  assert.equal(draft.payload.services[2].service_name, "hayahi_crawler_00");
+  assert.equal(draft.payload.services[9].service_name, "hayahi_crawler_07");
+  assert.equal(draft.payload.services[9].shard, "HAYAHI_CRAWLER_SHARD_ID=7;HAYAHI_CRAWLER_SHARD_COUNT=8");
+  assert.equal(draft.payload.services[1].lease_volumes[0], "owned_data");
+  assert.equal(draft.payload.services[0].routes[0].path_prefix, "/api/v1");
+  assert.equal(draft.provenancePayloads.deploy.schema, "soracloud.app.infra.provenance.v1");
+  assert.equal(draft.provenancePayloads.services.length, 10);
+});
+
+test("buildSoracloudAppInfraDraft rejects nested signing secrets", () => {
+  assert.throws(
+    () =>
+      buildSoracloudAppInfraDraft({
+        appName: "bad",
+        publicUrl: "https://bad.example",
+        services: [
+          {
+            name: "bad_worker",
+            serviceVersion: "v1",
+            serviceManifestHash: "hash-service",
+            containerManifestHash: "hash-container",
+            routes: [{ path: "/api", privateKeyHex: "00" }],
+          },
+        ],
+      }),
+    /privateKeyHex is not accepted/,
+  );
+});
+
+test("assembleSoracloudAppInfraRequest and instruction helpers use canonical manifest", () => {
+  const draft = buildSoracloudAppInfraDraft({
+    appName: "hayahi",
+    appVersion: "2026.05.20",
+    publicUrl: "https://hayahi.sora.org",
+    services: [
+      {
+        name: "hayahi_live",
+        serviceVersion: "2026.05.20",
+        serviceManifestHash: "hash-live-service",
+        containerManifestHash: "hash-live-container",
+        routes: [{ path: "/api" }],
+      },
+    ],
+  });
+  const provenance = { signer: "signer", signature: "ABCD" };
+  const request = assembleSoracloudAppInfraRequest(draft, { deploy: provenance });
+
+  assert.deepEqual(request.provenance, provenance);
+  assert.equal(request.manifest.app_name, "hayahi");
+  assert.deepEqual(request.deploy_services, []);
+  assert.equal(
+    deploySoracloudAppInfraInstruction(request.manifest, provenance).wire_id,
+    "iroha_data_model::isi::soracloud::DeploySoracloudAppInfra",
+  );
+  assert.equal(
+    upgradeSoracloudAppInfraInstruction(request.manifest, provenance).wire_id,
+    "iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra",
   );
 });
 

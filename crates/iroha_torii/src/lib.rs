@@ -34547,6 +34547,22 @@ impl Torii {
                 )
                 .route("/v1/soracloud/deploy", post(soracloud::handle_deploy))
                 .route("/v1/soracloud/upgrade", post(soracloud::handle_upgrade))
+                .route(
+                    "/v1/soracloud/apps/deploy",
+                    post(soracloud::handle_app_deploy),
+                )
+                .route(
+                    "/v1/soracloud/apps/upgrade",
+                    post(soracloud::handle_app_upgrade),
+                )
+                .route(
+                    "/v1/soracloud/apps/status",
+                    get(soracloud::handle_app_status),
+                )
+                .route(
+                    "/v1/soracloud/apps/{app_name}/status",
+                    get(soracloud::handle_named_app_status),
+                )
                 .route("/v1/soracloud/rollback", post(soracloud::handle_rollback))
                 .route("/v1/soracloud/rollout", post(soracloud::handle_rollout))
                 .route(

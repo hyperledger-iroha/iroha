@@ -98,12 +98,12 @@ use iroha_data_model::{
     rwa::{RwaEntry, RwaId, RwaValue},
     social::{ViralCampaignBudget, ViralDailyCounter, ViralEscrowRecord, ViralRewardBudget},
     soracloud::{
-        SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraDecryptionRequestRecordV1,
-        SoraDeploymentBundleV1, SoraHfPlacementRecordV1, SoraHfSharedLeaseAuditEventV1,
-        SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSourceRecordV1,
-        SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
-        SoraInrouServicePlacementRecordV1, SoraModelArtifactAuditEventV1,
-        SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAppInfraAuditEventV1,
+        SoraAppInfraStateV1, SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1,
+        SoraHfPlacementRecordV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberV1,
+        SoraHfSharedLeasePoolV1, SoraHfSourceRecordV1, SoraInrouHostCapabilityRecordV1,
+        SoraInrouReplicaRuntimeStateV1, SoraInrouServicePlacementRecordV1,
+        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
         SoraModelHostViolationEvidenceRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
         SoraModelWeightVersionRecordV1, SoraPrivateUploadedModelExecutionReceiptV1,
         SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
@@ -452,9 +452,11 @@ macro_rules! build_world_block {
             smart_contract_state: $state.smart_contract_state.$method(),
             soracloud_service_revisions: $state.soracloud_service_revisions.$method(),
             soracloud_service_deployments: $state.soracloud_service_deployments.$method(),
+            soracloud_app_infra_states: $state.soracloud_app_infra_states.$method(),
             soracloud_service_runtime: $state.soracloud_service_runtime.$method(),
             soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.$method(),
             soracloud_service_audit_events: $state.soracloud_service_audit_events.$method(),
+            soracloud_app_infra_audit_events: $state.soracloud_app_infra_audit_events.$method(),
             soracloud_service_state_entries: $state.soracloud_service_state_entries.$method(),
             soracloud_decryption_request_records: $state
                 .soracloud_decryption_request_records
@@ -654,9 +656,11 @@ macro_rules! build_world_transaction {
             smart_contract_state: $state.smart_contract_state.transaction(),
             soracloud_service_revisions: $state.soracloud_service_revisions.transaction(),
             soracloud_service_deployments: $state.soracloud_service_deployments.transaction(),
+            soracloud_app_infra_states: $state.soracloud_app_infra_states.transaction(),
             soracloud_service_runtime: $state.soracloud_service_runtime.transaction(),
             soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.transaction(),
             soracloud_service_audit_events: $state.soracloud_service_audit_events.transaction(),
+            soracloud_app_infra_audit_events: $state.soracloud_app_infra_audit_events.transaction(),
             soracloud_service_state_entries: $state.soracloud_service_state_entries.transaction(),
             soracloud_decryption_request_records: $state
                 .soracloud_decryption_request_records
@@ -1845,6 +1849,8 @@ pub struct World {
     pub(crate) soracloud_service_revisions: Storage<(String, String), SoraDeploymentBundleV1>,
     /// Current Soracloud deployment state keyed by service name.
     pub(crate) soracloud_service_deployments: Storage<Name, SoraServiceDeploymentStateV1>,
+    /// Current Soracloud app topology state keyed by app name.
+    pub(crate) soracloud_app_infra_states: Storage<Name, SoraAppInfraStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: Storage<Name, SoraServiceRuntimeStateV1>,
     /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
@@ -1852,6 +1858,8 @@ pub struct World {
         Storage<(String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: Storage<u64, SoraServiceAuditEventV1>,
+    /// Soracloud app topology audit events keyed by deterministic sequence.
+    pub(crate) soracloud_app_infra_audit_events: Storage<u64, SoraAppInfraAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
     pub(crate) soracloud_service_state_entries:
         Storage<(String, String, String), SoraServiceStateEntryV1>,
@@ -2297,6 +2305,8 @@ pub struct WorldBlock<'world> {
     /// Current Soracloud deployment state keyed by service name.
     pub(crate) soracloud_service_deployments:
         StorageBlock<'world, Name, SoraServiceDeploymentStateV1>,
+    /// Current Soracloud app topology state keyed by app name.
+    pub(crate) soracloud_app_infra_states: StorageBlock<'world, Name, SoraAppInfraStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: StorageBlock<'world, Name, SoraServiceRuntimeStateV1>,
     /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
@@ -2304,6 +2314,9 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, (String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: StorageBlock<'world, u64, SoraServiceAuditEventV1>,
+    /// Soracloud app topology audit events keyed by deterministic sequence.
+    pub(crate) soracloud_app_infra_audit_events:
+        StorageBlock<'world, u64, SoraAppInfraAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
     pub(crate) soracloud_service_state_entries:
         StorageBlock<'world, (String, String, String), SoraServiceStateEntryV1>,
@@ -2916,6 +2929,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Current Soracloud deployment state keyed by service name.
     pub(crate) soracloud_service_deployments:
         StorageTransaction<'block, 'world, Name, SoraServiceDeploymentStateV1>,
+    /// Current Soracloud app topology state keyed by app name.
+    pub(crate) soracloud_app_infra_states:
+        StorageTransaction<'block, 'world, Name, SoraAppInfraStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime:
         StorageTransaction<'block, 'world, Name, SoraServiceRuntimeStateV1>,
@@ -2929,6 +2945,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events:
         StorageTransaction<'block, 'world, u64, SoraServiceAuditEventV1>,
+    /// Soracloud app topology audit events keyed by deterministic sequence.
+    pub(crate) soracloud_app_infra_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraAppInfraAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
     pub(crate) soracloud_service_state_entries:
         StorageTransaction<'block, 'world, (String, String, String), SoraServiceStateEntryV1>,
@@ -4353,6 +4372,8 @@ pub struct WorldView<'world> {
     /// Current Soracloud deployment state keyed by service name.
     pub(crate) soracloud_service_deployments:
         StorageView<'world, Name, SoraServiceDeploymentStateV1>,
+    /// Current Soracloud app topology state keyed by app name.
+    pub(crate) soracloud_app_infra_states: StorageView<'world, Name, SoraAppInfraStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: StorageView<'world, Name, SoraServiceRuntimeStateV1>,
     /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
@@ -4360,6 +4381,8 @@ pub struct WorldView<'world> {
         StorageView<'world, (String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: StorageView<'world, u64, SoraServiceAuditEventV1>,
+    /// Soracloud app topology audit events keyed by deterministic sequence.
+    pub(crate) soracloud_app_infra_audit_events: StorageView<'world, u64, SoraAppInfraAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
     pub(crate) soracloud_service_state_entries:
         StorageView<'world, (String, String, String), SoraServiceStateEntryV1>,
@@ -12225,6 +12248,13 @@ impl World {
         &mut self.soracloud_service_deployments
     }
 
+    /// Provides mutable access to Soracloud app topology state for tests and API scaffolding.
+    pub fn soracloud_app_infra_states_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Name, SoraAppInfraStateV1> {
+        &mut self.soracloud_app_infra_states
+    }
+
     /// Provides mutable access to Soracloud runtime state for tests and API scaffolding.
     pub fn soracloud_service_runtime_mut_for_testing(
         &mut self,
@@ -12244,6 +12274,13 @@ impl World {
         &mut self,
     ) -> &mut Storage<u64, SoraServiceAuditEventV1> {
         &mut self.soracloud_service_audit_events
+    }
+
+    /// Provides mutable access to Soracloud app topology audit events for tests and API scaffolding.
+    pub fn soracloud_app_infra_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraAppInfraAuditEventV1> {
+        &mut self.soracloud_app_infra_audit_events
     }
 
     /// Provides mutable access to authoritative Soracloud ciphertext state for tests and API scaffolding.
@@ -13261,9 +13298,11 @@ impl World {
             smart_contract_state: self.smart_contract_state.view(),
             soracloud_service_revisions: self.soracloud_service_revisions.view(),
             soracloud_service_deployments: self.soracloud_service_deployments.view(),
+            soracloud_app_infra_states: self.soracloud_app_infra_states.view(),
             soracloud_service_runtime: self.soracloud_service_runtime.view(),
             soracloud_inrou_replica_runtime: self.soracloud_inrou_replica_runtime.view(),
             soracloud_service_audit_events: self.soracloud_service_audit_events.view(),
+            soracloud_app_infra_audit_events: self.soracloud_app_infra_audit_events.view(),
             soracloud_service_state_entries: self.soracloud_service_state_entries.view(),
             soracloud_decryption_request_records: self.soracloud_decryption_request_records.view(),
             soracloud_agent_apartments: self.soracloud_agent_apartments.view(),
@@ -13789,6 +13828,8 @@ pub trait WorldReadOnly {
     fn soracloud_service_deployments(
         &self,
     ) -> &impl StorageReadOnly<Name, SoraServiceDeploymentStateV1>;
+    /// Current Soracloud app topology state keyed by app name (read-only).
+    fn soracloud_app_infra_states(&self) -> &impl StorageReadOnly<Name, SoraAppInfraStateV1>;
     /// Active Soracloud runtime state keyed by service name (read-only).
     fn soracloud_service_runtime(&self) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1>;
     /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)` (read-only).
@@ -13798,6 +13839,10 @@ pub trait WorldReadOnly {
     /// Soracloud lifecycle audit events keyed by deterministic sequence (read-only).
     fn soracloud_service_audit_events(&self)
     -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1>;
+    /// Soracloud app topology audit events keyed by deterministic sequence (read-only).
+    fn soracloud_app_infra_audit_events(
+        &self,
+    ) -> &impl StorageReadOnly<u64, SoraAppInfraAuditEventV1>;
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)` (read-only).
     fn soracloud_service_state_entries(
         &self,
@@ -15123,6 +15168,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<Name, SoraServiceDeploymentStateV1> {
                 &self.soracloud_service_deployments
             }
+            fn soracloud_app_infra_states(
+                &self,
+            ) -> &impl StorageReadOnly<Name, SoraAppInfraStateV1> {
+                &self.soracloud_app_infra_states
+            }
             fn soracloud_service_runtime(
                 &self,
             ) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1> {
@@ -15137,6 +15187,11 @@ macro_rules! impl_world_ro {
                 &self,
             ) -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1> {
                 &self.soracloud_service_audit_events
+            }
+            fn soracloud_app_infra_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraAppInfraAuditEventV1> {
+                &self.soracloud_app_infra_audit_events
             }
             fn soracloud_service_state_entries(
                 &self,
@@ -15676,9 +15731,11 @@ impl<'world> WorldBlock<'world> {
             smart_contract_state,
             soracloud_service_revisions,
             soracloud_service_deployments,
+            soracloud_app_infra_states,
             soracloud_service_runtime,
             soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
+            soracloud_app_infra_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
             soracloud_agent_apartments,
@@ -15781,9 +15838,11 @@ impl<'world> WorldBlock<'world> {
         smart_contract_state.commit();
         soracloud_service_revisions.commit();
         soracloud_service_deployments.commit();
+        soracloud_app_infra_states.commit();
         soracloud_service_runtime.commit();
         soracloud_inrou_replica_runtime.commit();
         soracloud_service_audit_events.commit();
+        soracloud_app_infra_audit_events.commit();
         soracloud_service_state_entries.commit();
         soracloud_decryption_request_records.commit();
         soracloud_agent_apartments.commit();
@@ -16938,9 +16997,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             smart_contract_state,
             soracloud_service_revisions,
             soracloud_service_deployments,
+            soracloud_app_infra_states,
             soracloud_service_runtime,
             soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
+            soracloud_app_infra_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
             soracloud_agent_apartments,
@@ -17032,9 +17093,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         smart_contract_state.apply();
         soracloud_service_revisions.apply();
         soracloud_service_deployments.apply();
+        soracloud_app_infra_states.apply();
         soracloud_service_runtime.apply();
         soracloud_inrou_replica_runtime.apply();
         soracloud_service_audit_events.apply();
+        soracloud_app_infra_audit_events.apply();
         soracloud_service_state_entries.apply();
         soracloud_decryption_request_records.apply();
         soracloud_agent_apartments.apply();
@@ -33188,12 +33251,16 @@ pub(crate) mod deserialize {
             take_optional_default_lossy(&mut map, "soracloud_service_revisions")?;
         let soracloud_service_deployments =
             take_optional_default(&mut map, "soracloud_service_deployments")?;
+        let soracloud_app_infra_states =
+            take_optional_default(&mut map, "soracloud_app_infra_states")?;
         let soracloud_service_runtime =
             take_optional_default(&mut map, "soracloud_service_runtime")?;
         let soracloud_inrou_replica_runtime =
             take_optional_default(&mut map, "soracloud_inrou_replica_runtime")?;
         let soracloud_service_audit_events =
             take_optional_default(&mut map, "soracloud_service_audit_events")?;
+        let soracloud_app_infra_audit_events =
+            take_optional_default(&mut map, "soracloud_app_infra_audit_events")?;
         let soracloud_service_state_entries =
             take_optional_default(&mut map, "soracloud_service_state_entries")?;
         let soracloud_decryption_request_records =
@@ -33366,9 +33433,11 @@ pub(crate) mod deserialize {
             smart_contract_state,
             soracloud_service_revisions,
             soracloud_service_deployments,
+            soracloud_app_infra_states,
             soracloud_service_runtime,
             soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
+            soracloud_app_infra_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
             soracloud_agent_apartments,

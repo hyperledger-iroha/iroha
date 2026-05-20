@@ -348,13 +348,19 @@ impl PaymentOptions {
     }
 }
 
+fn submission_metadata<C: RunContext>(context: &C) -> Metadata {
+    context.transaction_metadata().cloned().unwrap_or_default()
+}
+
 impl Run for RegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
         let request = self.build_request(&context.config().account, &|literal| {
             crate::resolve_account_id(context, literal)
         })?;
-        let response = client.sns().register(&request)?;
+        let response = client
+            .sns()
+            .register_with_metadata(&request, submission_metadata(context))?;
         context.print_data(&response)
     }
 }
@@ -385,7 +391,12 @@ impl Run for RenewArgs {
         let literal = domain_literal_from_selector(self.selector_literal())?;
         let record = client
             .sns()
-            .renew(SnsNamespacePath::Domain, literal, &request)?;
+            .renew_with_metadata(
+                SnsNamespacePath::Domain,
+                literal,
+                &request,
+                submission_metadata(context),
+            )?;
         context.print_data(&record)
     }
 }
@@ -418,11 +429,15 @@ impl Run for TransferArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.build_request(&|literal| crate::resolve_account_id(context, literal))?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
-        let record = context.client_from_config().sns().transfer(
-            SnsNamespacePath::Domain,
-            literal,
-            &request,
-        )?;
+        let record = context
+            .client_from_config()
+            .sns()
+            .transfer_with_metadata(
+                SnsNamespacePath::Domain,
+                literal,
+                &request,
+                submission_metadata(context),
+            )?;
         context.print_data(&record)
     }
 }
@@ -459,11 +474,15 @@ impl Run for UpdateControllersArgs {
             crate::resolve_account_id(context, literal)
         })?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
-        let record = context.client_from_config().sns().update_controllers(
-            SnsNamespacePath::Domain,
-            literal,
-            &request,
-        )?;
+        let record = context
+            .client_from_config()
+            .sns()
+            .update_controllers_with_metadata(
+                SnsNamespacePath::Domain,
+                literal,
+                &request,
+                submission_metadata(context),
+            )?;
         context.print_data(&record)
     }
 }
@@ -487,11 +506,15 @@ impl Run for FreezeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.build_request()?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
-        let record = context.client_from_config().sns().freeze(
-            SnsNamespacePath::Domain,
-            literal,
-            &request,
-        )?;
+        let record = context
+            .client_from_config()
+            .sns()
+            .freeze_with_metadata(
+                SnsNamespacePath::Domain,
+                literal,
+                &request,
+                submission_metadata(context),
+            )?;
         context.print_data(&record)
     }
 }
@@ -515,11 +538,15 @@ impl Run for UnfreezeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let hook = self.governance()?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
-        let record = context.client_from_config().sns().unfreeze(
-            SnsNamespacePath::Domain,
-            literal,
-            &hook,
-        )?;
+        let record = context
+            .client_from_config()
+            .sns()
+            .unfreeze_with_metadata(
+                SnsNamespacePath::Domain,
+                literal,
+                &hook,
+                submission_metadata(context),
+            )?;
         context.print_data(&record)
     }
 }

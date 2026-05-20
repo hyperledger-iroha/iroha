@@ -1,7 +1,5 @@
 "use strict";
 
-import { Buffer } from "node:buffer";
-import { domainToASCII } from "node:url";
 import { blake2b256 } from "./blake2b.js";
 import {
   canonicalCurveAlgorithm,
@@ -21,12 +19,13 @@ const I105_SENTINEL_DEV = "dev";
 const I105_SENTINEL_NUMERIC_PREFIX = "n";
 const I105_CHECKSUM_LEN = 6;
 const BECH32M_CONST = 0x2bc830a3;
+const encoder = new TextEncoder();
 const I105_WARNING =
   "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 half-width katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
 
 const MULTISIG_DIGEST_PERSONALIZATION = (() => {
   const bytes = new Uint8Array(16);
-  bytes.set(Buffer.from("iroha-ms-policy", "ascii"));
+  bytes.set(encoder.encode("iroha-ms-policy"));
   return bytes;
 })();
 
@@ -112,6 +111,35 @@ const ED25519_SMALL_ORDER_ENCODINGS = [
   "0000000000000000000000000000000000000000000000000000000000000000",
   "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
 ].map((hex) => normalizeBytes(hex));
+
+function concatBytes(parts) {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function compareBytes(left, right) {
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    if (left[index] !== right[index]) {
+      return left[index] - right[index];
+    }
+  }
+  return left.length - right.length;
+}
+
+function hexToBytes(body) {
+  const out = new Uint8Array(body.length / 2);
+  for (let index = 0; index < out.length; index += 1) {
+    out[index] = Number.parseInt(body.slice(index * 2, index * 2 + 2), 16);
+  }
+  return out;
+}
 
 let enabledFeatures = new Set();
 
@@ -303,7 +331,7 @@ function normalizeControllerPublicKeyForCurve(curveId, keyBytes, context = "publ
   if (keyBytes.length !== rawSm2Length) {
     return keyBytes;
   }
-  const distidBytes = Buffer.from(SM2_DEFAULT_DISTINGUISHED_ID, "utf8");
+  const distidBytes = encoder.encode(SM2_DEFAULT_DISTINGUISHED_ID);
   if (distidBytes.length > 0xffff) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_PUBLIC_KEY,
@@ -363,16 +391,16 @@ function normalizeMultisigMembers(members) {
       publicKey,
       `multisig member ${index} public key`,
     );
-    const sortKey = Buffer.concat([
-      Buffer.from(curveIdToAlgorithm(curve), "ascii"),
-      Buffer.from([0]),
-      Buffer.from(canonicalPublicKey),
+    const sortKey = concatBytes([
+      encoder.encode(curveIdToAlgorithm(curve)),
+      Uint8Array.of(0),
+      canonicalPublicKey,
     ]);
     return { curve, weight, publicKey: canonicalPublicKey, sortKey };
   });
-  normalized.sort((left, right) => left.sortKey.compare(right.sortKey));
+  normalized.sort((left, right) => compareBytes(left.sortKey, right.sortKey));
   for (let index = 1; index < normalized.length; index += 1) {
-    if (normalized[index].sortKey.compare(normalized[index - 1].sortKey) === 0) {
+    if (compareBytes(normalized[index].sortKey, normalized[index - 1].sortKey) === 0) {
       invalidMultisigPolicy("DuplicateMember", "invalid multisig policy: DuplicateMember");
     }
   }
@@ -429,9 +457,6 @@ function normalizeBytes(value) {
   if (value instanceof Uint8Array) {
     return new Uint8Array(value);
   }
-  if (Buffer.isBuffer(value)) {
-    return new Uint8Array(value);
-  }
   if (ArrayBuffer.isView(value)) {
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   }
@@ -462,7 +487,7 @@ function normalizeBytes(value) {
     if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(body)) {
       throw new TypeError("hex string inputs must be even-length and contain only hex digits");
     }
-    return new Uint8Array(Buffer.from(body, "hex"));
+    return hexToBytes(body);
   }
   throw new TypeError(
     "expected Uint8Array, Buffer, ArrayBuffer, ArrayBufferView, number[], or hex string for byte data",
@@ -796,9 +821,7 @@ function curveIdToAlgorithm(curveId) {
 }
 
 function bytesToHex(bytes) {
-  return Buffer.from(bytes)
-    .toString("hex")
-    .toUpperCase();
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 
 function computeMultisigPolicyDigest(bytes) {
@@ -845,7 +868,7 @@ export function canonicalizeDomainLabel(domain) {
 
   let ascii;
   try {
-    ascii = domainToASCII(normalized);
+    ascii = new URL(`http://${normalized}/`).hostname;
   } catch (error) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
@@ -1052,7 +1075,7 @@ export class AccountAddress {
 
   canonicalHex() {
     const canonical = this.canonicalBytes();
-    return `0x${Buffer.from(canonical).toString("hex")}`;
+    return `0x${bytesToHex(canonical).toLowerCase()}`;
   }
 
   toI105(prefix = DEFAULT_I105_DISCRIMINANT) {
@@ -1470,7 +1493,7 @@ function decodeI105Payload(payload) {
   const checksumDigits = digits.slice(-I105_CHECKSUM_LEN);
   const canonicalBytes = decodeBaseN(dataDigits, I105_BASE);
   const expected = i105ChecksumDigits(canonicalBytes);
-  if (!Buffer.from(expected).equals(Buffer.from(checksumDigits))) {
+  if (compareBytes(expected, checksumDigits) !== 0) {
     throw new AccountAddressError(
       AccountAddressErrorCode.CHECKSUM_MISMATCH,
       "i105 checksum mismatch",

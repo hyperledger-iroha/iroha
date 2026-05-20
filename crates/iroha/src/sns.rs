@@ -9,11 +9,14 @@ use eyre::Result;
 
 use crate::{
     client::{Client, ResponseReport, join_torii_url},
-    data_model::sns::{
-        ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
-        FreezeNameRequestV1, GovernanceHookV1, NameRecordV1, RegisterNameRequestV1,
-        RegisterNameResponseV1, RenewNameRequestV1, SuffixId, SuffixPolicyV1,
-        TransferNameRequestV1, UpdateControllersRequestV1,
+    data_model::{
+        metadata::Metadata,
+        sns::{
+            ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
+            FreezeNameRequestV1, GovernanceHookV1, NameRecordV1, RegisterNameRequestV1,
+            RegisterNameResponseV1, RenewNameRequestV1, SuffixId, SuffixPolicyV1,
+            TransferNameRequestV1, UpdateControllersRequestV1,
+        },
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
 };
@@ -109,12 +112,25 @@ impl<'a> SnsApi<'a> {
     ///
     /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
     pub fn register(&self, payload: &RegisterNameRequestV1) -> Result<RegisterNameResponseV1> {
+        self.register_with_metadata(payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to register a name with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn register_with_metadata(
+        &self,
+        payload: &RegisterNameRequestV1,
+        metadata: Metadata,
+    ) -> Result<RegisterNameResponseV1> {
         let namespace = SnsNamespacePath::from_suffix_id(payload.selector.suffix_id)?;
         let literal = payload.selector.normalized_label().to_owned();
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::RegisterSnsName::new(
-                payload.clone(),
-            ))?;
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::RegisterSnsName::new(payload.clone()),
+            metadata,
+        )?;
         let name_record = self.get_committed_name(namespace, &literal)?;
         Ok(RegisterNameResponseV1 { name_record })
     }
@@ -199,12 +215,29 @@ impl<'a> SnsApi<'a> {
         literal: &str,
         payload: &RenewNameRequestV1,
     ) -> Result<NameRecordV1> {
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::RenewSnsName::new(
+        self.renew_with_metadata(namespace, literal, payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to renew a name with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn renew_with_metadata(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &RenewNameRequestV1,
+        metadata: Metadata,
+    ) -> Result<NameRecordV1> {
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::RenewSnsName::new(
                 namespace.suffix_id(),
                 literal,
                 payload.clone(),
-            ))?;
+            ),
+            metadata,
+        )?;
         self.get_committed_name(namespace, literal)
     }
 
@@ -219,12 +252,29 @@ impl<'a> SnsApi<'a> {
         literal: &str,
         payload: &TransferNameRequestV1,
     ) -> Result<NameRecordV1> {
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::TransferSnsName::new(
+        self.transfer_with_metadata(namespace, literal, payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to transfer a name with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn transfer_with_metadata(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &TransferNameRequestV1,
+        metadata: Metadata,
+    ) -> Result<NameRecordV1> {
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::TransferSnsName::new(
                 namespace.suffix_id(),
                 literal,
                 payload.clone(),
-            ))?;
+            ),
+            metadata,
+        )?;
         self.get_committed_name(namespace, literal)
     }
 
@@ -239,12 +289,29 @@ impl<'a> SnsApi<'a> {
         literal: &str,
         payload: &UpdateControllersRequestV1,
     ) -> Result<NameRecordV1> {
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::UpdateSnsNameControllers::new(
+        self.update_controllers_with_metadata(namespace, literal, payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to replace name controllers with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn update_controllers_with_metadata(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &UpdateControllersRequestV1,
+        metadata: Metadata,
+    ) -> Result<NameRecordV1> {
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::UpdateSnsNameControllers::new(
                 namespace.suffix_id(),
                 literal,
                 payload.clone(),
-            ))?;
+            ),
+            metadata,
+        )?;
         self.get_committed_name(namespace, literal)
     }
 
@@ -259,12 +326,29 @@ impl<'a> SnsApi<'a> {
         literal: &str,
         payload: &FreezeNameRequestV1,
     ) -> Result<NameRecordV1> {
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::FreezeSnsName::new(
+        self.freeze_with_metadata(namespace, literal, payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to freeze a name with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn freeze_with_metadata(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &FreezeNameRequestV1,
+        metadata: Metadata,
+    ) -> Result<NameRecordV1> {
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::FreezeSnsName::new(
                 namespace.suffix_id(),
                 literal,
                 payload.clone(),
-            ))?;
+            ),
+            metadata,
+        )?;
         self.get_committed_name(namespace, literal)
     }
 
@@ -279,12 +363,29 @@ impl<'a> SnsApi<'a> {
         literal: &str,
         payload: &GovernanceHookV1,
     ) -> Result<NameRecordV1> {
-        self.client
-            .submit_blocking(crate::data_model::isi::sns::UnfreezeSnsName::new(
+        self.unfreeze_with_metadata(namespace, literal, payload, Metadata::default())
+    }
+
+    /// Submit a consensus transaction to unfreeze a name with transaction metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction is rejected or the committed record cannot be fetched.
+    pub fn unfreeze_with_metadata(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &GovernanceHookV1,
+        metadata: Metadata,
+    ) -> Result<NameRecordV1> {
+        self.client.submit_blocking_with_metadata(
+            crate::data_model::isi::sns::UnfreezeSnsName::new(
                 namespace.suffix_id(),
                 literal,
                 payload.clone(),
-            ))?;
+            ),
+            metadata,
+        )?;
         self.get_committed_name(namespace, literal)
     }
 }

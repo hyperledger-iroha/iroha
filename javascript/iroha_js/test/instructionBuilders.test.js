@@ -1140,6 +1140,22 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
       accessSetHints: {
         readKeys: ["account:alice", "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
         writeKeys: ["contract:foo"],
+        dynamicReads: [
+          {
+            baseKey: "state:Balances",
+            keyType: "AccountId",
+            boundKind: "take",
+            maxKeys: "4",
+          },
+        ],
+        dynamicWrites: [
+          {
+            base_key: "state:Votes",
+            key_type: "ReferendumId",
+            bound_kind: "range",
+            max_keys: 2,
+          },
+        ],
       },
       entrypoints: [
         {
@@ -1170,6 +1186,22 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
         access_set_hints: {
           read_keys: ["account:alice", "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
           write_keys: ["contract:foo"],
+          dynamic_reads: [
+            {
+              base_key: "state:Balances",
+              key_type: "AccountId",
+              bound_kind: "take",
+              max_keys: 4,
+            },
+          ],
+          dynamic_writes: [
+            {
+              base_key: "state:Votes",
+              key_type: "ReferendumId",
+              bound_kind: "range",
+              max_keys: 2,
+            },
+          ],
         },
         entrypoints: [
           {

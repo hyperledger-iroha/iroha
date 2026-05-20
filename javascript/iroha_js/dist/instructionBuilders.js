@@ -1365,6 +1365,43 @@ function normalizeAccessSetHints(value, context) {
       assertString(entry, `${name}[${index}]`),
     );
   };
+  const normalizeDynamicHints = (entries, name) => {
+    if (entries === undefined || entries === null) {
+      return [];
+    }
+    if (!Array.isArray(entries)) {
+      fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array of dynamic access hints`, name);
+    }
+    return entries.map((entry, index) => {
+      const hint = assertPlainObject(entry, `${name}[${index}]`);
+      const maxKeys = asNonNegativeInteger(
+        hint.max_keys ?? hint.maxKeys,
+        `${name}[${index}].maxKeys`,
+      );
+      if (maxKeys > 0xffffffff) {
+        fail(
+          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          `${name}[${index}].maxKeys must fit in u32`,
+          `${name}[${index}].maxKeys`,
+        );
+      }
+      return {
+        base_key: assertString(
+          hint.base_key ?? hint.baseKey,
+          `${name}[${index}].baseKey`,
+        ),
+        key_type: assertString(
+          hint.key_type ?? hint.keyType,
+          `${name}[${index}].keyType`,
+        ),
+        bound_kind: assertString(
+          hint.bound_kind ?? hint.boundKind,
+          `${name}[${index}].boundKind`,
+        ),
+        max_keys: maxKeys,
+      };
+    });
+  };
   return {
     read_keys: normalizeKeys(
       hints.read_keys ?? hints.readKeys,
@@ -1373,6 +1410,14 @@ function normalizeAccessSetHints(value, context) {
     write_keys: normalizeKeys(
       hints.write_keys ?? hints.writeKeys,
       `${context}.writeKeys`,
+    ),
+    dynamic_reads: normalizeDynamicHints(
+      hints.dynamic_reads ?? hints.dynamicReads,
+      `${context}.dynamicReads`,
+    ),
+    dynamic_writes: normalizeDynamicHints(
+      hints.dynamic_writes ?? hints.dynamicWrites,
+      `${context}.dynamicWrites`,
     ),
   };
 }
