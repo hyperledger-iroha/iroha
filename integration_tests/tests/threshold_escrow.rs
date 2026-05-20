@@ -100,7 +100,11 @@ async fn wait_for_tx_terminal_status(
     let mut last_kind = String::from("pending");
 
     loop {
-        let response = http.get(status_url.clone()).send().await?;
+        let response = http
+            .get(status_url.clone())
+            .header("Accept", "application/json")
+            .send()
+            .await?;
         let status = response.status();
         let bytes = response.bytes().await?;
         if status == reqwest::StatusCode::OK || status == reqwest::StatusCode::ACCEPTED {

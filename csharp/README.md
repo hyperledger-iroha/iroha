@@ -53,11 +53,11 @@ The live smoke currently probes unauthenticated read endpoints:
 - `/v1/accounts`
 - `/v1/explorer/accounts/{account_id}/qr`
 - `/v1/explorer/accounts`, `/v1/explorer/domains`, `/v1/explorer/asset-definitions`, `/v1/explorer/assets`, `/v1/explorer/nfts`, and `/v1/explorer/rwas` with first-item detail reads when present
-- `/v1/contracts/instances/{ns}` using `universal` by default, with `/v1/contracts/code/{code_hash}`, `/v1/contracts/code-bytes/{code_hash}`, and `/v1/contracts/code/{code_hash}/contract-view` when a code hash is available from that namespace or the override env var below
+- `/v1/contracts/instances/{ns}` when the deployment exposes contract metadata, using `universal` by default, with `/v1/contracts/code/{code_hash}`, `/v1/contracts/code-bytes/{code_hash}`, and `/v1/contracts/code/{code_hash}/contract-view` when a code hash is available from that namespace or the override env var below
 - `/v1/identifier-policies`
 - `/v1/vpn/profile`
-- `/v1/sorafs/denylist/catalog`
-- `/v1/sorafs/denylist/packs/{pack_id}` when the catalog is non-empty
+- `/v1/sorafs/denylist/catalog` when the deployment exposes the denylist surface
+- `/v1/sorafs/denylist/packs/{pack_id}` when the catalog is available and non-empty
 - `/v1/aliases/by_account`
 - `/v1/accounts/faucet/puzzle`
 - `/v1/space-directory/uaids/{uaid}`

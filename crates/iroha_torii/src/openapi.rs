@@ -5850,7 +5850,10 @@ fn versioned_dual_format_post_operation(
         success_status.to_string(),
         dual_format_response("Successful response", response_schema_ref),
     );
-    responses.insert("400".to_owned(), dual_format_response("Bad request", "#/components/schemas/ErrorResponse"));
+    responses.insert(
+        "400".to_owned(),
+        dual_format_response("Bad request", "#/components/schemas/ErrorResponse"),
+    );
     responses.insert(
         "406".to_owned(),
         dual_format_response(
@@ -5860,7 +5863,10 @@ fn versioned_dual_format_post_operation(
     );
     responses.insert(
         "415".to_owned(),
-        dual_format_response("Unsupported request content type.", "#/components/schemas/ErrorResponse"),
+        dual_format_response(
+            "Unsupported request content type.",
+            "#/components/schemas/ErrorResponse",
+        ),
     );
     operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();

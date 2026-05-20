@@ -46,8 +46,10 @@ async fn test_sleep() {
         .map(FuturePollTelemetry::try_from)
         .filter_map(Result::ok)
         .take(3)
-        .collect::<Vec<_>>()
-        .await;
+        .collect::<Vec<_>>();
+    let telemetry = tokio::time::timeout(Duration::from_secs(5), telemetry)
+        .await
+        .expect("timed out waiting for future telemetry");
     assert_eq!(telemetry.len(), 3);
 
     let id = telemetry[0].id;

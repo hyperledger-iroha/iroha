@@ -337,7 +337,13 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
         "epoch_length_blocks should reflect permissioned mode before activation, got {pre_status:?}"
     );
 
-    advance_to_height(&network, &client, ACTIVATION_HEIGHT, "cutover seed").await?;
+    advance_to_height(
+        &network,
+        &client,
+        ACTIVATION_HEIGHT.saturating_add(1),
+        "cutover seed",
+    )
+    .await?;
     // Ensure the runtime mode flip is visible across all peers before we
     // inspect the active status shape. Dedicated NPoS liveness suites cover
     // post-cutover block production.
@@ -452,7 +458,7 @@ async fn staged_cutover_recomputes_consensus_fingerprint() -> Result<()> {
     advance_to_height(
         &network,
         &client,
-        ACTIVATION_HEIGHT,
+        ACTIVATION_HEIGHT.saturating_add(1),
         "cutover fingerprint seed",
     )
     .await?;

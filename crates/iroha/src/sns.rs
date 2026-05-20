@@ -177,15 +177,45 @@ impl<'a> SnsApi<'a> {
         namespace: SnsNamespacePath,
         literal: &str,
     ) -> Result<NameRecordV1> {
-        let deadline = Instant::now() + COMMITTED_NAME_READ_TIMEOUT;
-        let mut last_response = self.get_name_response(namespace, literal)?;
+        self.get_committed_name_matching(namespace, literal, |_| true, "committed record")
+    }
 
-        while retryable_name_lookup_status(last_response.status()) && Instant::now() < deadline {
+    fn get_committed_name_matching<F>(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        mut predicate: F,
+        context: &str,
+    ) -> Result<NameRecordV1>
+    where
+        F: FnMut(&NameRecordV1) -> bool,
+    {
+        let deadline = Instant::now() + COMMITTED_NAME_READ_TIMEOUT;
+        let mut last_record = None;
+
+        loop {
+            let response = self.get_name_response(namespace, literal)?;
+            if retryable_name_lookup_status(response.status()) {
+                if Instant::now() >= deadline {
+                    return Self::decode_name_response(&response);
+                }
+            } else {
+                let record = Self::decode_name_response(&response)?;
+                if predicate(&record) {
+                    return Ok(record);
+                }
+                last_record = Some(record);
+                if Instant::now() >= deadline {
+                    break;
+                }
+            }
+
             thread::sleep(COMMITTED_NAME_READ_INTERVAL);
-            last_response = self.get_name_response(namespace, literal)?;
         }
 
-        Self::decode_name_response(&last_response)
+        Err(eyre::eyre!(
+            "timed out waiting for SNS registration `{literal}` to reach {context}; last_record={last_record:?}"
+        ))
     }
 
     /// Submit a consensus transaction to renew a name.
@@ -199,13 +229,19 @@ impl<'a> SnsApi<'a> {
         literal: &str,
         payload: &RenewNameRequestV1,
     ) -> Result<NameRecordV1> {
+        let previous = self.get_name(namespace, literal)?;
         self.client
             .submit_blocking(crate::data_model::isi::sns::RenewSnsName::new(
                 namespace.suffix_id(),
                 literal,
                 payload.clone(),
             ))?;
-        self.get_committed_name(namespace, literal)
+        self.get_committed_name_matching(
+            namespace,
+            literal,
+            |record| record.expires_at_ms > previous.expires_at_ms,
+            "renewed expiry",
+        )
     }
 
     /// Submit a consensus transaction to transfer a name.
@@ -225,7 +261,12 @@ impl<'a> SnsApi<'a> {
                 literal,
                 payload.clone(),
             ))?;
-        self.get_committed_name(namespace, literal)
+        self.get_committed_name_matching(
+            namespace,
+            literal,
+            |record| record.owner == payload.new_owner,
+            "transferred owner",
+        )
     }
 
     /// Submit a consensus transaction to replace name controllers.

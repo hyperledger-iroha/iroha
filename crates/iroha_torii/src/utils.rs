@@ -149,8 +149,7 @@ pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<Respons
             || media_type.eq_ignore_ascii_case("*/*")
         {
             Some(ResponseFormat::Norito)
-        } else if is_json_media_type(media_type)
-        {
+        } else if is_json_media_type(media_type) {
             Some(ResponseFormat::Json)
         } else {
             None

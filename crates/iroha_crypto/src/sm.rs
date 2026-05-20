@@ -1065,16 +1065,6 @@ mod sm_accel {
 
     #[cfg(not(all(feature = "sm-neon", target_arch = "aarch64")))]
     mod neon {
-        pub fn encrypt_block(key: &[u8; 16], block: &[u8; 16]) -> Option<[u8; 16]> {
-            let _ = (key, block);
-            None
-        }
-
-        pub fn decrypt_block(key: &[u8; 16], block: &[u8; 16]) -> Option<[u8; 16]> {
-            let _ = (key, block);
-            None
-        }
-
         #[cfg(test)]
         pub struct SmAccelDisableGuard;
 
@@ -1145,6 +1135,7 @@ mod sm_accel {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum NeonPolicy {
+        #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         Auto,
         ForceEnable,
         ForceDisable,
@@ -1260,10 +1251,21 @@ mod sm_accel {
             ([0xA5; 16], [0x5A; 16]),
         ];
 
-        #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
-        pub use super::neon::force_disable_all_for_tests;
-        #[cfg(not(all(feature = "sm-neon", target_arch = "aarch64")))]
-        pub use super::neon::force_disable_all_for_tests;
+        /// Guard that disables every SM acceleration path available to this build.
+        pub struct SmAccelDisableGuard {
+            _neon: super::neon::SmAccelDisableGuard,
+            #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
+            _portable: super::portable::SmAccelDisableGuard,
+        }
+
+        /// Disable every SM acceleration path available to this build for the guard lifetime.
+        pub fn force_disable_all_for_tests() -> SmAccelDisableGuard {
+            SmAccelDisableGuard {
+                _neon: super::neon::force_disable_all_for_tests(),
+                #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
+                _portable: super::portable::force_disable_all_for_tests(),
+            }
+        }
 
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         #[test]
@@ -2256,6 +2258,7 @@ pub fn acceleration_advert() -> SmAccelerationAdvert {
     let policy = match sm_accel::neon_policy() {
         sm_accel::NeonPolicy::ForceEnable => SmIntrinsicPolicy::ForceEnable,
         sm_accel::NeonPolicy::ForceDisable => SmIntrinsicPolicy::ForceDisable,
+        #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         sm_accel::NeonPolicy::Auto => SmIntrinsicPolicy::Auto,
         #[cfg(not(all(feature = "sm-neon", target_arch = "aarch64")))]
         sm_accel::NeonPolicy::Unsupported => SmIntrinsicPolicy::ScalarOnly,
@@ -2274,6 +2277,7 @@ pub fn intrinsic_policy() -> SmIntrinsicPolicy {
     match sm_accel::neon_policy() {
         sm_accel::NeonPolicy::ForceEnable => SmIntrinsicPolicy::ForceEnable,
         sm_accel::NeonPolicy::ForceDisable => SmIntrinsicPolicy::ForceDisable,
+        #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         sm_accel::NeonPolicy::Auto => SmIntrinsicPolicy::Auto,
         #[cfg(not(all(feature = "sm-neon", target_arch = "aarch64")))]
         sm_accel::NeonPolicy::Unsupported => SmIntrinsicPolicy::ScalarOnly,

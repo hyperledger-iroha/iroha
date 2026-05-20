@@ -228,10 +228,6 @@ mod model {
         TryInto,
         IntoSchema,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub enum TransactionEntrypoint {
         /// User request that initiates a transaction.
