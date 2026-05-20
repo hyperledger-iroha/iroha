@@ -204,11 +204,43 @@ pub mod isi {
             .is_some_and(|perms| perms.iter().any(|p| p.name() == name))
     }
 
+    const VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE: &str = "VerifiedLaneRelays";
+
     fn verified_lane_relay_state_key(relay_ref: &LaneRelayEnvelopeRef) -> Result<Name, Error> {
         let key = relay_ref.relay_state_key();
         Name::from_str(&key).map_err(|_| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 "invalid verified lane relay state key".into(),
+            ))
+            .into()
+        })
+    }
+
+    fn verified_lane_relay_contract_map_state_key(relay_state_key: &Name) -> Result<Name, Error> {
+        let key_payload = norito::to_bytes(relay_state_key).map_err(|err| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                format!("verified lane relay map key encode failed: {err}"),
+            ))
+        })?;
+        let mut pointer_body = Vec::with_capacity(2 + 1 + 4 + key_payload.len() + 32);
+        pointer_body.extend_from_slice(&(ivm::PointerType::Name as u16).to_be_bytes());
+        pointer_body.push(1);
+        pointer_body.extend_from_slice(&(key_payload.len() as u32).to_be_bytes());
+        pointer_body.extend_from_slice(&key_payload);
+        let inner_hash: [u8; 32] = CryptoHash::new(&key_payload).into();
+        pointer_body.extend_from_slice(&inner_hash);
+
+        let digest: [u8; 32] = CryptoHash::new(&pointer_body).into();
+        let mut path = String::with_capacity(VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE.len() + 1 + 64);
+        path.push_str(VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE);
+        path.push('/');
+        use core::fmt::Write as _;
+        for byte in &digest {
+            let _ = write!(&mut path, "{byte:02x}");
+        }
+        Name::from_str(&path).map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "invalid verified lane relay map state key".into(),
             ))
             .into()
         })
@@ -10796,12 +10828,21 @@ pub mod isi {
                 binding,
             );
             let key = verified_lane_relay_state_key(&record.relay_ref)?;
+            let contract_map_key = verified_lane_relay_contract_map_state_key(&key)?;
             let encoded = encode_verified_lane_relay_record_state(&record).map_err(|err| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     err,
                 ))
             })?;
-            if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
+
+            for existing_key in [&key, &contract_map_key] {
+                let Some(existing) = state_transaction
+                    .world
+                    .smart_contract_state
+                    .get(existing_key)
+                else {
+                    continue;
+                };
                 let decoded = decode_verified_lane_relay_record_state(existing).map_err(|err| {
                     InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(format!("stored {err}")),
@@ -10813,14 +10854,38 @@ pub mod isi {
                     )
                     .into());
                 }
+            }
+
+            let mut inserted = false;
+            if state_transaction
+                .world
+                .smart_contract_state
+                .get(&key)
+                .is_none()
+            {
+                state_transaction
+                    .world
+                    .smart_contract_state
+                    .insert(key, encoded.clone());
+                inserted = true;
+            }
+            if state_transaction
+                .world
+                .smart_contract_state
+                .get(&contract_map_key)
+                .is_none()
+            {
+                state_transaction
+                    .world
+                    .smart_contract_state
+                    .insert(contract_map_key, encoded);
+                inserted = true;
+            }
+            if inserted {
                 state_transaction.stage_verified_lane_relay_record(record);
                 return Ok(());
             }
 
-            state_transaction
-                .world
-                .smart_contract_state
-                .insert(key, encoded);
             state_transaction.stage_verified_lane_relay_record(record);
             Ok(())
         }
@@ -12332,6 +12397,20 @@ pub mod isi {
             assert!(key.starts_with(&expected_prefix));
             assert!(!key.contains('/'));
             let suffix = key.rsplit('_').next().expect("hash suffix");
+            assert_eq!(suffix.len(), 64);
+            assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
+        }
+
+        #[test]
+        fn verified_lane_relay_contract_map_state_key_matches_kotodama_map_shape() {
+            let record = sample_verified_lane_relay_record();
+            let key = super::verified_lane_relay_state_key(&record.relay_ref).expect("state key");
+            let map_key =
+                super::verified_lane_relay_contract_map_state_key(&key).expect("map state key");
+            let map_key = map_key.to_string();
+            let expected_prefix = format!("{}/", super::VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE);
+            assert!(map_key.starts_with(&expected_prefix));
+            let suffix = map_key.rsplit('/').next().expect("hash suffix");
             assert_eq!(suffix.len(), 64);
             assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
         }

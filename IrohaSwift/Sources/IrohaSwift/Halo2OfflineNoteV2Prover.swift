@@ -15,7 +15,7 @@ public enum Halo2OfflineNoteV2Prover {
     public static let ipaK: UInt32 = 7
     public static let maxEnvelopeBytes = 20 * 1024
 
-    public static let canonicalVKHash = Data(hexString: "4736be739f171bad842a749930347abd1124c7e6f63ba6976eeb0d491aff3e1d")!
+    public static let canonicalVKHash = Data(hexString: "ad4d2ce680df32288d382c8b6403108d7174ca0ba9e558bd93a693f9d770b256")!
     private static let canonicalTranscriptRepresentation = Data(hexString: "7db2235914292d4e825d6d51e1a880da77f107eb2c7853e3ec9c9d0dccc59813")!
     private static let proofDegree = 6
     private static let blindingFactors = 5
