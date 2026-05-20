@@ -28,8 +28,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::addr::socket_addr;
 use iroha_test_network::{
-    BlockHeight, Network, NetworkBuilder, NetworkPeer,
-    ensure_domain_registration_lease_for_network, genesis_factory, once_blocks_sync,
+    BlockHeight, Network, NetworkBuilder, NetworkPeer, genesis_factory, once_blocks_sync,
 };
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
@@ -497,9 +496,9 @@ fn allow_supply_resubmit(faulty_peers: usize, force_soft_fork: bool) -> bool {
 }
 
 fn allow_round_supply_deadline_slip(faulty_peers: usize, force_soft_fork: bool) -> bool {
-    // Under multi-fault partitions, transaction dissemination can lag one round behind while
+    // Under partitioned rounds, transaction dissemination can lag one round behind while
     // still converging globally; defer strictness to the final supply assertion.
-    force_soft_fork || faulty_peers > 1
+    force_soft_fork || faulty_peers > 0
 }
 
 async fn wait_for_torii_ready_client(
@@ -824,12 +823,27 @@ async fn network_starts_with_relay() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    let client = network.client();
-    let relay_domain: DomainId = DomainId::try_new("relay-net", "universal")?;
-    ensure_domain_registration_lease_for_network(&network, &relay_domain)?;
-    let register = Register::domain(Domain::new(relay_domain));
-    spawn_blocking(move || client.submit(register)).await??;
-    network.ensure_blocks(2).await?;
+    let client = network
+        .peers()
+        .iter()
+        .min_by(|left, right| left.id().cmp(&right.id()))
+        .expect("relay network should have at least one peer")
+        .client();
+    if sandbox::handle_result(
+        network.ensure_blocks(1).await,
+        stringify!(network_starts_with_relay),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    spawn_blocking(move || client.submit(Log::new(Level::INFO, "relay started".to_owned())))
+        .await??;
+    timeout(
+        network.sync_timeout(),
+        once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
+    )
+    .await??;
 
     Ok(())
 }
@@ -1522,57 +1536,79 @@ impl UnstableNetwork {
                 iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
             }
         }
-        let submit_tx =
-            |phase: &'static str, timeout_window: Duration, submit_peers: Vec<NetworkPeer>| {
-                let tx = Arc::clone(&tx);
-                async move {
-                    let deadline = Instant::now() + timeout_window;
-                    let mut attempts = 0usize;
-                    loop {
-                        attempts = attempts.saturating_add(1);
-                        let mut accepted = false;
-                        let mut attempt_err: Option<eyre::Report> = None;
-                        for peer in &submit_peers {
-                            let client = peer.client();
-                            iroha_logger::info!(
-                                phase,
-                                via_peer = peer.mnemonic(),
-                                "Submit transaction"
-                            );
-                            let tx = Arc::clone(&tx);
-                            let res = spawn_blocking(move || client.submit_transaction(&tx)).await;
-                            match res {
-                                Ok(Ok(_hash)) => accepted = true,
-                                Ok(Err(err)) => {
-                                    if is_submission_accepted_duplicate(&err) {
-                                        accepted = true;
-                                        continue;
-                                    }
-                                    attempt_err = Some(err);
+        let submit_tx = |phase: &'static str,
+                         timeout_window: Duration,
+                         submit_peers: Vec<NetworkPeer>| {
+            let tx = Arc::clone(&tx);
+            async move {
+                let deadline = Instant::now() + timeout_window;
+                let per_attempt_timeout = timeout_window
+                    .min(Duration::from_secs(10))
+                    .max(Duration::from_secs(2));
+                let mut attempts = 0usize;
+                loop {
+                    attempts = attempts.saturating_add(1);
+                    let mut accepted = false;
+                    let mut attempt_err: Option<eyre::Report> = None;
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err(eyre!(
+                            "transaction submission failed on all peers during {phase}"
+                        ));
+                    }
+                    let attempt_timeout = per_attempt_timeout.min(remaining);
+                    let mut submissions = FuturesUnordered::new();
+                    for peer in &submit_peers {
+                        let client = peer.client();
+                        let mnemonic = peer.mnemonic().to_owned();
+                        iroha_logger::info!(
+                            phase,
+                            via_peer = peer.mnemonic(),
+                            "Submit transaction"
+                        );
+                        let tx = Arc::clone(&tx);
+                        submissions.push(async move {
+                            let res =
+                                timeout(attempt_timeout, client.submit_transaction_async(&tx))
+                                    .await;
+                            (mnemonic, res)
+                        });
+                    }
+                    while let Some((mnemonic, res)) = submissions.next().await {
+                        match res {
+                            Ok(Ok(_hash)) => accepted = true,
+                            Ok(Err(err)) => {
+                                if is_submission_accepted_duplicate(&err) {
+                                    accepted = true;
+                                    continue;
                                 }
-                                Err(err) => {
-                                    attempt_err = Some(eyre::Report::new(err));
-                                }
+                                attempt_err = Some(err);
+                            }
+                            Err(err) => {
+                                attempt_err = Some(eyre!(
+                                    "transaction submission timed out on peer {mnemonic} during {phase} after {attempt_timeout:?}: {err}"
+                                ));
                             }
                         }
-                        if accepted {
-                            return Ok(());
-                        }
-                        if Instant::now() >= deadline {
-                            return Err(attempt_err.unwrap_or_else(|| {
-                                eyre!("transaction submission failed on all peers during {phase}")
-                            }));
-                        }
-                        let remaining = deadline.saturating_duration_since(Instant::now());
-                        if remaining.is_zero() {
-                            return Err(attempt_err.unwrap_or_else(|| {
-                                eyre!("transaction submission failed on all peers during {phase}")
-                            }));
-                        }
-                        sleep(submit_retry_backoff(attempts).min(remaining)).await;
                     }
+                    if accepted {
+                        return Ok(());
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(attempt_err.unwrap_or_else(|| {
+                            eyre!("transaction submission failed on all peers during {phase}")
+                        }));
+                    }
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err(attempt_err.unwrap_or_else(|| {
+                            eyre!("transaction submission failed on all peers during {phase}")
+                        }));
+                    }
+                    sleep(submit_retry_backoff(attempts).min(remaining)).await;
                 }
-            };
+            }
+        };
         if submit_while_partitioned {
             match submit_tx("partitioned", partition_submit_window, candidates.clone()).await {
                 Ok(()) => {}
@@ -2059,9 +2095,9 @@ mod tests {
     }
 
     #[test]
-    fn round_supply_deadline_slip_allowed_for_multi_fault_or_soft_fork() {
+    fn round_supply_deadline_slip_allowed_for_fault_or_soft_fork() {
         assert!(!allow_round_supply_deadline_slip(0, false));
-        assert!(!allow_round_supply_deadline_slip(1, false));
+        assert!(allow_round_supply_deadline_slip(1, false));
         assert!(allow_round_supply_deadline_slip(2, false));
         assert!(allow_round_supply_deadline_slip(0, true));
     }

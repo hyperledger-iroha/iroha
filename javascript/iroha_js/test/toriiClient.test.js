@@ -9281,17 +9281,22 @@ test("getSccpCapabilities normalizes discovery response", async () => {
         local_chain: "sora",
         proof_family: "stark-fri-v1",
         burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}",
-        governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}",
         message_bundle_path: "/v1/sccp/proofs/message/{message_id}",
         message_proof_path: "/v1/sccp/artifacts/message/{message_id}",
         message_job_path: "/v1/sccp/jobs/message/{message_id}",
         recent_messages_path: "/v1/sccp/messages/recent",
         proof_manifest_path: "/v1/sccp/manifests",
         burn_registry_backend: "bridge/sccp/burn-v1",
-        governance_registry_backend: "bridge/sccp/governance-v1",
         proof_submit_path: "/v1/bridge/proofs/submit",
         message_submit_path: "/v1/bridge/messages",
-        message_payload_kinds: ["asset_register", "route_activate", "transfer"],
+        message_payload_kinds: [
+          "asset_register",
+          "route_activate",
+          "transfer",
+          "token_add",
+          "token_pause",
+          "token_resume",
+        ],
         codecs: [
           {
             id: 4,
@@ -9318,13 +9323,13 @@ test("getSccpCapabilities normalizes discovery response", async () => {
               anchor_id: null,
               blockers: [
                 "immutable TON verifier contract is not deployed for this SCCP lane",
-                "Sora Parliament anchor set is not approved for this SCCP lane",
+                "cryptographic trust anchor is not active for this SCCP lane",
                 "native recursive verifier contract submission is not wired into the SCCP relayer path",
               ],
             },
             production_ready: false,
             disabled_reason:
-              "disabled until the immutable TON recursive SCCP verifier and Sora Parliament anchors are live for this lane",
+              "disabled until the immutable TON recursive SCCP verifier and cryptographic trust anchors are live for this lane",
           },
         ],
       },
@@ -9338,17 +9343,22 @@ test("getSccpCapabilities normalizes discovery response", async () => {
     localChain: "sora",
     proofFamily: "stark-fri-v1",
     burnBundlePath: "/v1/sccp/proofs/burn/{message_id}",
-    governanceBundlePath: "/v1/sccp/proofs/governance/{message_id}",
     messageBundlePath: "/v1/sccp/proofs/message/{message_id}",
     messageProofPath: "/v1/sccp/artifacts/message/{message_id}",
     messageJobPath: "/v1/sccp/jobs/message/{message_id}",
     recentMessagesPath: "/v1/sccp/messages/recent",
     proofManifestPath: "/v1/sccp/manifests",
     burnRegistryBackend: "bridge/sccp/burn-v1",
-    governanceRegistryBackend: "bridge/sccp/governance-v1",
     proofSubmitPath: "/v1/bridge/proofs/submit",
     messageSubmitPath: "/v1/bridge/messages",
-    messagePayloadKinds: ["asset_register", "route_activate", "transfer"],
+    messagePayloadKinds: [
+      "asset_register",
+      "route_activate",
+      "transfer",
+      "token_add",
+      "token_pause",
+      "token_resume",
+    ],
     codecs: [
       {
         id: 4,
@@ -9375,13 +9385,13 @@ test("getSccpCapabilities normalizes discovery response", async () => {
           anchorId: null,
           blockers: [
             "immutable TON verifier contract is not deployed for this SCCP lane",
-            "Sora Parliament anchor set is not approved for this SCCP lane",
+            "cryptographic trust anchor is not active for this SCCP lane",
             "native recursive verifier contract submission is not wired into the SCCP relayer path",
           ],
         },
         productionReady: false,
         disabledReason:
-          "disabled until the immutable TON recursive SCCP verifier and Sora Parliament anchors are live for this lane",
+          "disabled until the immutable TON recursive SCCP verifier and cryptographic trust anchors are live for this lane",
       },
     ],
   });
@@ -9404,7 +9414,7 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
             counterparty_domain: 1,
             chain: "eth",
             security_model: "RecursiveZk",
-            anchor_governance: "SoraParliament",
+            anchor_governance: "CryptographicProof",
             destination_binding: {
               version: 1,
               key: "sccp:eth:governed-recursive-zk:v1",
@@ -9427,7 +9437,14 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
               "finality_height",
               "finality_block_hash",
             ],
-            message_payload_kinds: ["asset_register", "route_activate", "transfer"],
+            message_payload_kinds: [
+              "asset_register",
+              "route_activate",
+              "transfer",
+              "token_add",
+              "token_pause",
+              "token_resume",
+            ],
             destination_rollout: {
               version: 1,
               verifier_plan: "EvmGroth16Bn254Adapter",
@@ -9438,13 +9455,13 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
               anchor_id: null,
               blockers: [
                 "immutable EVM verifier contract is not deployed for this SCCP lane",
-                "Sora Parliament anchor set is not approved for this SCCP lane",
+                "cryptographic trust anchor is not active for this SCCP lane",
                 "Groth16/bn254 adapter proof submission is not wired into the SCCP relayer path",
               ],
             },
             production_ready: false,
             disabled_reason:
-              "disabled until the immutable EVM Groth16/bn254 SCCP verifier and Sora Parliament anchors are live for this lane",
+              "disabled until the immutable EVM Groth16/bn254 SCCP verifier and cryptographic trust anchors are live for this lane",
             submission_template: {
               version: 1,
               encoding: "abi_tuple_v1",
@@ -9488,7 +9505,7 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
         chain: "eth",
         proofFamily: "stark-fri-v1",
         securityModel: "RecursiveZk",
-        anchorGovernance: "SoraParliament",
+        anchorGovernance: "CryptographicProof",
         destinationBinding: {
           version: 1,
           key: "sccp:eth:governed-recursive-zk:v1",
@@ -9510,7 +9527,14 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
           "finality_height",
           "finality_block_hash",
         ],
-        messagePayloadKinds: ["asset_register", "route_activate", "transfer"],
+        messagePayloadKinds: [
+          "asset_register",
+          "route_activate",
+          "transfer",
+          "token_add",
+          "token_pause",
+          "token_resume",
+        ],
         destinationRollout: {
           version: 1,
           verifierPlan: "EvmGroth16Bn254Adapter",
@@ -9521,13 +9545,13 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
           anchorId: null,
           blockers: [
             "immutable EVM verifier contract is not deployed for this SCCP lane",
-            "Sora Parliament anchor set is not approved for this SCCP lane",
+            "cryptographic trust anchor is not active for this SCCP lane",
             "Groth16/bn254 adapter proof submission is not wired into the SCCP relayer path",
           ],
         },
         productionReady: false,
         disabledReason:
-          "disabled until the immutable EVM Groth16/bn254 SCCP verifier and Sora Parliament anchors are live for this lane",
+          "disabled until the immutable EVM Groth16/bn254 SCCP verifier and cryptographic trust anchors are live for this lane",
         submissionTemplate: {
           version: 1,
           encoding: "abi_tuple_v1",
@@ -9571,7 +9595,7 @@ test("getSccpProofManifests rejects unsupported verifier target", async () => {
             counterparty_domain: 4,
             chain: "ton",
             security_model: "RecursiveZk",
-            anchor_governance: "SoraParliament",
+            anchor_governance: "CryptographicProof",
             destination_binding: {
               version: 1,
               key: "sccp:ton:governed-recursive-zk:v1",
@@ -9587,7 +9611,14 @@ test("getSccpProofManifests rejects unsupported verifier target", async () => {
             verifier_target: "UnknownVerifier",
             manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
             required_public_inputs: ["message_id"],
-            message_payload_kinds: ["transfer"],
+            message_payload_kinds: [
+              "asset_register",
+              "route_activate",
+              "transfer",
+              "token_add",
+              "token_pause",
+              "token_resume",
+            ],
             destination_rollout: {
               version: 1,
               verifier_plan: "TonContractNativeRecursive",
@@ -9598,13 +9629,13 @@ test("getSccpProofManifests rejects unsupported verifier target", async () => {
               anchor_id: null,
               blockers: [
                 "immutable TON verifier contract is not deployed for this SCCP lane",
-                "Sora Parliament anchor set is not approved for this SCCP lane",
+                "cryptographic trust anchor is not active for this SCCP lane",
                 "native recursive verifier contract submission is not wired into the SCCP relayer path",
               ],
             },
             production_ready: false,
             disabled_reason:
-              "disabled until the immutable TON recursive SCCP verifier and Sora Parliament anchors are live for this lane",
+              "disabled until the immutable TON recursive SCCP verifier and cryptographic trust anchors are live for this lane",
             submission_template: {
               version: 1,
               encoding: "ton_cell_v1",
@@ -9643,7 +9674,7 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
         local_domain: 0,
         counterparty_domain: 4,
         security_model: "RecursiveZk",
-        anchor_governance: "SoraParliament",
+        anchor_governance: "CryptographicProof",
         destination_binding: {
           version: 1,
           key: "sccp:ton:governed-recursive-zk:v1",
@@ -9710,7 +9741,6 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
             target_domain: 4,
             message_id: messageId,
             payload_hash: payloadHash,
-            parliament_certificate_hash: null,
           },
           merkle_proof: {
             steps: [{ sibling_hash: "55".repeat(32), sibling_is_left: false }],
@@ -9738,7 +9768,7 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
     counterpartyDomain: 4,
     proofFamily: "stark-fri-v1",
     securityModel: "RecursiveZk",
-    anchorGovernance: "SoraParliament",
+    anchorGovernance: "CryptographicProof",
     destinationBinding: {
       version: 1,
       key: "sccp:ton:governed-recursive-zk:v1",
@@ -9804,7 +9834,6 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
         targetDomain: 4,
         messageId,
         payloadHash,
-        parliamentCertificateHash: null,
       },
       merkleProof: {
         steps: [{ siblingHash: "55".repeat(32), siblingIsLeft: false }],
@@ -9833,7 +9862,7 @@ test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async (
         local_domain: 0,
         counterparty_domain: 1,
         security_model: "RecursiveZk",
-        anchor_governance: "SoraParliament",
+        anchor_governance: "CryptographicProof",
         destination_binding: {
           version: 1,
           key: "sccp:eth:governed-recursive-zk:v1",
@@ -9909,7 +9938,6 @@ test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async (
             target_domain: 1,
             message_id: "99".repeat(32),
             payload_hash: "22".repeat(32),
-            parliament_certificate_hash: null,
           },
           merkle_proof: { steps: [] },
           payload: { Transfer: { version: 1 } },
@@ -9941,7 +9969,7 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
         local_domain: 0,
         counterparty_domain: 4,
         security_model: "RecursiveZk",
-        anchor_governance: "SoraParliament",
+        anchor_governance: "CryptographicProof",
         destination_binding: {
           version: 1,
           key: "sccp:ton:governed-recursive-zk:v1",
@@ -10048,7 +10076,6 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
             target_domain: 4,
             message_id: messageId,
             payload_hash: payloadHash,
-            parliament_certificate_hash: null,
           },
           merkle_proof: { steps: [] },
           payload: { Transfer: { version: 1, amount: "77" } },
@@ -10068,7 +10095,7 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
     counterpartyDomain: 4,
     proofFamily: "stark-fri-v1",
     securityModel: "RecursiveZk",
-    anchorGovernance: "SoraParliament",
+    anchorGovernance: "CryptographicProof",
     destinationBinding: {
       version: 1,
       key: "sccp:ton:governed-recursive-zk:v1",
@@ -10173,7 +10200,6 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
         targetDomain: 4,
         messageId,
         payloadHash,
-        parliamentCertificateHash: null,
       },
       merkleProof: { steps: [] },
       payload: {

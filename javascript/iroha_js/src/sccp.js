@@ -30,7 +30,6 @@ const SCCP_MSG_PREFIX_TOKEN_RESUME_V1 = "sccp:token:resume:v1";
 const SCCP_HUB_LEAF_PREFIX_V1 = "sccp:hub:leaf:v1";
 const SCCP_HUB_NODE_PREFIX_V1 = "sccp:hub:node:v1";
 const SCCP_PAYLOAD_HASH_PREFIX_V1 = "sccp:payload:v1";
-const SCCP_PARLIAMENT_HASH_PREFIX_V1 = "sccp:parliament:v1";
 
 const textEncoder = new TextEncoder();
 
@@ -129,9 +128,9 @@ const prefixedKeccak = (prefix, payload) => keccak_256(concatBytes(textEncoder.e
 const prefixedBlake2b = (prefix, payload) =>
   blake2b(concatBytes(textEncoder.encode(prefix), payload), { dkLen: 32 });
 
-const normalizeGovernancePayload = (payload) => {
+const normalizeTokenMessagePayload = (payload) => {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new TypeError("governance payload must be an object");
+    throw new TypeError("token message payload must be an object");
   }
   if (typeof payload.kind === "string" && payload.value && typeof payload.value === "object") {
     return {
@@ -139,16 +138,16 @@ const normalizeGovernancePayload = (payload) => {
       value: payload.value,
     };
   }
-  if ("Add" in payload) {
-    return { kind: "Add", value: payload.Add };
+  if ("TokenAdd" in payload) {
+    return { kind: "TokenAdd", value: payload.TokenAdd };
   }
-  if ("Pause" in payload) {
-    return { kind: "Pause", value: payload.Pause };
+  if ("TokenPause" in payload) {
+    return { kind: "TokenPause", value: payload.TokenPause };
   }
-  if ("Resume" in payload) {
-    return { kind: "Resume", value: payload.Resume };
+  if ("TokenResume" in payload) {
+    return { kind: "TokenResume", value: payload.TokenResume };
   }
-  throw new TypeError("governance payload must be Add, Pause, or Resume");
+  throw new TypeError("token message payload must be TokenAdd, TokenPause, or TokenResume");
 };
 
 const messageKindCode = (kind) => {
@@ -161,6 +160,12 @@ const messageKindCode = (kind) => {
       return 2;
     case "TokenResume":
       return 3;
+    case "AssetRegister":
+      return 4;
+    case "RouteActivate":
+      return 5;
+    case "Transfer":
+      return 6;
     default:
       throw new TypeError(`unsupported SCCP message kind: ${kind}`);
   }
@@ -221,27 +226,27 @@ export const canonicalSccpTokenControlPayloadBytes = (payload) => {
   return out;
 };
 
-export const canonicalSccpGovernancePayloadBytes = (payload) => {
-  const normalized = normalizeGovernancePayload(payload);
-  if (normalized.kind === "Add") {
+export const canonicalSccpTokenMessagePayloadBytes = (payload) => {
+  const normalized = normalizeTokenMessagePayload(payload);
+  if (normalized.kind === "TokenAdd") {
     return concatBytes(
-      Uint8Array.from([0]),
+      Uint8Array.from([3]),
       canonicalSccpTokenAddPayloadBytes(normalized.value),
     );
   }
-  if (normalized.kind === "Pause") {
+  if (normalized.kind === "TokenPause") {
     return concatBytes(
-      Uint8Array.from([1]),
+      Uint8Array.from([4]),
       canonicalSccpTokenControlPayloadBytes(normalized.value),
     );
   }
-  if (normalized.kind === "Resume") {
+  if (normalized.kind === "TokenResume") {
     return concatBytes(
-      Uint8Array.from([2]),
+      Uint8Array.from([5]),
       canonicalSccpTokenControlPayloadBytes(normalized.value),
     );
   }
-  throw new TypeError(`unsupported governance payload kind: ${normalized.kind}`);
+  throw new TypeError(`unsupported token message payload kind: ${normalized.kind}`);
 };
 
 export const sccpBurnMessageId = (payload, options = {}) =>
@@ -265,27 +270,21 @@ export const sccpTokenResumeMessageId = (payload, options = {}) =>
     options.prefix !== false,
   );
 
-export const sccpGovernanceMessageId = (payload, options = {}) => {
-  const normalized = normalizeGovernancePayload(payload);
-  if (normalized.kind === "Add") return sccpTokenAddMessageId(normalized.value, options);
-  if (normalized.kind === "Pause") return sccpTokenPauseMessageId(normalized.value, options);
-  if (normalized.kind === "Resume") return sccpTokenResumeMessageId(normalized.value, options);
-  throw new TypeError(`unsupported governance payload kind: ${normalized.kind}`);
+export const sccpTokenMessageId = (payload, options = {}) => {
+  const normalized = normalizeTokenMessagePayload(payload);
+  if (normalized.kind === "TokenAdd") return sccpTokenAddMessageId(normalized.value, options);
+  if (normalized.kind === "TokenPause") return sccpTokenPauseMessageId(normalized.value, options);
+  if (normalized.kind === "TokenResume") return sccpTokenResumeMessageId(normalized.value, options);
+  throw new TypeError(`unsupported token message payload kind: ${normalized.kind}`);
 };
 
-export const sccpGovernanceTargetDomain = (payload) => {
-  const normalized = normalizeGovernancePayload(payload);
+export const sccpTokenMessageTargetDomain = (payload) => {
+  const normalized = normalizeTokenMessagePayload(payload);
   return Number(normalized.value.target_domain);
 };
 
 export const sccpPayloadHash = (payload, options = {}) =>
   bytesToHex(prefixedBlake2b(SCCP_PAYLOAD_HASH_PREFIX_V1, toBytes(payload, "payload")), options.prefix !== false);
-
-export const sccpParliamentCertificateHash = (certificateBytes, options = {}) =>
-  bytesToHex(
-    prefixedBlake2b(SCCP_PARLIAMENT_HASH_PREFIX_V1, toBytes(certificateBytes, "certificateBytes")),
-    options.prefix !== false,
-  );
 
 export const canonicalSccpCommitmentBytes = (commitment) => {
   if (!commitment || typeof commitment !== "object") {
@@ -297,15 +296,6 @@ export const canonicalSccpCommitmentBytes = (commitment) => {
   out = writeU32Le(out, Number(commitment.target_domain));
   out = concatBytes(out, hexToBytes(commitment.message_id, "commitment.message_id", 32));
   out = concatBytes(out, hexToBytes(commitment.payload_hash, "commitment.payload_hash", 32));
-  if (commitment.parliament_certificate_hash == null) {
-    out = writeU8(out, 0);
-    return out;
-  }
-  out = writeU8(out, 1);
-  out = concatBytes(
-    out,
-    hexToBytes(commitment.parliament_certificate_hash, "commitment.parliament_certificate_hash", 32),
-  );
   return out;
 };
 
@@ -342,7 +332,6 @@ export const validateSccpBurnBundleSurface = (bundle) => {
     burnKindMatches: bundle.commitment?.kind === "Burn",
     messageIdMatches: normalizeHexInput(bundle.commitment?.message_id, "bundle.commitment.message_id", 32) === normalizeHexInput(expectedMessageId, "expectedMessageId", 32),
     payloadHashMatches: normalizeHexInput(bundle.commitment?.payload_hash, "bundle.commitment.payload_hash", 32) === normalizeHexInput(expectedPayloadHash, "expectedPayloadHash", 32),
-    parliamentCertificateAbsent: bundle.commitment?.parliament_certificate_hash == null,
     merkleRootMatches: normalizeHexInput(bundle.commitment_root, "bundle.commitment_root", 32) === normalizeHexInput(expectedMerkleRoot, "expectedMerkleRoot", 32),
   };
   return {
@@ -354,33 +343,25 @@ export const validateSccpBurnBundleSurface = (bundle) => {
   };
 };
 
-export const validateSccpGovernanceBundleSurface = (bundle) => {
-  const normalizedPayload = normalizeGovernancePayload(bundle.payload);
-  const expectedMessageId = sccpGovernanceMessageId(normalizedPayload);
-  const expectedPayloadHash = sccpPayloadHash(canonicalSccpGovernancePayloadBytes(normalizedPayload));
+export const validateSccpTokenMessageBundleSurface = (bundle) => {
+  const normalizedPayload = normalizeTokenMessagePayload(bundle.payload);
+  const expectedMessageId = sccpTokenMessageId(normalizedPayload);
+  const expectedPayloadHash = sccpPayloadHash(canonicalSccpTokenMessagePayloadBytes(normalizedPayload));
   const expectedMerkleRoot = sccpMerkleRootFromCommitment(bundle.commitment, bundle.merkle_proof);
-  const expectedCertificateHash =
-    bundle.parliament_certificate == null
-      ? null
-      : sccpParliamentCertificateHash(hexToBytes(bundle.parliament_certificate, "bundle.parliament_certificate"));
   const expectedKind =
-    normalizedPayload.kind === "Add"
+    normalizedPayload.kind === "TokenAdd"
       ? "TokenAdd"
-      : normalizedPayload.kind === "Pause"
+      : normalizedPayload.kind === "TokenPause"
         ? "TokenPause"
         : "TokenResume";
   const checks = {
     bundleVersion: Number(bundle.version) === 1,
     commitmentVersion: Number(bundle.commitment?.version) === 1,
-    targetDomainSupported: isSupportedSccpDomain(sccpGovernanceTargetDomain(normalizedPayload)),
+    targetDomainSupported: isSupportedSccpDomain(sccpTokenMessageTargetDomain(normalizedPayload)),
     kindMatches: bundle.commitment?.kind === expectedKind,
-    targetDomainMatches: Number(bundle.commitment?.target_domain) === sccpGovernanceTargetDomain(normalizedPayload),
+    targetDomainMatches: Number(bundle.commitment?.target_domain) === sccpTokenMessageTargetDomain(normalizedPayload),
     messageIdMatches: normalizeHexInput(bundle.commitment?.message_id, "bundle.commitment.message_id", 32) === normalizeHexInput(expectedMessageId, "expectedMessageId", 32),
     payloadHashMatches: normalizeHexInput(bundle.commitment?.payload_hash, "bundle.commitment.payload_hash", 32) === normalizeHexInput(expectedPayloadHash, "expectedPayloadHash", 32),
-    parliamentCertificateHashMatches:
-      expectedCertificateHash == null
-        ? bundle.commitment?.parliament_certificate_hash == null
-        : normalizeHexInput(bundle.commitment?.parliament_certificate_hash, "bundle.commitment.parliament_certificate_hash", 32) === normalizeHexInput(expectedCertificateHash, "expectedCertificateHash", 32),
     merkleRootMatches: normalizeHexInput(bundle.commitment_root, "bundle.commitment_root", 32) === normalizeHexInput(expectedMerkleRoot, "expectedMerkleRoot", 32),
   };
   return {
@@ -388,7 +369,6 @@ export const validateSccpGovernanceBundleSurface = (bundle) => {
     expectedMessageId,
     expectedPayloadHash,
     expectedMerkleRoot,
-    expectedCertificateHash,
     checks,
   };
 };

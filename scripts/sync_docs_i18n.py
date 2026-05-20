@@ -4,8 +4,10 @@ Utility for generating localization stubs for documentation.
 
 The script reads `docs/i18n/manifest.json` to discover the documentation
 files that should have translations and then ensures that every target
-language has a sibling file (e.g. `README.ja.md`) next to the English
-original. Existing translations are never overwritten.
+language has a translation file. Most translated files live next to the
+English original (e.g. `docs/source/foo.ja.md`); repository-root documents live
+under `docs/i18n/root/<language>/` so translated governance/readme companions do
+not crowd the root. Existing translations are never overwritten.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from typing import Iterable, List, Sequence, Set
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPO_ROOT / "docs" / "i18n" / "manifest.json"
+ROOT_TRANSLATIONS_DIR = Path("docs") / "i18n" / "root"
 
 
 @dataclass(frozen=True)
@@ -303,7 +306,10 @@ def _is_translation_file(path: Path, language_codes: Set[str]) -> bool:
 
 
 def compute_translation_path(source: Path, lang_code: str) -> Path:
-    """Return the sibling path that should contain the translation."""
+    """Return the path that should contain the translation."""
+    if source.parent == Path("."):
+        return ROOT_TRANSLATIONS_DIR / lang_code / source.name
+
     name_parts = source.name.split(".")
     if len(name_parts) == 1:
         translated_name = f"{source.name}.{lang_code}"

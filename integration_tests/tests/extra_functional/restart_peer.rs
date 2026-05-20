@@ -63,6 +63,8 @@ use tokio::{
 use toml::Table;
 
 const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+const TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(120);
+const TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
 
 fn test_account_alias_name_controller(
     account: &AccountId,
@@ -99,6 +101,28 @@ fn test_account_alias_register_request(
 }
 
 fn ensure_account_alias_registration_lease(client: &Client, alias_literal: &str) -> Result<()> {
+    if account_alias_registration_lease_visible_to_client(client, alias_literal)? {
+        return Ok(());
+    }
+
+    let request = test_account_alias_register_request(alias_literal, &client.account)?;
+    match client.sns().register(&request) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_sns_selector_error(&err) => {
+            if wait_for_account_alias_registration_lease(client, alias_literal)? {
+                Ok(())
+            } else {
+                Err(err)
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn account_alias_registration_lease_visible_to_client(
+    client: &Client,
+    alias_literal: &str,
+) -> Result<bool> {
     match client
         .sns()
         .get_name(iroha::sns::SnsNamespacePath::AccountAlias, alias_literal)
@@ -107,7 +131,7 @@ fn ensure_account_alias_registration_lease(client: &Client, alias_literal: &str)
             if record.owner == client.account
                 && record.status == iroha::data_model::sns::NameStatus::Active =>
         {
-            Ok(())
+            Ok(true)
         }
         Ok(record) => Err(eyre!(
             "account alias `{alias_literal}` requires an active SNS lease owned by `{}`; found owner `{}` with status {:?}",
@@ -115,20 +139,50 @@ fn ensure_account_alias_registration_lease(client: &Client, alias_literal: &str)
             record.owner,
             record.status
         )),
-        Err(_) => {
-            let request = test_account_alias_register_request(alias_literal, &client.account)?;
-            client.sns().register(&request)?;
-            Ok(())
-        }
+        Err(_) => Ok(false),
     }
+}
+
+fn wait_for_account_alias_registration_lease(client: &Client, alias_literal: &str) -> Result<bool> {
+    let deadline = Instant::now() + TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_TIMEOUT;
+    while Instant::now() < deadline {
+        if account_alias_registration_lease_visible_to_client(client, alias_literal)? {
+            return Ok(true);
+        }
+        std::thread::sleep(TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_POLL);
+    }
+    account_alias_registration_lease_visible_to_client(client, alias_literal)
+}
+
+fn is_duplicate_sns_selector_error(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("selector `") && message.contains(" is already registered")
+    })
 }
 
 fn ensure_account_alias_registration_lease_for_network(
     network: &Network,
     alias_literal: &str,
 ) -> Result<()> {
-    for peer in network.peers() {
-        ensure_account_alias_registration_lease(&peer.client(), alias_literal)?;
+    let clients = network
+        .peers()
+        .iter()
+        .map(NetworkPeer::client)
+        .collect::<Vec<_>>();
+    let Some((primary, replicas)) = clients.split_first() else {
+        return Ok(());
+    };
+
+    ensure_account_alias_registration_lease(primary, alias_literal)?;
+    for client in replicas {
+        if !wait_for_account_alias_registration_lease(client, alias_literal)? {
+            return Err(eyre!(
+                "account alias `{alias_literal}` SNS lease was not visible to peer `{}` within {:?}",
+                client.torii_url,
+                TEST_ACCOUNT_ALIAS_LEASE_VISIBILITY_TIMEOUT
+            ));
+        }
     }
     Ok(())
 }

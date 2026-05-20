@@ -1,6 +1,8 @@
 # Hyperledger Iroha
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![GitHub License](https://img.shields.io/github/license/hyperledger-iroha/iroha)](./LICENSE)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/960/badge)](https://www.bestpractices.dev/projects/960)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/hyperledger/iroha/badge)](https://scorecard.dev/viewer/?uri=github.com/hyperledger/iroha)
 
 Hyperledger Iroha is a deterministic blockchain platform for permissioned and consortium deployments. It provides account/asset management, on-chain permissions, and smart contracts through the Iroha Virtual Machine (IVM).
 
@@ -188,21 +190,26 @@ than a secret-bearing runtime profile.
 - IVM syscalls: [`docs/source/ivm_syscalls.md`](./docs/source/ivm_syscalls.md)
 - Kotodama grammar: [`docs/source/kotodama_grammar.md`](./docs/source/kotodama_grammar.md)
 - Norito wire format: [`norito.md`](./norito.md)
+- Community: [`docs/source/community.md`](./docs/source/community.md)
 - Current work tracking: [`status.md`](./status.md), [`roadmap.md`](./roadmap.md)
 
 ## Translations
 
-Japanese overview: [`README.ja.md`](./README.ja.md)
+Root document translations are kept out of the repository root under
+[`docs/i18n/root/`](./docs/i18n/root).
+
+Japanese overview: [`docs/i18n/root/ja/README.md`](./docs/i18n/root/ja/README.md)
 
 Other overviews:
-[`README.he.md`](./README.he.md), [`README.es.md`](./README.es.md), [`README.pt.md`](./README.pt.md), [`README.fr.md`](./README.fr.md), [`README.ru.md`](./README.ru.md), [`README.ar.md`](./README.ar.md), [`README.ur.md`](./README.ur.md)
+[`Hebrew`](./docs/i18n/root/he/README.md), [`Spanish`](./docs/i18n/root/es/README.md), [`Portuguese`](./docs/i18n/root/pt/README.md), [`French`](./docs/i18n/root/fr/README.md), [`Russian`](./docs/i18n/root/ru/README.md), [`Arabic`](./docs/i18n/root/ar/README.md), [`Urdu`](./docs/i18n/root/ur/README.md)
 
 Translation workflow: [`docs/i18n/README.md`](./docs/i18n/README.md)
 
 ## Contributing and Help
 
 - Contribution guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
-- Community/support channels: [`CONTRIBUTING.md#contact`](./CONTRIBUTING.md#contact)
+- Community/support channels: [`docs/source/community.md`](./docs/source/community.md)
+- Security policy: [`SECURITY.md`](./SECURITY.md)
 
 ## License
 

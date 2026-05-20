@@ -5246,22 +5246,23 @@ impl Kura {
             .fastpq_proof_sidecar_queue_cap
             .load(Ordering::Relaxed)
             .max(1);
-        let queue_depth = {
+        let (queue_depth, should_notify) = {
             let mut queue = self.fastpq_proof_queue.lock();
             if queue.len() >= cap {
                 telemetry.record_event("rejected_queue_full");
                 telemetry.set_queue_depth(queue.len());
                 return FastpqProofEnqueueResult::RejectedQueueFull { cap };
             }
+            let should_notify = queue.is_empty();
             queue.push_back(QueuedFastpqProofSnapshot {
                 snapshot,
                 retries: 0,
             });
-            queue.len()
+            (queue.len(), should_notify)
         };
         telemetry.record_event("enqueued");
         telemetry.set_queue_depth(queue_depth);
-        if let Err(err) = self.block_notify_tx.send(BlockNotify::NewBlock) {
+        if should_notify && let Err(err) = self.block_notify_tx.send(BlockNotify::NewBlock) {
             iroha_logger::warn!(
                 ?err,
                 "failed to notify block writer about FASTPQ proof sidecar"
@@ -5280,36 +5281,58 @@ impl Kura {
             }
             queue.drain(..).collect::<Vec<_>>()
         };
+        let mut groups: Vec<Vec<QueuedFastpqProofSnapshot>> = Vec::new();
+        for snapshot in snapshots {
+            if let Some(group) = groups.iter_mut().find(|group| {
+                group.first().is_some_and(|queued| {
+                    queued.snapshot.height == snapshot.snapshot.height
+                        && queued.snapshot.block_hash == snapshot.snapshot.block_hash
+                })
+            }) {
+                group.push(snapshot);
+            } else {
+                groups.push(vec![snapshot]);
+            }
+        }
+
         let mut written = 0usize;
         let mut retry = VecDeque::new();
         let max_retries = self
             .fastpq_proof_sidecar_max_retries
             .load(Ordering::Relaxed)
             .max(1);
-        for mut queued in snapshots {
-            match self.write_fastpq_proof_snapshot(&queued.snapshot) {
+        for group in groups {
+            let snapshots = group
+                .iter()
+                .map(|queued| &queued.snapshot)
+                .collect::<Vec<_>>();
+            match self.write_fastpq_proof_snapshots(&snapshots) {
                 FastpqProofWriteResult::Written => {
                     telemetry.record_event("written");
-                    written = written.saturating_add(1);
+                    written = written.saturating_add(group.len());
                 }
                 FastpqProofWriteResult::Retry => {
-                    let next_retries = queued.retries.saturating_add(1);
-                    if next_retries >= max_retries {
-                        telemetry.record_event("dropped");
-                        iroha_logger::warn!(
-                            height = queued.snapshot.height,
-                            retries = next_retries,
-                            max_retries,
-                            "dropping FASTPQ proof snapshot after retry limit"
-                        );
-                    } else {
-                        telemetry.record_event("retried");
-                        queued.retries = next_retries;
-                        retry.push_back(queued);
+                    for mut queued in group {
+                        let next_retries = queued.retries.saturating_add(1);
+                        if next_retries >= max_retries {
+                            telemetry.record_event("dropped");
+                            iroha_logger::warn!(
+                                height = queued.snapshot.height,
+                                retries = next_retries,
+                                max_retries,
+                                "dropping FASTPQ proof snapshot after retry limit"
+                            );
+                        } else {
+                            telemetry.record_event("retried");
+                            queued.retries = next_retries;
+                            retry.push_back(queued);
+                        }
                     }
                 }
                 FastpqProofWriteResult::Drop => {
-                    telemetry.record_event("dropped");
+                    for _ in group {
+                        telemetry.record_event("dropped");
+                    }
                 }
             }
         }
@@ -5398,11 +5421,16 @@ impl Kura {
         }
     }
 
-    fn write_fastpq_proof_snapshot(
+    fn write_fastpq_proof_snapshots(
         &self,
-        snapshot: &FastpqProofSnapshot,
+        snapshots: &[&FastpqProofSnapshot],
     ) -> FastpqProofWriteResult {
-        if snapshot.height == 0 {
+        let Some(first_snapshot) = snapshots.first().copied() else {
+            return FastpqProofWriteResult::Written;
+        };
+        let height = first_snapshot.height;
+        let block_hash = first_snapshot.block_hash;
+        if height == 0 {
             iroha_logger::warn!("refusing to store FASTPQ proof snapshot for zero height");
             return FastpqProofWriteResult::Drop;
         }
@@ -5418,37 +5446,54 @@ impl Kura {
         }
         let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-        let json_sidecar_path = dir.join(format!("block_{}.json", snapshot.height));
+        let json_sidecar_path = dir.join(format!("block_{height}.json"));
         let Some(mut sidecar) = self.read_indexed_sidecar(
-            snapshot.height,
+            height,
             PIPELINE_SIDECARS_DATA_FILE,
             PIPELINE_SIDECARS_INDEX_FILE,
             norito::decode_from_bytes::<PipelineRecoverySidecar>,
             "pipeline sidecar",
         ) else {
             iroha_logger::debug!(
-                height = snapshot.height,
+                height,
                 "pipeline sidecar not ready for FASTPQ proof attachment"
             );
             return FastpqProofWriteResult::Retry;
         };
-        if sidecar.block_hash != snapshot.block_hash {
+        if sidecar.block_hash != block_hash {
             iroha_logger::warn!(
-                height = snapshot.height,
+                height,
                 expected = %sidecar.block_hash,
-                actual = %snapshot.block_hash,
+                actual = %block_hash,
                 "dropping FASTPQ proof snapshot for mismatched block hash"
             );
             return FastpqProofWriteResult::Drop;
         }
-        if sidecar
-            .fastpq_proofs
-            .iter()
-            .any(|existing| existing.same_attachment(snapshot))
-        {
+        let mut added = 0usize;
+        for snapshot in snapshots {
+            if snapshot.height != height || snapshot.block_hash != block_hash {
+                iroha_logger::warn!(
+                    height = snapshot.height,
+                    expected_height = height,
+                    expected_hash = %block_hash,
+                    actual_hash = %snapshot.block_hash,
+                    "dropping FASTPQ proof snapshot grouped with a different block"
+                );
+                continue;
+            }
+            if sidecar
+                .fastpq_proofs
+                .iter()
+                .any(|existing| existing.same_attachment(snapshot))
+            {
+                continue;
+            }
+            sidecar.fastpq_proofs.push((*snapshot).clone());
+            added = added.saturating_add(1);
+        }
+        if added == 0 {
             return FastpqProofWriteResult::Written;
         }
-        sidecar.fastpq_proofs.push(snapshot.clone());
         let before_bytes =
             match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path)) {
                 Ok(bytes) => Some(bytes),
@@ -5464,18 +5509,14 @@ impl Kura {
         let payload = match sidecar.encode_framed() {
             Ok(payload) => payload,
             Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    height = snapshot.height,
-                    "failed to encode FASTPQ proof sidecar update"
-                );
+                iroha_logger::warn!(?err, height, "failed to encode FASTPQ proof sidecar update");
                 return FastpqProofWriteResult::Retry;
             }
         };
         let wrote = Self::append_indexed_sidecar(
             &data_path,
             &index_path,
-            snapshot.height,
+            height,
             &payload,
             "pipeline sidecar",
             self.sidecar_fsync_mode(),
@@ -6269,9 +6310,11 @@ impl Kura {
             iroha_logger::warn!(?err, ?data_path, kind, "failed to append sidecar payload");
             return false;
         }
-        if let Err(err) = data.sync_data() {
-            iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
-            return false;
+        if should_sync {
+            if let Err(err) = data.sync_data() {
+                iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
+                return false;
+            }
         }
 
         let entry = SidecarIndexEntry {
@@ -6294,19 +6337,21 @@ impl Kura {
             }
             return false;
         }
-        if let Err(err) = index.sync_data() {
-            iroha_logger::warn!(?err, ?index_path, kind, "failed to sync sidecar index");
-            return false;
-        }
-        if let Some(parent) = data_path.parent() {
-            if let Err(err) = sync_dir(parent) {
-                iroha_logger::warn!(
-                    ?err,
-                    ?parent,
-                    kind,
-                    "failed to sync sidecar parent directory after append"
-                );
+        if should_sync {
+            if let Err(err) = index.sync_data() {
+                iroha_logger::warn!(?err, ?index_path, kind, "failed to sync sidecar index");
                 return false;
+            }
+            if let Some(parent) = data_path.parent() {
+                if let Err(err) = sync_dir(parent) {
+                    iroha_logger::warn!(
+                        ?err,
+                        ?parent,
+                        kind,
+                        "failed to sync sidecar parent directory after append"
+                    );
+                    return false;
+                }
             }
         }
 
@@ -12889,6 +12934,74 @@ mod tests {
         assert_eq!(kura.flush_fastpq_proof_snapshots(), 1);
         let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
         assert_eq!(got.fastpq_proofs.len(), 1);
+    }
+
+    #[test]
+    fn fastpq_proof_snapshots_for_same_block_flush_as_single_sidecar_update() {
+        use iroha_config::base::WithOrigin;
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        let block_hash = store_dummy_blocks(&kura, 1)[0];
+        let sidecar = PipelineRecoverySidecar::new(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [0u8; 32],
+                key_count: 0,
+            },
+            Vec::new(),
+        );
+        let base_payload_len = sidecar.encode_framed().expect("encode sidecar").len() as u64;
+        kura.write_pipeline_metadata(&sidecar);
+
+        let snapshot1 = sample_fastpq_snapshot(1, block_hash, 8);
+        let snapshot2 = sample_fastpq_snapshot(1, block_hash, 9);
+        assert!(matches!(
+            kura.enqueue_fastpq_proof_snapshot(snapshot1),
+            FastpqProofEnqueueResult::Enqueued { .. }
+        ));
+        assert!(matches!(
+            kura.enqueue_fastpq_proof_snapshot(snapshot2),
+            FastpqProofEnqueueResult::Enqueued { .. }
+        ));
+
+        assert_eq!(kura.flush_fastpq_proof_snapshots(), 2);
+        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
+        assert_eq!(got.fastpq_proofs.len(), 2);
+
+        let updated_payload_len = got.encode_framed().expect("encode updated sidecar").len() as u64;
+        let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
+        pipeline_dir.push(PIPELINE_DIR_NAME);
+        let data_len = fs::metadata(pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE))
+            .expect("sidecar data metadata")
+            .len();
+        assert_eq!(
+            data_len,
+            base_payload_len + updated_payload_len,
+            "proof attachments for one block should not append an intermediate sidecar copy"
+        );
     }
 
     #[test]

@@ -195,7 +195,7 @@ fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "sccp capabilities: local={}({}) proof_family={} runtime_family={} runtime_backend={} payloads={} codecs={} artifact={} runtime_message={} runtime_governance={} job={} manifests={} counterparties=[{}]",
+        "sccp capabilities: local={}({}) proof_family={} runtime_family={} runtime_backend={} payloads={} codecs={} artifact={} runtime_message={} job={} manifests={} counterparties=[{}]",
         capabilities.local_chain,
         capabilities.local_domain,
         capabilities.proof_family,
@@ -212,10 +212,6 @@ fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
         capabilities.message_proof_path,
         capabilities
             .message_runtime_bundle_path
-            .as_deref()
-            .unwrap_or("unavailable"),
-        capabilities
-            .governance_runtime_bundle_path
             .as_deref()
             .unwrap_or("unavailable"),
         capabilities.message_job_path,
@@ -656,14 +652,10 @@ mod tests {
             local_chain: "sora".to_owned(),
             proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
             burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
-            governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
             runtime_proof_family: Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1.to_owned()),
             runtime_verifier_backend: Some(
                 iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1.to_owned(),
-            ),
-            governance_runtime_bundle_path: Some(
-                "/v1/sccp/proofs/governance/{message_id}/runtime-scale".to_owned(),
             ),
             message_runtime_bundle_path: Some(
                 "/v1/sccp/proofs/message/{message_id}/runtime-scale".to_owned(),
@@ -672,7 +664,6 @@ mod tests {
             message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
             proof_manifest_path: "/v1/sccp/manifests".to_owned(),
             legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
-            legacy_governance_registry_backend: "bridge/sccp/governance-v1".to_owned(),
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             message_submit_path: Some("/v1/bridge/messages".to_owned()),
             message_payload_kinds: vec![
@@ -815,7 +806,6 @@ mod tests {
             target_domain: iroha_sccp::SCCP_DOMAIN_TON,
             message_id: sccp_message_id(&payload),
             payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
-            parliament_certificate_hash: None,
         };
         let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
@@ -1004,9 +994,6 @@ mod tests {
         assert!(rendered.contains("runtime_backend=sora-nexus-runtime-v1"));
         assert!(rendered.contains(
             "runtime_message=/v1/sccp/proofs/message/{message_id}/runtime-scale"
-        ));
-        assert!(rendered.contains(
-            "runtime_governance=/v1/sccp/proofs/governance/{message_id}/runtime-scale"
         ));
         assert!(rendered.contains(
             "ton(4:ton_raw:ton-contract-v1:TonContractNativeRecursive/verifier_live=false/anchors_live=false:disabled)"

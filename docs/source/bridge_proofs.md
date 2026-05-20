@@ -2,39 +2,38 @@
 
 Bridge proof submissions travel through the standard instruction path (`SubmitBridgeProof`) and land in the proof registry with a verified status. The current surface covers ICS-style Merkle proofs and transparent-ZK payloads with pinned retention and manifest binding.
 
-Torii now exposes three live SCCP bundle families:
+Torii now exposes two SCCP bundle families:
 
 - `burn` bundles for the legacy fixed-width burn message path
-- `governance` bundles for token add/pause/resume governance actions
-- `message` bundles for the generic multi-chain SCCP payload family (`asset_register`, `route_activate`, `transfer`)
+- `message` bundles for the generic multi-chain SCCP payload family
+  (`asset_register`, `route_activate`, `transfer`, `token_add`, `token_pause`,
+  `token_resume`)
 
 ## Human relay model
 
 SCCP relay to the SORA2 `sccp-bridge` pallet is a manual operator flow. The
 production path does not assume an off-chain worker, node-side daemon, or
 automated relayer service. A human relay operator uses a bridge web interface to
-review a Nexus/Iroha SCCP message or governance action, fetch the pallet-ready
-proof envelope, and sign the corresponding SORA2 extrinsic through a wallet.
+review a Nexus/Iroha SCCP message, fetch the pallet-ready proof envelope, and
+sign the corresponding SORA2 extrinsic through a wallet.
 
 The relay operator is only a courier and transaction fee payer. Authorization
-comes from Sora Parliament on Sora Nexus, Nexus finality, and the on-chain
-checks performed by the SORA2 pallet against trusted finality and Parliament
-roster anchors. A malformed or unauthorized relay transaction is expected to be
-rejected on-chain.
+comes from Nexus finality plus the cryptographic proof artifacts checked by the
+destination verifier. Parliament may govern channel configuration, but it does
+not approve bridge transactions. A malformed or unauthorized relay transaction
+is expected to be rejected on-chain.
 
 The bridge UI should perform the following checks before preparing a wallet
 transaction:
 
 - fetch `/v1/sccp/capabilities` and confirm `runtime_proof_family =
   runtime-scale-v1` and `runtime_verifier_backend = sora-nexus-runtime-v1`;
-- fetch the human-readable JSON bundle for the selected message or governance
-  action and display the payload, message id, commitment root, finality epoch,
-  finality height, and any Parliament certificate metadata;
+- fetch the human-readable JSON bundle for the selected message and display the
+  payload, message id, commitment root, finality epoch, and finality height;
 - fetch the matching runtime SCALE envelope from
-  `/v1/sccp/proofs/message/{message_id}/runtime-scale` or
-  `/v1/sccp/proofs/governance/{message_id}/runtime-scale`;
-- check that SORA2 already has the required `TrustedNexusFinalityAnchors` and,
-  for governance/control actions, `TrustedParliamentRosters` entries; and
+  `/v1/sccp/proofs/message/{message_id}/runtime-scale`;
+- check that SORA2 already has the required `TrustedNexusFinalityAnchors` and
+  destination verifier/trust-anchor configuration; and
 - prepare the correct SORA2 call for wallet signing:
   `submit_message_proof`, `submit_token_add_proof`, `submit_token_pause_proof`,
   or `submit_token_resume_proof`.
@@ -63,20 +62,22 @@ and may be empty for this runtime envelope path.
   commitment, and wrapped public inputs), and then replays
   `fastpq_prover::verify(...)` against that batch.
 - Legacy 32-byte placeholder digests are no longer accepted.
+- Raw SCCP message bundle bytes are not accepted as transparent bridge-proof
+  payloads; Torii/core validation requires the typed artifact and replays the
+  embedded cryptographic proof.
 - Pinned proofs are exempt from retention pruning; unpinned proofs still respect the global `zk.proof_history_cap`/grace/batch settings.
 
 ## Torii API surface
 
 - `GET /v1/sccp/capabilities` returns the relay-operator-facing SCCP capability snapshot:
   - local hub domain/chain identity (`SORA`);
-  - legacy burn/governance registry backends;
+  - the SCCP burn registry backend;
   - the generic message proof family (`stark-fri-v1`);
   - the SORA2 runtime proof family (`runtime-scale-v1`) and verifier backend
     (`sora-nexus-runtime-v1`);
   - the runtime SCALE envelope paths used by the bridge UI for wallet
     submission:
     - `/v1/sccp/proofs/message/{message_id}/runtime-scale`
-    - `/v1/sccp/proofs/governance/{message_id}/runtime-scale`
   - the typed SCCP message proof-artifact discovery path (`/v1/sccp/artifacts/message/{message_id}`);
   - the normalized SCCP counterparty proof-job discovery path (`/v1/sccp/jobs/message/{message_id}`);
   - the SCCP proof-manifest discovery path (`/v1/sccp/manifests`);
@@ -86,7 +87,7 @@ and may be empty for this runtime envelope path.
     `sora-polkadot`.
   - every currently advertised lane is marked `production_ready = false` with a
     `disabled_reason` until the destination chain has an immutable verifier for
-    governed recursive SCCP proofs.
+    cryptographic recursive SCCP proofs.
   - client helpers now exist for this route directly:
     - Rust: `iroha::client::Client::get_sccp_capabilities_json(...)` and `get_sccp_capabilities(...)`;
     - JavaScript: `ToriiClient.getSccpCapabilities(...)`; and
@@ -95,7 +96,7 @@ and may be empty for this runtime envelope path.
   counterparty set. Each manifest binds together:
   - the chain key and counterparty domain id;
   - the target verifier backend key for that counterparty lane (`evm-secp256k1-keccak-v1`, `tron-stark-fri-v1`, `solana-program-v1`, `ton-contract-v1`, or `substrate-runtime-v1`);
-  - the declared SCCP proof security model (`RecursiveZk`) and anchor governance authority (`SoraParliament`);
+  - the declared SCCP proof security model (`RecursiveZk`) and anchor mode (`CryptographicProof`);
   - a typed destination binding (`version`, `key`, `binding_hash`) that scopes proofs to the intended verifier deployment/runtime context for that lane;
   - the chain-specific message backend / registry backend pair;
   - the canonical counterparty account codec;
@@ -129,11 +130,11 @@ and may be empty for this runtime envelope path.
     - Rust: `iroha::client::Client::get_sccp_proof_manifests_json(...)` and `get_sccp_proof_manifests(...)`;
     - JavaScript: `ToriiClient.getSccpProofManifests(...)`; and
     - Python: `ToriiClient.get_sccp_proof_manifests()`.
-- `GET /v1/sccp/proofs/burn/{message_id}`, `GET /v1/sccp/proofs/governance/{message_id}`, and `GET /v1/sccp/proofs/message/{message_id}` return the live SCCP bundle keyed by canonical message id. The generic `message` route remains the raw bundle/debug fetch surface for multi-chain SCCP transfer and registry traffic.
+- `GET /v1/sccp/proofs/burn/{message_id}` and `GET /v1/sccp/proofs/message/{message_id}` return the live SCCP bundle keyed by canonical message id. The generic `message` route remains the raw bundle/debug fetch surface for multi-chain SCCP transfer, registry, and token-control traffic.
 - `GET /v1/sccp/artifacts/message/{message_id}` returns the typed SCCP transparent proof artifact for the same canonical message id. Each artifact now bundles:
   - the target verifier backend metadata for the counterparty lane;
   - the chain-specific `message_backend` / `registry_backend`;
-  - the shared SCCP security model / anchor governance declaration and the destination binding carried through from the manifest;
+  - the shared SCCP security model / cryptographic anchor mode and the destination binding carried through from the manifest;
   - the finality model and verifier target derived from the shared manifest table;
   - the canonical public inputs (`message_id`, `payload_hash`, `target_domain`, `commitment_root`, `finality_height`, `finality_block_hash`);
   - `proof_bytes` containing a real Norito-encoded `OpenVerifyEnvelope` over
@@ -162,7 +163,7 @@ and may be empty for this runtime envelope path.
     because they are disabled until native recursive verification exists.
 - `GET /v1/sccp/jobs/message/{message_id}` returns the normalized SCCP counterparty proof job for the same canonical message id. Each job bundles:
   - the chain family, chain key, backend labels, verifier backend, manifest seed, finality model, verifier target, and canonical SCCP public inputs;
-  - the same SCCP security model / anchor governance declaration and destination binding that the artifact and manifest commit into the canonical statement hash;
+  - the same SCCP security model / cryptographic anchor mode and destination binding that the artifact and manifest commit into the canonical statement hash;
   - a normalized payload projection with typed codec values for EVM / Solana / TON / Tron / logical-text surfaces; and
   - the same chain-specific `submission_template` advertised by the manifest, so proof tooling can derive the target verifier entrypoint and argument list without hard-coding per-chain packaging; and
   - the generated `submission_package` for the chain-specific relay/verifier
@@ -178,17 +179,17 @@ and may be empty for this runtime envelope path.
     - JavaScript: `ToriiClient.getSccpMessageProofJob(...)`.
   - current production behavior: this route rejects all live counterparty lanes
     because they are disabled until native recursive verification exists.
-- `GET /v1/sccp/proofs/message/{message_id}` now reconstructs the proof from committed blocks that contain `RecordSccpMessage` instructions and a non-null `sccp_commitment_root` in the finalized block header. The temporary in-memory bundle registry remains only as a fallback/test path.
+- `GET /v1/sccp/proofs/message/{message_id}` now reconstructs the proof from committed blocks that contain `RecordSccpMessage` instructions and a non-null `sccp_commitment_root` in the finalized block header. The in-memory bundle registry is retained only for unit tests and never bypasses typed artifact or finality verification.
 - Generic SCCP `message` payloads now enforce explicit v1 codec families during structural verification instead of accepting arbitrary nonzero codec ids:
   - `1`: generic UTF-8 logical identifiers;
   - `2`: EVM `0x`-prefixed 20-byte hex addresses;
   - `3`: Solana base58 public keys;
   - `4`: TON raw `workchain:account_hex` addresses; and
   - `5`: Tron base58check account addresses.
-- `POST /v1/bridge/proofs/submit` accepts exactly one of `burn_bundle`, `governance_bundle`, or `message_bundle`. `message_bundle` is converted into a typed SCCP transparent proof artifact and then wrapped in a bridge proof with backend label `bridge/sccp/stark-fri-v1/<chain>`.
+- `POST /v1/bridge/proofs/submit` accepts exactly one of `burn_bundle` or `message_bundle`. Token add, pause, and resume operations are submitted as SCCP message bundles; the bridge does not accept parliament certificates as transaction proofs. `message_bundle` is converted into a typed SCCP transparent proof artifact and then wrapped in a bridge proof with backend label `bridge/sccp/stark-fri-v1/<chain>`.
   - current production behavior: generic SCCP `message_bundle` conversion is
-    disabled for all live counterparties until governed recursive verifiers
-    exist.
+    disabled for all live counterparties until cryptographic recursive
+    verifiers exist.
 - `POST /v1/bridge/proofs/submit` now derives chain-specific SCCP transparent backends for generic `message` bundles:
   - outbound `SORA -> ETH` and inbound `ETH -> SORA` messages use `bridge/sccp/stark-fri-v1/eth`;
   - the same pattern applies to `bsc`, `sol`, `ton`, `tron`, `sora2`, `sora-kusama`, and `sora-polkadot`;

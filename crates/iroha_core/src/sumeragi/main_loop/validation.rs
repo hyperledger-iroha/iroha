@@ -1613,6 +1613,7 @@ impl Actor {
                 crate::block::SignatureVerificationError::UnknownSignature
                     | crate::block::SignatureVerificationError::UnknownSignatory
                     | crate::block::SignatureVerificationError::MissingPop
+                    | crate::block::SignatureVerificationError::LeaderMissing
             )
         );
         if !signature_mismatch {

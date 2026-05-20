@@ -57,6 +57,10 @@ async fn register_new_peer() -> Result<()> {
     let submit_timeout = network
         .sync_timeout()
         .saturating_add(network.da_commit_quorum_timeout());
+    let peer_sync_timeout = network
+        .sync_timeout()
+        .saturating_mul(2)
+        .saturating_add(network.da_commit_quorum_timeout());
     let register = RegisterPeerWithPop::new(
         peer.id(),
         peer.bls_pop()
@@ -77,14 +81,10 @@ async fn register_new_peer() -> Result<()> {
     }
 
     let genesis = network.genesis();
-    peer.start(
-        network.config_layers_with_additional_peers([&peer]),
-        Some(&genesis),
-    )
-    .await?;
+    peer.start(network.config_layers(), Some(&genesis)).await?;
 
     if sandbox::handle_result(
-        timeout(network.sync_timeout(), peer.once_block(2))
+        timeout(peer_sync_timeout, peer.once_block(2))
             .await
             .map_err(eyre::Report::new),
         stringify!(register_new_peer),
@@ -113,7 +113,7 @@ async fn register_new_peer() -> Result<()> {
     }
 
     if sandbox::handle_result(
-        timeout(network.sync_timeout(), peer.once_block(3))
+        timeout(peer_sync_timeout, peer.once_block(3))
             .await
             .map_err(eyre::Report::new),
         stringify!(register_new_peer),

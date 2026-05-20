@@ -1,7 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests queries for retrieving roles and their identifiers.
 
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 use eyre::Result;
 use integration_tests::sandbox;
@@ -28,7 +32,7 @@ fn start_network(
 
 #[test]
 fn find_roles() -> Result<()> {
-    let Some((network, _rt)) = start_network(stringify!(find_roles)) else {
+    let Some((network, rt)) = start_network(stringify!(find_roles)) else {
         return Ok(());
     };
     let test_client = network.client();
@@ -49,28 +53,37 @@ fn find_roles() -> Result<()> {
     {
         return Ok(());
     }
+    rt.block_on(async { network.ensure_blocks(1).await })?;
 
     let role_ids = HashSet::from(role_ids);
 
     // Checking results
-    let found_role_ids = match sandbox::handle_result(
-        test_client
-            .query(FindRoles::new())
-            .execute_all()
-            .map_err(Into::into),
-        stringify!(find_roles),
-    )? {
-        Some(found_role_ids) => found_role_ids.into_iter(),
-        None => return Ok(()),
-    };
-
-    assert!(
-        role_ids.is_subset(
-            &found_role_ids
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let found_role_ids = match sandbox::handle_result(
+            test_client
+                .query(FindRoles::new())
+                .execute_all()
+                .map_err(Into::into),
+            stringify!(find_roles),
+        )? {
+            Some(found_role_ids) => found_role_ids
+                .into_iter()
                 .map(|role| role.id().clone())
-                .collect::<HashSet<_>>()
-        )
-    );
+                .collect::<HashSet<_>>(),
+            None => return Ok(()),
+        };
+        if role_ids.is_subset(&found_role_ids) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            assert!(
+                role_ids.is_subset(&found_role_ids),
+                "expected registered roles {role_ids:?} to be included in {found_role_ids:?}"
+            );
+        }
+        sleep(Duration::from_millis(250));
+    }
 
     Ok(())
 }

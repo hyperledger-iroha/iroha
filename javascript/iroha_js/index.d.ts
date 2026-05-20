@@ -530,15 +530,22 @@ export interface SccpTokenControlPayload {
   sora_asset_id: string;
 }
 
-export type SccpGovernancePayload =
-  | { kind: "Add"; value: SccpTokenAddPayload }
-  | { kind: "Pause"; value: SccpTokenControlPayload }
-  | { kind: "Resume"; value: SccpTokenControlPayload }
-  | { Add: SccpTokenAddPayload }
-  | { Pause: SccpTokenControlPayload }
-  | { Resume: SccpTokenControlPayload };
+export type SccpTokenMessagePayload =
+  | { kind: "TokenAdd"; value: SccpTokenAddPayload }
+  | { kind: "TokenPause"; value: SccpTokenControlPayload }
+  | { kind: "TokenResume"; value: SccpTokenControlPayload }
+  | { TokenAdd: SccpTokenAddPayload }
+  | { TokenPause: SccpTokenControlPayload }
+  | { TokenResume: SccpTokenControlPayload };
 
-export type SccpHubMessageKind = "Burn" | "TokenAdd" | "TokenPause" | "TokenResume";
+export type SccpHubMessageKind =
+  | "Burn"
+  | "TokenAdd"
+  | "TokenPause"
+  | "TokenResume"
+  | "AssetRegister"
+  | "RouteActivate"
+  | "Transfer";
 
 export interface SccpHubCommitment {
   version: number;
@@ -546,7 +553,6 @@ export interface SccpHubCommitment {
   target_domain: number;
   message_id: string;
   payload_hash: string;
-  parliament_certificate_hash?: string | null;
 }
 
 export interface SccpMerkleStep {
@@ -567,13 +573,12 @@ export interface SccpBurnBundle {
   finality_proof: string;
 }
 
-export interface SccpGovernanceBundle {
+export interface SccpTokenMessageBundle {
   version: number;
   commitment_root: string;
   commitment: SccpHubCommitment;
   merkle_proof: SccpMerkleProof;
-  payload: SccpGovernancePayload;
-  parliament_certificate: string;
+  payload: SccpTokenMessagePayload;
   finality_proof: string;
 }
 
@@ -585,15 +590,11 @@ export interface SccpBundleSurfaceValidation {
   checks: Record<string, boolean>;
 }
 
-export interface SccpGovernanceBundleSurfaceValidation extends SccpBundleSurfaceValidation {
-  expectedCertificateHash: string | null;
-}
-
 export function isSupportedSccpDomain(domainId: number): boolean;
 export function canonicalSccpBurnPayloadBytes(payload: SccpBurnPayload): Uint8Array;
 export function canonicalSccpTokenAddPayloadBytes(payload: SccpTokenAddPayload): Uint8Array;
 export function canonicalSccpTokenControlPayloadBytes(payload: SccpTokenControlPayload): Uint8Array;
-export function canonicalSccpGovernancePayloadBytes(payload: SccpGovernancePayload): Uint8Array;
+export function canonicalSccpTokenMessagePayloadBytes(payload: SccpTokenMessagePayload): Uint8Array;
 export function canonicalSccpCommitmentBytes(commitment: SccpHubCommitment): Uint8Array;
 export function sccpBurnMessageId(
   payload: SccpBurnPayload,
@@ -611,17 +612,13 @@ export function sccpTokenResumeMessageId(
   payload: SccpTokenControlPayload,
   options?: { prefix?: boolean },
 ): string;
-export function sccpGovernanceMessageId(
-  payload: SccpGovernancePayload,
+export function sccpTokenMessageId(
+  payload: SccpTokenMessagePayload,
   options?: { prefix?: boolean },
 ): string;
-export function sccpGovernanceTargetDomain(payload: SccpGovernancePayload): number;
+export function sccpTokenMessageTargetDomain(payload: SccpTokenMessagePayload): number;
 export function sccpPayloadHash(
   payload: Uint8Array | ArrayBufferView | ArrayBuffer | string,
-  options?: { prefix?: boolean },
-): string;
-export function sccpParliamentCertificateHash(
-  certificateBytes: Uint8Array | ArrayBufferView | ArrayBuffer | string,
   options?: { prefix?: boolean },
 ): string;
 export function sccpCommitmentLeafHash(
@@ -634,9 +631,9 @@ export function sccpMerkleRootFromCommitment(
   options?: { prefix?: boolean },
 ): string;
 export function validateSccpBurnBundleSurface(bundle: SccpBurnBundle): SccpBundleSurfaceValidation;
-export function validateSccpGovernanceBundleSurface(
-  bundle: SccpGovernanceBundle,
-): SccpGovernanceBundleSurfaceValidation;
+export function validateSccpTokenMessageBundleSurface(
+  bundle: SccpTokenMessageBundle,
+): SccpBundleSurfaceValidation;
 
 export interface BuildPacs008Options {
   messageId: string;
@@ -3860,14 +3857,12 @@ export interface ToriiSccpCapabilities {
   localChain: string;
   proofFamily: string;
   burnBundlePath: string;
-  governanceBundlePath: string;
   messageBundlePath: string;
   messageProofPath: string;
   messageJobPath: string;
   recentMessagesPath: string;
   proofManifestPath: string;
   burnRegistryBackend: string;
-  governanceRegistryBackend: string;
   proofSubmitPath: string | null;
   messageSubmitPath: string | null;
   messagePayloadKinds: ReadonlyArray<string>;
@@ -3892,7 +3887,7 @@ export type ToriiSccpProofVerifierTarget =
 
 export type ToriiSccpProofSecurityModel = "RecursiveZk";
 
-export type ToriiSccpAnchorGovernance = "SoraParliament";
+export type ToriiSccpAnchorGovernance = "CryptographicProof";
 
 export interface ToriiSccpDestinationBinding {
   version: number;
@@ -3941,7 +3936,13 @@ export type ToriiSccpHubMessageKind =
   | "RouteActivate"
   | "Transfer";
 
-export type ToriiSccpMessagePayloadKind = "AssetRegister" | "RouteActivate" | "Transfer";
+export type ToriiSccpMessagePayloadKind =
+  | "AssetRegister"
+  | "RouteActivate"
+  | "Transfer"
+  | "TokenAdd"
+  | "TokenPause"
+  | "TokenResume";
 
 export interface ToriiSccpHubCommitment {
   version: number;
@@ -3949,7 +3950,6 @@ export interface ToriiSccpHubCommitment {
   targetDomain: number;
   messageId: string;
   payloadHash: string;
-  parliamentCertificateHash: string | null;
 }
 
 export interface ToriiSccpMerkleStep {

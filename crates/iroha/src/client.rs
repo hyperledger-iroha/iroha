@@ -243,8 +243,6 @@ pub struct SccpCapabilities {
     pub proof_family: String,
     /// Legacy burn-bundle fetch path.
     pub burn_bundle_path: String,
-    /// Legacy governance-bundle fetch path.
-    pub governance_bundle_path: String,
     /// Generic SCCP message-bundle fetch path.
     pub message_bundle_path: String,
     /// Runtime SCALE proof family accepted by the SORA SCCP pallet.
@@ -253,9 +251,6 @@ pub struct SccpCapabilities {
     /// Runtime verifier backend label accepted by the SORA SCCP pallet.
     #[norito(default)]
     pub runtime_verifier_backend: Option<String>,
-    /// Optional runtime SCALE governance-envelope fetch path.
-    #[norito(default)]
-    pub governance_runtime_bundle_path: Option<String>,
     /// Optional runtime SCALE message-envelope fetch path.
     #[norito(default)]
     pub message_runtime_bundle_path: Option<String>,
@@ -267,8 +262,6 @@ pub struct SccpCapabilities {
     pub proof_manifest_path: String,
     /// Registry backend label used by legacy burn proofs.
     pub legacy_burn_registry_backend: String,
-    /// Registry backend label used by legacy governance proofs.
-    pub legacy_governance_registry_backend: String,
     /// Optional Torii path for outbound proof registration.
     #[norito(default)]
     pub proof_submit_path: Option<String>,
@@ -3269,13 +3262,12 @@ impl Client {
         context: &'static str,
     ) -> Result<norito::json::Value> {
         if response.status() != StatusCode::OK {
-            return Err(eyre!(
-                "{context}: {} {}",
-                response.status(),
-                std::str::from_utf8(response.body()).unwrap_or("")
-            ));
+            return Err(ResponseReport::with_msg(context, response)
+                .unwrap_or_else(core::convert::identity)
+                .into());
         }
-        Ok(norito::json::from_slice(response.body())?)
+        norito::json::from_slice(response.body())
+            .map_err(|error| eyre!("{context}: failed to decode JSON payload: {error}"))
     }
 
     fn response_content_type(response: &Response<Vec<u8>>) -> &str {
@@ -3611,14 +3603,7 @@ impl Client {
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi vrf penalties: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::parse_json_ok_response(&resp, "Failed to get sumeragi vrf penalties")
     }
 
     /// GET `/v1/sumeragi/vrf/epoch/:epoch` — VRF epoch snapshot (participants, randomness state).
@@ -3631,14 +3616,7 @@ impl Client {
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi vrf epoch: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::parse_json_ok_response(&resp, "Failed to get sumeragi vrf epoch")
     }
 
     /// GET `/v1/sumeragi/leader` — leader index snapshot with optional PRF context.
@@ -3651,14 +3629,7 @@ impl Client {
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi leader: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::parse_json_ok_response(&resp, "Failed to get sumeragi leader")
     }
 
     /// GET `/v1/sumeragi/params` — on-chain Sumeragi parameters snapshot.
@@ -3671,14 +3642,7 @@ impl Client {
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi params: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::parse_json_ok_response(&resp, "Failed to get sumeragi params")
     }
 
     /// GET `/v1/parameters` — full parameter snapshot (system + custom).
@@ -3701,14 +3665,7 @@ impl Client {
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi collectors: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::parse_json_ok_response(&resp, "Failed to get sumeragi collectors")
     }
 
     /// GET `/v1/sumeragi/qc` — `HighestQC`/`LockedQC` snapshot.
@@ -3751,14 +3708,7 @@ impl Client {
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi pacemaker: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::parse_json_ok_response(&resp, "Failed to get sumeragi pacemaker")
     }
 
     /// GET `/v1/sumeragi/phases` — latest per-phase latencies (ms).
@@ -3771,14 +3721,7 @@ impl Client {
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi phases: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::parse_json_ok_response(&resp, "Failed to get sumeragi phases")
     }
 
     /// GET `/v1/sumeragi/telemetry` — aggregated telemetry snapshot.
@@ -3791,14 +3734,7 @@ impl Client {
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi telemetry: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::parse_json_ok_response(&resp, "Failed to get sumeragi telemetry")
     }
 
     /// GET `/v1/sumeragi/rbc` — RBC session/throughput counters.
@@ -3811,14 +3747,7 @@ impl Client {
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi rbc status: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::parse_json_ok_response(&resp, "Failed to get sumeragi rbc status")
     }
 
     /// GET `/v1/sumeragi/rbc/sessions` — RBC sessions snapshot.
@@ -3831,14 +3760,7 @@ impl Client {
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi rbc sessions: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
+        Self::parse_json_ok_response(&resp, "Failed to get sumeragi rbc sessions")
     }
 
     /// GET `/v1/sumeragi/evidence/count` — total persisted evidence entries.
@@ -4106,6 +4028,62 @@ mod evidence_filter_tests {
         let params = filter.param_entries();
         assert!(params.is_empty());
     }
+
+    #[test]
+    fn evidence_filter_param_entries_preserve_adversarial_kind_literal() {
+        let injected_kind = "InvalidQc&limit=999&offset=999";
+        let filter = SumeragiEvidenceListFilter {
+            limit: Some(1),
+            offset: Some(0),
+            kind: Some(injected_kind),
+        };
+
+        assert_eq!(
+            filter.param_entries(),
+            vec![
+                ("limit", "1".to_string()),
+                ("offset", "0".to_string()),
+                ("kind", injected_kind.to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn evidence_filter_param_entries_preserve_control_characters_and_equals() {
+        let injected_kind = "InvalidQc=1%0a\r\nX-Iroha-Injected: yes";
+        let filter = SumeragiEvidenceListFilter {
+            limit: Some(u32::MAX),
+            offset: Some(u32::MAX - 1),
+            kind: Some(injected_kind),
+        };
+
+        assert_eq!(
+            filter.param_entries(),
+            vec![
+                ("limit", u32::MAX.to_string()),
+                ("offset", (u32::MAX - 1).to_string()),
+                ("kind", injected_kind.to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn evidence_filter_param_entries_preserve_zero_values_and_blank_kind() {
+        let filter = SumeragiEvidenceListFilter {
+            limit: Some(0),
+            offset: Some(0),
+            kind: Some(""),
+        };
+
+        assert_eq!(
+            filter.param_entries(),
+            vec![
+                ("limit", "0".to_string()),
+                ("offset", "0".to_string()),
+                ("kind", String::new())
+            ]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -4184,6 +4162,68 @@ mod evidence_response_tests {
             .body(b"denied".to_vec())
             .unwrap();
         assert!(Client::parse_json_ok_response(&response, "context").is_err());
+    }
+
+    #[test]
+    fn parse_json_ok_response_non_ok_error_includes_status_context_and_body() {
+        let response = HttpResponse::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .body(b"slow down".to_vec())
+            .unwrap();
+        let err = Client::parse_json_ok_response(&response, "context")
+            .expect_err("non-OK response must fail");
+        let message = err.to_string();
+        assert!(message.contains("context"), "missing context: {message}");
+        assert!(message.contains("429"), "missing status: {message}");
+        assert!(message.contains("slow down"), "missing body: {message}");
+    }
+
+    #[test]
+    fn parse_json_ok_response_rejects_malformed_ok_payload() {
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .body(br#"{"count":"#.to_vec())
+            .unwrap();
+        let err = Client::parse_json_ok_response(&response, "context")
+            .expect_err("malformed JSON body must fail even with HTTP 200");
+        let message = err.to_string();
+        assert!(message.contains("context"), "missing context: {message}");
+        assert!(
+            message.contains("failed to decode JSON payload"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn parse_json_ok_response_rejects_duplicate_object_keys() {
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .body(br#"{"count":1,"count":2}"#.to_vec())
+            .unwrap();
+        let err = Client::parse_json_ok_response(&response, "context")
+            .expect_err("duplicate JSON object keys must fail closed");
+        let message = err.to_string();
+        assert!(message.contains("context"), "missing context: {message}");
+        assert!(
+            message.contains("failed to decode JSON payload"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn parse_json_ok_response_rejects_trailing_payload_after_valid_json() {
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .body(br#"{"count":1}{"injected":true}"#.to_vec())
+            .unwrap();
+        let err = Client::parse_json_ok_response(&response, "context")
+            .expect_err("trailing JSON payload must fail closed");
+        let message = err.to_string();
+        assert!(message.contains("context"), "missing context: {message}");
+        assert!(
+            message.contains("failed to decode JSON payload"),
+            "unexpected error: {message}"
+        );
     }
 }
 
@@ -5511,6 +5551,14 @@ mod evidence_http_tests {
             .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence/count");
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                    && value == APPLICATION_JSON),
+            "evidence count JSON helper must request JSON"
+        );
     }
 
     #[test]
@@ -5541,6 +5589,14 @@ mod evidence_http_tests {
             .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                    && value == APPLICATION_JSON),
+            "evidence list JSON helper must request JSON"
+        );
         let params: HashMap<_, _> = snapshot
             .url
             .query_pairs()
@@ -5549,6 +5605,173 @@ mod evidence_http_tests {
         assert_eq!(params.get("limit"), Some(&"5".to_string()));
         assert_eq!(params.get("offset"), Some(&"2".to_string()));
         assert_eq!(params.get("kind"), Some(&"InvalidQc".to_string()));
+    }
+
+    #[test]
+    fn get_evidence_list_percent_encodes_adversarial_kind_filter() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(base_url());
+        let injected_kind = "InvalidQc&limit=999&offset=999";
+        let filter = SumeragiEvidenceListFilter {
+            limit: Some(5),
+            offset: Some(2),
+            kind: Some(injected_kind),
+        };
+
+        with_mock_http(
+            respond_with(&snapshots, json_response(StatusCode::OK, r#"{"items":[]}"#)),
+            || client.get_sumeragi_evidence_list_json(&filter),
+        )
+        .expect("list request");
+
+        let snapshot = snapshots
+            .lock()
+            .expect("lock snapshots")
+            .first()
+            .cloned()
+            .expect("snapshot captured");
+        let params: Vec<_> = snapshot
+            .url
+            .query_pairs()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        assert_eq!(
+            params,
+            vec![
+                ("limit".to_string(), "5".to_string()),
+                ("offset".to_string(), "2".to_string()),
+                ("kind".to_string(), injected_kind.to_string()),
+            ],
+            "kind filter must not inject sibling query parameters"
+        );
+    }
+
+    #[test]
+    fn get_evidence_list_percent_encodes_control_character_kind_filter() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(base_url());
+        let injected_kind = "InvalidQc=1%0a\r\nX-Iroha-Injected: yes";
+        let filter = SumeragiEvidenceListFilter {
+            limit: Some(u32::MAX),
+            offset: Some(u32::MAX - 1),
+            kind: Some(injected_kind),
+        };
+
+        with_mock_http(
+            respond_with(&snapshots, json_response(StatusCode::OK, r#"{"items":[]}"#)),
+            || client.get_sumeragi_evidence_list_json(&filter),
+        )
+        .expect("list request");
+
+        let snapshot = snapshots
+            .lock()
+            .expect("lock snapshots")
+            .first()
+            .cloned()
+            .expect("snapshot captured");
+        let raw_query = snapshot.url.query().expect("query string");
+        assert!(
+            !raw_query.contains('\r') && !raw_query.contains('\n'),
+            "query string must percent-encode control characters: {raw_query:?}"
+        );
+        let params: Vec<_> = snapshot
+            .url
+            .query_pairs()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        assert_eq!(
+            params,
+            vec![
+                ("limit".to_string(), u32::MAX.to_string()),
+                ("offset".to_string(), (u32::MAX - 1).to_string()),
+                ("kind".to_string(), injected_kind.to_string()),
+            ],
+            "control-character kind filter must remain a single query value"
+        );
+    }
+
+    #[test]
+    fn get_evidence_list_preserves_zero_and_blank_filter_params() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(base_url());
+        let filter = SumeragiEvidenceListFilter {
+            limit: Some(0),
+            offset: Some(0),
+            kind: Some(""),
+        };
+
+        with_mock_http(
+            respond_with(&snapshots, json_response(StatusCode::OK, r#"{"items":[]}"#)),
+            || client.get_sumeragi_evidence_list_json(&filter),
+        )
+        .expect("list request");
+
+        let snapshot = snapshots
+            .lock()
+            .expect("lock snapshots")
+            .first()
+            .cloned()
+            .expect("snapshot captured");
+        let params: Vec<_> = snapshot
+            .url
+            .query_pairs()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        assert_eq!(
+            params,
+            vec![
+                ("limit".to_string(), "0".to_string()),
+                ("offset".to_string(), "0".to_string()),
+                ("kind".to_string(), String::new()),
+            ],
+            "zero and blank filter values must remain explicit query params"
+        );
+    }
+
+    #[test]
+    fn get_evidence_count_rejects_malformed_success_payload() {
+        let client = client_with_base_url(base_url());
+        let err = with_mock_http(
+            respond_with(
+                &Arc::new(Mutex::new(Vec::new())),
+                json_response(StatusCode::OK, r#"{"count":"#),
+            ),
+            || client.get_sumeragi_evidence_count_json(),
+        )
+        .expect_err("malformed successful count response should fail");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("Failed to get sumeragi evidence count"),
+            "missing endpoint context: {message}"
+        );
+        assert!(
+            message.contains("failed to decode JSON payload"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn get_evidence_list_rejects_duplicate_key_success_payload() {
+        let client = client_with_base_url(base_url());
+        let err = with_mock_http(
+            respond_with(
+                &Arc::new(Mutex::new(Vec::new())),
+                json_response(StatusCode::OK, r#"{"items":[],"items":[]}"#),
+            ),
+            || client.get_sumeragi_evidence_list_json(&SumeragiEvidenceListFilter::default()),
+        )
+        .expect_err("duplicate-key successful list response should fail");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("Failed to get sumeragi evidence list"),
+            "missing endpoint context: {message}"
+        );
+        assert!(
+            message.contains("failed to decode JSON payload"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]
@@ -12551,8 +12774,6 @@ where
     // Keep track of the block height in which the transaction was approved
     // so we can later detect the corresponding block finalization event.
     let mut block_height = None;
-    // Remember whether we have observed a matching committed block event.
-    let mut committed_block_observed = false;
     // Track when the transaction first entered the queue.
     let mut queued_at: Option<Instant> = None;
     let poll_enabled = poll_interval != Duration::ZERO;
@@ -12610,9 +12831,6 @@ where
                         }
                         TxConfirmationStatus::Approved(height) => {
                             if let Some(height) = height {
-                                if block_height != Some(height) {
-                                    committed_block_observed = false;
-                                }
                                 block_height = Some(height);
                             }
                         }
@@ -12669,9 +12887,6 @@ where
                                         "transaction approved"
                                     );
                                     let next_height = transaction_event.block_height();
-                                    if block_height != next_height {
-                                        committed_block_observed = false;
-                                    }
                                     block_height = next_height;
                                 }
                                 TransactionStatus::Rejected(reason) => {
@@ -12709,9 +12924,6 @@ where
                                         }
                                         TxConfirmationStatus::Approved(height) => {
                                             if let Some(height) = height {
-                                                if block_height != Some(height) {
-                                                    committed_block_observed = false;
-                                                }
                                                 block_height = Some(height);
                                             }
                                         }
@@ -12790,27 +13002,12 @@ where
                                                 | TxConfirmationStatus::Committed,
                                             )
                                             | None) => {
-                                                if committed_block_observed {
-                                                    debug!(
-                                                        %hash,
-                                                        "block committed+applied observed; accepting despite stale polled status"
-                                                    );
-                                                    return Some(Ok(hash));
-                                                }
                                                 debug!(
                                                     %hash,
                                                     "block applied observed before final transaction status; waiting"
                                                 );
                                             }
                                             Err(err) => {
-                                                if committed_block_observed {
-                                                    debug!(
-                                                        %hash,
-                                                        ?err,
-                                                        "status check failed after committed+applied block events; accepting"
-                                                    );
-                                                    return Some(Ok(hash));
-                                                }
                                                 debug!(
                                                     %hash,
                                                     ?err,
@@ -12835,7 +13032,6 @@ where
                                             status = ?block_event.status(),
                                             "transaction committed observed in block event"
                                         );
-                                        committed_block_observed = true;
                                     }
                                     _ => {}
                                 }
@@ -13862,6 +14058,11 @@ mod tx_confirmation_stream_tests {
 
     #[tokio::test]
     async fn committed_block_event_waits_for_applied() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([14_u8; Hash::LENGTH]));
         let height = std::num::NonZeroU64::new(15).expect("nonzero height");
@@ -13905,6 +14106,8 @@ mod tx_confirmation_stream_tests {
         }));
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
         let mut events = UnboundedReceiverStream::new(rx);
+        let status_is_applied = Arc::new(AtomicBool::new(false));
+        let status_is_applied_in_task = Arc::clone(&status_is_applied);
         let mut handle = tokio::spawn(async move {
             listen_for_tx_confirmation_stream_with_status_check(
                 &mut events,
@@ -13912,7 +14115,13 @@ mod tx_confirmation_stream_tests {
                 Duration::from_secs(1),
                 Duration::from_millis(1),
                 None,
-                || Ok(Some(super::TxConfirmationStatus::Approved(Some(height)))),
+                || {
+                    if status_is_applied_in_task.load(Ordering::SeqCst) {
+                        Ok(Some(super::TxConfirmationStatus::Applied))
+                    } else {
+                        Ok(Some(super::TxConfirmationStatus::Approved(Some(height))))
+                    }
+                },
             )
             .await
         });
@@ -13926,6 +14135,16 @@ mod tx_confirmation_stream_tests {
             "confirmation should wait for applied"
         );
 
+        let _ = tx.send(Ok(applied_event.clone()));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), &mut handle)
+                .await
+                .is_err(),
+            "applied block event should still wait for the transaction's Applied status"
+        );
+
+        status_is_applied.store(true, Ordering::SeqCst);
         let _ = tx.send(Ok(applied_event));
         let result = tokio::time::timeout(Duration::from_secs(1), &mut handle)
             .await
@@ -17875,6 +18094,478 @@ mod tests {
                     .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
                 "missing operator signature header"
             );
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                        && value == APPLICATION_JSON),
+                "{path} JSON helper must request JSON"
+            );
+        }
+    }
+
+    #[test]
+    fn sumeragi_json_endpoints_request_json() {
+        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
+        let cases: [SumeragiEndpointCase; 5] = [
+            ("/v1/sumeragi/leader", Client::get_sumeragi_leader_json),
+            ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
+            (
+                "/v1/sumeragi/collectors",
+                Client::get_sumeragi_collectors_json,
+            ),
+            (
+                "/v1/sumeragi/telemetry",
+                Client::get_sumeragi_telemetry_json,
+            ),
+            (
+                "/v1/sumeragi/rbc/sessions",
+                Client::get_sumeragi_rbc_sessions_json,
+            ),
+        ];
+
+        for (path, request) in cases {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+            with_mock_http(
+                respond_with(&snapshots, json_response(StatusCode::OK, "{}")),
+                || request(&client_with_base_url(base_url())),
+            )
+            .expect("JSON endpoint request should decode mocked payload");
+
+            let snapshot = snapshots
+                .lock()
+                .expect("lock snapshots")
+                .first()
+                .cloned()
+                .expect("request snapshot");
+            assert_eq!(snapshot.method, HttpMethod::GET);
+            assert_eq!(snapshot.url.path(), path);
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                        && value == APPLICATION_JSON),
+                "{path} JSON helper must request JSON"
+            );
+        }
+    }
+
+    #[test]
+    fn sumeragi_json_endpoints_reject_malformed_ok_payloads() {
+        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
+        let cases: [SumeragiEndpointCase; 5] = [
+            ("/v1/sumeragi/leader", Client::get_sumeragi_leader_json),
+            ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
+            (
+                "/v1/sumeragi/collectors",
+                Client::get_sumeragi_collectors_json,
+            ),
+            (
+                "/v1/sumeragi/telemetry",
+                Client::get_sumeragi_telemetry_json,
+            ),
+            (
+                "/v1/sumeragi/rbc/sessions",
+                Client::get_sumeragi_rbc_sessions_json,
+            ),
+        ];
+
+        for (path, request) in cases {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let err = with_mock_http(
+                respond_with(&snapshots, json_response(StatusCode::OK, r#"{"broken":"#)),
+                || request(&client_with_base_url(base_url())),
+            )
+            .expect_err("malformed successful JSON payload should fail");
+
+            assert!(
+                err.to_string().contains("failed to decode JSON payload"),
+                "{path} returned unexpected error: {err}"
+            );
+            let snapshot = snapshots
+                .lock()
+                .expect("lock snapshots")
+                .first()
+                .cloned()
+                .expect("request snapshot");
+            assert_eq!(snapshot.method, HttpMethod::GET);
+            assert_eq!(snapshot.url.path(), path);
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                        && value == APPLICATION_JSON),
+                "{path} JSON helper must request JSON"
+            );
+        }
+    }
+
+    #[test]
+    fn sumeragi_json_endpoints_reject_non_ok_responses_with_context() {
+        type SumeragiEndpointCase = (
+            &'static str,
+            &'static str,
+            fn(&Client) -> Result<norito::json::Value>,
+        );
+        let cases: [SumeragiEndpointCase; 5] = [
+            (
+                "/v1/sumeragi/leader",
+                "Failed to get sumeragi leader",
+                Client::get_sumeragi_leader_json,
+            ),
+            (
+                "/v1/sumeragi/params",
+                "Failed to get sumeragi params",
+                Client::get_sumeragi_params_json,
+            ),
+            (
+                "/v1/sumeragi/collectors",
+                "Failed to get sumeragi collectors",
+                Client::get_sumeragi_collectors_json,
+            ),
+            (
+                "/v1/sumeragi/telemetry",
+                "Failed to get sumeragi telemetry",
+                Client::get_sumeragi_telemetry_json,
+            ),
+            (
+                "/v1/sumeragi/rbc/sessions",
+                "Failed to get sumeragi rbc sessions",
+                Client::get_sumeragi_rbc_sessions_json,
+            ),
+        ];
+
+        for (path, context, request) in cases {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let err = with_mock_http(
+                respond_with(
+                    &snapshots,
+                    json_response(StatusCode::TOO_MANY_REQUESTS, "rate limited"),
+                ),
+                || request(&client_with_base_url(base_url())),
+            )
+            .expect_err("non-OK JSON endpoint response should fail");
+
+            let message = err.to_string();
+            assert!(
+                message.contains(context),
+                "{path} missing context: {message}"
+            );
+            assert!(message.contains("429"), "{path} missing status: {message}");
+            assert!(
+                message.contains("rate limited"),
+                "{path} missing response body: {message}"
+            );
+            let snapshot = snapshots
+                .lock()
+                .expect("lock snapshots")
+                .first()
+                .cloned()
+                .expect("request snapshot");
+            assert_eq!(snapshot.method, HttpMethod::GET);
+            assert_eq!(snapshot.url.path(), path);
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                        && value == APPLICATION_JSON),
+                "{path} JSON helper must request JSON"
+            );
+        }
+    }
+
+    #[test]
+    fn sumeragi_vrf_json_endpoints_request_json_and_reject_malformed_payloads() {
+        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
+
+        fn penalties(client: &Client) -> Result<norito::json::Value> {
+            client.get_sumeragi_vrf_penalties_json(7)
+        }
+
+        fn epoch(client: &Client) -> Result<norito::json::Value> {
+            client.get_sumeragi_vrf_epoch_json(7)
+        }
+
+        let cases: [SumeragiEndpointCase; 2] = [
+            ("/v1/sumeragi/vrf/penalties/7", penalties),
+            ("/v1/sumeragi/vrf/epoch/7", epoch),
+        ];
+
+        for (path, request) in cases {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            with_mock_http(
+                respond_with(&snapshots, json_response(StatusCode::OK, "{}")),
+                || request(&client_with_base_url(base_url())),
+            )
+            .expect("VRF JSON endpoint should decode mocked payload");
+
+            let snapshot = snapshots
+                .lock()
+                .expect("lock snapshots")
+                .first()
+                .cloned()
+                .expect("request snapshot");
+            assert_eq!(snapshot.method, HttpMethod::GET);
+            assert_eq!(snapshot.url.path(), path);
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                        && value == APPLICATION_JSON),
+                "{path} JSON helper must request JSON"
+            );
+
+            let malformed_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let err = with_mock_http(
+                respond_with(
+                    &malformed_snapshots,
+                    json_response(StatusCode::OK, r#"{"broken":"#),
+                ),
+                || request(&client_with_base_url(base_url())),
+            )
+            .expect_err("malformed successful VRF JSON payload should fail");
+
+            assert!(
+                err.to_string().contains("failed to decode JSON payload"),
+                "{path} returned unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn sumeragi_vrf_json_endpoints_reject_non_ok_responses_with_context() {
+        type SumeragiEndpointCase = (
+            &'static str,
+            &'static str,
+            fn(&Client) -> Result<norito::json::Value>,
+        );
+
+        fn penalties(client: &Client) -> Result<norito::json::Value> {
+            client.get_sumeragi_vrf_penalties_json(9)
+        }
+
+        fn epoch(client: &Client) -> Result<norito::json::Value> {
+            client.get_sumeragi_vrf_epoch_json(9)
+        }
+
+        let cases: [SumeragiEndpointCase; 2] = [
+            (
+                "/v1/sumeragi/vrf/penalties/9",
+                "Failed to get sumeragi vrf penalties",
+                penalties,
+            ),
+            (
+                "/v1/sumeragi/vrf/epoch/9",
+                "Failed to get sumeragi vrf epoch",
+                epoch,
+            ),
+        ];
+
+        for (path, context, request) in cases {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let err = with_mock_http(
+                respond_with(
+                    &snapshots,
+                    json_response(
+                        StatusCode::BAD_GATEWAY,
+                        "upstream consensus snapshot failed",
+                    ),
+                ),
+                || request(&client_with_base_url(base_url())),
+            )
+            .expect_err("non-OK VRF JSON endpoint response should fail");
+
+            let message = err.to_string();
+            assert!(
+                message.contains(context),
+                "{path} missing context: {message}"
+            );
+            assert!(message.contains("502"), "{path} missing status: {message}");
+            assert!(
+                message.contains("upstream consensus snapshot failed"),
+                "{path} missing response body: {message}"
+            );
+            let snapshot = snapshots
+                .lock()
+                .expect("lock snapshots")
+                .first()
+                .cloned()
+                .expect("request snapshot");
+            assert_eq!(snapshot.method, HttpMethod::GET);
+            assert_eq!(snapshot.url.path(), path);
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                        && value == APPLICATION_JSON),
+                "{path} JSON helper must request JSON"
+            );
+        }
+    }
+
+    #[test]
+    fn sumeragi_operator_json_endpoints_reject_duplicate_key_payloads() {
+        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
+        let cases: [SumeragiEndpointCase; 3] = [
+            (
+                "/v1/sumeragi/pacemaker",
+                Client::get_sumeragi_pacemaker_json,
+            ),
+            ("/v1/sumeragi/phases", Client::get_sumeragi_phases_json),
+            ("/v1/sumeragi/rbc", Client::get_sumeragi_rbc_status_json),
+        ];
+
+        for (path, request) in cases {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let mut client = client_with_base_url(base_url());
+            client.set_operator_key_pair(KeyPair::random());
+
+            let err = with_mock_http(
+                respond_with(
+                    &snapshots,
+                    json_response(StatusCode::OK, r#"{"dup":1,"dup":2}"#),
+                ),
+                || request(&client),
+            )
+            .expect_err("duplicate-key successful JSON payload should fail");
+
+            assert!(
+                err.to_string().contains("failed to decode JSON payload"),
+                "{path} returned unexpected error: {err}"
+            );
+            let snapshot = snapshots
+                .lock()
+                .expect("lock snapshots")
+                .first()
+                .cloned()
+                .expect("request snapshot");
+            assert_eq!(snapshot.method, HttpMethod::GET);
+            assert_eq!(snapshot.url.path(), path);
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_PUBLIC_KEY)),
+                "missing operator public key header"
+            );
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_TIMESTAMP_MS)),
+                "missing operator timestamp header"
+            );
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_NONCE)),
+                "missing operator nonce header"
+            );
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
+                "missing operator signature header"
+            );
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                        && value == APPLICATION_JSON),
+                "{path} JSON helper must request JSON"
+            );
+        }
+    }
+
+    #[test]
+    fn sumeragi_operator_json_endpoints_reject_non_ok_responses_with_context() {
+        type SumeragiEndpointCase = (
+            &'static str,
+            &'static str,
+            fn(&Client) -> Result<norito::json::Value>,
+        );
+        let cases: [SumeragiEndpointCase; 3] = [
+            (
+                "/v1/sumeragi/pacemaker",
+                "Failed to get sumeragi pacemaker",
+                Client::get_sumeragi_pacemaker_json,
+            ),
+            (
+                "/v1/sumeragi/phases",
+                "Failed to get sumeragi phases",
+                Client::get_sumeragi_phases_json,
+            ),
+            (
+                "/v1/sumeragi/rbc",
+                "Failed to get sumeragi rbc status",
+                Client::get_sumeragi_rbc_status_json,
+            ),
+        ];
+
+        for (path, context, request) in cases {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let mut client = client_with_base_url(base_url());
+            client.set_operator_key_pair(KeyPair::random());
+
+            let err = with_mock_http(
+                respond_with(
+                    &snapshots,
+                    json_response(StatusCode::FORBIDDEN, "operator key rejected"),
+                ),
+                || request(&client),
+            )
+            .expect_err("non-OK operator JSON endpoint response should fail");
+
+            let message = err.to_string();
+            assert!(
+                message.contains(context),
+                "{path} missing context: {message}"
+            );
+            assert!(message.contains("403"), "{path} missing status: {message}");
+            assert!(
+                message.contains("operator key rejected"),
+                "{path} missing response body: {message}"
+            );
+            let snapshot = snapshots
+                .lock()
+                .expect("lock snapshots")
+                .first()
+                .cloned()
+                .expect("request snapshot");
+            assert_eq!(snapshot.method, HttpMethod::GET);
+            assert_eq!(snapshot.url.path(), path);
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_PUBLIC_KEY)),
+                "missing operator public key header"
+            );
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_OPERATOR_SIGNATURE)),
+                "missing operator signature header"
+            );
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                        && value == APPLICATION_JSON),
+                "{path} JSON helper must request JSON"
+            );
         }
     }
 
@@ -20227,7 +20918,6 @@ mod tests {
             target_domain: iroha_sccp::SCCP_DOMAIN_TON,
             message_id: sccp_message_id(&payload),
             payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
-            parliament_certificate_hash: None,
         };
         let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
@@ -20341,13 +21031,9 @@ mod tests {
             local_chain: "sora".to_owned(),
             proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
             burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
-            governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
             runtime_proof_family: Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1.to_owned()),
             runtime_verifier_backend: Some(iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1.to_owned()),
-            governance_runtime_bundle_path: Some(
-                "/v1/sccp/proofs/governance/{message_id}/runtime-scale".to_owned(),
-            ),
             message_runtime_bundle_path: Some(
                 "/v1/sccp/proofs/message/{message_id}/runtime-scale".to_owned(),
             ),
@@ -20355,7 +21041,6 @@ mod tests {
             message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
             proof_manifest_path: "/v1/sccp/manifests".to_owned(),
             legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
-            legacy_governance_registry_backend: "bridge/sccp/governance-v1".to_owned(),
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             message_submit_path: Some("/v1/bridge/messages".to_owned()),
             message_payload_kinds: vec![

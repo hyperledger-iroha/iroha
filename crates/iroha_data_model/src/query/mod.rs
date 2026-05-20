@@ -4711,6 +4711,25 @@ mod tests {
     }
 
     #[test]
+    fn proof_backend_query_payload_roundtrips() {
+        use norito::codec::{Decode, Encode};
+
+        let query =
+            proof::prelude::FindProofRecordsByBackend::new("test/nonexistent-proof-backend".into());
+        let encoded = query.encode();
+        assert!(
+            !encoded.is_empty(),
+            "backend query payload must carry the backend identifier"
+        );
+
+        let mut bytes = encoded.as_slice();
+        let decoded =
+            proof::prelude::FindProofRecordsByBackend::decode(&mut bytes).expect("decode query");
+        assert!(bytes.is_empty(), "decoder must consume the whole payload");
+        assert_eq!(decoded.backend, query.backend);
+    }
+
+    #[test]
     fn query_output_batch_box_json_roundtrip() {
         let batch = QueryOutputBatchBox::String(vec!["hello".to_owned()]);
 

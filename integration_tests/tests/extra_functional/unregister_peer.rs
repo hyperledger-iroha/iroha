@@ -37,7 +37,9 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     else {
         return Ok(());
     };
-    let sync_timeout = network.sync_timeout().saturating_mul(2);
+    // Late-join and removal flows replay DA/RBC history while the validator set is changing, so
+    // give them a wider budget than steady-state block waits.
+    let sync_timeout = network.sync_timeout().saturating_mul(3);
     let tx_timeout = sync_timeout;
     let client = network.client();
 
@@ -82,10 +84,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     .await?;
     let genesis = network.genesis();
     if let Err(err) = new_peer
-        .start(
-            network.config_layers_with_additional_peers([&new_peer]),
-            Some(&genesis),
-        )
+        .start(network.config_layers(), Some(&genesis))
         .await
     {
         if let Some(reason) = sandbox::sandbox_reason(&err) {

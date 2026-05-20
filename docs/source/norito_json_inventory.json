@@ -1911,16 +1911,6 @@
       "category": "source",
       "kind": "serde_json",
       "path": "crates/iroha_torii/src/routing.rs",
-      "line": 12606,
-      "scope": "prod",
-      "allowed": false,
-      "reason": "production serde usage",
-      "context": "serde_json::from_str::<NexusSccpGovernanceProofV1>(&raw)"
-    },
-    {
-      "category": "source",
-      "kind": "serde_json",
-      "path": "crates/iroha_torii/src/routing.rs",
       "line": 12614,
       "scope": "prod",
       "allowed": false,

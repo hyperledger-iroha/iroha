@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use iroha_crypto::{HashOf, PublicKey};
+use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     ChainId,
     block::{BlockHeader, SignedBlock},
@@ -14,17 +14,21 @@ use iroha_data_model::{
         BridgeAuthoritySet, BridgeCommitment, BridgeCommitmentJustification, BridgeFinalityBundle,
         BridgeFinalityProof,
     },
-    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1},
     isi::InstructionBox,
     peer::PeerId,
     transaction::Executable,
 };
-use iroha_sccp::{SccpHubCommitmentV1, SccpPayloadV1};
+use iroha_sccp::{
+    NexusBridgeFinalityProofV1, NexusConsensusPhaseV1, SccpHubCommitmentV1, SccpPayloadV1,
+};
 use thiserror::Error;
 
 use crate::{
     mmr::BlockMmr,
-    state::{State as CoreState, StateReadOnly, consensus_key_pop_for_public_key},
+    state::{
+        State as CoreState, StateReadOnly, StateTransaction, consensus_key_pop_for_public_key,
+    },
     sumeragi,
     tx::AcceptedTransaction,
 };
@@ -67,6 +71,45 @@ impl BridgeStateReadOnly for CoreState {
     fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
         let world = self.world_view();
         consensus_key_pop_for_public_key(&world, public_key)
+    }
+}
+
+/// Narrow read-only surface used to validate SCCP finality proofs against local state.
+pub trait SccpFinalityStateReadOnly {
+    /// Chain identifier bound to the local committed chain.
+    fn sccp_chain_id(&self) -> &ChainId;
+    /// Load the locally committed block at `height`.
+    fn sccp_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>>;
+    /// Load the locally trusted commit QC for `height` and `block_hash`.
+    fn sccp_commit_qc_for_block(&self, height: u64, block_hash: HashOf<BlockHeader>) -> Option<Qc>;
+}
+
+impl SccpFinalityStateReadOnly for CoreState {
+    fn sccp_chain_id(&self) -> &ChainId {
+        self.chain_id_ref()
+    }
+
+    fn sccp_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
+        self.block_by_height(height)
+    }
+
+    fn sccp_commit_qc_for_block(&self, height: u64, block_hash: HashOf<BlockHeader>) -> Option<Qc> {
+        self.commit_roster_snapshot_for_block(height, block_hash)
+            .map(|snapshot| snapshot.commit_qc)
+    }
+}
+
+impl SccpFinalityStateReadOnly for StateTransaction<'_, '_> {
+    fn sccp_chain_id(&self) -> &ChainId {
+        &self.chain_id
+    }
+
+    fn sccp_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
+        self.block_by_height(height)
+    }
+
+    fn sccp_commit_qc_for_block(&self, height: u64, block_hash: HashOf<BlockHeader>) -> Option<Qc> {
+        self.commit_qc_for_block(height, block_hash)
     }
 }
 
@@ -714,6 +757,137 @@ pub fn verify_finality_proof(
     Ok(())
 }
 
+fn sccp_block_hash_from_h256(hash: [u8; 32]) -> HashOf<BlockHeader> {
+    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(hash))
+}
+
+fn sccp_block_hash_to_h256(hash: &HashOf<BlockHeader>) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hash.as_ref().as_ref());
+    out
+}
+
+fn sccp_qc_projection_matches_local(
+    finality: &NexusBridgeFinalityProofV1,
+    trusted_qc: &Qc,
+) -> bool {
+    let qc = &finality.commit_qc;
+    qc.version == 1
+        && qc.phase == NexusConsensusPhaseV1::Commit
+        && trusted_qc.phase == sumeragi::consensus::Phase::Commit
+        && qc.height == trusted_qc.height
+        && qc.view == trusted_qc.view
+        && qc.epoch == trusted_qc.epoch
+        && qc.mode_tag == trusted_qc.mode_tag
+        && qc.subject_block_hash == sccp_block_hash_to_h256(&trusted_qc.subject_block_hash)
+        && qc.validator_set_hash_version == trusted_qc.validator_set_hash_version
+        && qc.validator_public_keys
+            == trusted_qc
+                .validator_set
+                .iter()
+                .map(|peer| peer.public_key().to_string())
+                .collect::<Vec<_>>()
+        && qc.validator_set_pops.len() == trusted_qc.validator_set.len()
+        && qc.signers_bitmap == trusted_qc.aggregate.signers_bitmap
+        && qc.bls_aggregate_signature == trusted_qc.aggregate.bls_aggregate_signature
+}
+
+/// Verify an SCCP finality proof against local committed blocks and trusted commit-roster data.
+///
+/// This intentionally rejects proofs when the local node cannot load the committed block or
+/// trusted commit QC for the referenced height.
+///
+/// # Errors
+/// Returns a human-readable rejection reason when the SCCP proof is not anchored to local state
+/// or when the trusted local QC fails full finality verification.
+#[allow(clippy::too_many_lines)]
+pub fn verify_sccp_finality_proof_against_local_state(
+    state: &impl SccpFinalityStateReadOnly,
+    finality: &NexusBridgeFinalityProofV1,
+) -> Result<BridgeFinalityProof, String> {
+    if !iroha_sccp::verify_nexus_bridge_finality_proof_structure(finality) {
+        return Err("SCCP finality proof failed structural verification".to_owned());
+    }
+    if finality.chain_id != state.sccp_chain_id().as_str() {
+        return Err(format!(
+            "SCCP finality proof chain_id mismatch: expected {}, actual {}",
+            state.sccp_chain_id(),
+            finality.chain_id
+        ));
+    }
+
+    let height_usize: usize = finality
+        .height
+        .try_into()
+        .map_err(|_| format!("invalid SCCP finality height {}", finality.height))?;
+    let nonzero_height = NonZeroUsize::new(height_usize)
+        .ok_or_else(|| format!("invalid SCCP finality height {}", finality.height))?;
+    let local_block = state
+        .sccp_block_by_height(nonzero_height)
+        .ok_or_else(|| format!("local committed block {} not found", finality.height))?;
+    let local_header = local_block.header();
+    let local_hash = local_block.hash();
+    let proof_hash = sccp_block_hash_from_h256(finality.block_hash);
+    if proof_hash != local_hash {
+        return Err(
+            "SCCP finality proof block hash does not match local committed block".to_owned(),
+        );
+    }
+
+    let local_header_bytes = norito::to_bytes(&local_header)
+        .map_err(|err| format!("failed to encode local block header: {err}"))?;
+    if local_header_bytes != finality.block_header_bytes {
+        return Err(
+            "SCCP finality proof block header bytes do not match local committed block".to_owned(),
+        );
+    }
+    if local_header.sccp_commitment_root() != Some(finality.commitment_root) {
+        return Err(
+            "SCCP finality proof commitment root does not match local block header".to_owned(),
+        );
+    }
+
+    let messages = collect_sccp_messages_from_signed_block(local_block.as_ref());
+    if sccp_commitment_root_from_messages(&messages) != Some(finality.commitment_root) {
+        return Err(
+            "SCCP finality proof commitment root does not match local SCCP records".to_owned(),
+        );
+    }
+
+    let trusted_qc = state
+        .sccp_commit_qc_for_block(finality.height, local_hash)
+        .ok_or_else(|| {
+            format!(
+                "trusted local commit QC for SCCP proof height {} is missing",
+                finality.height
+            )
+        })?;
+    if !sccp_qc_projection_matches_local(finality, &trusted_qc) {
+        return Err(
+            "SCCP finality QC projection does not match the trusted local commit QC".to_owned(),
+        );
+    }
+
+    let proof = BridgeFinalityProof {
+        height: finality.height,
+        chain_id: state.sccp_chain_id().clone(),
+        block_header: local_header,
+        block_hash: local_hash,
+        commit_qc: trusted_qc,
+        validator_set_pops: finality.commit_qc.validator_set_pops.clone(),
+    };
+    verify_finality_proof(
+        &proof,
+        &FinalityProofVerificationConfig {
+            expected_chain_id: state.sccp_chain_id(),
+            expected_height: Some(finality.height),
+            trusted_validator_set_hash: Some(proof.commit_qc.validator_set_hash),
+        },
+    )
+    .map_err(|err| format!("trusted local finality QC failed verification: {err}"))?;
+    Ok(proof)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{borrow::Cow, num::NonZeroU64};
@@ -750,7 +924,7 @@ mod tests {
             amount: 77,
             sender_codec: 1,
             sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
             recipient: recipient.to_vec(),
             route_id_codec: 1,
             route_id: b"nexus:eth:xor".to_vec(),
@@ -853,11 +1027,11 @@ mod tests {
         let payloads = vec![
             iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
                 1,
-                b"0x0000000000000000000000000000000000000aaa",
+                b"0x0000000000000000000000000000000000000001",
             )),
             iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
                 2,
-                b"0x0000000000000000000000000000000000000bbb",
+                b"0x0000000000000000000000000000000000000002",
             )),
         ];
         let (block, _) = signed_block_with_sccp_payloads(&payloads, 1);
@@ -883,11 +1057,11 @@ mod tests {
         let payloads = vec![
             iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
                 1,
-                b"0x0000000000000000000000000000000000000aaa",
+                b"0x0000000000000000000000000000000000000001",
             )),
             iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
                 2,
-                b"0x0000000000000000000000000000000000000bbb",
+                b"0x0000000000000000000000000000000000000002",
             )),
         ];
         let (block, decoded_payloads) = signed_block_with_sccp_payloads(&payloads, 1);
@@ -918,7 +1092,7 @@ mod tests {
         let payloads = vec![
             iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
                 3,
-                b"0x0000000000000000000000000000000000000ccc",
+                b"0x0000000000000000000000000000000000000003",
             )),
             vec![0xff, 0x00, 0x01],
         ];
@@ -931,7 +1105,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_skips_decodable_but_invalid_payloads() {
-        let invalid = sample_transfer_payload(4, b"0x0000000000000000000000000000000000000ddd");
+        let invalid = sample_transfer_payload(4, b"0x0000000000000000000000000000000000000004");
         let SccpPayloadV1::Transfer(mut invalid_transfer) = invalid else {
             panic!("sample payload should be a transfer");
         };
@@ -945,7 +1119,7 @@ mod tests {
         );
         assert!(!iroha_sccp::verify_sccp_payload_structure(&invalid_payload));
         let valid_payload =
-            sample_transfer_payload(5, b"0x0000000000000000000000000000000000000eee");
+            sample_transfer_payload(5, b"0x0000000000000000000000000000000000000005");
         let payloads = vec![
             iroha_sccp::canonical_sccp_payload_bytes(&invalid_payload),
             iroha_sccp::canonical_sccp_payload_bytes(&valid_payload),
@@ -995,12 +1169,12 @@ mod tests {
         let payloads = vec![
             iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
                 4,
-                b"0x0000000000000000000000000000000000000ddd",
+                b"0x0000000000000000000000000000000000000004",
             )),
             vec![0x00, 0x01, 0xff],
             iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
                 5,
-                b"0x0000000000000000000000000000000000000eee",
+                b"0x0000000000000000000000000000000000000005",
             )),
         ];
         let (block, decoded_payloads) = signed_block_with_sccp_payloads(&payloads, 3);
@@ -1022,11 +1196,11 @@ mod tests {
     fn collect_sccp_messages_preserves_transaction_indices_across_block() {
         let first_payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
             6,
-            b"0x0000000000000000000000000000000000000f01",
+            b"0x0000000000000000000000000000000000000006",
         ));
         let second_payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
             7,
-            b"0x0000000000000000000000000000000000000f02",
+            b"0x0000000000000000000000000000000000000007",
         ));
         let ignored_tx =
             signed_transaction_with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![
@@ -1071,7 +1245,7 @@ mod tests {
 
         let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
             6,
-            b"0x0000000000000000000000000000000000000fff",
+            b"0x0000000000000000000000000000000000000008",
         ));
         let external_tx = signed_transaction_with_executable(Executable::Instructions(
             vec![InstructionBox::from(
