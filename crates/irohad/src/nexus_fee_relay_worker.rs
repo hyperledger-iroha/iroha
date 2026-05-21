@@ -307,6 +307,7 @@ impl NexusFeeRelayWorker {
             InstructionBox::from(RegisterVerifiedLaneRelay {
                 envelope: proven_envelope,
                 proof_blob,
+                effect_proof_blob: None,
             }),
             "/internal/nexus/fee-relay/register-verified-lane-relay",
         )

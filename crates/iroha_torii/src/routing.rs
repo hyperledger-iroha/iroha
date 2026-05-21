@@ -14056,6 +14056,22 @@ fn normalize_contract_payload(
     })?;
     let parsed = json::parse_value(payload.get())
         .map_err(|err| conversion_error(format!("invalid contract payload JSON: {err}")))?;
+
+    if descriptor.params.len() == 1 {
+        let param = &descriptor.params[0];
+        let schema = parse_contract_schema_type(&param.type_name)?;
+        if schema == ContractSchemaType::Json {
+            let normalized = match &parsed {
+                Value::Object(map) if map.len() == 1 => map.get(&param.name).map_or_else(
+                    || normalize_contract_value(&schema, &parsed, &param.name),
+                    |value| normalize_contract_value(&schema, value, &param.name),
+                )?,
+                _ => normalize_contract_value(&schema, &parsed, &param.name)?,
+            };
+            return Ok(Some(IrohaJson::from(normalized)));
+        }
+    }
+
     let object = match parsed {
         Value::Object(map) => map,
         _ => {
@@ -16508,6 +16524,24 @@ mod contract_payload_normalization_tests {
         }
     }
 
+    fn json_descriptor() -> EntrypointDescriptor {
+        EntrypointDescriptor {
+            name: "run".to_owned(),
+            kind: EntryPointKind::Public,
+            params: vec![EntrypointParamDescriptor {
+                name: "ev".to_owned(),
+                type_name: "Json".to_owned(),
+            }],
+            return_type: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        }
+    }
+
     fn expect_conversion(err: Error) -> String {
         match err {
             Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(message))) => {
@@ -16593,6 +16627,50 @@ mod contract_payload_normalization_tests {
             .expect("payload");
         let value = json::parse_value(normalized.get()).expect("normalized payload json");
         assert_eq!(value, Value::Object(expected));
+    }
+
+    #[test]
+    fn normalize_contract_payload_unwraps_single_json_parameter() {
+        let descriptor = json_descriptor();
+        let payload = IrohaJson::new(norito::json!({
+            "ev": {
+                "action": "finalize",
+                "source_dataspace": "cbuae"
+            }
+        }));
+
+        let normalized = normalize_contract_payload(&descriptor, Some(&payload))
+            .expect("single Json payload should normalize")
+            .expect("payload");
+        let value = json::parse_value(normalized.get()).expect("normalized payload json");
+        assert_eq!(
+            value,
+            norito::json!({
+                "action": "finalize",
+                "source_dataspace": "cbuae"
+            })
+        );
+    }
+
+    #[test]
+    fn normalize_contract_payload_accepts_direct_single_json_parameter() {
+        let descriptor = json_descriptor();
+        let payload = IrohaJson::new(norito::json!({
+            "action": "finalize",
+            "source_dataspace": "cbuae"
+        }));
+
+        let normalized = normalize_contract_payload(&descriptor, Some(&payload))
+            .expect("direct single Json payload should normalize")
+            .expect("payload");
+        let value = json::parse_value(normalized.get()).expect("normalized payload json");
+        assert_eq!(
+            value,
+            norito::json!({
+                "action": "finalize",
+                "source_dataspace": "cbuae"
+            })
+        );
     }
 }
 

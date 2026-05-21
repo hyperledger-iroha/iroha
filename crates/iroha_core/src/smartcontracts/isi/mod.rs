@@ -869,6 +869,105 @@ mod tests {
         }
     }
 
+    fn axt_effect_proof_blob_for(
+        envelope: &LaneRelayEnvelope,
+        proof_seed: &[u8],
+        expiry_slot: u64,
+    ) -> ProofBlob {
+        let manifest_root = envelope.manifest_root.expect("test relay manifest root");
+        let relay_ref = envelope.relay_ref();
+        let relay_ref_bytes = norito::to_bytes(&relay_ref).expect("encode relay ref");
+        let source_tx_commitment = axt_test_digest(
+            b"axt-isi-test:effect-source-tx",
+            &[proof_seed, &relay_ref_bytes],
+        );
+        let claim_digest = axt_test_digest(
+            b"axt-isi-test:effect-claim",
+            &[source_tx_commitment.as_ref()],
+        );
+        let witness_commitment = axt_test_digest(b"axt-isi-test:effect-witness", &[proof_seed]);
+        let policy_commitment = axt_test_digest(b"axt-isi-test:effect-policy", &[&manifest_root]);
+        let dsid = envelope.dataspace_id;
+        let binding = AxtFastpqBinding {
+            parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
+            source_dsid: dsid.as_u64(),
+            source_dataspace: format!("isi-test-dataspace-{}", dsid.as_u64()),
+            source_receipt_id: format!("effect-{}", hex::encode(source_tx_commitment.as_ref())),
+            source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+            claim_type: "authorization".to_owned(),
+            claim_digest: hex::encode(claim_digest.as_ref()),
+            witness_commitment: hex::encode(witness_commitment.as_ref()),
+            policy_commitment: hex::encode(policy_commitment.as_ref()),
+            verified_effect_type: "aed_to_pkr_settlement".to_owned(),
+            corridor: "isi-test-effect".to_owned(),
+            verifier_id: "fastpq".to_owned(),
+            verifier_version: "v1".to_owned(),
+            target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
+            effect_binding: Some(AxtEffectBinding {
+                destination_domain: Some("hbl".to_owned()),
+                destination_account_id: Some(ALICE_ID.to_string()),
+                vault_account_id: None,
+                issuance_account_id: None,
+                source_asset_definition_id: Some("aed#cbuae".to_owned()),
+                destination_asset_definition_id: Some("pkr#sbp".to_owned()),
+                source_amount_i64: Some(10),
+                destination_amount_i64: Some(760),
+            }),
+        };
+        let mut dsid_bytes = [0_u8; 16];
+        dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
+        let mut batch = fastpq_prover::TransitionBatch::new(
+            fastpq_prover::AXT_DEFAULT_PARAMETER,
+            fastpq_prover::PublicInputs {
+                dsid: dsid_bytes,
+                slot: expiry_slot,
+                old_root: axt_test_digest(b"axt-isi-test:effect-old-root", &[proof_seed]).into(),
+                new_root: manifest_root,
+                perm_root: axt_test_digest(b"axt-isi-test:effect-perm-root", &[proof_seed]).into(),
+                tx_set_hash: axt_test_digest(
+                    b"axt-isi-test:effect-tx-set",
+                    &[claim_digest.as_ref()],
+                )
+                .into(),
+            },
+        );
+        batch.push(fastpq_prover::StateTransition::new(
+            b"axt/isi/effect".to_vec(),
+            proof_seed.to_vec(),
+            claim_digest.as_ref().to_vec(),
+            fastpq_prover::OperationKind::MetaSet,
+        ));
+        batch.sort();
+        batch.metadata.insert(
+            "entry_hash".to_owned(),
+            source_tx_commitment.as_ref().to_vec(),
+        );
+        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT effect batch");
+        let proof = fastpq_prover::Prover::canonical_with_modes(
+            fastpq_prover::AXT_DEFAULT_PARAMETER,
+            fastpq_prover::ExecutionMode::Cpu,
+            fastpq_prover::PoseidonExecutionMode::Cpu,
+        )
+        .expect("FASTPQ prover")
+        .prove(&batch)
+        .expect("FASTPQ proof");
+        let fastpq_payload =
+            fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
+        let proof_envelope = AxtProofEnvelope {
+            dsid,
+            manifest_root,
+            da_commitment: None,
+            proof: fastpq_payload,
+            fastpq_binding: Some(binding),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        ProofBlob {
+            payload: norito::to_bytes(&proof_envelope).expect("encode effect proof envelope"),
+            expiry_slot: Some(expiry_slot),
+        }
+    }
+
     fn axt_fee_budget_proof_blob_for(
         sponsor: &AccountId,
         fee_asset_id: &str,
@@ -1161,6 +1260,7 @@ mod tests {
             InstructionBox::from(iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
                 envelope,
                 proof_blob,
+                effect_proof_blob: None,
             });
 
         let is_registered = INSTRUCTION_HANDLERS
@@ -1343,6 +1443,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1388,6 +1489,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1436,6 +1538,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1492,6 +1595,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1533,6 +1637,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1574,6 +1679,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1624,6 +1730,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1674,6 +1781,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1721,6 +1829,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1767,6 +1876,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1815,6 +1925,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1864,6 +1975,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1913,6 +2025,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -1964,6 +2077,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2023,6 +2137,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2068,6 +2183,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2123,6 +2239,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2171,6 +2288,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2218,6 +2336,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2265,6 +2384,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2312,6 +2432,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2362,6 +2483,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2416,6 +2538,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2470,6 +2593,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2480,6 +2604,116 @@ mod tests {
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(message)
             ) if message.contains("effect must be lane_relay_block")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_persists_effect_proof_binding() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-effect-primary",
+            state_transaction.block_height() + 10,
+        );
+        let effect_proof_blob = axt_effect_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-effect-business",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let relay_state_key = relay_state_key_for_test(&envelope);
+        let proof_payload_hash = iroha_crypto::Hash::new(&proof_blob.payload);
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+            effect_proof_blob: Some(effect_proof_blob),
+        };
+
+        instruction.execute(&ALICE_ID, &mut state_transaction)?;
+        let payload = state_transaction
+            .world
+            .smart_contract_state
+            .get(&relay_state_key)
+            .expect("verified relay record persisted");
+        let stored_json: Json = norito::decode_from_bytes(payload)?;
+        let record: VerifiedLaneRelayRecord =
+            norito::json::from_slice(stored_json.get().as_bytes())?;
+
+        assert_eq!(record.proof_payload_hash, proof_payload_hash);
+        assert_eq!(
+            record.fastpq_binding.verified_effect_type,
+            "aed_to_pkr_settlement"
+        );
+        assert!(record.fastpq_binding.effect_binding.is_some());
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_lane_proof_as_effect_proof() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-effect-lane-proof",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            effect_proof_blob: Some(proof_blob.clone()),
+            proof_blob,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("lane proof in the effect slot must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("effect proof must not use lane_relay_block")
         ));
         Ok(())
     }
@@ -2521,6 +2755,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction
@@ -2579,6 +2814,7 @@ mod tests {
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
+            effect_proof_blob: None,
         };
 
         let err = instruction

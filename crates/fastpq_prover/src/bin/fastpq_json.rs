@@ -11,18 +11,19 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand};
 use fastpq_prover::{
-    AXT_DEFAULT_PARAMETER, Proof, Prover, TransitionBatch,
-    batch_manifest_sha256 as axt_batch_manifest_sha256, bind_axt_batch, canonicalize_binding,
-    encode_axt_fastpq_payload, transition_batch_from_model, verify,
+    AXT_DEFAULT_PARAMETER, OperationKind, Proof, Prover, PublicInputs, StateTransition,
+    TransitionBatch, batch_manifest_sha256 as axt_batch_manifest_sha256, bind_axt_batch,
+    canonicalize_binding, encode_axt_fastpq_payload, transition_batch_from_model, verify,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
     block::{BlockHeader, consensus::LaneBlockCommitment},
-    fastpq::FastpqTransitionBatch,
+    fastpq::{FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY},
     nexus::{
         AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, AxtTouchSpec,
-        LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob, TouchManifest,
+        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope,
+        ProofBlob, TouchManifest, lane_relay_fastpq_claim_digest,
     },
 };
 use norito::{
@@ -119,6 +120,7 @@ struct ProofRequest {
     source_lane_id: u32,
     #[norito(default = "default_relay_block_height")]
     relay_block_height: u64,
+    #[norito(default)]
     batch_base64: String,
     #[norito(default)]
     effect_binding: Option<EffectBindingRequest>,
@@ -158,6 +160,7 @@ struct ProofResponse {
     dataspace_id_hex: String,
     axt_descriptor_hex: String,
     touch_manifest_hex: String,
+    effect_proof_blob_hex: String,
     proof_blob_hex: String,
     manifest_root_hex: String,
     relay_envelope_hex: String,
@@ -320,6 +323,7 @@ fn handle_prove(request: ProofRequest) -> Result<ProofResponse, String> {
         dataspace_id_hex: axt.dataspace_id,
         axt_descriptor_hex: axt.descriptor,
         touch_manifest_hex: axt.touch_manifest,
+        effect_proof_blob_hex: axt.effect_proof_blob,
         proof_blob_hex: axt.proof_blob,
         manifest_root_hex: axt.manifest_root,
         relay_envelope_hex: axt.relay_envelope,
@@ -331,6 +335,7 @@ struct AxtArtifacts {
     dataspace_id: String,
     descriptor: String,
     touch_manifest: String,
+    effect_proof_blob: String,
     proof_blob: String,
     manifest_root: String,
     relay_envelope: String,
@@ -389,9 +394,85 @@ fn prove_request(
 
 fn build_batch_from_request(request: &ProofRequest) -> Result<TransitionBatch, String> {
     let binding = request_to_binding(request);
-    let mut batch = decode_request_batch(&request.batch_base64)?;
+    let mut batch = if request.batch_base64.trim().is_empty() {
+        descriptor_fixture_batch(request)?
+    } else {
+        decode_request_batch(&request.batch_base64)?
+    };
     bind_axt_batch(&mut batch, &binding)
         .map_err(|err| format!("failed to bind AXT metadata to FASTPQ batch: {err}"))?;
+    Ok(batch)
+}
+
+fn descriptor_fixture_batch(request: &ProofRequest) -> Result<TransitionBatch, String> {
+    let parameter = normalized_parameter(&request.parameter);
+    let claim_type = normalized_claim_type(&request.claim_type)?;
+    let seed = format!(
+        "{}:{}:{}:{}:{}:{}",
+        request.source_dsid,
+        request.source_tx_commitment,
+        request.claim_digest,
+        request.witness_commitment,
+        request.policy_commitment,
+        request.verified_effect_type
+    );
+    let mut batch = TransitionBatch::new(
+        parameter,
+        PublicInputs {
+            dsid: dsid_bytes(request.source_dsid),
+            slot: request.relay_block_height.max(1),
+            old_root: digest32(format!("old:{seed}").as_bytes()),
+            new_root: digest32(format!("new:{seed}").as_bytes()),
+            perm_root: digest32(format!("perm:{seed}").as_bytes()),
+            tx_set_hash: digest32(format!("tx:{seed}").as_bytes()),
+        },
+    );
+
+    if matches!(claim_type.as_str(), "tx_predicate" | "value_conservation") {
+        let amount = request
+            .effect_binding
+            .as_ref()
+            .and_then(|binding| binding.source_amount_i64)
+            .unwrap_or(1)
+            .unsigned_abs()
+            .max(1);
+        let destination_amount = request
+            .effect_binding
+            .as_ref()
+            .and_then(|binding| binding.destination_amount_i64)
+            .unwrap_or(amount as i64)
+            .unsigned_abs()
+            .max(1);
+        batch.push(StateTransition::new(
+            format!("fastpq/fixture/source/{seed}").into_bytes(),
+            amount.to_le_bytes().to_vec(),
+            0_u64.to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        ));
+        batch.push(StateTransition::new(
+            format!("fastpq/fixture/destination/{seed}").into_bytes(),
+            0_u64.to_le_bytes().to_vec(),
+            destination_amount.to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        ));
+        batch.metadata.insert(
+            TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+            digest32(format!("transfer-transcripts:{seed}").as_bytes()).to_vec(),
+        );
+    } else {
+        batch.push(StateTransition::new(
+            format!("fastpq/fixture/{claim_type}/{seed}").into_bytes(),
+            vec![0],
+            vec![1],
+            OperationKind::MetaSet,
+        ));
+    }
+
+    batch.metadata.insert(
+        "entry_hash".into(),
+        decode_hex_digest(&request.source_tx_commitment, "source_tx_commitment")?.to_vec(),
+    );
+    batch.sort();
     Ok(batch)
 }
 
@@ -399,9 +480,12 @@ fn decode_request_batch(encoded: &str) -> Result<TransitionBatch, String> {
     let bytes = BASE64_STANDARD
         .decode(encoded.as_bytes())
         .map_err(|err| format!("invalid batch_base64: {err}"))?;
-    let dto: FastpqTransitionBatch = norito::decode_from_bytes(&bytes)
-        .map_err(|err| format!("failed to decode batch_base64 FastpqTransitionBatch: {err}"))?;
-    Ok(transition_batch_from_model(&dto))
+    if let Ok(dto) = norito::decode_from_bytes::<FastpqTransitionBatch>(&bytes) {
+        return Ok(transition_batch_from_model(&dto));
+    }
+    norito::decode_from_bytes::<TransitionBatch>(&bytes).map_err(|err| {
+        format!("failed to decode batch_base64 as FastpqTransitionBatch or TransitionBatch: {err}")
+    })
 }
 
 fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<AxtArtifacts, String> {
@@ -443,28 +527,34 @@ fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<Axt
             "policy_commitment",
         )?),
     };
-    let proof_blob = ProofBlob {
+    let effect_proof_blob = ProofBlob {
         payload: to_bytes(&proof_envelope)
             .map_err(|err| format!("AXT proof envelope encode failed: {err}"))?,
         expiry_slot: Some(4_294_967_295),
     };
-    let relay = build_relay_artifacts(request, manifest_root, proof_blob.payload.as_slice())?;
+    let relay = build_relay_artifacts(request, manifest_root)?;
     Ok(AxtArtifacts {
         dataspace_id: norito_hex(&dsid)?,
         descriptor: norito_hex(&descriptor)?,
         touch_manifest: norito_hex(&touch_manifest)?,
-        proof_blob: norito_hex(&proof_blob)?,
+        effect_proof_blob: norito_hex(&effect_proof_blob)?,
+        proof_blob: relay.proof_blob_hex,
         manifest_root: manifest_root_hex,
-        relay_envelope: relay.0,
-        relay_ref: relay.1,
+        relay_envelope: relay.relay_envelope_hex,
+        relay_ref: relay.relay_ref,
     })
+}
+
+struct RelayArtifacts {
+    relay_envelope_hex: String,
+    proof_blob_hex: String,
+    relay_ref: RelayRefJson,
 }
 
 fn build_relay_artifacts(
     request: &ProofRequest,
     manifest_root: [u8; 32],
-    proof_payload: &[u8],
-) -> Result<(String, RelayRefJson), String> {
+) -> Result<RelayArtifacts, String> {
     let lane_id = LaneId::new(request.source_lane_id);
     let dataspace_id = DataSpaceId::new(request.source_dsid);
     let block_height = request.relay_block_height.max(1);
@@ -514,9 +604,9 @@ fn build_relay_artifacts(
     let base = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)
         .map_err(|err| format!("failed to build lane relay envelope: {err}"))?
         .with_manifest_root(Some(manifest_root));
-    let proof_digest = Hash::new(proof_payload);
+    let proof_blob = build_lane_relay_proof_blob(request, &base, manifest_root)?;
     let envelope = base.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
-        proof_digest,
+        proof_digest: Hash::new(proof_blob.payload.as_slice()),
         verified_at_height: block_height,
     }));
     let relay_ref = envelope.relay_ref();
@@ -527,8 +617,117 @@ fn build_relay_artifacts(
         block_height: relay_ref.block_height,
         settlement_hash: relay_ref.settlement_hash.to_string(),
     };
-    let _ = proof_payload;
-    Ok((relay_envelope_hex, relay_ref_json))
+    Ok(RelayArtifacts {
+        relay_envelope_hex,
+        proof_blob_hex: norito_hex(&proof_blob)?,
+        relay_ref: relay_ref_json,
+    })
+}
+
+fn build_lane_relay_proof_blob(
+    request: &ProofRequest,
+    envelope: &LaneRelayEnvelope,
+    manifest_root: [u8; 32],
+) -> Result<ProofBlob, String> {
+    let relay_ref = envelope.relay_ref();
+    let relay_ref_bytes =
+        to_bytes(&relay_ref).map_err(|err| format!("lane relay ref encode failed: {err}"))?;
+    let source_tx_commitment = digest32_with_domain(
+        b"fastpq-json:lane-relay-source-tx:v1",
+        &[relay_ref_bytes.as_slice()],
+    );
+    let claim_digest = lane_relay_fastpq_claim_digest(envelope)
+        .map_err(|err| format!("lane relay claim digest failed: {err}"))?;
+    let witness_commitment = digest32_with_domain(
+        b"fastpq-json:lane-relay-witness:v1",
+        &[envelope.settlement_hash.as_ref()],
+    );
+    let policy_commitment =
+        digest32_with_domain(b"fastpq-json:lane-relay-policy:v1", &[&manifest_root]);
+    let binding = AxtFastpqBinding {
+        parameter: normalized_parameter(&request.parameter),
+        source_dsid: request.source_dsid,
+        source_dataspace: if request.source_dataspace.trim().is_empty() {
+            format!("dataspace-{}", request.source_dsid)
+        } else {
+            request.source_dataspace.trim().to_string()
+        },
+        source_receipt_id: format!("relay-{}", hex::encode(&relay_ref_bytes)),
+        source_tx_commitment: hex::encode(source_tx_commitment),
+        claim_type: "authorization".to_string(),
+        claim_digest: claim_digest.to_string(),
+        witness_commitment: hex::encode(witness_commitment),
+        policy_commitment: hex::encode(policy_commitment),
+        verified_effect_type: LANE_RELAY_FASTPQ_EFFECT_TYPE.to_string(),
+        corridor: if request.corridor.trim().is_empty() {
+            "lane-relay".to_string()
+        } else {
+            request.corridor.trim().to_string()
+        },
+        verifier_id: normalized_verifier_id(&request.verifier_id),
+        verifier_version: normalized_verifier_version(&request.verifier_version),
+        target_dsids: if request.target_dsids.is_empty() {
+            vec![request.source_dsid]
+        } else {
+            request.target_dsids.clone()
+        },
+        effect_binding: None,
+    };
+    let mut batch = TransitionBatch::new(
+        normalized_parameter(&request.parameter),
+        PublicInputs {
+            dsid: dsid_bytes(request.source_dsid),
+            slot: envelope.block_height.max(1),
+            old_root: digest32_with_domain(
+                b"fastpq-json:lane-relay-old-root:v1",
+                &[relay_ref_bytes.as_slice()],
+            ),
+            new_root: manifest_root,
+            perm_root: digest32_with_domain(
+                b"fastpq-json:lane-relay-perm-root:v1",
+                &[&manifest_root],
+            ),
+            tx_set_hash: digest32_with_domain(
+                b"fastpq-json:lane-relay-tx-set:v1",
+                &[claim_digest.as_ref()],
+            ),
+        },
+    );
+    batch.push(StateTransition::new(
+        b"axt/nexus/lane-relay".to_vec(),
+        relay_ref_bytes,
+        claim_digest.as_ref().to_vec(),
+        OperationKind::MetaSet,
+    ));
+    batch.sort();
+    batch
+        .metadata
+        .insert("entry_hash".to_string(), source_tx_commitment.to_vec());
+    bind_axt_batch(&mut batch, &binding)
+        .map_err(|err| format!("failed to bind lane relay AXT metadata: {err}"))?;
+    let prover = Prover::canonical(&request.parameter)
+        .map_err(|err| format!("failed to construct lane relay FASTPQ prover: {err}"))?;
+    let proof = prover
+        .prove(&batch)
+        .map_err(|err| format!("lane relay FASTPQ prove failed: {err}"))?;
+    verify(&batch, &proof)
+        .map_err(|err| format!("lane relay FASTPQ verification failed: {err}"))?;
+    let payload = encode_axt_fastpq_payload(&batch, proof)
+        .map_err(|err| format!("failed to encode lane relay AXT FASTPQ payload: {err}"))?;
+    let proof_envelope = AxtProofEnvelope {
+        dsid: DataSpaceId::new(request.source_dsid),
+        manifest_root,
+        da_commitment: None,
+        proof: payload,
+        fastpq_binding: Some(binding),
+        committed_amount: None,
+        amount_commitment: None,
+    };
+    Ok(ProofBlob {
+        payload: to_bytes(&proof_envelope)
+            .map_err(|err| format!("lane relay proof envelope encode failed: {err}"))?,
+        expiry_slot: Some(4_294_967_295),
+    })
 }
 
 fn axt_manifest_keys(request: &ProofRequest) -> (String, String) {
@@ -601,6 +800,33 @@ fn decode_hex_digest(value: &str, field: &str) -> Result<[u8; 32], String> {
         .try_into()
         .map_err(|_| format!("{field} must be 32 bytes of hex"))?;
     Ok(array)
+}
+
+fn digest32(bytes: &[u8]) -> [u8; 32] {
+    let digest = Sha256::digest(bytes);
+    let mut output = [0_u8; 32];
+    output.copy_from_slice(&digest);
+    output
+}
+
+fn digest32_with_domain(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update([0]);
+    for part in parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part);
+    }
+    let digest = hasher.finalize();
+    let mut output = [0_u8; 32];
+    output.copy_from_slice(&digest);
+    output
+}
+
+fn dsid_bytes(source_dsid: u64) -> [u8; 16] {
+    let mut output = [0_u8; 16];
+    output[..8].copy_from_slice(&DataSpaceId::new(source_dsid).as_u64().to_le_bytes());
+    output
 }
 
 fn batch_manifest_sha256(request: &ProofRequest) -> String {

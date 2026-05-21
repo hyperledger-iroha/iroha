@@ -74,7 +74,7 @@ pub mod isi {
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
             DomainEndorsementRecord, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneRelayEmergencyValidatorSet,
             LaneRelayEnvelopeRef, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
-            lane_relay_fastpq_claim_digest, nexus_fee_budget_claim_digest,
+            lane_relay_fastpq_claim_digest, nexus_fee_budget_claim_digest, proof_matches_manifest,
         },
         parameter::{Parameter, SumeragiParameter},
         prelude::*,
@@ -206,6 +206,63 @@ pub mod isi {
 
     const VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE: &str = "VerifiedLaneRelays";
 
+    fn encode_pointer_abi_tlv(
+        pointer_type: ivm::PointerType,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let len = u32::try_from(payload.len())
+            .map_err(|_| "pointer-ABI payload exceeds u32 length".to_owned())?;
+        let mut out = Vec::with_capacity(7 + payload.len() + CryptoHash::LENGTH);
+        out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+        out.push(1);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(payload);
+        let hash: [u8; CryptoHash::LENGTH] = CryptoHash::new(payload).into();
+        out.extend_from_slice(&hash);
+        Ok(out)
+    }
+
+    fn exact_pointer_abi_tlv_payload(
+        payload: &[u8],
+    ) -> Result<Option<(ivm::PointerType, &[u8])>, String> {
+        if payload.len() < 7 + CryptoHash::LENGTH {
+            return Ok(None);
+        }
+        let inner_len =
+            u32::from_be_bytes([payload[3], payload[4], payload[5], payload[6]]) as usize;
+        let total_len = 7usize
+            .checked_add(inner_len)
+            .and_then(|len| len.checked_add(CryptoHash::LENGTH))
+            .ok_or_else(|| "pointer-ABI envelope length overflow".to_owned())?;
+        if total_len != payload.len() {
+            return Ok(None);
+        }
+        let tlv = ivm::validate_tlv_bytes(payload)
+            .map_err(|err| format!("invalid pointer-ABI envelope: {err}"))?;
+        Ok(Some((tlv.type_id, tlv.payload)))
+    }
+
+    fn verified_lane_relay_record_json_payload<'a>(payload: &'a [u8]) -> Result<&'a [u8], String> {
+        let Some((outer_type, outer_payload)) = exact_pointer_abi_tlv_payload(payload)? else {
+            return Ok(payload);
+        };
+        if outer_type != ivm::PointerType::NoritoBytes {
+            return Err(format!(
+                "verified lane relay state wrapper has type {outer_type:?}, expected NoritoBytes"
+            ));
+        }
+        let Some((inner_type, inner_payload)) = exact_pointer_abi_tlv_payload(outer_payload)?
+        else {
+            return Err("verified lane relay state wrapper is missing inner pointer value".into());
+        };
+        if inner_type != ivm::PointerType::Blob {
+            return Err(format!(
+                "verified lane relay state wrapper contains type {inner_type:?}, expected Blob"
+            ));
+        }
+        Ok(inner_payload)
+    }
+
     fn verified_lane_relay_state_key(relay_ref: &LaneRelayEnvelopeRef) -> Result<Name, Error> {
         let key = relay_ref.relay_state_key();
         Name::from_str(&key).map_err(|_| {
@@ -222,13 +279,12 @@ pub mod isi {
                 format!("verified lane relay map key encode failed: {err}"),
             ))
         })?;
-        let mut pointer_body = Vec::with_capacity(2 + 1 + 4 + key_payload.len() + 32);
-        pointer_body.extend_from_slice(&(ivm::PointerType::Name as u16).to_be_bytes());
-        pointer_body.push(1);
-        pointer_body.extend_from_slice(&(key_payload.len() as u32).to_be_bytes());
-        pointer_body.extend_from_slice(&key_payload);
-        let inner_hash: [u8; 32] = CryptoHash::new(&key_payload).into();
-        pointer_body.extend_from_slice(&inner_hash);
+        let pointer_body =
+            encode_pointer_abi_tlv(ivm::PointerType::Name, &key_payload).map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("verified lane relay map key pointer encode failed: {err}"),
+                ))
+            })?;
 
         let digest: [u8; 32] = CryptoHash::new(&pointer_body).into();
         let mut path = String::with_capacity(VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE.len() + 1 + 64);
@@ -255,10 +311,19 @@ pub mod isi {
             .map_err(|err| format!("verified lane relay state encode failed: {err}"))
     }
 
+    fn encode_verified_lane_relay_record_contract_map_state(
+        record: &VerifiedLaneRelayRecord,
+    ) -> Result<Vec<u8>, String> {
+        let json_payload = encode_verified_lane_relay_record_state(record)?;
+        let blob = encode_pointer_abi_tlv(ivm::PointerType::Blob, &json_payload)?;
+        encode_pointer_abi_tlv(ivm::PointerType::NoritoBytes, &blob)
+    }
+
     fn decode_verified_lane_relay_record_state(
         payload: &[u8],
     ) -> Result<VerifiedLaneRelayRecord, String> {
-        let json: Json = norito::decode_from_bytes(payload)
+        let json_payload = verified_lane_relay_record_json_payload(payload)?;
+        let json: Json = norito::decode_from_bytes(json_payload)
             .map_err(|err| format!("verified lane relay JSON decode failed: {err}"))?;
         norito::json::from_slice(json.get().as_bytes())
             .map_err(|err| format!("verified lane relay JSON materialization failed: {err}"))
@@ -10923,15 +10988,98 @@ pub mod isi {
                         format!("verified lane relay FASTPQ verification failed: {err}").into(),
                     )
                 })?;
+            let (record_statement_digest, record_proof_digest, record_binding) = match self
+                .effect_proof_blob()
+                .as_ref()
+            {
+                Some(effect_proof_blob) => {
+                    if effect_proof_blob.payload.is_empty() {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "verified lane relay effect proof payload is empty".into(),
+                            ),
+                        )
+                        .into());
+                    }
+                    if let Some(expiry_slot) = effect_proof_blob.expiry_slot
+                        && verified_at_height > expiry_slot
+                    {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(format!(
+                                "verified lane relay effect proof expired at slot {expiry_slot}"
+                            )),
+                        )
+                        .into());
+                    }
+                    if !proof_matches_manifest(
+                        effect_proof_blob,
+                        envelope.dataspace_id,
+                        manifest_root,
+                    ) {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "verified lane relay effect proof does not match the declared manifest_root"
+                                        .into(),
+                                ),
+                            )
+                            .into());
+                    }
+                    let effect_envelope =
+                        norito::decode_from_bytes::<AxtProofEnvelope>(&effect_proof_blob.payload)
+                            .map_err(|err| {
+                            InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(format!(
+                                    "verified lane relay effect proof envelope decode failed: {err}"
+                                )),
+                            )
+                        })?;
+                    let Some(effect_binding) = effect_envelope.fastpq_binding.clone() else {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "verified lane relay effect proof is missing fastpq_binding".into(),
+                            ),
+                        )
+                        .into());
+                    };
+                    if effect_binding.verified_effect_type == LANE_RELAY_FASTPQ_EFFECT_TYPE {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "verified lane relay effect proof must not use lane_relay_block"
+                                    .into(),
+                            ),
+                        )
+                        .into());
+                    }
+                    let verified_effect_fastpq = fastpq_prover::verify_axt_proof_envelope(
+                        &effect_envelope,
+                    )
+                    .map_err(|err| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("verified lane relay effect FASTPQ verification failed: {err}")
+                                .into(),
+                        )
+                    })?;
+                    (
+                        verified_effect_fastpq.statement_digest,
+                        verified_effect_fastpq.proof_digest,
+                        effect_binding,
+                    )
+                }
+                None => (
+                    verified_fastpq.statement_digest,
+                    verified_fastpq.proof_digest,
+                    binding,
+                ),
+            };
 
             let record = VerifiedLaneRelayRecord::new(
                 envelope,
                 proof_payload_hash,
-                verified_fastpq.statement_digest,
-                verified_fastpq.proof_digest,
+                record_statement_digest,
+                record_proof_digest,
                 verified_at_height,
                 manifest_root,
-                binding,
+                record_binding,
             );
             let key = verified_lane_relay_state_key(&record.relay_ref)?;
             let contract_map_key = verified_lane_relay_contract_map_state_key(&key)?;
@@ -10940,6 +11088,12 @@ pub mod isi {
                     err,
                 ))
             })?;
+            let contract_map_encoded =
+                encode_verified_lane_relay_record_contract_map_state(&record).map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(err),
+                    )
+                })?;
 
             for existing_key in [&key, &contract_map_key] {
                 let Some(existing) = state_transaction
@@ -10984,7 +11138,7 @@ pub mod isi {
                 state_transaction
                     .world
                     .smart_contract_state
-                    .insert(contract_map_key, encoded);
+                    .insert(contract_map_key, contract_map_encoded);
                 inserted = true;
             }
             if inserted {
@@ -12534,6 +12688,24 @@ pub mod isi {
 
             let old_shape = norito::to_bytes(&record).expect("old record bytes");
             assert!(super::decode_verified_lane_relay_record_state(&old_shape).is_err());
+        }
+
+        #[test]
+        fn verified_lane_relay_contract_map_state_encoding_is_pointer_abi_blob() {
+            let record = sample_verified_lane_relay_record();
+            let direct = super::encode_verified_lane_relay_record_state(&record).expect("encode");
+            let encoded = super::encode_verified_lane_relay_record_contract_map_state(&record)
+                .expect("encode contract map");
+
+            let outer = ivm::validate_tlv_bytes(&encoded).expect("outer state TLV");
+            assert_eq!(outer.type_id, ivm::PointerType::NoritoBytes);
+            let inner = ivm::validate_tlv_bytes(outer.payload).expect("inner blob TLV");
+            assert_eq!(inner.type_id, ivm::PointerType::Blob);
+            assert_eq!(inner.payload, direct.as_slice());
+
+            let decoded =
+                super::decode_verified_lane_relay_record_state(&encoded).expect("decode wrapper");
+            assert_eq!(decoded, record);
         }
 
         fn new_account_in_domain(account_id: &AccountId) -> NewAccount {
