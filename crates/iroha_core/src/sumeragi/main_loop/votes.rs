@@ -2933,7 +2933,20 @@ impl Actor {
                             existing.view,
                         )
                     });
-                if new_view_qc_supersedes {
+                let local_candidate_completes_quorum = matches!(vote.phase, Phase::Commit)
+                    && signer_peer == self.common_config.peer.id()
+                    && existing.view < vote.view
+                    && !new_view_qc_supersedes
+                    && self.candidate_commit_quorum_completes_with_local_vote(
+                        vote.block_hash,
+                        vote.height,
+                        vote.view,
+                        signature_topology,
+                        signature_topology,
+                        vote.signer,
+                        Some((vote.parent_state_root, vote.post_state_root)),
+                    );
+                if new_view_qc_supersedes || local_candidate_completes_quorum {
                     info!(
                         phase = ?vote.phase,
                         height = vote.height,
@@ -2944,7 +2957,9 @@ impl Actor {
                         existing_view = existing.view,
                         existing_block = %existing.block_hash,
                         signer_peer = ?signer_peer,
-                        "accepting vote: NEW_VIEW QC supersedes raw same-height signer vote"
+                        new_view_qc_supersedes,
+                        local_candidate_completes_quorum,
+                        "accepting vote: same-height signer vote is superseded"
                     );
                 } else if self.should_defer_same_height_supersession_conflict(vote, &existing) {
                     self.defer_vote_for_missing_highest_qc_context(vote, &existing, signer_peer);

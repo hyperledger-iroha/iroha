@@ -343,6 +343,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::governance::EnactReferendum>,
     dispatch_instruction::<iroha_data_model::isi::governance::FinalizeReferendum>,
     dispatch_instruction::<iroha_data_model::isi::governance::ApproveGovernanceProposal>,
+    dispatch_instruction::<iroha_data_model::isi::governance::CastParliamentBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::PersistCouncilForEpoch>,
     dispatch_instruction::<iroha_data_model::isi::governance::RecordCitizenServiceOutcome>,
     dispatch_instruction::<iroha_data_model::isi::governance::RegisterCitizen>,

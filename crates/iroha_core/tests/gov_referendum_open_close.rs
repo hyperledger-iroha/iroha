@@ -93,24 +93,26 @@ fn referendum_open_and_close_by_height() {
         };
         stx1.world.governance_proposals_mut().insert(pid, proposal);
         let mut approvals = GovernanceStageApprovals::default();
-        approvals.stages.insert(
+        for body in [
             ParliamentBody::RulesCommittee,
-            GovernanceStageApproval {
-                epoch: 0,
-                approvers: Default::default(),
-                required: 0,
-                quorum_bps: 0,
-            },
-        );
-        approvals.stages.insert(
             ParliamentBody::AgendaCouncil,
-            GovernanceStageApproval {
-                epoch: 0,
-                approvers: Default::default(),
-                required: 0,
-                quorum_bps: 0,
-            },
-        );
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+        ] {
+            approvals.stages.insert(
+                body,
+                GovernanceStageApproval {
+                    epoch: 0,
+                    approvers: Default::default(),
+                    rejections: Default::default(),
+                    abstentions: Default::default(),
+                    required: 0,
+                    quorum_bps: 0,
+                },
+            );
+        }
         stx1.world
             .governance_stage_approvals_mut()
             .insert(rid.clone(), approvals);

@@ -1759,6 +1759,7 @@ fn governance_matches(
         | GovernanceEvent::CouncilPersisted(_)
         | GovernanceEvent::ParliamentSelected(_) => true,
         GovernanceEvent::ParliamentApprovalRecorded(ev) => proposal_matches(&ev.proposal_id),
+        GovernanceEvent::ParliamentBallotRecorded(ev) => proposal_matches(&ev.proposal_id),
         GovernanceEvent::LockSlashed(ev) => referendum_matches(&ev.referendum_id),
         GovernanceEvent::LockRestituted(ev) => referendum_matches(&ev.referendum_id),
     }

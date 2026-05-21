@@ -14,10 +14,12 @@ use iroha_core::{
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{
     governance::types::{
-        AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
-        ProposalKind,
+        AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBodies,
+        ParliamentBody, ParliamentRoster, ProposalKind,
     },
-    isi::governance::ApproveGovernanceProposal,
+    isi::governance::{
+        ApproveGovernanceProposal, CastParliamentBallot, CouncilDerivationKind, ParliamentDecision,
+    },
     prelude::*,
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
@@ -51,7 +53,7 @@ fn setup_council_state() -> State {
     );
     let mut state = State::new_for_testing(world, kura, query);
     state.gov.min_enactment_delay = 1;
-    state.gov.window_span = 4;
+    state.gov.window_span = 16;
     state.gov.parliament_term_blocks = 10;
     state.gov.parliament_quorum_bps = 5_000;
     state
@@ -63,6 +65,17 @@ fn enable_parliament_module(state: &mut State) {
     parliament_module.module_type = Some("parliament".to_string());
     nexus.governance.default_module = Some("parliament".to_string());
     nexus.governance.modules = BTreeMap::from([("parliament".to_string(), parliament_module)]);
+}
+
+fn deployment_stage_bodies() -> [ParliamentBody; 6] {
+    [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::PolicyJury,
+        ParliamentBody::OversightCommittee,
+    ]
 }
 
 fn roster_root(bodies: &iroha_data_model::governance::types::ParliamentBodies) -> [u8; 32] {
@@ -84,6 +97,29 @@ fn seed_referendum_and_proposal(state: &mut State, pid: [u8; 32], rid: &str) {
         ..Default::default()
     };
     stx.world.council_mut().insert(0, council);
+    stx.world.parliament_bodies_mut().insert(
+        0,
+        ParliamentBodies {
+            selection_epoch: 0,
+            rosters: deployment_stage_bodies()
+                .into_iter()
+                .map(|body| {
+                    (
+                        body,
+                        ParliamentRoster {
+                            body,
+                            epoch: 0,
+                            members: vec![ALICE_ID.clone(), BOB_ID.clone()],
+                            alternates: Vec::new(),
+                            verified: 0,
+                            candidate_count: 2,
+                            derived_by: CouncilDerivationKind::Fallback,
+                        },
+                    )
+                })
+                .collect(),
+        },
+    );
 
     let h_start = header
         .height()
@@ -162,14 +198,9 @@ fn assert_quorum_records(state: &State, rid: &str) {
         .governance_stage_approvals()
         .get(rid)
         .expect("approval record");
-    assert!(
-        approvals.quorum_met(ParliamentBody::RulesCommittee, 0),
-        "rules committee quorum recorded"
-    );
-    assert!(
-        approvals.quorum_met(ParliamentBody::AgendaCouncil, 0),
-        "agenda council quorum recorded"
-    );
+    for body in deployment_stage_bodies() {
+        assert!(approvals.quorum_met(body, 0), "{body:?} quorum recorded");
+    }
 }
 
 #[test]
@@ -200,12 +231,83 @@ fn referendum_opens_after_council_quorum() {
     );
 
     approve_at_height(&mut state, 4, ParliamentBody::AgendaCouncil, pid, &BOB_ID);
+    assert_eq!(
+        referendum_status(&state, &rid),
+        iroha_core::state::GovernanceReferendumStatus::Proposed,
+        "rules plus agenda quorum must not open the referendum"
+    );
+
+    for (idx, body) in [
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::PolicyJury,
+        ParliamentBody::OversightCommittee,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        approve_at_height(
+            &mut state,
+            5 + u64::try_from(idx).expect("idx fits"),
+            body,
+            pid,
+            &ALICE_ID,
+        );
+    }
 
     assert_eq!(
         referendum_status(&state, &rid),
         iroha_core::state::GovernanceReferendumStatus::Open
     );
     assert_quorum_records(&state, &rid);
+}
+
+#[test]
+fn body_rejection_closes_and_prevents_later_opening() {
+    let mut state = setup_council_state();
+    let pid = [0xCD; 32];
+    let rid = hex::encode(pid);
+    seed_referendum_and_proposal(&mut state, pid, &rid);
+
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut stx = block.transaction();
+    CastParliamentBallot {
+        body: ParliamentBody::RulesCommittee,
+        proposal_id: pid,
+        decision: ParliamentDecision::Reject,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("rejection ballot executes");
+    stx.apply();
+    block.commit().expect("commit rejection block");
+
+    assert_eq!(
+        referendum_status(&state, &rid),
+        iroha_core::state::GovernanceReferendumStatus::Closed
+    );
+    assert!(matches!(
+        state
+            .view()
+            .world()
+            .governance_proposals()
+            .get(&pid)
+            .expect("proposal")
+            .status,
+        iroha_core::state::GovernanceProposalStatus::Rejected
+    ));
+
+    let mut block = state.block(BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0));
+    let mut stx = block.transaction();
+    let err = ApproveGovernanceProposal {
+        body: ParliamentBody::AgendaCouncil,
+        proposal_id: pid,
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("closed proposal cannot accept later approval");
+    assert!(
+        format!("{err:?}").contains("no longer open"),
+        "unexpected error: {err:?}"
+    );
 }
 
 #[test]
@@ -277,33 +379,21 @@ fn parliament_snapshot_allows_approvals_without_council_state() {
     stx.apply();
     block.commit().expect("commit seed block");
 
-    let rules_signer = bodies
-        .rosters
-        .get(&ParliamentBody::RulesCommittee)
-        .and_then(|roster| roster.members.first())
-        .cloned()
-        .expect("rules signer");
-    let agenda_signer = bodies
-        .rosters
-        .get(&ParliamentBody::AgendaCouncil)
-        .and_then(|roster| roster.members.first())
-        .cloned()
-        .expect("agenda signer");
-
-    approve_at_height(
-        &mut state,
-        2,
-        ParliamentBody::RulesCommittee,
-        pid,
-        &rules_signer,
-    );
-    approve_at_height(
-        &mut state,
-        3,
-        ParliamentBody::AgendaCouncil,
-        pid,
-        &agenda_signer,
-    );
+    for (idx, body) in deployment_stage_bodies().into_iter().enumerate() {
+        let signer = bodies
+            .rosters
+            .get(&body)
+            .and_then(|roster| roster.members.first())
+            .cloned()
+            .expect("parliament body signer");
+        approve_at_height(
+            &mut state,
+            2 + u64::try_from(idx).expect("idx fits"),
+            body,
+            pid,
+            &signer,
+        );
+    }
 
     assert!(
         state.view().world().council().get(&0).is_none(),

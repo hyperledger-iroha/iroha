@@ -2,9 +2,9 @@
 title: Governance App API — Endpoints (Draft)
 ---
 
-Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii can sign/submit transactions when `authority` and `private_key` are provided, otherwise clients build and submit to `/v1/pipeline/transactions`.
+Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii returns unsigned instruction skeletons for transaction-producing flows and rejects `private_key` payloads. Clients sign locally and submit via `/v1/pipeline/transactions`.
 
-Important: we do not ship a standing council or “default” governance roster. Out of the box, the council endpoints either return an empty/pending state or derive a deterministic fallback from the configured parameters (stake asset, term, committee size) when enabled. Operators must persist their own roster via the governance flows; there is no baked‑in multisig, secret key, or privileged council account in this repository.
+Important: we do not ship a standing council or “default” governance roster. Out of the box, the council endpoints either return an empty/pending state or derive a deterministic fallback from the bonded citizen registry. A citizen is an account that posted the configured minimum bond; the bond is an anti-Sybil/collateral floor and does not increase Parliament draw odds or vote weight above the minimum. Operators must persist their own roster via the governance flows; there is no baked‑in multisig, secret key, or privileged council account in this repository.
 
 Overview
 - All endpoints return JSON. For transaction-producing flows, responses include `tx_instructions` — an array of one or more instruction skeletons:
@@ -122,7 +122,11 @@ Code Size Cap
 
 - GET `/v1/gov/council/current`
   - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
-  - Notes: Returns the persisted council when present; otherwise derives a deterministic fallback using the configured stake asset and thresholds (mirrors the VRF spec until live VRF proofs are persisted on chain).
+  - Notes: Returns the persisted council when present; otherwise derives a deterministic fallback from bonded citizens at or above `citizenship_bond_amount`.
+
+- POST `/v1/gov/parliament/ballots`
+  - Request: { "authority": "<account>", "chain_id": "...", "proposal_id": "<hex32>", "body": "PolicyJury", "decision": "approve|reject|abstain" }
+  - Behavior: Builds a `CastParliamentBallot` instruction skeleton. The transaction authority must be the seated body member; alternates cannot vote until promoted into the roster.
 
 - POST `/v1/gov/council/derive-vrf` (feature: gov_vrf)
   - Request: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "…", "variant": "Normal|Small", "pk_b64": "…", "proof_b64": "…" }, …] }
@@ -194,7 +198,7 @@ RBAC
   - Ballots: `CanSubmitGovernanceBallot{ referendum_id }`
   - Enactment: `CanEnactGovernance`
   - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
-  - Council management (future): `CanManageParliament`
+  - Council management: `CanManageParliament`
 - Slashing/appeals:
   - Double-vote/invalid/ineligible ballots apply configured slash percentages against the bond escrow, moving funds into `slash_receiver_account`, updating the slashing ledger, and emitting typed `LockSlashed` events (reason + destination + note).
   - Manual `SlashGovernanceLock`/`RestituteGovernanceLock` instructions support operator-driven penalties and appeals; restitution is capped by recorded slashes, restores funds to the bond escrow, updates the ledger, and emits `LockRestituted` while keeping the lock active until expiry.

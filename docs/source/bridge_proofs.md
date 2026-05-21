@@ -169,6 +169,10 @@ and may be empty for this runtime envelope path.
   - the generated `submission_package` for the chain-specific relay/verifier
     lane, including the same typed `platform_payload` projection surfaced on the
     artifact route; and
+  - production-ready EVM/BSC lanes require callers to provide
+    `network_id_hex`, `verifier_address_hex`, and `bridge_address_hex`; those
+    fields bind only the EVM deployment submission package, while the
+    transparent proof artifact keeps the manifest destination binding; and
   - JSON responses for this route also expose `proof_envelope_summary`, derived
     from the canonical native SCCP proof for the bundled message so operators can
     inspect the bound circuit/verifier/schema metadata before submission; and
@@ -240,8 +244,11 @@ stream, replacing the prior log-only stub. The CLI `iroha bridge emit-receipt` h
 typed instruction so indexers can consume receipts deterministically.
 
 Outbound SCCP traffic is recorded separately through `RecordSccpMessage`. The instruction carries
-canonical SCCP payload bytes, is structurally validated during execution, and is used by proposal
-assembly to derive the block-level `sccp_commitment_root`.
+canonical SCCP payload bytes and remains permissionless for valid bridge flows, but it is accepted
+only while applying a verified `Executable::IvmProved` overlay. Bare `RecordSccpMessage`
+transactions fail during execution, still follow the normal rejected-transaction fee path, and do
+not contribute to the block-level `sccp_commitment_root`. Proposal assembly derives the root only
+from proved-overlay records.
 
 ## External verification sketch (ICS)
 

@@ -91,6 +91,8 @@ pub mod uri {
     pub const GOV_BALLOT_ZK: &str = "/v1/gov/ballots/zk";
     /// Governance: submit a non-ZK quadratic ballot (optional mode)
     pub const GOV_BALLOT_PLAIN: &str = "/v1/gov/ballots/plain";
+    /// Governance: draft an equal signed Parliament stage ballot
+    pub const GOV_PARLIAMENT_BALLOT: &str = "/v1/gov/parliament/ballots";
     /// Governance: finalize a referendum (compute tally and emit Approved/Rejected)
     pub const GOV_FINALIZE: &str = "/v1/gov/finalize";
     /// Governance: enact an approved referendum (build `EnactReferendum` instruction)

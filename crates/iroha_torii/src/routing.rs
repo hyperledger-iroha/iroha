@@ -136,8 +136,10 @@ use iroha_sccp::{
     SccpCounterpartyProofJobV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
     SccpNormalizedCodecValueV1, SccpOpenVerifyEnvelopeSummaryV1, SccpPayloadProjectionV1,
     SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof,
+    build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer,
     build_nexus_sccp_message_transparent_proof_with_signer,
     build_sccp_counterparty_proof_job_from_bundle,
+    build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer,
     build_sccp_counterparty_proof_job_from_bundle_with_signer,
     build_sccp_message_transparent_inner_proof_from_artifact,
     build_sccp_message_transparent_open_verify_summary_from_bundle, burn_message_id,
@@ -5510,6 +5512,82 @@ fn parse_sccp_message_id_hex(value: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+/// Optional EVM deployment destination fields for SCCP artifact and job requests.
+pub struct SccpEvmDestinationQuery {
+    /// Hex-encoded 32-byte EVM network id.
+    #[serde(default)]
+    pub network_id_hex: Option<String>,
+    /// Hex-encoded 20-byte verifier contract address.
+    #[serde(default)]
+    pub verifier_address_hex: Option<String>,
+    /// Hex-encoded 20-byte bridge contract address.
+    #[serde(default)]
+    pub bridge_address_hex: Option<String>,
+}
+
+fn sccp_evm_destination_fields_present(fields: &SccpEvmDestinationQuery) -> bool {
+    fields.network_id_hex.is_some()
+        || fields.verifier_address_hex.is_some()
+        || fields.bridge_address_hex.is_some()
+}
+
+fn parse_sccp_fixed_hex<const N: usize>(label: &str, value: &str) -> Result<[u8; N]> {
+    let value = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    let decoded =
+        hex::decode(value).map_err(|err| sccp_bad_request(format!("invalid {label}: {err}")))?;
+    if decoded.len() != N {
+        return Err(sccp_bad_request(format!(
+            "{label} must decode to {N} bytes, got {}",
+            decoded.len()
+        )));
+    }
+    let mut out = [0u8; N];
+    out.copy_from_slice(&decoded);
+    Ok(out)
+}
+
+fn sccp_evm_destination_binding_for_bundle(
+    bundle: &NexusSccpMessageProofV1,
+    fields: &SccpEvmDestinationQuery,
+) -> Result<Option<iroha_sccp::SccpDestinationBindingV1>> {
+    let manifest = sccp_message_manifest_for_bundle(bundle)?;
+    let has_any = sccp_evm_destination_fields_present(fields);
+    let is_evm = matches!(
+        manifest.verifier_target,
+        iroha_sccp::SccpProofVerifierTargetV1::EvmContract
+    );
+    if !is_evm {
+        if has_any {
+            return Err(sccp_bad_request(
+                "EVM SCCP destination fields are only valid for EVM/BSC lanes",
+            ));
+        }
+        return Ok(None);
+    }
+    if !manifest.production_ready {
+        return Ok(None);
+    }
+    let (Some(network_id_hex), Some(verifier_address_hex), Some(bridge_address_hex)) = (
+        fields.network_id_hex.as_deref(),
+        fields.verifier_address_hex.as_deref(),
+        fields.bridge_address_hex.as_deref(),
+    ) else {
+        return Err(sccp_bad_request(
+            "EVM SCCP lanes require network_id_hex, verifier_address_hex, and bridge_address_hex",
+        ));
+    };
+    Ok(Some(iroha_sccp::build_sccp_evm_destination_binding(
+        &manifest,
+        parse_sccp_fixed_hex("network_id_hex", network_id_hex)?,
+        parse_sccp_fixed_hex("verifier_address_hex", verifier_address_hex)?,
+        parse_sccp_fixed_hex("bridge_address_hex", bridge_address_hex)?,
+    )))
+}
+
 fn sccp_bundle_response<T>(bundle: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
 where
     T: norito::core::NoritoSerialize + serde::Serialize,
@@ -6173,6 +6251,7 @@ fn sccp_message_proof_build_error_message(
 fn bridge_proof_from_sccp_message_bundle(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
+    evm_destination: Option<&iroha_sccp::SccpDestinationBindingV1>,
 ) -> Result<iroha_data_model::bridge::BridgeProof> {
     if !verify_message_bundle_structure(bundle) {
         return Err(conversion_error(
@@ -6188,15 +6267,23 @@ fn bridge_proof_from_sccp_message_bundle(
         conversion_error("SCCP message bundle finality proof could not be decoded".to_owned())
     })?;
     let (backend, manifest_hash, _) = sccp_message_backend_descriptor(&bundle.payload)?;
-    let artifact = build_nexus_sccp_message_transparent_proof_with_signer(bundle, signer)
-        .or_else(|| build_nexus_sccp_message_transparent_proof(bundle))
-        .ok_or_else(|| {
-            conversion_error(sccp_message_proof_build_error_message(
-                bundle,
-                signer,
-                "transparent proof artifact",
-            ))
-        })?;
+    let artifact = if let Some(destination_binding) = evm_destination {
+        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer(
+            bundle,
+            destination_binding,
+            signer,
+        )
+    } else {
+        build_nexus_sccp_message_transparent_proof_with_signer(bundle, signer)
+            .or_else(|| build_nexus_sccp_message_transparent_proof(bundle))
+    }
+    .ok_or_else(|| {
+        conversion_error(sccp_message_proof_build_error_message(
+            bundle,
+            signer,
+            "transparent proof artifact",
+        ))
+    })?;
     let proof_bytes = to_bytes(&artifact).map_err(|err| {
         conversion_error(format!(
             "failed to encode SCCP transparent proof artifact: {err}"
@@ -6492,6 +6579,81 @@ mod sccp_message_backend_tests {
             submission_package: artifact.submission_package.clone(),
             bundle: artifact.bundle,
         }
+    }
+
+    #[test]
+    fn evm_destination_query_detects_partial_field_sets() {
+        assert!(!sccp_evm_destination_fields_present(
+            &SccpEvmDestinationQuery::default()
+        ));
+        assert!(sccp_evm_destination_fields_present(
+            &SccpEvmDestinationQuery {
+                network_id_hex: Some(format!("0x{}", "11".repeat(32))),
+                verifier_address_hex: None,
+                bridge_address_hex: None,
+            }
+        ));
+        assert!(sccp_evm_destination_fields_present(
+            &SccpEvmDestinationQuery {
+                network_id_hex: None,
+                verifier_address_hex: Some(format!("0x{}", "22".repeat(20))),
+                bridge_address_hex: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn evm_destination_hex_parser_rejects_malformed_lengths_and_bytes() {
+        assert_eq!(
+            parse_sccp_fixed_hex::<32>("network_id_hex", &format!("0x{}", "11".repeat(32)))
+                .expect("network id"),
+            [0x11; 32]
+        );
+        assert_eq!(
+            parse_sccp_fixed_hex::<20>("verifier_address_hex", &"33".repeat(20))
+                .expect("verifier address"),
+            [0x33; 20]
+        );
+
+        let err =
+            parse_sccp_fixed_hex::<32>("network_id_hex", "0x11").expect_err("short network id");
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| message.contains("network_id_hex must decode to 32 bytes"))
+        );
+
+        let err = parse_sccp_fixed_hex::<20>("bridge_address_hex", "0xzzzz")
+            .expect_err("invalid bridge address");
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| message.contains("invalid bridge_address_hex"))
+        );
+
+        let err =
+            parse_sccp_fixed_hex::<20>("verifier_address_hex", &format!("0x{}", "44".repeat(21)))
+                .expect_err("oversized verifier address");
+        assert!(conversion_message(&err).is_some_and(|message| {
+            message.contains("verifier_address_hex must decode to 20 bytes")
+        }));
+    }
+
+    #[test]
+    fn evm_destination_binding_query_rejects_evm_fields_on_non_evm_lanes() {
+        let bundle = sample_ton_artifact_with_proof_bytes(vec![0xAA, 0xBB]).bundle;
+        let err = sccp_evm_destination_binding_for_bundle(
+            &bundle,
+            &SccpEvmDestinationQuery {
+                network_id_hex: Some(format!("0x{}", "11".repeat(32))),
+                verifier_address_hex: Some(format!("0x{}", "22".repeat(20))),
+                bridge_address_hex: Some(format!("0x{}", "33".repeat(20))),
+            },
+        )
+        .expect_err("non-EVM lane must reject EVM deployment fields");
+
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| message.contains("only valid for EVM/BSC lanes"))
+        );
     }
 
     #[test]
@@ -6925,7 +7087,7 @@ mod sccp_message_backend_tests {
             b"iroha:torii:routing:test:evm-attestor".to_vec(),
             Algorithm::Secp256k1,
         );
-        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer)
+        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None)
             .expect_err("disabled lane should reject bridge proof generation");
         assert!(conversion_message(&err).is_some_and(|message| message.contains("is disabled")));
     }
@@ -7465,6 +7627,7 @@ pub async fn handle_v1_sccp_message_proof_artifact(
     state: &CoreState,
     signer: &KeyPair,
     message_id_hex: String,
+    evm_destination: SccpEvmDestinationQuery,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
@@ -7477,19 +7640,28 @@ pub async fn handle_v1_sccp_message_proof_artifact(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
+    let evm_destination = sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination)?;
     if let Some(message) = sccp_message_lane_disabled_message(&bundle, "proof artifact generation")
     {
         return Err(sccp_bad_request(message));
     }
-    let artifact = build_nexus_sccp_message_transparent_proof_with_signer(&bundle, signer)
-        .or_else(|| build_nexus_sccp_message_transparent_proof(&bundle))
-        .ok_or_else(|| {
-            sccp_internal_error(sccp_message_proof_build_error_message(
-                &bundle,
-                signer,
-                "proof artifact",
-            ))
-        })?;
+    let artifact = if let Some(destination_binding) = evm_destination.as_ref() {
+        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer(
+            &bundle,
+            destination_binding,
+            signer,
+        )
+    } else {
+        build_nexus_sccp_message_transparent_proof_with_signer(&bundle, signer)
+            .or_else(|| build_nexus_sccp_message_transparent_proof(&bundle))
+    }
+    .ok_or_else(|| {
+        sccp_internal_error(sccp_message_proof_build_error_message(
+            &bundle,
+            signer,
+            "proof artifact",
+        ))
+    })?;
     let artifact_json = sccp_artifact_json_value(&artifact)?;
     sccp_bundle_response_with_json_value(&artifact, artifact_json, accept.as_ref())
 }
@@ -7500,6 +7672,7 @@ pub async fn handle_v1_sccp_message_proof_job(
     state: &CoreState,
     signer: &KeyPair,
     message_id_hex: String,
+    evm_destination: SccpEvmDestinationQuery,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
@@ -7512,18 +7685,27 @@ pub async fn handle_v1_sccp_message_proof_job(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
+    let evm_destination = sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination)?;
     if let Some(message) = sccp_message_lane_disabled_message(&bundle, "proof job generation") {
         return Err(sccp_bad_request(message));
     }
-    let job = build_sccp_counterparty_proof_job_from_bundle_with_signer(&bundle, signer)
-        .or_else(|| build_sccp_counterparty_proof_job_from_bundle(&bundle))
-        .ok_or_else(|| {
-            sccp_internal_error(sccp_message_proof_build_error_message(
-                &bundle,
-                signer,
-                "normalized proof job",
-            ))
-        })?;
+    let job = if let Some(destination_binding) = evm_destination.as_ref() {
+        build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer(
+            &bundle,
+            destination_binding,
+            signer,
+        )
+    } else {
+        build_sccp_counterparty_proof_job_from_bundle_with_signer(&bundle, signer)
+            .or_else(|| build_sccp_counterparty_proof_job_from_bundle(&bundle))
+    }
+    .ok_or_else(|| {
+        sccp_internal_error(sccp_message_proof_build_error_message(
+            &bundle,
+            signer,
+            "normalized proof job",
+        ))
+    })?;
     let job_json = sccp_job_json_value(&job)?;
     sccp_bundle_response_with_json_value(&job, job_json, accept.as_ref())
 }
@@ -13083,6 +13265,9 @@ pub async fn handle_post_bridge_proof_submit(
         signature_b64,
         burn_bundle,
         message_bundle,
+        network_id_hex,
+        verifier_address_hex,
+        bridge_address_hex,
         creation_time_ms,
     } = req;
 
@@ -13109,6 +13294,16 @@ pub async fn handle_post_bridge_proof_submit(
             "provide exactly one of burn_bundle or message_bundle".to_owned(),
         ));
     }
+    let evm_destination_fields = SccpEvmDestinationQuery {
+        network_id_hex,
+        verifier_address_hex,
+        bridge_address_hex,
+    };
+    if burn_bundle.is_some() && sccp_evm_destination_fields_present(&evm_destination_fields) {
+        return Err(conversion_error(
+            "EVM SCCP destination fields are only valid for message_bundle submissions".to_owned(),
+        ));
+    }
 
     let (proof_kind, bridge_proof, counterparty_domain, counterparty_chain) =
         match (burn_bundle.as_ref(), message_bundle.as_ref()) {
@@ -13125,9 +13320,15 @@ pub async fn handle_post_bridge_proof_submit(
             (None, Some(bundle)) => {
                 let (counterparty_domain, counterparty_chain) =
                     sccp_counterparty_for_message_payload(&bundle.payload)?;
+                let evm_destination =
+                    sccp_evm_destination_binding_for_bundle(bundle, &evm_destination_fields)?;
                 (
                     "message",
-                    bridge_proof_from_sccp_message_bundle(bundle, signer)?,
+                    bridge_proof_from_sccp_message_bundle(
+                        bundle,
+                        signer,
+                        evm_destination.as_ref(),
+                    )?,
                     counterparty_domain,
                     counterparty_chain.to_owned(),
                 )
@@ -13332,7 +13533,7 @@ pub async fn handle_post_bridge_message_submit(
     let (counterparty_domain, counterparty_chain) =
         sccp_counterparty_for_message_payload(&message_bundle.payload)?;
     let message_id_hex = hex::encode(message_bundle.commitment.message_id);
-    let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle, signer)?;
+    let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle, signer, None)?;
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;
     let manifest_hash_hex = hex::encode(bridge_proof.manifest_hash);
@@ -23139,6 +23340,15 @@ pub struct BridgeProofSubmitDto {
     /// Optional live generic message bundle fetched from `/v1/sccp/proofs/message/{message_id}`.
     #[norito(default)]
     pub message_bundle: Option<Value>,
+    /// Optional EVM network id for production-ready EVM SCCP message artifacts.
+    #[norito(default)]
+    pub network_id_hex: Option<String>,
+    /// Optional EVM verifier contract address for production-ready EVM SCCP message artifacts.
+    #[norito(default)]
+    pub verifier_address_hex: Option<String>,
+    /// Optional EVM bridge contract address for production-ready EVM SCCP message artifacts.
+    #[norito(default)]
+    pub bridge_address_hex: Option<String>,
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
@@ -43672,6 +43882,11 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
             referendum_id = Some(id);
         }
         GovernanceEvent::ParliamentApprovalRecorded(payload) => {
+            let id = hex::encode(payload.proposal_id);
+            proposal_id = Some(id.clone());
+            referendum_id = Some(id);
+        }
+        GovernanceEvent::ParliamentBallotRecorded(payload) => {
             let id = hex::encode(payload.proposal_id);
             proposal_id = Some(id.clone());
             referendum_id = Some(id);
