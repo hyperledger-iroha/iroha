@@ -50,8 +50,7 @@ const DEFAULT_TX_SUBMIT_WAIT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TX_SUBMIT_WAIT_TIMEOUT_MS: u64 = 600_000;
 const DEFAULT_TX_SUBMIT_WAIT_POLL_INTERVAL_MS: u64 = 500;
 const MIN_TX_SUBMIT_WAIT_POLL_INTERVAL_MS: u64 = 50;
-const DEFAULT_TX_SUBMIT_WAIT_TERMINAL_STATUSES: &[&str] =
-    &["Committed", "Applied", "Rejected", "Expired"];
+const DEFAULT_TX_SUBMIT_WAIT_TERMINAL_STATUSES: &[&str] = &["Applied"];
 const SUPPORTED_PIPELINE_STATUS_KINDS: &[&str] = &[
     "Queued",
     "Approved",
@@ -122,7 +121,9 @@ fn sanitize_tool_input_schema(schema: &Value) -> Value {
         .any(|key| root.contains_key(*key));
     let is_object_schema = root.get("type").and_then(Value::as_str) == Some("object");
     if is_object_schema && !has_disallowed_top_level_keywords {
-        return schema.clone();
+        let mut strict = schema.clone();
+        stricten_tool_input_schema(&mut strict, false);
+        return strict;
     }
 
     let mut schema_obj = root.clone();
@@ -163,7 +164,37 @@ fn sanitize_tool_input_schema(schema: &Value) -> Value {
         .entry("additionalProperties".into())
         .or_insert(Value::Bool(false));
 
-    Value::Object(schema_obj)
+    let mut schema = Value::Object(schema_obj);
+    stricten_tool_input_schema(&mut schema, false);
+    schema
+}
+
+fn stricten_tool_input_schema(schema: &mut Value, inside_body: bool) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    let is_object_schema = object.get("type").and_then(Value::as_str) == Some("object")
+        || object.contains_key("properties");
+    if is_object_schema {
+        object.insert("additionalProperties".into(), Value::Bool(inside_body));
+    }
+    if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+        for (name, value) in properties {
+            stricten_tool_input_schema(value, inside_body || name == "body");
+        }
+    }
+    for keyword in ["items", "additionalItems", "contains"] {
+        if let Some(value) = object.get_mut(keyword) {
+            stricten_tool_input_schema(value, inside_body);
+        }
+    }
+    for keyword in ["anyOf", "oneOf", "allOf"] {
+        if let Some(values) = object.get_mut(keyword).and_then(Value::as_array_mut) {
+            for value in values {
+                stricten_tool_input_schema(value, inside_body);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2228,6 +2259,13 @@ fn mcp_tool_success(structured: Value) -> Value {
 
 fn mcp_tool_error(message: String) -> Value {
     let error_message = message.clone();
+    let envelope = error_envelope_value(
+        MCP_TOOL_EXECUTION_ERROR_CODE,
+        error_message.as_str(),
+        Some(norito::json!({
+            "layer": "mcp"
+        })),
+    );
     norito::json!({
         "content": [
             {
@@ -2236,11 +2274,18 @@ fn mcp_tool_error(message: String) -> Value {
             }
         ],
         "isError": true,
-        "structuredContent": {
-            "error_code": MCP_TOOL_EXECUTION_ERROR_CODE,
-            "message": error_message
-        }
+        "structuredContent": envelope
     })
+}
+
+fn error_envelope_value(code: &str, message: &str, details: Option<Value>) -> Value {
+    let mut envelope = Map::new();
+    envelope.insert("code".into(), Value::String(code.to_owned()));
+    envelope.insert("message".into(), Value::String(message.to_owned()));
+    if let Some(details) = details {
+        envelope.insert("details".into(), details);
+    }
+    Value::Object(envelope)
 }
 
 fn jsonrpc_result_response(id: Option<Value>, result: Value) -> Value {
@@ -2266,9 +2311,21 @@ fn jsonrpc_error_response(
         }
         None => Map::new(),
     };
-    data_object
-        .entry("error_code".into())
-        .or_insert(Value::String(jsonrpc_error_code_label(code).to_owned()));
+    let label = data_object
+        .remove("error_code")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| jsonrpc_error_code_label(code).to_owned());
+    if !data_object.contains_key("code") {
+        let details = if data_object.is_empty() {
+            Some(norito::json!({ "layer": "mcp" }))
+        } else {
+            Some(Value::Object(data_object))
+        };
+        data_object = match error_envelope_value(label.as_str(), message, details) {
+            Value::Object(map) => map,
+            _ => Map::new(),
+        };
+    }
 
     let mut err = Map::new();
     err.insert("code".into(), Value::from(code));
@@ -2397,14 +2454,14 @@ fn build_input_schema(
         let mut headers_schema = Map::new();
         headers_schema.insert("type".into(), Value::String("object".to_owned()));
         headers_schema.insert("properties".into(), Value::Object(header_props));
-        headers_schema.insert("additionalProperties".into(), Value::Bool(true));
+        headers_schema.insert("additionalProperties".into(), Value::Bool(false));
         properties.insert("headers".into(), Value::Object(headers_schema));
     } else {
         properties.insert(
             "headers".into(),
             norito::json!({
                 "type": "object",
-                "additionalProperties": { "type": "string" }
+                "additionalProperties": false
             }),
         );
     }
@@ -7064,6 +7121,7 @@ async fn wait_for_terminal_transaction_status(
 
         let mut status_arguments = Map::new();
         status_arguments.insert("hash".into(), Value::String(tx_hash.clone()));
+        status_arguments.insert("scope".into(), Value::String("local".to_owned()));
         status_arguments.insert("accept".into(), Value::String(status_accept.clone()));
         if let Some(headers) = arguments.get("headers") {
             status_arguments.insert("headers".into(), headers.clone());
@@ -7078,13 +7136,29 @@ async fn wait_for_terminal_transaction_status(
 
         if (200..300).contains(&status_code) {
             let kind = extract_pipeline_status_kind(&status_result).ok_or_else(|| {
-                "status polling response is missing `body.status.kind`".to_owned()
+                format!(
+                    "status polling response is missing `body.status.kind` for `{tx_hash}`; last_status=decode_failed"
+                )
             })?;
             last_kind = Some(kind.to_owned());
+            if !SUPPORTED_PIPELINE_STATUS_KINDS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(kind))
+            {
+                return Err(format!(
+                    "unsupported transaction status kind `{kind}` for `{tx_hash}`; last_status={kind}"
+                ));
+            }
+            if matches!(kind, "Rejected" | "Expired") {
+                return Err(format!(
+                    "transaction `{tx_hash}` reached terminal failure status `{kind}`; expected Applied; last_status={kind}"
+                ));
+            }
             if is_terminal_pipeline_status(kind, &terminal_statuses) {
                 let mut out = Map::new();
                 out.insert("status".into(), Value::from(status_code));
                 out.insert("hash".into(), Value::String(tx_hash.clone()));
+                out.insert("tx_hash".into(), Value::String(tx_hash.clone()));
                 out.insert("terminal_kind".into(), Value::String(kind.to_owned()));
                 out.insert(
                     "terminal_statuses".into(),
@@ -7111,6 +7185,7 @@ async fn wait_for_terminal_transaction_status(
                 if let Some(submit) = submit.as_ref() {
                     out.insert("submit".into(), submit.clone());
                 }
+                out.insert("final_status".into(), status_result.clone());
                 out.insert("final".into(), status_result);
                 return Ok(Value::Object(out));
             }
@@ -7120,7 +7195,10 @@ async fn wait_for_terminal_transaction_status(
                 last_kind = Some(kind.to_owned());
             }
             if !retryable_http {
-                return Ok(status_result);
+                return Err(format!(
+                    "status polling failed with HTTP {status_code} for `{tx_hash}`; last_status={}",
+                    last_kind.as_deref().unwrap_or("not_observed")
+                ));
             }
         }
 
@@ -7133,7 +7211,7 @@ async fn wait_for_terminal_transaction_status(
 
     let last_kind = last_kind
         .map(|kind| format!(" (last status kind: `{kind}`)"))
-        .unwrap_or_default();
+        .unwrap_or_else(|| " (last status kind: `not_observed`)".to_owned());
     Err(format!(
         "timed out waiting for terminal transaction status after {timeout_ms}ms for `{tx_hash}`{last_kind}"
     ))
@@ -7402,33 +7480,16 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
         .ok_or_else(|| "submit response missing `body`".to_owned())?;
 
     if let Some(hash) = body
-        .get("payload")
-        .and_then(Value::as_object)
-        .and_then(|payload| payload.get("tx_hash"))
+        .get("tx_hash_hex")
         .and_then(Value::as_str)
-        .or_else(|| body.get("tx_hash_hex").and_then(Value::as_str))
         .or_else(|| body.get("tx_hash").and_then(Value::as_str))
         .or_else(|| body.get("transaction_hash").and_then(Value::as_str))
-        .or_else(|| body.get("hash").and_then(Value::as_str))
         .filter(|hash| !hash.is_empty())
     {
         return Ok(hash.to_owned());
     }
 
-    if let Some(encoded_receipt) = body.as_str() {
-        if let Some(hash) = decode_transaction_hash_from_receipt_base64(encoded_receipt) {
-            return Ok(hash);
-        }
-    }
-
-    Err("unable to extract transaction hash from submission response".to_owned())
-}
-
-fn decode_transaction_hash_from_receipt_base64(encoded_receipt: &str) -> Option<String> {
-    let bytes = decode_base64_any(encoded_receipt)?;
-    let receipt: iroha_data_model::transaction::TransactionSubmissionReceipt =
-        norito::decode_from_bytes(&bytes).ok()?;
-    Some(receipt.payload.tx_hash.to_string())
+    Err("submission response missing canonical top-level transaction hash field (`tx_hash_hex`, `tx_hash`, or `transaction_hash`)".to_owned())
 }
 
 fn extract_pipeline_status_kind(status_result: &Value) -> Option<&str> {
@@ -14413,6 +14474,74 @@ mod tests {
         assert!(properties.contains_key("sid"));
         assert!(properties.contains_key("session_id"));
         assert!(properties.contains_key("path"));
+        let path_schema = properties
+            .get("path")
+            .and_then(Value::as_object)
+            .expect("path schema");
+        assert_eq!(
+            path_schema
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn sanitize_tool_input_schema_keeps_only_raw_body_open() {
+        let schema = norito::json!({
+            "type": "object",
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "properties": {
+                        "x-api-token": { "type": "string" }
+                    },
+                    "additionalProperties": true
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "payload": {
+                            "type": "object",
+                            "additionalProperties": false
+                        }
+                    }
+                }
+            }
+        });
+
+        let sanitized = sanitize_tool_input_schema(&schema);
+        let properties = sanitized
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties");
+        let headers = properties
+            .get("headers")
+            .and_then(Value::as_object)
+            .expect("headers schema");
+        assert_eq!(
+            headers.get("additionalProperties").and_then(Value::as_bool),
+            Some(false)
+        );
+        let body = properties
+            .get("body")
+            .and_then(Value::as_object)
+            .expect("body schema");
+        assert_eq!(
+            body.get("additionalProperties").and_then(Value::as_bool),
+            Some(true)
+        );
+        let payload = body
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|props| props.get("payload"))
+            .and_then(Value::as_object)
+            .expect("payload schema");
+        assert_eq!(
+            payload.get("additionalProperties").and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
@@ -14466,9 +14595,9 @@ mod tests {
         let code = payload
             .get("error")
             .and_then(|err| err.get("data"))
-            .and_then(|data| data.get("error_code"))
+            .and_then(|data| data.get("code"))
             .and_then(Value::as_str)
-            .expect("error_code");
+            .expect("error envelope code");
         assert_eq!(code, "invalid_params");
     }
 
@@ -14738,7 +14867,7 @@ mod tests {
             let code = result
                 .get("error")
                 .and_then(|error| error.get("data"))
-                .and_then(|data| data.get("error_code"))
+                .and_then(|data| data.get("code"))
                 .and_then(Value::as_str)
                 .expect("error code");
             assert_eq!(code, MCP_TOOL_NOT_FOUND);
@@ -14795,7 +14924,7 @@ mod tests {
             .and_then(|value| value.get("state"))
             .and_then(|value| value.get("error"))
             .and_then(|value| value.get("data"))
-            .and_then(|value| value.get("error_code"))
+            .and_then(|value| value.get("code"))
             .and_then(Value::as_str)
             .expect("error code");
         assert_eq!(error_code, MCP_TOOL_NOT_FOUND);
@@ -16171,7 +16300,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_transaction_hash_from_submit_result_decodes_submission_receipt() {
+    fn extract_transaction_hash_from_submit_result_rejects_encoded_submission_receipt() {
         let key_pair = iroha_crypto::KeyPair::random();
         let tx_hash =
             iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xAB; 32]));
@@ -16195,8 +16324,9 @@ mod tests {
             "body": encoded
         });
 
-        let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
-        assert_eq!(hash, tx_hash.to_string());
+        let err = extract_transaction_hash_from_submit_result(&submit_result)
+            .expect_err("encoded receipt fallback must not be accepted");
+        assert!(err.contains("canonical top-level transaction hash field"));
     }
 
     #[test]
@@ -16237,6 +16367,14 @@ mod tests {
         let statuses =
             resolve_submit_wait_terminal_statuses(args.as_object().expect("object")).expect("ok");
         assert_eq!(statuses, vec!["Applied", "Rejected"]);
+    }
+
+    #[test]
+    fn resolve_submit_wait_terminal_statuses_defaults_to_applied_only() {
+        let args = norito::json!({});
+        let statuses =
+            resolve_submit_wait_terminal_statuses(args.as_object().expect("object")).expect("ok");
+        assert_eq!(statuses, vec!["Applied"]);
     }
 
     #[test]

@@ -2900,6 +2900,8 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instructions.
 pub mod sorafs;
+/// SoraSwap DeFi-native instructions.
+pub mod soraswap;
 /// Space Directory manifest instructions.
 pub mod space_directory;
 /// Public lane staking instructions.
@@ -2935,6 +2937,7 @@ pub use settlement::*;
 pub use sns::*;
 pub use soradns::*;
 pub use sorafs::*;
+pub use soraswap::*;
 pub use space_directory::*;
 pub use staking::*;
 pub use transfer::*;

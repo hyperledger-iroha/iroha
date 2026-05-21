@@ -65,7 +65,11 @@ const ROUTE_CHECKS: &[(&str, &str, &[u16])] = &[
     // rejected as bad input. Treating that as mounted keeps the doctor aligned
     // with the rollout harness instead of requiring a real contract key.
     ("contracts_state", "/v1/contracts/state", &[400]),
-    ("musubi_search", "/v1/musubi/packages?query=&limit=1", &[200]),
+    (
+        "musubi_search",
+        "/v1/musubi/packages?query=&limit=1",
+        &[200],
+    ),
 ];
 
 /// Taira public testnet helpers.
@@ -191,13 +195,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
     let mcp_url = join_url(&public_root, "/v1/mcp")?;
     let mcp_get = http_json(&http, reqwest::Method::GET, mcp_url.as_str(), None)?;
     let mcp_get_ok = (200..300).contains(&mcp_get.status);
-    push_check(
-        &mut checks,
-        "mcp_get",
-        mcp_get.status,
-        mcp_get_ok,
-        None,
-    );
+    push_check(&mut checks, "mcp_get", mcp_get.status, mcp_get_ok, None);
     if !mcp_get_ok {
         failures.push(format!("mcp_get returned HTTP {}", mcp_get.status));
     }
@@ -243,13 +241,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         Some(&tools_payload),
     )?;
     let tools_ok = (200..300).contains(&tools.status);
-    push_check(
-        &mut checks,
-        "mcp_tools_list",
-        tools.status,
-        tools_ok,
-        None,
-    );
+    push_check(&mut checks, "mcp_tools_list", tools.status, tools_ok, None);
     if !tools_ok {
         failures.push(format!("mcp_tools_list returned HTTP {}", tools.status));
     } else {
@@ -313,7 +305,11 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     let public_root = normalize_root_url(&args.public_root)?;
     let http = http_client()?;
     let signer = resolve_canary_signer(config, args.use_config_signer)?;
-    let alias = build_alias(&args.alias_prefix, signer.key_pair.public_key(), "wonderland.universal");
+    let alias = build_alias(
+        &args.alias_prefix,
+        signer.key_pair.public_key(),
+        "wonderland.universal",
+    );
     let mut warnings = Vec::new();
     let mut checks = Vec::new();
     let mut failures = Vec::new();
@@ -329,20 +325,59 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
         &mut checks,
         "accounts_onboard",
         onboarding.status,
-        (200..300).contains(&onboarding.status) || onboarding.status == 400,
+        (200..300).contains(&onboarding.status),
         onboarding.body.as_ref().map(compact_json),
     );
+    if !(200..300).contains(&onboarding.status) {
+        failures.push(format!(
+            "account onboarding failed with HTTP {}; faucet funding was not attempted",
+            onboarding.status
+        ));
+        let mut extra = Map::new();
+        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
+        return report_value(
+            "taira_write_canary",
+            "fail",
+            &public_root,
+            checks,
+            warnings,
+            failures,
+            extra,
+        );
+    }
+    if let Some(actual) = extract_optional_response_string(onboarding.body.as_ref(), "account_id")
+        && actual != signer.account_id.to_string()
+    {
+        failures.push(format!(
+            "account onboarding resolved unexpected account_id; expected {}, actual {}",
+            signer.account_id, actual
+        ));
+        let mut extra = Map::new();
+        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
+        return report_value(
+            "taira_write_canary",
+            "fail",
+            &public_root,
+            checks,
+            warnings,
+            failures,
+            extra,
+        );
+    }
 
     let faucet = claim_faucet(&http, &public_root, &signer.account_id)?;
+    let faucet_applied = response_status_is_applied(faucet.body.as_ref());
     push_check(
         &mut checks,
         "accounts_faucet",
         faucet.status,
-        (200..300).contains(&faucet.status),
+        (200..300).contains(&faucet.status) && faucet_applied,
         faucet.body.as_ref().map(compact_json),
     );
     if !(200..300).contains(&faucet.status) {
         failures.push(faucet_failure_hint(&faucet));
+    } else if !faucet_applied {
+        failures.push("faucet funding did not report Applied finality".to_owned());
     }
 
     let mut canary_config = config.clone();
@@ -353,7 +388,8 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     canary_config.account_chain_discriminant = DEFAULT_CHAIN_DISCRIMINANT;
     canary_config.key_pair = signer.key_pair.clone();
     canary_config.transaction_ttl = Duration::from_millis(DEFAULT_WRITE_TTL_MS);
-    canary_config.transaction_status_timeout = Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS);
+    canary_config.transaction_status_timeout =
+        Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS);
     canary_config.transaction_add_nonce = false;
 
     if let Some(path) = &args.write_config {
@@ -407,7 +443,10 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     let mut extra = Map::new();
     insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
     extra.insert("message".into(), Value::String(message));
-    extra.insert("faucet_tx_hash".into(), extract_response_string(faucet.body.as_ref(), "tx_hash_hex"));
+    extra.insert(
+        "faucet_tx_hash".into(),
+        extract_response_string(faucet.body.as_ref(), "tx_hash_hex"),
+    );
     extra.insert("ping_tx_hash".into(), Value::String(wait.hash.clone()));
     extra.insert(
         "applied_block_height".into(),
@@ -441,7 +480,9 @@ fn render_report<C: RunContext>(context: &mut C, json: bool, report: &Value) -> 
     if json || context.output_format() == CliOutputFormat::Json {
         context.print_data(report)
     } else {
-        let object = report.as_object().ok_or_else(|| eyre!("report must be an object"))?;
+        let object = report
+            .as_object()
+            .ok_or_else(|| eyre!("report must be an object"))?;
         let command = object
             .get("command")
             .and_then(Value::as_str)
@@ -513,7 +554,10 @@ fn print_receipt_fields<C: RunContext>(context: &mut C, object: &Map) -> Result<
         "config_path",
     ];
     for field in RECEIPT_FIELDS {
-        let Some(value) = object.get(*field).filter(|value| !matches!(value, Value::Null)) else {
+        let Some(value) = object
+            .get(*field)
+            .filter(|value| !matches!(value, Value::Null))
+        else {
             continue;
         };
         context.println_data(format!("  {field}: {}", display_json_scalar(value)))?;
@@ -656,7 +700,9 @@ fn collect_status_warnings(status: Option<&Value>, warnings: &mut Vec<String>) {
     if let Some(rejected) = value_path_u64(status, &["txs_rejected_recent_5m"])
         && rejected > 0
     {
-        warnings.push(format!("recent rejected transactions in /status: {rejected}"));
+        warnings.push(format!(
+            "recent rejected transactions in /status: {rejected}"
+        ));
     }
     if let Some(queue) = value_path_u64(status, &["queue_size"])
         && queue > 0
@@ -725,10 +771,16 @@ fn insert_write_receipt_identity(
         "chain_discriminant".into(),
         Value::from(u64::from(DEFAULT_CHAIN_DISCRIMINANT)),
     );
-    extra.insert("account_id".into(), Value::String(signer.account_id.to_string()));
+    extra.insert(
+        "account_id".into(),
+        Value::String(signer.account_id.to_string()),
+    );
     extra.insert("alias".into(), Value::String(alias.to_owned()));
     extra.insert("generated_signer".into(), Value::from(signer.generated));
-    extra.insert("gas_asset_id".into(), Value::String(gas_asset_id.to_owned()));
+    extra.insert(
+        "gas_asset_id".into(),
+        Value::String(gas_asset_id.to_owned()),
+    );
 }
 
 fn build_alias(prefix: &str, public_key: &iroha_crypto::PublicKey, domain: &str) -> String {
@@ -761,7 +813,7 @@ fn onboard_canary(
     public_root: &str,
     alias: &str,
     public_key_raw_hex: &str,
-    warnings: &mut Vec<String>,
+    _warnings: &mut Vec<String>,
 ) -> Result<HttpJson> {
     let url = join_url(public_root, "/v1/accounts/onboard")?;
     let mut body = Map::new();
@@ -776,13 +828,12 @@ fn onboard_canary(
             "source": "iroha taira write-canary"
         }),
     );
-    let result = http_json(http, reqwest::Method::POST, url.as_str(), Some(&Value::Object(body)))?;
-    if !(200..300).contains(&result.status) {
-        warnings.push(format!(
-            "account onboarding returned HTTP {}; continuing with faucet registration fallback",
-            result.status
-        ));
-    }
+    let result = http_json(
+        http,
+        reqwest::Method::POST,
+        url.as_str(),
+        Some(&Value::Object(body)),
+    )?;
     Ok(result)
 }
 
@@ -836,8 +887,8 @@ fn solve_faucet_puzzle(account_id: &str, puzzle: &Value) -> Result<Value> {
     )?;
     let params = ScryptParams::new(log_n, r, p, 32)
         .map_err(|err| eyre!("invalid faucet scrypt parameters: {err}"))?;
-    let difficulty_bits = u32::try_from(difficulty_bits)
-        .map_err(|_| eyre!("faucet difficulty is too large"))?;
+    let difficulty_bits =
+        u32::try_from(difficulty_bits).map_err(|_| eyre!("faucet difficulty is too large"))?;
     let nonce = solve_faucet_pow(&challenge, &params, difficulty_bits)?;
     body.insert("pow_anchor_height".into(), Value::from(anchor_height));
     body.insert("pow_nonce_hex".into(), Value::String(hex::encode(nonce)));
@@ -1003,7 +1054,9 @@ fn hint_submit_error(err: eyre::Report, gas_asset_id: &str) -> eyre::Report {
 fn hint_wait_error(err: eyre::Report) -> eyre::Report {
     let text = format!("{err:#}");
     if text.contains("Expired") || text.contains("expired") {
-        eyre!("{text}\nThe canary transaction expired before application; inspect /status queue depth and validator health.")
+        eyre!(
+            "{text}\nThe canary transaction expired before application; inspect /status queue depth and validator health."
+        )
     } else {
         err
     }
@@ -1037,12 +1090,25 @@ fn error_value(code: &str, message: &str) -> Value {
 }
 
 fn extract_response_string(response: Option<&Value>, key: &str) -> Value {
+    extract_optional_response_string(response, key)
+        .map(Value::String)
+        .unwrap_or(Value::Null)
+}
+
+fn extract_optional_response_string(response: Option<&Value>, key: &str) -> Option<String> {
     response
         .and_then(Value::as_object)
         .and_then(|obj| obj.get(key))
         .and_then(Value::as_str)
-        .map(|value| Value::String(value.to_owned()))
-        .unwrap_or(Value::Null)
+        .map(str::to_owned)
+}
+
+fn response_status_is_applied(response: Option<&Value>) -> bool {
+    response
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("status"))
+        .and_then(Value::as_str)
+        .is_some_and(|status| status == "Applied")
 }
 
 #[cfg(test)]
@@ -1306,14 +1372,13 @@ mod tests {
                         norito::json!({
                             "error_code": "account_already_exists",
                             "message": "account already exists",
-                            "hint": "continue with faucet registration fallback"
+                            "hint": "retry onboarding with a fresh runtime signer"
                         }),
                     )
                 } else {
                     MockResponse::json(
                         200,
                         norito::json!({
-                            "account_id": "mock",
                             "uaid": "uaid:mock",
                             "tx_hash_hex": "onboardabc",
                             "status": "Applied",
@@ -1359,7 +1424,7 @@ mod tests {
                     norito::json!({
                         "hash": hash,
                         "status": { "kind": "Applied", "block_height": 42 },
-                        "scope": "auto",
+                        "scope": "local",
                         "resolved_from": "state"
                     }),
                 )
@@ -1415,9 +1480,10 @@ mod tests {
         render_report(&mut context, false, &report).expect("render report");
 
         let output = context.lines.join("\n");
-        assert!(output.contains(
-            "contracts_state HTTP 400 (mounted route is expected to return HTTP 400"
-        ));
+        assert!(
+            output
+                .contains("contracts_state HTTP 400 (mounted route is expected to return HTTP 400")
+        );
     }
 
     #[test]
@@ -1463,17 +1529,13 @@ mod tests {
         assert!(rendered.contains(DEFAULT_CHAIN_ID));
         assert!(rendered.contains(DEFAULT_GAS_ASSET_ID));
         assert!(!rendered.contains("private_key"));
-        assert!(
-            requests
-                .iter()
-                .any(|request| request.method == "POST"
-                    && path_only(&request.path) == torii_uri::TRANSACTION)
-        );
+        assert!(requests.iter().any(|request| request.method == "POST"
+            && path_only(&request.path) == torii_uri::TRANSACTION));
     }
 
     #[test]
-    fn write_canary_mock_onboarding_400_continues_to_faucet_fallback() {
-        let server = spawn_mock_http(7, |request| write_canary_mock_response(request, 400));
+    fn write_canary_mock_onboarding_400_does_not_attempt_faucet() {
+        let server = spawn_mock_http(1, |request| write_canary_mock_response(request, 400));
         let args = WriteCanary {
             public_root: server.base_url.clone(),
             alias_prefix: "mock-canary".to_owned(),
@@ -1484,24 +1546,22 @@ mod tests {
         };
         let report = run_write_canary(&crate::fallback_config(), &args).expect("write canary");
         let requests = finish_mock(server);
-        let warnings = report
+        let failures = report
             .as_object()
-            .and_then(|object| object.get("warnings"))
+            .and_then(|object| object.get("failures"))
             .and_then(Value::as_array)
-            .expect("warnings");
+            .expect("failures");
 
-        assert_eq!(report_status(&report), Some("ok"));
+        assert_eq!(report_status(&report), Some("fail"));
         assert!(
-            warnings
+            failures
                 .iter()
                 .filter_map(Value::as_str)
-                .any(|warning| warning.contains("faucet registration fallback"))
+                .any(|failure| failure.contains("faucet funding was not attempted"))
         );
         assert!(
-            requests
-                .iter()
-                .any(|request| request.method == "POST"
-                    && path_only(&request.path) == "/v1/accounts/faucet")
+            !requests.iter().any(|request| request.method == "POST"
+                && path_only(&request.path) == "/v1/accounts/faucet")
         );
     }
 
@@ -1533,13 +1593,9 @@ mod tests {
 
     #[test]
     fn faucet_challenge_matches_python_fixture_shape() {
-        let challenge = build_faucet_challenge(
-            "testu1example",
-            7,
-            &"11".repeat(32),
-            Some(&"22".repeat(32)),
-        )
-        .expect("challenge");
+        let challenge =
+            build_faucet_challenge("testu1example", 7, &"11".repeat(32), Some(&"22".repeat(32)))
+                .expect("challenge");
         assert_eq!(challenge.len(), 32);
         assert_ne!(challenge, [0_u8; 32]);
     }
@@ -1575,7 +1631,10 @@ mod tests {
         let (_, public_key_bytes) = key_pair.public_key().to_bytes();
 
         assert!(!signer.generated);
-        assert_eq!(signer.account_id, AccountId::new(key_pair.public_key().clone()));
+        assert_eq!(
+            signer.account_id,
+            AccountId::new(key_pair.public_key().clone())
+        );
         assert_eq!(signer.public_key_raw_hex, hex::encode(public_key_bytes));
     }
 
@@ -1617,10 +1676,18 @@ mod tests {
     #[test]
     fn build_alias_is_stable_and_sanitized() {
         let key_pair = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
-        let alias = build_alias("Taira Rollout Canary!", key_pair.public_key(), "wonderland.universal");
+        let alias = build_alias(
+            "Taira Rollout Canary!",
+            key_pair.public_key(),
+            "wonderland.universal",
+        );
         assert!(alias.starts_with("tairarolloutcanary"));
         assert!(alias.ends_with("@universal"));
-        assert!(alias.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '@'));
+        assert!(
+            alias
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '@')
+        );
     }
 
     #[test]

@@ -5923,7 +5923,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("auto".to_owned())
+            Some("local".to_owned())
         );
     }
 
@@ -5984,7 +5984,7 @@ mod evidence_http_tests {
         let payload = norito::json!({
             "hash": "deadbeef",
             "status": { "kind": "Queued" },
-            "scope": "auto",
+            "scope": "local",
             "resolved_from": "queue",
         });
         let status_body = norito::json::to_string(&payload).expect("status payload");
@@ -6027,7 +6027,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("auto".to_owned())
+            Some("local".to_owned())
         );
     }
 
@@ -6076,7 +6076,7 @@ mod evidence_http_tests {
         let payload = norito::json!({
             "hash": "deadbeef",
             "status": { "kind": "Queued" },
-            "scope": "auto",
+            "scope": "local",
             "resolved_from": "queue",
         });
         let status_body = norito::json::to_string(&payload).expect("status payload");
@@ -6126,7 +6126,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("auto".to_owned())
+            Some("local".to_owned())
         );
     }
 
@@ -6136,7 +6136,7 @@ mod evidence_http_tests {
         let payload = norito::json!({
             "hash": "deadbeef",
             "status": { "kind": "Approved", "block_height": 9 },
-            "scope": "auto",
+            "scope": "local",
             "resolved_from": "state",
         });
         let status_body = norito::json::to_string(&payload).expect("status payload");
@@ -6181,7 +6181,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("auto".to_owned())
+            Some("local".to_owned())
         );
     }
 
@@ -6191,7 +6191,7 @@ mod evidence_http_tests {
         let payload = norito::json!({
             "hash": "deadbeef",
             "status": { "kind": "Approved" },
-            "scope": "auto",
+            "scope": "local",
             "resolved_from": "state",
         });
         let status_body = norito::json::to_string(&payload).expect("status payload");
@@ -6234,7 +6234,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("auto".to_owned())
+            Some("local".to_owned())
         );
     }
 
@@ -6287,7 +6287,7 @@ mod evidence_http_tests {
         let status_payload = norito::json!({
             "hash": "deadbeef",
             "status": { "kind": "Rejected" },
-            "scope": "auto",
+            "scope": "local",
             "resolved_from": "state",
         });
         let status_body = norito::json::to_string(&status_payload).expect("status payload");
@@ -6340,7 +6340,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("auto".to_owned())
+            Some("local".to_owned())
         );
     }
 
@@ -6392,12 +6392,12 @@ mod evidence_http_tests {
         );
         assert!(
             snapshot.url.query_pairs().all(|(key, _)| key != "scope"),
-            "generic status lookups should keep the public auto-scope behavior"
+            "generic status lookups should use Torii's strict local default"
         );
     }
 
     #[test]
-    fn get_transaction_status_response_auto_sets_auto_scope() {
+    fn get_transaction_status_response_auto_sets_global_scope() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
 
         let hash =
@@ -6411,7 +6411,7 @@ mod evidence_http_tests {
                 block_height: Some(7),
                 rejection_reason: None,
             },
-            scope: "auto".to_owned(),
+            scope: "global".to_owned(),
             resolved_from: "state".to_owned(),
         };
         let body = norito::json::to_string(
@@ -6441,7 +6441,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("auto".to_owned())
+            Some("global".to_owned())
         );
     }
 
@@ -6716,7 +6716,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("auto".to_owned())
+            Some("local".to_owned())
         );
     }
 
@@ -6768,7 +6768,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("auto".to_owned())
+            Some("local".to_owned())
         );
     }
 }
@@ -6840,6 +6840,30 @@ fn format_error_envelope(envelope: &ErrorEnvelope) -> String {
     }
     if let Some(endpoint) = details.endpoint.as_deref() {
         let _ = write!(message, "; endpoint={endpoint}");
+    }
+    if let Some(field) = details.field.as_deref() {
+        let _ = write!(message, "; field={field}");
+    }
+    if let Some(expected) = details.expected.as_deref() {
+        let _ = write!(message, "; expected={expected}");
+    }
+    if let Some(actual) = details.actual.as_deref() {
+        let _ = write!(message, "; actual={actual}");
+    }
+    if let Some(profile) = details.profile.as_deref() {
+        let _ = write!(message, "; profile={profile}");
+    }
+    if let Some(chain_discriminant) = details.chain_discriminant {
+        let _ = write!(message, "; chain_discriminant={chain_discriminant}");
+    }
+    if let Some(tx_hash) = details.tx_hash.as_deref() {
+        let _ = write!(message, "; tx_hash={tx_hash}");
+    }
+    if let Some(last_status) = details.last_status.as_deref() {
+        let _ = write!(message, "; last_status={last_status}");
+    }
+    if let Some(hint) = details.hint.as_deref() {
+        let _ = write!(message, "; hint={hint}");
     }
     if let Some(axt) = details.axt.as_ref()
         && let Some(code) = axt.code.as_deref()
@@ -7015,12 +7039,7 @@ impl Default for TransactionWaitOptions {
         Self {
             timeout: DEFAULT_TRANSACTION_WAIT_TIMEOUT,
             poll_interval: DEFAULT_TRANSACTION_WAIT_POLL_INTERVAL,
-            terminal_statuses: vec![
-                TransactionWaitTerminalStatus::Committed,
-                TransactionWaitTerminalStatus::Applied,
-                TransactionWaitTerminalStatus::Rejected,
-                TransactionWaitTerminalStatus::Expired,
-            ],
+            terminal_statuses: vec![TransactionWaitTerminalStatus::Applied],
         }
     }
 }
@@ -8463,7 +8482,7 @@ impl Client {
         hash: HashOf<SignedTransaction>,
         _entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
-        match self.get_transaction_status_response_with_scope(hash, Some("auto")) {
+        match self.get_transaction_status_response_with_scope(hash, Some("local")) {
             Ok(Some(payload)) => Ok(tx_confirmation_status_from_pipeline_response(&payload)),
             Ok(None) => Ok(None),
             Err(err) => Err(err),
@@ -8520,8 +8539,8 @@ impl Client {
         self.get_transaction_status_response_with_scope(hash, None)
     }
 
-    /// GET `/v1/pipeline/transactions/status?scope=auto` — typed pipeline status lookup
-    /// using Torii's local-cache-first routing and global fallback.
+    /// GET `/v1/pipeline/transactions/status?scope=global` — typed pipeline status lookup
+    /// using explicit global/fanout routing.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response has an unexpected content type,
@@ -8530,7 +8549,7 @@ impl Client {
         &self,
         hash: HashOf<SignedTransaction>,
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
-        self.get_transaction_status_response_with_scope(hash, Some("auto"))
+        self.get_transaction_status_response_with_scope(hash, Some("global"))
     }
 
     /// GET `/v1/pipeline/transactions/status` — convenience status lookup mapped to [`TxConfirmationStatus`].
@@ -8589,15 +8608,26 @@ impl Client {
         };
         let target_description = format_transaction_wait_target(&stop_statuses);
         let mut attempts = 0_u64;
+        let mut last_status: Option<String> = None;
 
         loop {
             attempts = attempts.saturating_add(1);
             if let Some(response) =
-                self.get_transaction_status_response_with_scope(hash, Some("auto"))?
+                self.get_transaction_status_response_with_scope(hash, Some("local"))?
             {
                 let kind = response.status.kind.as_str();
+                last_status = Some(kind.to_owned());
                 if tx_confirmation_status_from_pipeline_response(&response).is_none() {
-                    return Err(eyre!("unsupported pipeline status kind `{kind}`"));
+                    return Err(eyre!(
+                        "unsupported pipeline status kind `{kind}` for transaction {}; last_status={kind}",
+                        response.hash
+                    ));
+                }
+                if matches!(kind, "Rejected" | "Expired") {
+                    return Err(eyre!(
+                        "transaction {} reached terminal failure status `{kind}` before {target_description}; last_status={kind}",
+                        response.hash
+                    ));
                 }
                 if should_stop_waiting_on_pipeline_kind(kind, &stop_statuses) {
                     return Ok(TransactionWaitOutcome {
@@ -8612,8 +8642,9 @@ impl Client {
 
             let elapsed = start.elapsed();
             if elapsed >= timeout {
+                let last_status = last_status.unwrap_or_else(|| "not_observed".to_owned());
                 return Err(eyre!(
-                    "transaction did not reach {target_description} within {} ms",
+                    "transaction did not reach {target_description} within {} ms; last_status={last_status}",
                     timeout.as_millis()
                 ));
             }
@@ -21543,8 +21574,7 @@ mod response_report {
                     saturated: true,
                 }),
                 retry_after_seconds: Some(1),
-                endpoint: None,
-                axt: None,
+                ..Default::default()
             });
         let body = to_bytes(&envelope).expect("encode queue error envelope");
         let response = Response::builder()
@@ -21577,6 +21607,7 @@ mod response_report {
                     reason: Some("rule denied".to_owned()),
                     ..Default::default()
                 }),
+                ..Default::default()
             });
         let body = to_bytes(&envelope).expect("encode axt error envelope");
         let response = Response::builder()

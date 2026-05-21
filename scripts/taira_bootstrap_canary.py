@@ -658,20 +658,6 @@ def resolve_alias_account_id(torii_root: str, alias: str) -> str:
     raise RuntimeError(f"alias resolve failed: status={status} body={payload!r}")
 
 
-def faucet_registration_fallback_record(
-    onboarding_error: RuntimeError,
-    alias_resolve_error: RuntimeError,
-) -> dict[str, Any]:
-    """Describe a bootstrap fallback that relies on faucet account registration."""
-
-    return {
-        "status": "faucet_registration_fallback",
-        "response_status": 400,
-        "response": str(onboarding_error),
-        "alias_resolve_error": str(alias_resolve_error),
-    }
-
-
 def attempt_faucet(
     account_id: str,
     torii_root: str,
@@ -681,23 +667,6 @@ def attempt_faucet(
     chain_discriminant: int = DEFAULT_CHAIN_DISCRIMINANT,
     iroha_bin: str | None = None,
 ) -> dict[str, Any]:
-    if (
-        is_loopback_torii_root(torii_root)
-        and DEFAULT_LOCALNET_CLIENT_TOML.exists()
-        and isinstance(gas_asset_id, str)
-        and gas_asset_id.strip()
-    ):
-        return fund_account_with_local_registrar(
-            client_toml=DEFAULT_LOCALNET_CLIENT_TOML,
-            iroha_bin=iroha_bin,
-            chain_discriminant=chain_discriminant,
-            account_id=account_id,
-            asset_definition_id=gas_asset_id.strip(),
-            quantity=str(DEFAULT_LOCAL_LOOPBACK_FUND_AMOUNT).strip(),
-            gas_asset_id=gas_asset_id,
-            gas_limit=gas_limit,
-        )
-
     puzzle_status, puzzle = _http_json(
         "GET",
         f"{torii_root.rstrip('/')}/v1/accounts/faucet/puzzle",
@@ -716,6 +685,15 @@ def attempt_faucet(
         claim_body,
     )
     if claim_status in (200, 202):
+        status = faucet_claim_status_kind(claim)
+        if status != "Applied":
+            return {
+                "status": "failed",
+                "response_status": claim_status,
+                "request": claim_body,
+                "response": claim,
+                "last_status": status or "not_observed",
+            }
         return {
             "status": "claimed",
             "response_status": claim_status,
@@ -729,6 +707,28 @@ def attempt_faucet(
         "request": claim_body,
         "response": claim,
     }
+
+
+def faucet_claim_status_kind(claim: Any) -> str | None:
+    if not isinstance(claim, dict):
+        return None
+    status = claim.get("status")
+    if isinstance(status, str) and status:
+        return status
+    if isinstance(status, dict):
+        kind = status.get("kind")
+        if isinstance(kind, str) and kind:
+            return kind
+    final_status = claim.get("final_status")
+    if isinstance(final_status, dict):
+        body = final_status.get("body")
+        if isinstance(body, dict):
+            status_obj = body.get("status")
+            if isinstance(status_obj, dict):
+                kind = status_obj.get("kind")
+                if isinstance(kind, str) and kind:
+                    return kind
+    return None
 
 
 def write_config(
@@ -891,7 +891,6 @@ def main(argv: list[str] | None = None) -> int:
 
     alias = build_alias(args.alias_prefix, public_key, domain)
     account_id = None
-    requires_faucet_registration = False
     try:
         onboarding = onboard_account(
             args.torii_root,
@@ -907,56 +906,11 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(value, str) and value:
                 account_id = value
     except RuntimeError as onboarding_error:
-        if is_loopback_torii_root(args.torii_root) and DEFAULT_LOCALNET_CLIENT_TOML.exists():
-            derived_account_id = canonical_account_id_from_public_key(
-                public_key,
-                chain_discriminant,
-                args.iroha_bin,
-            )
-            if not derived_account_id:
-                raise RuntimeError(
-                    "failed to derive canonical account id for local registrar fallback"
-                ) from onboarding_error
-            account_id = derived_account_id
-            onboarding = register_account_with_local_registrar(
-                client_toml=DEFAULT_LOCALNET_CLIENT_TOML,
-                iroha_bin=args.iroha_bin,
-                chain_discriminant=chain_discriminant,
-                account_id=account_id,
-                permissions=args.permissions,
-                gas_asset_id=args.gas_asset_id,
-                gas_limit=args.gas_limit,
-            )
-        else:
-            try:
-                account_id = resolve_alias_account_id(args.torii_root, alias)
-                onboarding = {
-                    "status": "existing",
-                    "response_status": 400,
-                    "response": str(onboarding_error),
-                }
-            except RuntimeError as alias_resolve_error:
-                derived_account_id = canonical_account_id_from_public_key(
-                    public_key,
-                    chain_discriminant,
-                    args.iroha_bin,
-                )
-                if not derived_account_id:
-                    raise RuntimeError(
-                        "account onboarding failed, alias is unresolved, and the canonical account id could not be derived"
-                    ) from onboarding_error
-                account_id = derived_account_id
-                onboarding = faucet_registration_fallback_record(
-                    onboarding_error,
-                    alias_resolve_error,
-                )
-                requires_faucet_registration = True
+        raise RuntimeError(
+            "account onboarding failed; faucet funding was not attempted"
+        ) from onboarding_error
     if account_id is None:
         account_id = resolve_alias_account_id(args.torii_root, alias)
-    if requires_faucet_registration and args.skip_faucet:
-        raise RuntimeError(
-            "account onboarding failed and alias is unresolved; faucet registration fallback requires the faucet"
-        )
     faucet = (
         {"status": "skipped"}
         if args.skip_faucet
@@ -969,9 +923,9 @@ def main(argv: list[str] | None = None) -> int:
             iroha_bin=args.iroha_bin,
         )
     )
-    if requires_faucet_registration and faucet.get("status") != "claimed":
+    if not args.skip_faucet and faucet.get("status") != "claimed":
         raise RuntimeError(
-            f"account onboarding failed and faucet registration fallback did not claim funds: {faucet!r}"
+            f"faucet funding did not reach Applied finality: {faucet!r}"
         )
 
     write_config(

@@ -11375,8 +11375,6 @@ pub struct ContractStateEntry {
     pub value_len: Option<u64>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub value_json: Option<norito::json::Value>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub decode_error: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -11966,6 +11964,13 @@ pub async fn handle_get_contract_state(
         ))
     }
 
+    fn contract_state_decode_failed(path: &str, error: String) -> Error {
+        Error::AppQueryValidation {
+            code: "contract_state_decode_failed",
+            message: format!("failed to decode contract state `{path}` as json: {error}"),
+        }
+    }
+
     fn parse_name(value: &str, label: &str) -> Result<Name> {
         Name::from_str(value)
             .map_err(|err| conversion_error(format!("invalid {label} name `{value}`: {err}")))
@@ -12075,8 +12080,7 @@ pub async fn handle_get_contract_state(
     let encode_entry = |path: &str,
                         value: Option<&Vec<u8>>,
                         found: bool,
-                        value_json: Option<norito::json::Value>,
-                        decode_error: Option<String>| {
+                        value_json: Option<norito::json::Value>| {
         if !include_value {
             return ContractStateEntry {
                 path: path.to_string(),
@@ -12084,7 +12088,6 @@ pub async fn handle_get_contract_state(
                 value_b64: None,
                 value_len: None,
                 value_json,
-                decode_error,
             };
         }
         let (value_b64, value_len) = if let Some(bytes) = value {
@@ -12101,7 +12104,6 @@ pub async fn handle_get_contract_state(
             value_b64,
             value_len,
             value_json,
-            decode_error,
         }
     };
 
@@ -12117,15 +12119,17 @@ pub async fn handle_get_contract_state(
             .as_ref()
             .is_some_and(|registry| contract_state_logical_path_exists(registry, path, &has_value));
 
-        let (value_json, decode_error) = match (decode_mode, schema_registry.as_ref()) {
+        let value_json = match (decode_mode, schema_registry.as_ref()) {
             (Some(ContractStateDecodeMode::Json), Some(registry)) => {
                 match decode_contract_state_path_json(registry, path, &get_value) {
-                    Ok(value) => (Some(value), None),
-                    Err(err) if stored.is_some() || logical_found => (None, Some(err)),
-                    Err(_) => (None, None),
+                    Ok(value) => Some(value),
+                    Err(err) if stored.is_some() || logical_found => {
+                        return Err(contract_state_decode_failed(path, err));
+                    }
+                    Err(_) => None,
                 }
             }
-            _ => (None, None),
+            _ => None,
         };
 
         if stored.is_none() && !logical_found {
@@ -12134,7 +12138,7 @@ pub async fn handle_get_contract_state(
             )));
         }
 
-        let entry = encode_entry(path, stored.as_ref(), true, value_json, decode_error);
+        let entry = encode_entry(path, stored.as_ref(), true, value_json);
         return Ok(JsonBody(ContractStateResponse {
             contract_address: contract_address_response.clone(),
             contract_alias: contract_alias_response.clone(),
@@ -12174,23 +12178,19 @@ pub async fn handle_get_contract_state(
                 contract_state_logical_path_exists(registry, path, &has_value)
             });
             let found = stored.is_some() || logical_found;
-            let (value_json, decode_error) = match (decode_mode, schema_registry.as_ref()) {
+            let value_json = match (decode_mode, schema_registry.as_ref()) {
                 (Some(ContractStateDecodeMode::Json), Some(registry)) => {
                     match decode_contract_state_path_json(registry, path, &get_value) {
-                        Ok(value) => (Some(value), None),
-                        Err(err) if found => (None, Some(err)),
-                        Err(_) => (None, None),
+                        Ok(value) => Some(value),
+                        Err(err) if found => {
+                            return Err(contract_state_decode_failed(path, err));
+                        }
+                        Err(_) => None,
                     }
                 }
-                _ => (None, None),
+                _ => None,
             };
-            entries.push(encode_entry(
-                path,
-                stored.as_ref(),
-                found,
-                value_json,
-                decode_error,
-            ));
+            entries.push(encode_entry(path, stored.as_ref(), found, value_json));
             paths.push(path.to_string());
         }
         let limit = entries.len() as u64;
@@ -12248,22 +12248,16 @@ pub async fn handle_get_contract_state(
                     break;
                 }
                 let logical_path = format!("{prefix_str}/{key_suffix}");
-                let (value_json, decode_error) = match decode_contract_state_map_value_json(
+                let value_json = match decode_contract_state_map_value_json(
                     prefix_str,
                     value,
                     &key_suffix,
                     &get_value,
                 ) {
-                    Ok(value_json) => (Some(value_json), None),
-                    Err(err) => (None, Some(err)),
+                    Ok(value_json) => Some(value_json),
+                    Err(err) => return Err(contract_state_decode_failed(&logical_path, err)),
                 };
-                entries.push(encode_entry(
-                    &logical_path,
-                    None,
-                    true,
-                    value_json,
-                    decode_error,
-                ));
+                entries.push(encode_entry(&logical_path, None, true, value_json));
             }
 
             let next_offset = if has_more {
@@ -12301,23 +12295,24 @@ pub async fn handle_get_contract_state(
             has_more = true;
             break;
         }
-        let (value_json, decode_error) = match (decode_mode, schema_registry.as_ref()) {
+        let value_json = match (decode_mode, schema_registry.as_ref()) {
             (Some(ContractStateDecodeMode::Json), Some(registry))
                 if registry.contains_key(logical_key.as_str()) =>
             {
                 match decode_contract_state_path_json(registry, logical_key.as_str(), &get_value) {
-                    Ok(value_json) => (Some(value_json), None),
-                    Err(err) => (None, Some(err)),
+                    Ok(value_json) => Some(value_json),
+                    Err(err) => {
+                        return Err(contract_state_decode_failed(logical_key.as_str(), err));
+                    }
                 }
             }
-            _ => (None, None),
+            _ => None,
         };
         entries.push(encode_entry(
             logical_key.as_str(),
             Some(value),
             true,
             value_json,
-            decode_error,
         ));
     }
     let next_offset = if has_more {
@@ -16384,6 +16379,7 @@ mod contract_entrypoint_validation_tests {
             features_bitmap: Some(0),
             access_set_hints: None,
             entrypoints,
+            states: None,
             kotoba: None,
             provenance: None,
         }
@@ -30526,6 +30522,24 @@ fn trader_contract_module(
     if source.contains("policy_manager") || source.contains("fixturecover") {
         return Some("cover");
     }
+    if source.contains("settlement_router") || source.contains("intents.") {
+        return Some("intents");
+    }
+    if source.contains("vaults.manager") || source.contains("manager::vaults") {
+        return Some("vaults");
+    }
+    if source.contains("operators.registry") || source.contains("registry::operators") {
+        return Some("operators");
+    }
+    if source.contains("portfolio_margin") || source.contains("margin.") {
+        return Some("margin");
+    }
+    if source.contains("rwa.market") || source.contains("market::rwa") {
+        return Some("rwa");
+    }
+    if source.contains("hook_manager") || source.contains("dlmm_hooks") {
+        return Some("dlmmHooks");
+    }
     None
 }
 
@@ -30564,6 +30578,31 @@ fn canonical_contract_event_kind(module: &str, entrypoint: &str) -> Option<&'sta
         ("cover", "record_observation") => Some("cover_observation_recorded"),
         ("cover", "route_claim") => Some("cover_claim_routed"),
         ("cover", "expire_policy") => Some("cover_policy_expired"),
+        ("intents", "open_intent") => Some("intent_opened"),
+        ("intents", "cancel_intent") => Some("intent_cancelled"),
+        ("intents", "fill_intent") => Some("intent_filled"),
+        ("vaults", "register_vault") => Some("vault_registered"),
+        ("vaults", "deposit") => Some("vault_deposited"),
+        ("vaults", "request_redeem") => Some("vault_redeem_requested"),
+        ("vaults", "claim_redeem") => Some("vault_redeem_claimed"),
+        ("operators", "register_operator") => Some("operator_registered"),
+        ("operators", "bond") => Some("operator_bonded"),
+        ("operators", "heartbeat") => Some("operator_heartbeat"),
+        ("operators", "claim_fees") => Some("operator_fees_claimed"),
+        ("margin", "register_market") => Some("margin_market_registered"),
+        ("margin", "deposit_collateral") => Some("margin_collateral_deposited"),
+        ("margin", "withdraw_collateral") => Some("margin_collateral_withdrawn"),
+        ("margin", "lock_exposure") => Some("margin_exposure_locked"),
+        ("margin", "liquidate_account") => Some("margin_account_liquidated"),
+        ("rwa", "issue_lot") => Some("rwa_lot_issued"),
+        ("rwa", "bind_share_asset") => Some("rwa_share_asset_bound"),
+        ("rwa", "report_nav") => Some("rwa_nav_reported"),
+        ("rwa", "request_redemption") => Some("rwa_redemption_requested"),
+        ("rwa", "settle_redemption") => Some("rwa_redemption_settled"),
+        ("dlmmHooks", "configure_hook_policy") => Some("dlmm_hook_configured"),
+        ("dlmmHooks", "place_limit_order") => Some("dlmm_hook_limit_order_placed"),
+        ("dlmmHooks", "schedule_twamm") => Some("dlmm_hook_twamm_scheduled"),
+        ("dlmmHooks", "record_execution") => Some("dlmm_hook_execution_recorded"),
         _ => None,
     }
 }
@@ -33478,6 +33517,20 @@ pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY: &str =
     "/v1/contracts/rollups/trader/activity";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACCOUNT: &str = "/v1/contracts/rollups/trader/account";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_INTENTS: &str = "/v1/contracts/rollups/intents";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_VAULT_POSITIONS: &str =
+    "/v1/contracts/rollups/vaults/positions";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_OPERATORS_STATUS: &str =
+    "/v1/contracts/rollups/operators/status";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_MARGIN_HEALTH: &str = "/v1/contracts/rollups/margin/health";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_RWA_LOTS: &str = "/v1/contracts/rollups/rwa/lots";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_DLMM_HOOKS: &str = "/v1/contracts/rollups/dlmm/hooks";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
 #[cfg(feature = "app_api")]
@@ -51962,6 +52015,12 @@ const TRADER_MODULE_ORDER: &[&str] = &[
     "launchpad",
     "options",
     "cover",
+    "intents",
+    "vaults",
+    "operators",
+    "margin",
+    "rwa",
+    "dlmmHooks",
 ];
 
 #[cfg(feature = "app_api")]
@@ -52032,6 +52091,12 @@ fn trader_module_label(module: &str) -> &'static str {
         "launchpad" => "Launchpad",
         "options" => "Options",
         "cover" => "Cover",
+        "intents" => "Intents",
+        "vaults" => "Vaults",
+        "operators" => "Operators",
+        "margin" => "Portfolio Margin",
+        "rwa" => "RWA Markets",
+        "dlmmHooks" => "DLMM Hooks",
         _ => "Contract",
     }
 }
@@ -52046,6 +52111,12 @@ fn trader_module_contract_key(module: &str) -> &'static str {
         "launchpad" => "launchpad.sale_factory",
         "options" => "options.factory",
         "cover" => "cover.policy_manager",
+        "intents" => "intents.settlement_router",
+        "vaults" => "vaults.manager",
+        "operators" => "operators.registry",
+        "margin" => "margin.portfolio_margin",
+        "rwa" => "rwa.market",
+        "dlmmHooks" => "dlmm_hooks.hook_manager",
         _ => "unknown",
     }
 }
@@ -52060,6 +52131,12 @@ fn trader_module_alias_candidates(module: &str) -> &'static [&'static str] {
         "launchpad" => &["launchpad.sale_factory"],
         "options" => &["options.factory", "options.manager"],
         "cover" => &["cover.policy_manager"],
+        "intents" => &["intents.settlement_router"],
+        "vaults" => &["vaults.manager"],
+        "operators" => &["operators.registry"],
+        "margin" => &["margin.portfolio_margin"],
+        "rwa" => &["rwa.market"],
+        "dlmmHooks" => &["dlmm_hooks.hook_manager"],
         _ => &[],
     }
 }
@@ -52186,40 +52263,93 @@ fn parse_contract_view_int(value: &Value) -> Option<i64> {
 }
 
 #[cfg(feature = "app_api")]
-fn parse_router_assets_from_value(value: &Value) -> (String, String) {
+fn parse_router_assets_from_value(value: &Value) -> Result<(String, String)> {
     match value {
-        Value::Array(values) if values.len() >= 2 => (
-            values[0].as_str().unwrap_or("xor#universal").to_owned(),
-            values[1].as_str().unwrap_or("quote").to_owned(),
-        ),
-        Value::Object(object) => (
-            object_lookup_string(object, &["base_asset", "baseAsset"])
-                .unwrap_or_else(|| "xor#universal".to_owned()),
-            object_lookup_string(object, &["quote_asset", "quoteAsset"])
-                .unwrap_or_else(|| "quote".to_owned()),
-        ),
-        _ => ("xor#universal".to_owned(), "quote".to_owned()),
+        Value::Array(values) if values.len() >= 2 => {
+            let base = values
+                .first()
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    conversion_error("router_assets returned malformed base asset".to_owned())
+                })?;
+            let quote = values
+                .get(1)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    conversion_error("router_assets returned malformed quote asset".to_owned())
+                })?;
+            Ok((base.to_owned(), quote.to_owned()))
+        }
+        Value::Object(object) => {
+            let base = object_lookup_string(object, &["base_asset", "baseAsset"])
+                .ok_or_else(|| conversion_error("router_assets missing base asset".to_owned()))?;
+            let quote = object_lookup_string(object, &["quote_asset", "quoteAsset"])
+                .ok_or_else(|| conversion_error("router_assets missing quote asset".to_owned()))?;
+            Ok((base, quote))
+        }
+        _ => Err(conversion_error(
+            "router_assets returned malformed value".to_owned(),
+        )),
     }
 }
 
 #[cfg(feature = "app_api")]
-fn parse_swap_history_record(record_id: u64, value: &Value) -> Option<SwapFillRollupItem> {
+fn parse_swap_history_record(record_id: u64, value: &Value) -> Result<SwapFillRollupItem> {
     let (trader, input_is_base, amount_in, amount_out, min_out) = match value {
         Value::Array(values) if values.len() >= 5 => (
-            values[0].as_str()?.to_owned(),
-            value_as_i64(values.get(1)?)?,
-            value_as_i64(values.get(2)?)?,
-            value_as_i64(values.get(3)?)?,
-            value_as_i64(values.get(4)?)?,
+            values
+                .first()
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    conversion_error(format!("swap history record {record_id} missing trader"))
+                })?
+                .to_owned(),
+            values.get(1).and_then(value_as_i64).ok_or_else(|| {
+                conversion_error(format!(
+                    "swap history record {record_id} missing input_is_base"
+                ))
+            })?,
+            values.get(2).and_then(value_as_i64).ok_or_else(|| {
+                conversion_error(format!("swap history record {record_id} missing amount_in"))
+            })?,
+            values.get(3).and_then(value_as_i64).ok_or_else(|| {
+                conversion_error(format!(
+                    "swap history record {record_id} missing amount_out"
+                ))
+            })?,
+            values.get(4).and_then(value_as_i64).ok_or_else(|| {
+                conversion_error(format!("swap history record {record_id} missing min_out"))
+            })?,
         ),
         Value::Object(object) => (
-            object_lookup_string(object, &["trader", "authority"])?,
-            object_lookup_i64(object, &["input_is_base", "inputIsBase"])?,
-            object_lookup_i64(object, &["amount_in", "amountIn"])?,
-            object_lookup_i64(object, &["amount_out", "amountOut"])?,
-            object_lookup_i64(object, &["min_out", "minOut"])?,
+            object_lookup_string(object, &["trader", "authority"]).ok_or_else(|| {
+                conversion_error(format!("swap history record {record_id} missing trader"))
+            })?,
+            object_lookup_i64(object, &["input_is_base", "inputIsBase"]).ok_or_else(|| {
+                conversion_error(format!(
+                    "swap history record {record_id} missing input_is_base"
+                ))
+            })?,
+            object_lookup_i64(object, &["amount_in", "amountIn"]).ok_or_else(|| {
+                conversion_error(format!("swap history record {record_id} missing amount_in"))
+            })?,
+            object_lookup_i64(object, &["amount_out", "amountOut"]).ok_or_else(|| {
+                conversion_error(format!(
+                    "swap history record {record_id} missing amount_out"
+                ))
+            })?,
+            object_lookup_i64(object, &["min_out", "minOut"]).ok_or_else(|| {
+                conversion_error(format!("swap history record {record_id} missing min_out"))
+            })?,
         ),
-        _ => return None,
+        _ => {
+            return Err(conversion_error(format!(
+                "swap history record {record_id} malformed"
+            )));
+        }
     };
     let side = if input_is_base == 1 { "buy" } else { "sell" }.to_owned();
     let price = if input_is_base == 1 {
@@ -52228,7 +52358,7 @@ fn parse_swap_history_record(record_id: u64, value: &Value) -> Option<SwapFillRo
         amount_out as f64 / (amount_in.max(1) as f64)
     };
     let protection_ratio = (min_out > 0).then_some((amount_out - min_out) as f64 / min_out as f64);
-    Some(SwapFillRollupItem {
+    Ok(SwapFillRollupItem {
         record_id,
         trader,
         input_is_base,
@@ -52372,7 +52502,7 @@ fn load_swap_fill_rollup(
         None,
         gas_limit,
     )?;
-    let (base_asset_id, quote_asset_id) = parse_router_assets_from_value(&assets_value);
+    let (base_asset_id, quote_asset_id) = parse_router_assets_from_value(&assets_value)?;
     let history_head_value = call_contract_view_value(
         Arc::clone(&state),
         &authority_id,
@@ -52409,10 +52539,9 @@ fn load_swap_fill_rollup(
             gas_limit,
         )?;
         scanned = scanned.saturating_add(1);
-        if let Some(record) = parse_swap_history_record(cursor, &record_value) {
-            if record.trader == authority {
-                records.push(record);
-            }
+        let record = parse_swap_history_record(cursor, &record_value)?;
+        if record.trader == authority {
+            records.push(record);
         }
         cursor = cursor.saturating_sub(1);
     }
@@ -52825,6 +52954,182 @@ fn trader_activity_item_from_projection(
             context = policy_id
                 .map(|value| format!("Policy #{value}"))
                 .unwrap_or_else(|| "Cover".to_owned());
+        }
+        event
+            if projection.module == "intents"
+                && matches!(
+                    event,
+                    "intent_opened" | "intent_cancelled" | "intent_filled"
+                ) =>
+        {
+            let intent_id = object_lookup_string(&payload, &["intent_id"]);
+            let amount_in = object_lookup_i64(&payload, &["amount_in"]);
+            let min_out = object_lookup_i64(&payload, &["min_out"]);
+            let amount_out = object_lookup_i64(&payload, &["amount_out"]);
+            exposure = [
+                amount_in.map(|value| format!("{} in", compact_number(value as f64, 0))),
+                amount_out.map(|value| format!("{} out", compact_number(value as f64, 0))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if exposure.is_empty() {
+                exposure = min_out
+                    .map(|value| format!("{} min out", compact_number(value as f64, 0)))
+                    .unwrap_or_else(|| "Intent action".to_owned());
+            }
+            context = intent_id
+                .map(|value| format!("Intent {value}"))
+                .unwrap_or_else(|| "Intents".to_owned());
+        }
+        event
+            if projection.module == "vaults"
+                && matches!(
+                    event,
+                    "vault_registered"
+                        | "vault_deposited"
+                        | "vault_redeem_requested"
+                        | "vault_redeem_claimed"
+                ) =>
+        {
+            let vault_id = object_lookup_string(&payload, &["vault_id"]);
+            let position_id = object_lookup_string(&payload, &["position_id"]);
+            let amount = object_lookup_i64(&payload, &["amount", "shares"]);
+            exposure = amount
+                .map(|value| compact_number(value as f64, 0))
+                .unwrap_or_else(|| "Vault action".to_owned());
+            context = [vault_id, position_id]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if context.is_empty() {
+                context = "Vaults".to_owned();
+            }
+        }
+        event
+            if projection.module == "operators"
+                && matches!(
+                    event,
+                    "operator_registered"
+                        | "operator_bonded"
+                        | "operator_heartbeat"
+                        | "operator_fees_claimed"
+                ) =>
+        {
+            let service = object_lookup_string(&payload, &["service"]);
+            let amount = object_lookup_i64(&payload, &["amount", "min_bond", "fees_accrued"]);
+            let health = object_lookup_i64(&payload, &["health_bps"]);
+            exposure = [
+                amount.map(|value| compact_number(value as f64, 0)),
+                health.map(|value| format!("{} bps health", compact_number(value as f64, 0))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if exposure.is_empty() {
+                exposure = "Operator action".to_owned();
+            }
+            context = service
+                .map(|value| format!("Service {value}"))
+                .unwrap_or_else(|| "Operators".to_owned());
+        }
+        event
+            if projection.module == "margin"
+                && matches!(
+                    event,
+                    "margin_market_registered"
+                        | "margin_collateral_deposited"
+                        | "margin_collateral_withdrawn"
+                        | "margin_exposure_locked"
+                        | "margin_account_liquidated"
+                ) =>
+        {
+            let market_id = object_lookup_string(&payload, &["market_id"]);
+            let account_key = object_lookup_string(&payload, &["account_key"]);
+            let amount = object_lookup_i64(&payload, &["amount", "exposure_delta"]);
+            exposure = amount
+                .map(|value| compact_number(value as f64, 0))
+                .unwrap_or_else(|| "Margin action".to_owned());
+            context = [market_id, account_key]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if context.is_empty() {
+                context = "Portfolio Margin".to_owned();
+            }
+        }
+        event
+            if projection.module == "rwa"
+                && matches!(
+                    event,
+                    "rwa_lot_issued"
+                        | "rwa_share_asset_bound"
+                        | "rwa_nav_reported"
+                        | "rwa_redemption_requested"
+                        | "rwa_redemption_settled"
+                ) =>
+        {
+            let market_id = object_lookup_string(&payload, &["market_id"]);
+            let redemption_id = object_lookup_string(&payload, &["redemption_id"]);
+            let shares = object_lookup_i64(&payload, &["shares", "total_shares"]);
+            let nav = object_lookup_i64(&payload, &["nav_per_share", "initial_nav_per_share"]);
+            exposure = [
+                shares.map(|value| format!("{} shares", compact_number(value as f64, 0))),
+                nav.map(|value| format!("{} NAV", compact_number(value as f64, 0))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if exposure.is_empty() {
+                exposure = "RWA action".to_owned();
+            }
+            context = [market_id, redemption_id]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if context.is_empty() {
+                context = "RWA Markets".to_owned();
+            }
+        }
+        event
+            if projection.module == "dlmmHooks"
+                && matches!(
+                    event,
+                    "dlmm_hook_configured"
+                        | "dlmm_hook_limit_order_placed"
+                        | "dlmm_hook_twamm_scheduled"
+                        | "dlmm_hook_execution_recorded"
+                ) =>
+        {
+            let hook_id = object_lookup_string(&payload, &["hook_id"]);
+            let order_id = object_lookup_string(&payload, &["order_id"]);
+            let amount_in = object_lookup_i64(&payload, &["amount_in"]);
+            let min_out = object_lookup_i64(&payload, &["min_out", "amount_out"]);
+            exposure = [
+                amount_in.map(|value| format!("{} in", compact_number(value as f64, 0))),
+                min_out.map(|value| format!("{} out", compact_number(value as f64, 0))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if exposure.is_empty() {
+                exposure = "Hook action".to_owned();
+            }
+            context = [hook_id, order_id]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if context.is_empty() {
+                context = "DLMM Hooks".to_owned();
+            }
         }
         _ => {
             if !payload.is_empty() {
@@ -53362,6 +53667,149 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
         axum::http::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+async fn handle_v1_contracts_rollups_module_get(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(mut params): crate::NoritoQuery<ContractEventGetParams>,
+    module: &'static str,
+    endpoint: &'static str,
+    rollup_kind: &'static str,
+) -> Result<axum::response::Response> {
+    params.module = Some(module.to_owned());
+    params.result_ok = Some(params.result_ok.unwrap_or(true));
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(params.limit, params.offset, cap, endpoint)?;
+    let count_mode = app_count_mode(params.count_mode.as_deref(), endpoint);
+    let index = contract_event_index_snapshot(state.as_ref());
+    let (items, total) = collect_trader_activity_page(index.as_ref(), &params, pagination);
+    let page = page_result_from_counted_items(items, total, params.offset, count_mode);
+    let activity_items = page
+        .items
+        .iter()
+        .map(trader_activity_item_from_projection)
+        .collect::<Vec<_>>();
+    let mut top = Map::new();
+    top.insert("ok".into(), Value::Bool(true));
+    top.insert("module".into(), Value::from(module));
+    top.insert(
+        "moduleLabel".into(),
+        Value::from(trader_module_label(module)),
+    );
+    top.insert("rollupKind".into(), Value::from(rollup_kind));
+    top.insert(
+        "contractKey".into(),
+        Value::from(trader_module_contract_key(module)),
+    );
+    top.insert(
+        "items".into(),
+        Value::Array(trader_activity_items_to_json(&activity_items)),
+    );
+    insert_page_metadata(&mut top, &page, count_mode);
+    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_intents_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "intents",
+        ENDPOINT_CONTRACTS_ROLLUPS_INTENTS,
+        "intent_lifecycle",
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_vault_positions_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "vaults",
+        ENDPOINT_CONTRACTS_ROLLUPS_VAULT_POSITIONS,
+        "vault_positions",
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_operators_status_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "operators",
+        ENDPOINT_CONTRACTS_ROLLUPS_OPERATORS_STATUS,
+        "operator_status",
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_margin_health_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "margin",
+        ENDPOINT_CONTRACTS_ROLLUPS_MARGIN_HEALTH,
+        "margin_health",
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_rwa_lots_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "rwa",
+        ENDPOINT_CONTRACTS_ROLLUPS_RWA_LOTS,
+        "rwa_lots",
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_dlmm_hooks_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "dlmmHooks",
+        ENDPOINT_CONTRACTS_ROLLUPS_DLMM_HOOKS,
+        "dlmm_hooks",
+    )
+    .await
 }
 
 #[cfg(all(test, feature = "app_api"))]
