@@ -16368,6 +16368,7 @@ mod contract_entrypoint_validation_tests {
             features_bitmap: Some(0),
             access_set_hints: None,
             entrypoints,
+            states: None,
             kotoba: None,
             provenance: None,
         }
