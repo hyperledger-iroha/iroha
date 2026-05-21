@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, error::Error as StdError, fmt};
 use iroha_crypto::Hash;
 use iroha_data_model::smart_contract::manifest::{
     AccessSetHints, ContractManifest, DynamicAccessHint, EntryPointKind, KotobaTranslationEntry,
+    StateDescriptor,
 };
 
 use crate::{
@@ -110,6 +111,7 @@ pub fn verify_contract_artifact(
         features_bitmap: Some(contract_interface.features_bitmap),
         access_set_hints: contract_interface.access_set_hints.clone(),
         entrypoints: Some(entrypoints),
+        states: Some(manifest_state_descriptors(&contract_interface.states)),
         kotoba: (!contract_interface.kotoba.is_empty())
             .then_some(contract_interface.kotoba.clone()),
         provenance: None,
@@ -124,6 +126,64 @@ pub fn verify_contract_artifact(
         contract_interface,
         manifest,
     })
+}
+
+fn manifest_state_descriptors(
+    states: &[crate::metadata::EmbeddedStateDescriptor],
+) -> Vec<StateDescriptor> {
+    states
+        .iter()
+        .map(|state| StateDescriptor {
+            name: state.name.clone(),
+            type_name: manifest_state_type_name(&state.ty),
+        })
+        .collect()
+}
+
+fn manifest_state_type_name(ty: &crate::metadata::EmbeddedStateType) -> String {
+    use crate::metadata::EmbeddedStateType;
+
+    match ty {
+        EmbeddedStateType::Int => "int".to_string(),
+        EmbeddedStateType::FixedU128 => "FixedU128".to_string(),
+        EmbeddedStateType::Amount => "Amount".to_string(),
+        EmbeddedStateType::Balance => "Balance".to_string(),
+        EmbeddedStateType::Bool => "bool".to_string(),
+        EmbeddedStateType::String => "string".to_string(),
+        EmbeddedStateType::Blob => "Blob".to_string(),
+        EmbeddedStateType::Bytes => "bytes".to_string(),
+        EmbeddedStateType::DataSpaceId => "DataSpaceId".to_string(),
+        EmbeddedStateType::AccountId => "AccountId".to_string(),
+        EmbeddedStateType::AssetDefinitionId => "AssetDefinitionId".to_string(),
+        EmbeddedStateType::AssetId => "AssetId".to_string(),
+        EmbeddedStateType::NftId => "NftId".to_string(),
+        EmbeddedStateType::DomainId => "DomainId".to_string(),
+        EmbeddedStateType::Name => "Name".to_string(),
+        EmbeddedStateType::Json => "Json".to_string(),
+        EmbeddedStateType::Tuple(items) => {
+            let items = items
+                .iter()
+                .map(manifest_state_type_name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({items})")
+        }
+        EmbeddedStateType::Struct { name, fields } => {
+            let fields = fields
+                .iter()
+                .map(|field| format!("{}: {}", field.name, manifest_state_type_name(&field.ty)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{name}{{{fields}}}")
+        }
+        EmbeddedStateType::Map { key, value } => {
+            format!(
+                "map<{}, {}>",
+                manifest_state_type_name(key),
+                manifest_state_type_name(value)
+            )
+        }
+    }
 }
 
 fn validate_contract_interface(

@@ -337,24 +337,9 @@ fn manifest_from_verified_artifact(
     verified: &ivm::VerifiedContractArtifact,
     code_hash: Hash,
 ) -> ContractManifest {
-    ContractManifest {
-        code_hash: Some(code_hash),
-        abi_hash: Some(verified.abi_hash),
-        compiler_fingerprint: Some(verified.contract_interface.compiler_fingerprint.clone()),
-        features_bitmap: Some(verified.contract_interface.features_bitmap),
-        access_set_hints: verified.contract_interface.access_set_hints.clone(),
-        entrypoints: Some(
-            verified
-                .contract_interface
-                .entrypoints
-                .iter()
-                .map(|entrypoint| entrypoint.to_manifest_descriptor())
-                .collect(),
-        ),
-        kotoba: (!verified.contract_interface.kotoba.is_empty())
-            .then_some(verified.contract_interface.kotoba.clone()),
-        provenance: None,
-    }
+    let mut manifest = verified.manifest.clone();
+    manifest.code_hash = Some(code_hash);
+    manifest
 }
 
 fn parse_code_hash_hex(raw: &str) -> Result<Hash, Error> {

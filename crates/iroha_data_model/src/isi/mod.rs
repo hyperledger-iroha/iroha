@@ -4522,7 +4522,7 @@ mod tests {
 
     #[test]
     fn instruction_box_lossy_deserialize_maps_trailing_pair_bytes_to_invalid_instruction() {
-        let _guard = RegistryGuard::set(instruction_registry![Log]);
+        let _guard = RegistryGuard::set(instruction_registry_with_ids![Log]);
         let boxed = InstructionBox::from(Log::new(Level::INFO, "lossy pair tail".to_owned()));
         let (wire_id, framed_payload) =
             encoded_instruction_pair_payload(&boxed).expect("encoded instruction payload");

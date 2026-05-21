@@ -17,6 +17,7 @@ fn contract_manifest_roundtrip_norito() {
             dynamic_writes: Vec::new(),
         }),
         entrypoints: None,
+        states: None,
         kotoba: None,
         provenance: None,
     };

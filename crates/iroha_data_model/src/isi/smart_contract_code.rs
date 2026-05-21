@@ -247,6 +247,7 @@ mod tests {
             features_bitmap: Some(0),
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         }

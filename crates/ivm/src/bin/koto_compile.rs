@@ -220,9 +220,39 @@ fn manifest_to_json(
     norito::json::to_json_pretty(manifest).map_err(|e| format!("manifest json serialize: {e}"))
 }
 
+fn interface_to_json(
+    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
+) -> Result<String, String> {
+    let manifest_value =
+        json::to_value(manifest).map_err(|e| format!("interface manifest serialize: {e}"))?;
+    let entrypoints = manifest
+        .entrypoints
+        .as_ref()
+        .map(json::to_value)
+        .transpose()
+        .map_err(|e| format!("interface entrypoints serialize: {e}"))?
+        .unwrap_or(Value::Array(Vec::new()));
+    let states = manifest
+        .states
+        .as_ref()
+        .map(json::to_value)
+        .transpose()
+        .map_err(|e| format!("interface states serialize: {e}"))?
+        .unwrap_or(Value::Array(Vec::new()));
+    let value = json_object(vec![
+        json_entry("interface_version", Value::from(1_u64)),
+        json_entry("manifest", manifest_value),
+        json_entry("entrypoints", entrypoints),
+        json_entry("states", states),
+    ]);
+    json::to_string_pretty(&value).map_err(|e| format!("interface json serialize: {e}"))
+}
+
 fn print_usage() {
     eprintln!("Usage:");
-    eprintln!("  koto_compile <input.ko> [--out <output.to>] [--manifest-out <manifest.json>] \\");
+    eprintln!(
+        "  koto_compile <input.ko> [--out <output.to>] [--manifest-out <manifest.json>] [--interface-out <interface.json>] \\"
+    );
     eprintln!(
         "               [--abi <u8>] [--vl <u8>] [--max-cycles <u64>] [--force-zk] [--force-vector] [--emit-source-map <path>] [--emit-budget-report <path>] [--diagnostic-format <text|json>] [--embed-debug] [--strip-debug] [--mode <production|test>] [--no-lint] [--deny-lint-warnings]"
     );
@@ -255,6 +285,7 @@ fn main() {
     let mut out: Option<String> = None;
     let mut abi_version: Option<u8> = None;
     let mut manifest_out: Option<String> = None;
+    let mut interface_out: Option<String> = None;
     let mut vector_length: Option<u8> = None;
     let mut max_cycles: Option<u64> = None;
     let mut iter_cap: Option<u8> = None;
@@ -294,6 +325,14 @@ fn main() {
                     std::process::exit(2);
                 }
                 manifest_out = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--interface-out" => {
+                if i + 1 >= args.len() {
+                    eprintln!("--interface-out expects a path");
+                    std::process::exit(2);
+                }
+                interface_out = Some(args[i + 1].clone());
                 i += 2;
             }
             "--vl" => {
@@ -512,6 +551,7 @@ fn main() {
         }
     };
     print_access_hint_diagnostics(&report.access_hint_diagnostics, diagnostic_format);
+    let interface_manifest = manifest.clone();
     let manifest_opt = manifest_out.is_some().then_some(manifest);
 
     // Pick output path
@@ -545,6 +585,26 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("manifest serialize error: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(path) = interface_out {
+        match interface_to_json(&interface_manifest) {
+            Ok(json) => {
+                if path == "-" {
+                    println!("{json}");
+                } else {
+                    if let Err(e) = fs::write(&path, &json) {
+                        eprintln!("failed to write {path}: {e}");
+                        std::process::exit(1);
+                    }
+                    println!("Wrote interface {path}");
+                }
+            }
+            Err(e) => {
+                eprintln!("interface serialize error: {e}");
                 std::process::exit(1);
             }
         }
@@ -603,11 +663,31 @@ mod tests {
             features_bitmap: Some(0),
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         };
         let s = manifest_to_json(&m).expect("json");
         assert!(s.contains("compiler_fingerprint"));
+    }
+
+    #[test]
+    fn interface_json_serialization_has_schema_sections() {
+        let m = iroha_data_model::smart_contract::manifest::ContractManifest {
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: Some("test".to_string()),
+            features_bitmap: Some(0),
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            kotoba: None,
+            provenance: None,
+        };
+        let s = interface_to_json(&m).expect("json");
+        assert!(s.contains("interface_version"));
+        assert!(s.contains("entrypoints"));
+        assert!(s.contains("states"));
     }
 
     #[test]

@@ -825,6 +825,9 @@ pub mod manifest {
         /// Optional entrypoint descriptors (name, kind, permission) advertised by the compiler.
         #[norito(default)]
         pub entrypoints: Option<Vec<EntrypointDescriptor>>,
+        /// Optional durable state schema advertised by the compiler.
+        #[norito(default)]
+        pub states: Option<Vec<StateDescriptor>>,
         /// Optional localization tables extracted from `kotoba { ... }` blocks.
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
@@ -1042,6 +1045,25 @@ pub mod manifest {
         pub type_name: String,
     }
 
+    /// Declarative durable state schema advertised by a compiled contract.
+    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveFastJson,
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct StateDescriptor {
+        /// Stable state key as declared in Kotodama source.
+        pub name: String,
+        /// Canonical durable value type stored under this key.
+        pub type_name: String,
+    }
+
     /// Localized message text for a specific language tag.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1180,6 +1202,9 @@ pub mod manifest {
         /// Optional entrypoint descriptors (name, kind, permission) advertised by the compiler.
         #[norito(default)]
         pub entrypoints: Option<Vec<EntrypointDescriptor>>,
+        /// Optional durable state schema advertised by the compiler.
+        #[norito(default)]
+        pub states: Option<Vec<StateDescriptor>>,
         /// Optional localization tables extracted from `kotoba { ... }` blocks.
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
@@ -1194,6 +1219,7 @@ pub mod manifest {
                 features_bitmap: manifest.features_bitmap,
                 access_set_hints: manifest.access_set_hints.clone(),
                 entrypoints: manifest.entrypoints.clone(),
+                states: manifest.states.clone(),
                 kotoba: manifest.kotoba.clone(),
             }
         }
@@ -1322,6 +1348,7 @@ pub mod manifest {
                 features_bitmap: Some(0xAA),
                 access_set_hints: None,
                 entrypoints: None,
+                states: None,
                 kotoba: None,
                 provenance: None,
             };

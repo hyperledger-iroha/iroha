@@ -3141,6 +3141,7 @@ fn write_start_script(
     let default_iroha_release = default_irohad_release.with_file_name("iroha");
     let mut start_file = BufWriter::new(File::create(start)?);
     let sora_flag = if sora_mode { "--sora " } else { "" };
+    let sora_mode_env = if sora_mode { "1" } else { "0" };
     writeln!(start_file, "#!/usr/bin/env bash")?;
     writeln!(start_file, "set -euo pipefail")?;
     writeln!(start_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
@@ -3173,14 +3174,14 @@ fn write_start_script(
     writeln!(start_file, "if [ -z \"${{IROHAD_BIN:-}}\" ]; then")?;
     writeln!(
         start_file,
-        "  if [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then"
-    )?;
-    writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN_RELEASE\"")?;
-    writeln!(
-        start_file,
-        "  elif [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then"
+        "  if [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then"
     )?;
     writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN_DEBUG\"")?;
+    writeln!(
+        start_file,
+        "  elif [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then"
+    )?;
+    writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN_RELEASE\"")?;
     writeln!(
         start_file,
         "  else\n    echo \"IROHAD_BIN not set and default ($DEFAULT_IROHAD_BIN_DEBUG or $DEFAULT_IROHAD_BIN_RELEASE) not found; build irohad or set IROHAD_BIN\" >&2\n    exit 1\n  fi"
@@ -3232,6 +3233,10 @@ fn write_start_script(
         "FAUCET_RESERVE_TARGET=\"{}\"",
         LOCALNET_FEE_ASSET_RESERVE_TARGET
     )?;
+    writeln!(
+        start_file,
+        "FAUCET_RESERVE_RETRIES=\"${{IROHA_LOCALNET_FAUCET_RESERVE_RETRIES:-30}}\""
+    )?;
     writeln!(start_file, "for i in $(seq 0 {}); do", peers - 1)?;
     writeln!(
         start_file,
@@ -3256,11 +3261,42 @@ fn write_start_script(
     writeln!(start_file, "    rm -f \"$PIDFILE\"")?;
     writeln!(start_file, "  fi")?;
     writeln!(start_file, "  mkdir -p \"$SNAPSHOT_STORE_DIR\"")?;
+    writeln!(start_file, "  if command -v python3 >/dev/null 2>&1; then")?;
     writeln!(
         start_file,
-        "  nohup env SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" RUST_LOG=${{RUST_LOG:-info}} \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\" > \"$DIR/peer${{i}}.log\" 2>&1 &"
+        "    peer_pid=$(SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" RUST_LOG=\"${{RUST_LOG:-info}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_SORA_MODE=\"{sora_mode_env}\" python3 - <<'PY'"
     )?;
-    writeln!(start_file, "  echo $! > \"$PIDFILE\"")?;
+    writeln!(start_file, "import os")?;
+    writeln!(start_file, "import subprocess")?;
+    writeln!(start_file, "")?;
+    writeln!(start_file, "env = os.environ.copy()")?;
+    writeln!(start_file, "cmd = [env[\"IROHAD_BIN\"]]")?;
+    writeln!(start_file, "if env.get(\"IROHA_SORA_MODE\") == \"1\":")?;
+    writeln!(start_file, "    cmd.append(\"--sora\")")?;
+    writeln!(
+        start_file,
+        "cmd.extend([\"--config\", env[\"IROHA_PEER_CONFIG\"]])"
+    )?;
+    writeln!(
+        start_file,
+        "log = open(env[\"IROHA_PEER_LOG\"], \"ab\", buffering=0)"
+    )?;
+    writeln!(
+        start_file,
+        "process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, close_fds=True, start_new_session=True)"
+    )?;
+    writeln!(start_file, "print(process.pid)")?;
+    writeln!(start_file, "PY")?;
+    writeln!(start_file, "    )")?;
+    writeln!(start_file, "  else")?;
+    writeln!(
+        start_file,
+        "    nohup env SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" RUST_LOG=${{RUST_LOG:-info}} \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\" > \"$DIR/peer${{i}}.log\" 2>&1 &"
+    )?;
+    writeln!(start_file, "    peer_pid=$!")?;
+    writeln!(start_file, "    disown \"$peer_pid\" 2>/dev/null || true")?;
+    writeln!(start_file, "  fi")?;
+    writeln!(start_file, "  echo \"$peer_pid\" > \"$PIDFILE\"")?;
     writeln!(start_file, "  echo \"peer$i pid $(cat \"$PIDFILE\")\"")?;
     writeln!(start_file, "done")?;
     writeln!(start_file, "ensure_faucet_reserve() {{")?;
@@ -3268,7 +3304,10 @@ fn write_start_script(
         start_file,
         "  [ -n \"$IROHA_CLI\" ] || {{ echo \"Skipping faucet reserve check: iroha CLI unavailable\" >&2; return 0; }}"
     )?;
-    writeln!(start_file, "  for _ in $(seq 1 90); do")?;
+    writeln!(
+        start_file,
+        "  for _ in $(seq 1 \"$FAUCET_RESERVE_RETRIES\"); do"
+    )?;
     writeln!(
         start_file,
         "    if asset_json=\"$($IROHA_CLI --machine -c \"$DIR/client.toml\" --output-format json ledger asset get --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" 2>/dev/null)\"; then"
@@ -7190,12 +7229,12 @@ mod tests {
             "start script should set release default"
         );
         assert!(
-            start_contents.contains("if [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then"),
-            "start script should prefer the release irohad when both binaries exist"
+            start_contents.contains("if [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then"),
+            "start script should prefer the debug irohad for local contract development"
         );
         assert!(
-            start_contents.contains("elif [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then"),
-            "start script should fall back to the debug irohad when no release binary exists"
+            start_contents.contains("elif [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then"),
+            "start script should fall back to the release irohad when no debug binary exists"
         );
         assert!(
             start_contents.contains("DEFAULT_IROHA_CLI_RELEASE="),
@@ -7204,6 +7243,10 @@ mod tests {
         assert!(
             start_contents.contains("FAUCET_RESERVE_TARGET="),
             "start script should declare a faucet reserve target"
+        );
+        assert!(
+            start_contents.contains("FAUCET_RESERVE_RETRIES="),
+            "start script should make faucet reserve retries configurable"
         );
         assert!(
             start_contents
@@ -7225,8 +7268,12 @@ mod tests {
             "start script should export build line"
         );
         assert!(
+            start_contents.contains("start_new_session=True"),
+            "start script should detach peers into a new session when python3 is available"
+        );
+        assert!(
             start_contents.contains("nohup env SNAPSHOT_STORE_DIR="),
-            "start script should launch peers under nohup so they survive wrapper exit"
+            "start script should keep a nohup fallback for minimal shells"
         );
         assert!(
             start_contents.contains("peer$i already running with pid $existing_pid"),
