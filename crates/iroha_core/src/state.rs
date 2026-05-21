@@ -20668,6 +20668,22 @@ impl State {
         self.kura.get_block(height)
     }
 
+    /// Load the commit certificate recorded in Kura's roster sidecar for a committed block.
+    ///
+    /// This intentionally returns `None` when the sidecar is missing or does not match the
+    /// indexed block, so proof validation can fail closed.
+    #[track_caller]
+    pub fn commit_qc_for_block(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<iroha_data_model::consensus::Qc> {
+        let sidecar = self.kura.read_roster_metadata(height)?;
+        let commit_qc = sidecar.commit_qc?;
+        (commit_qc.height == height && commit_qc.subject_block_hash == block_hash)
+            .then_some(commit_qc)
+    }
+
     /// Load a committed block hash by height from Kura's durable index.
     ///
     /// This avoids loading the whole block when callers only need to verify
@@ -28560,6 +28576,19 @@ mod replay_validation_tests {
 
     use super::*;
 
+    fn run_replay_validation_test_on_stack(name: &'static str, test: fn()) {
+        // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
+        // platform-default worker stack for these integration-heavy scenarios.
+        let handle = std::thread::Builder::new()
+            .name(name.to_owned())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn replay validation test");
+        if let Err(payload) = handle.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
     fn new_genesis_account(
         account_id: &iroha_data_model::account::AccountId,
     ) -> iroha_data_model::account::NewAccount {
@@ -28956,8 +28985,15 @@ mod replay_validation_tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn replay_rotates_topology_for_npos_prf_leader() {
+        run_replay_validation_test_on_stack(
+            "replay_rotates_topology_for_npos_prf_leader",
+            replay_rotates_topology_for_npos_prf_leader_impl,
+        );
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn replay_rotates_topology_for_npos_prf_leader_impl() {
         use std::borrow::Cow;
 
         use iroha_crypto::{Algorithm, KeyPair};
@@ -31062,6 +31098,24 @@ impl StateTransaction<'_, '_> {
     #[inline]
     pub fn block_height(&self) -> u64 {
         self._curr_block.height().get()
+    }
+
+    /// Load a committed block by height from Kura for the current transaction context.
+    #[must_use]
+    pub fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
+        self.kura.get_block(height)
+    }
+
+    /// Load the commit certificate recorded in Kura's roster sidecar for a committed block.
+    ///
+    /// This intentionally returns `None` when the sidecar is missing or does not match the
+    /// indexed block, so SCCP proof validation fails closed.
+    #[must_use]
+    pub fn commit_qc_for_block(&self, height: u64, block_hash: HashOf<BlockHeader>) -> Option<Qc> {
+        let sidecar = self.kura.read_roster_metadata(height)?;
+        let commit_qc = sidecar.commit_qc?;
+        (commit_qc.height == height && commit_qc.subject_block_hash == block_hash)
+            .then_some(commit_qc)
     }
 
     /// Current slot derived from the block timestamp.

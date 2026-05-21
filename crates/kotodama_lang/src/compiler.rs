@@ -31,7 +31,7 @@ use iroha_data_model::{
     role::RoleId,
     smart_contract::manifest::{
         AccessSetHints, DynamicAccessHint, EntryPointKind, EntrypointParamDescriptor,
-        TriggerCallback, TriggerDescriptor,
+        StateDescriptor, TriggerCallback, TriggerDescriptor,
     },
     trigger::{Trigger, TriggerId},
 };
@@ -39,8 +39,8 @@ use norito::json;
 
 use super::{
     ast::{
-        BinaryOp, ContractFeature, ContractMeta, FunctionKind, FunctionModifiers,
-        FunctionVisibility, Program, UnaryOp,
+        BinaryOp, Block, ContractFeature, ContractMeta, Expr, FunctionKind, FunctionModifiers,
+        FunctionVisibility, Item, Program, Statement, UnaryOp,
     },
     i18n::{self, Language, Message},
     ir::{self, Instr, Terminator},
@@ -76,6 +76,45 @@ const AUTHORITY_ACCOUNT_KEY: &str = "account:$authority";
 const AUTHORITY_PLACEHOLDER: &str = "$authority";
 const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
 const COMPILER_FINGERPRINT: &str = concat!("kotodama_lang/", env!("CARGO_PKG_VERSION"));
+const FIRST_RELEASE_PRELUDE: &str = r#"
+fn require_authority(expected: AccountId) {
+  assert(authority() == expected, "authority mismatch");
+}
+
+fn require_owner(owner: AccountId) {
+  require_authority(owner);
+}
+
+fn bps_fee(amount: int, bps: int) -> int {
+  assert(amount >= 0, "amount negative");
+  assert(bps >= 0, "bps negative");
+  return amount * bps / 10000;
+}
+
+fn checked_add_amount(left: int, right: int) -> int {
+  assert(left >= 0, "left amount negative");
+  assert(right >= 0, "right amount negative");
+  let result = left + right;
+  assert(result >= left, "amount overflow");
+  return result;
+}
+
+fn checked_sub_amount(left: int, right: int) -> int {
+  assert(left >= 0, "left amount negative");
+  assert(right >= 0, "right amount negative");
+  assert(left >= right, "amount underflow");
+  return left - right;
+}
+
+fn verify_signed_json(payload: bytes, signature: bytes, public_key: bytes, scheme: int) -> Json {
+  assert(verify_signature(payload, signature, public_key, scheme), "signature");
+  return decode_json(payload);
+}
+
+fn require_json_int(payload: Json, key: Name) -> int {
+  return payload.get_int(key);
+}
+"#;
 
 #[derive(Clone, PartialEq, Eq)]
 struct AccessSets {
@@ -764,6 +803,40 @@ seiyaku MyC {
         let code = compiler.compile_source(src).expect("compile");
         let parsed = ProgramMetadata::parse(&code).expect("parse meta");
         assert_eq!(parsed.metadata.max_cycles, 42);
+    }
+
+    #[test]
+    fn loop_phi_lowering_is_deterministic() {
+        let compiler = Compiler::new();
+        let src = r#"
+seiyaku StableLoop {
+  kotoage fn main() -> int {
+    let alpha = 1;
+    let beta = 2;
+    let gamma = 3;
+    let delta = 4;
+    let epsilon = 5;
+    let cursor = 0;
+    while cursor < 4 {
+      if alpha < beta {
+        gamma = gamma + delta;
+      } else {
+        delta = delta + gamma;
+      }
+      alpha = alpha + 1;
+      beta = beta + 2;
+      epsilon = epsilon + alpha;
+      cursor = cursor + 1;
+    }
+    return alpha + beta + gamma + delta + epsilon + cursor;
+  }
+}
+"#;
+        let first = compiler.compile_source(src).expect("first compile");
+        for _ in 0..8 {
+            let next = compiler.compile_source(src).expect("repeat compile");
+            assert_eq!(next, first);
+        }
     }
 
     #[test]
@@ -3995,6 +4068,58 @@ mod test_mode_tests {
             );
         }
     }
+
+    #[test]
+    fn first_release_prelude_helpers_are_available_without_imports() {
+        let src = r#"
+        seiyaku Demo {
+            kotoage fn fee_quote() -> int {
+                return checked_sub_amount(checked_add_amount(bps_fee(10000, 25), 10), 5);
+            }
+        }
+        "#;
+
+        let (_code, manifest) = Compiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile prelude helper use");
+        assert!(
+            manifest
+                .entrypoints
+                .as_ref()
+                .is_some_and(|entrypoints| entrypoints
+                    .iter()
+                    .any(|entry| entry.name == "fee_quote"))
+        );
+    }
+
+    #[test]
+    fn manifest_state_descriptors_use_canonical_type_names() {
+        let src = r#"
+        seiyaku Demo {
+            state int Counter;
+            state Prices: Map<Name, int>;
+
+            view fn get_counter() -> int {
+                return Counter;
+            }
+        }
+        "#;
+
+        let (_code, manifest) = Compiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile state schema");
+        let states = manifest.states.expect("state schema");
+        assert!(
+            states
+                .iter()
+                .any(|state| state.name == "Counter" && state.type_name == "int")
+        );
+        assert!(
+            states
+                .iter()
+                .any(|state| state.name == "Prices" && state.type_name == "map<Name, int>")
+        );
+    }
 }
 
 impl Compiler {
@@ -4052,9 +4177,10 @@ impl Compiler {
     }
 
     fn compile_program(&self, program: &Program) -> Result<CompilationArtifacts, String> {
+        let prelude_program = program_with_first_release_prelude(program)?;
         let compiled_program = match self.opts.mode {
-            CompilerMode::Production => program.stripped_for_production(),
-            CompilerMode::Test => program.clone(),
+            CompilerMode::Production => prelude_program.stripped_for_production(),
+            CompilerMode::Test => prelude_program,
         };
         let typed = semantic::analyze(&compiled_program)
             .map_err(|e| i18n::translate(self.lang, Message::SemanticError(&e.message)))?;
@@ -9745,6 +9871,7 @@ impl Compiler {
                     .map(|entrypoint| entrypoint.to_manifest_descriptor())
                     .collect(),
             ),
+            states: Some(manifest_state_descriptors(&contract_interface.states)),
             kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
             provenance: None,
         };
@@ -9765,6 +9892,168 @@ impl Compiler {
     > {
         let (bytes, manifest, report) = self.compile_source_with_manifest_and_report(src)?;
         Ok((bytes, manifest, report.access_hint_diagnostics))
+    }
+}
+
+fn program_with_first_release_prelude(program: &Program) -> Result<Program, String> {
+    let mut defined = HashSet::new();
+    let mut called = HashSet::new();
+    collect_program_function_names(program, &mut defined, &mut called);
+
+    let mut needed = HashSet::new();
+    for name in [
+        "require_authority",
+        "require_owner",
+        "bps_fee",
+        "checked_add_amount",
+        "checked_sub_amount",
+        "verify_signed_json",
+        "require_json_int",
+    ] {
+        if called.contains(name) && !defined.contains(name) {
+            needed.insert(name.to_owned());
+        }
+    }
+    if needed.contains("require_owner") && !defined.contains("require_authority") {
+        needed.insert("require_authority".to_owned());
+    }
+
+    if needed.is_empty() {
+        return Ok(program.clone());
+    }
+
+    let prelude = parser::parse(FIRST_RELEASE_PRELUDE)
+        .map_err(|err| format!("prelude parse error: {err}"))?;
+    let mut items = Vec::new();
+    for item in prelude.items {
+        if let Item::Function(func) = &item
+            && needed.contains(&func.name)
+        {
+            items.push(item);
+        }
+    }
+    items.extend(program.items.clone());
+
+    Ok(Program {
+        items,
+        contract_meta: program.contract_meta.clone(),
+        test_target: program.test_target.clone(),
+        fixtures: program.fixtures.clone(),
+    })
+}
+
+fn collect_program_function_names(
+    program: &Program,
+    defined: &mut HashSet<String>,
+    called: &mut HashSet<String>,
+) {
+    for item in &program.items {
+        match item {
+            Item::Function(func) => {
+                defined.insert(func.name.clone());
+                collect_block_calls(&func.body, called);
+            }
+            Item::Const(const_decl) => collect_expr_calls(&const_decl.value, called),
+            Item::Struct(_) | Item::State(_) | Item::Trigger(_) | Item::Kotoba(_) => {}
+        }
+    }
+}
+
+fn collect_block_calls(block: &Block, called: &mut HashSet<String>) {
+    for stmt in &block.statements {
+        collect_statement_calls(stmt, called);
+    }
+}
+
+fn collect_statement_calls(stmt: &Statement, called: &mut HashSet<String>) {
+    match stmt {
+        Statement::Let { value, .. } | Statement::Assign { value, .. } => {
+            collect_expr_calls(value, called);
+        }
+        Statement::AssignExpr { target, value, .. } => {
+            collect_expr_calls(target, called);
+            collect_expr_calls(value, called);
+        }
+        Statement::Expr(expr) | Statement::Return(Some(expr)) => collect_expr_calls(expr, called),
+        Statement::Return(None) | Statement::Break | Statement::Continue => {}
+        Statement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            collect_expr_calls(cond, called);
+            collect_block_calls(then_branch, called);
+            if let Some(branch) = else_branch {
+                collect_block_calls(branch, called);
+            }
+        }
+        Statement::While { cond, body } => {
+            collect_expr_calls(cond, called);
+            collect_block_calls(body, called);
+        }
+        Statement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(init) = init {
+                collect_statement_calls(init, called);
+            }
+            if let Some(cond) = cond {
+                collect_expr_calls(cond, called);
+            }
+            if let Some(step) = step {
+                collect_statement_calls(step, called);
+            }
+            collect_block_calls(body, called);
+        }
+        Statement::ForEachMap { map, body, .. } => {
+            collect_expr_calls(map, called);
+            collect_block_calls(body, called);
+        }
+    }
+}
+
+fn collect_expr_calls(expr: &Expr, called: &mut HashSet<String>) {
+    match expr {
+        Expr::Binary { left, right, .. } => {
+            collect_expr_calls(left, called);
+            collect_expr_calls(right, called);
+        }
+        Expr::Unary { expr, .. } => collect_expr_calls(expr, called),
+        Expr::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            collect_expr_calls(cond, called);
+            collect_expr_calls(then_expr, called);
+            collect_expr_calls(else_expr, called);
+        }
+        Expr::Call { name, args } => {
+            called.insert(name.clone());
+            for arg in args {
+                collect_expr_calls(arg, called);
+            }
+        }
+        Expr::Member { object, .. } => collect_expr_calls(object, called),
+        Expr::Index { target, index } => {
+            collect_expr_calls(target, called);
+            collect_expr_calls(index, called);
+        }
+        Expr::Tuple(items) => {
+            for item in items {
+                collect_expr_calls(item, called);
+            }
+        }
+        Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Decimal(_)
+        | Expr::String(_)
+        | Expr::Bytes(_)
+        | Expr::Ident(_) => {}
     }
 }
 
@@ -10000,6 +10289,60 @@ fn build_state_descriptors(typed: &TypedProgram) -> Result<Vec<EmbeddedStateDesc
             })
         })
         .collect()
+}
+
+fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDescriptor> {
+    states
+        .iter()
+        .map(|state| StateDescriptor {
+            name: state.name.clone(),
+            type_name: manifest_state_type_name(&state.ty),
+        })
+        .collect()
+}
+
+fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
+    match ty {
+        EmbeddedStateType::Int => "int".to_string(),
+        EmbeddedStateType::FixedU128 => "FixedU128".to_string(),
+        EmbeddedStateType::Amount => "Amount".to_string(),
+        EmbeddedStateType::Balance => "Balance".to_string(),
+        EmbeddedStateType::Bool => "bool".to_string(),
+        EmbeddedStateType::String => "string".to_string(),
+        EmbeddedStateType::Blob => "Blob".to_string(),
+        EmbeddedStateType::Bytes => "bytes".to_string(),
+        EmbeddedStateType::DataSpaceId => "DataSpaceId".to_string(),
+        EmbeddedStateType::AccountId => "AccountId".to_string(),
+        EmbeddedStateType::AssetDefinitionId => "AssetDefinitionId".to_string(),
+        EmbeddedStateType::AssetId => "AssetId".to_string(),
+        EmbeddedStateType::NftId => "NftId".to_string(),
+        EmbeddedStateType::DomainId => "DomainId".to_string(),
+        EmbeddedStateType::Name => "Name".to_string(),
+        EmbeddedStateType::Json => "Json".to_string(),
+        EmbeddedStateType::Tuple(items) => {
+            let items = items
+                .iter()
+                .map(manifest_state_type_name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({items})")
+        }
+        EmbeddedStateType::Struct { name, fields } => {
+            let fields = fields
+                .iter()
+                .map(|field| format!("{}: {}", field.name, manifest_state_type_name(&field.ty)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{name}{{{fields}}}")
+        }
+        EmbeddedStateType::Map { key, value } => {
+            format!(
+                "map<{}, {}>",
+                manifest_state_type_name(key),
+                manifest_state_type_name(value)
+            )
+        }
+    }
 }
 
 fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType, String> {

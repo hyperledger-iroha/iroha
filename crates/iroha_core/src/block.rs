@@ -1417,11 +1417,7 @@ mod pipeline_recovery_tests {
             fingerprint: [0x44; 32],
             key_count: 1,
         };
-        let txs = vec![PipelineTxSnapshot {
-            hash: call_hash,
-            reads: Vec::new(),
-            writes: Vec::new(),
-        }];
+        let txs = vec![PipelineTxSnapshot::compact(call_hash, 0, 0)];
 
         let sidecar_mismatch = PipelineRecoverySidecar::new(height, other_hash, dag, txs.clone());
         assert!(
@@ -2087,6 +2083,13 @@ pub enum BlockValidationError {
     EmptyBlock,
     /// Block contains duplicate transactions
     DuplicateTransactions,
+    /// SCCP commitment root mismatch. Expected: {expected:?}, actual: {actual:?}
+    SccpCommitmentRootMismatch {
+        /// Root recomputed from committed SCCP message records.
+        expected: Option<[u8; 32]>,
+        /// Root advertised in the block header.
+        actual: Option<[u8; 32]>,
+    },
     /// Mismatch between the actual and expected hashes of the previous block. Expected: {expected:?}, actual: {actual:?}
     PrevBlockHashMismatch {
         /// Expected value
@@ -4979,6 +4982,17 @@ pub(crate) mod valid {
             )
         }
 
+        fn validate_sccp_commitment_root(block: &SignedBlock) -> Result<(), BlockValidationError> {
+            let messages = crate::bridge::collect_sccp_messages_from_signed_block(block);
+            let expected = crate::bridge::sccp_commitment_root_from_messages(&messages);
+            let actual = block.header().sccp_commitment_root();
+            if actual == expected {
+                Ok(())
+            } else {
+                Err(BlockValidationError::SccpCommitmentRootMismatch { expected, actual })
+            }
+        }
+
         #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
         fn validate_keep_voting_block_inner<'state>(
             mut block: SignedBlock,
@@ -5203,6 +5217,12 @@ pub(crate) mod valid {
             }
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_da_cursor_ms = to_ms(da_cursor_start.elapsed());
+            }
+            if let Err(error) = Self::validate_sccp_commitment_root(&block) {
+                drop(state_block);
+                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
+                emit_rejection(&block, &error);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             state_block.capture_exec_witness();
             drop(exec_witness_guard);
@@ -8289,10 +8309,12 @@ pub(crate) mod valid {
                 let txs_sidecar: Vec<PipelineTxSnapshot> = prepared_txs
                     .iter()
                     .zip(access.iter())
-                    .map(|(prepared, aset)| PipelineTxSnapshot {
-                        hash: prepared.metadata.entrypoint_hash,
-                        reads: aset.read_keys.iter().cloned().collect(),
-                        writes: aset.write_keys.iter().cloned().collect(),
+                    .map(|(prepared, aset)| {
+                        PipelineTxSnapshot::compact(
+                            prepared.metadata.entrypoint_hash,
+                            aset.read_keys.len(),
+                            aset.write_keys.len(),
+                        )
                     })
                     .collect();
 
@@ -11752,6 +11774,96 @@ pub(crate) mod valid {
 
             block.sign(&key_pairs[1], &topology);
             assert!(!block.signatures_verified_for_tests());
+        }
+
+        fn sccp_transfer_payload() -> iroha_sccp::SccpPayloadV1 {
+            iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                nonce: 1,
+                asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"xor#universal".to_vec(),
+                amount: 10,
+                sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                sender: b"bridge@sora".to_vec(),
+                recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                recipient: b"0x3333333333333333333333333333333333333333".to_vec(),
+                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                route_id: b"nexus:eth:xor".to_vec(),
+            })
+        }
+
+        fn sccp_accepted_transaction() -> AcceptedTransaction<'static> {
+            let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+                .parse()
+                .expect("valid chain id");
+            let (account_id, keypair) = gen_account_in("sccp");
+            let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&sccp_transfer_payload());
+            let tx = TransactionBuilder::new(chain_id, account_id)
+                .with_instructions([iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                    payload_bytes,
+                )])
+                .sign(keypair.private_key());
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+        }
+
+        fn signed_sccp_block(root: Option<[u8; 32]>) -> SignedBlock {
+            let leader = KeyPair::random();
+            BlockBuilder::new(vec![sccp_accepted_transaction()])
+                .chain(0, None)
+                .with_sccp_commitment_root(root)
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into()
+        }
+
+        #[test]
+        fn sccp_commitment_root_validation_accepts_matching_root() {
+            let probe = signed_sccp_block(None);
+            let messages = crate::bridge::collect_sccp_messages_from_signed_block(&probe);
+            let root = crate::bridge::sccp_commitment_root_from_messages(&messages);
+            let block = signed_sccp_block(root);
+
+            ValidBlock::validate_sccp_commitment_root(&block)
+                .expect("matching SCCP commitment root should validate");
+        }
+
+        #[test]
+        fn sccp_commitment_root_validation_rejects_wrong_root() {
+            let block = signed_sccp_block(Some([0xAA; 32]));
+
+            let err = ValidBlock::validate_sccp_commitment_root(&block)
+                .expect_err("wrong SCCP commitment root should reject");
+            assert!(matches!(
+                err,
+                BlockValidationError::SccpCommitmentRootMismatch {
+                    actual: Some(_),
+                    ..
+                }
+            ));
+        }
+
+        #[test]
+        fn sccp_commitment_root_validation_rejects_root_without_messages() {
+            let leader = KeyPair::random();
+            let block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+                .chain(0, None)
+                .with_sccp_commitment_root(Some([0xBB; 32]))
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into();
+
+            let err = ValidBlock::validate_sccp_commitment_root(&block)
+                .expect_err("root without SCCP messages should reject");
+            assert!(matches!(
+                err,
+                BlockValidationError::SccpCommitmentRootMismatch {
+                    expected: None,
+                    actual: Some(_),
+                }
+            ));
         }
 
         #[test]
@@ -17171,6 +17283,9 @@ mod event {
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
             BlockValidationError::DuplicateTransactions => Reason::TransactionValidationFailed,
+            BlockValidationError::SccpCommitmentRootMismatch { .. } => {
+                Reason::SccpCommitmentRootMismatch
+            }
             BlockValidationError::ExecutionContextInvalid(_) => Reason::TransactionValidationFailed,
             BlockValidationError::PrevBlockHashMismatch { .. } => Reason::PrevBlockHashMismatch,
             BlockValidationError::PrevBlockHeightMismatch { .. } => Reason::PrevBlockHeightMismatch,

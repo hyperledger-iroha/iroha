@@ -3729,6 +3729,7 @@ mod tests {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                states: None,
                 kotoba: None,
                 provenance: None,
             }
@@ -4066,6 +4067,7 @@ mod tests {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                states: None,
                 kotoba: None,
                 provenance: None,
             }
@@ -4185,6 +4187,7 @@ mod tests {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                states: None,
                 kotoba: None,
                 provenance: None,
             }
@@ -4230,6 +4233,7 @@ mod tests {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                states: None,
                 kotoba: None,
                 provenance: None,
             }
@@ -4365,6 +4369,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         };

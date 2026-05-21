@@ -109,7 +109,7 @@ use crate::api_version::{self, ApiVersion};
 use core::fmt;
 use std::{
     cmp::{Ordering, Reverse},
-    collections::{BTreeMap, BTreeSet, BinaryHeap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque},
     num::NonZeroUsize,
     panic::AssertUnwindSafe,
     sync::OnceLock,
@@ -131,10 +131,8 @@ use iroha_data_model::soranet::privacy_metrics::{
 };
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_sccp::{
-    BurnPayloadV1, GovernancePayloadV1, NexusBridgeFinalityProofV1, NexusCommitQcV1,
-    NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentRosterMemberV1,
-    NexusParliamentSignatureSchemeV1, NexusParliamentSignatureV1, NexusSccpBurnProofV1,
-    NexusSccpGovernanceProofV1, NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
+    BurnPayloadV1, NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,
+    NexusSccpBurnProofV1, NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
     SccpCounterpartyProofJobV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
     SccpNormalizedCodecValueV1, SccpOpenVerifyEnvelopeSummaryV1, SccpPayloadProjectionV1,
     SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof,
@@ -143,14 +141,13 @@ use iroha_sccp::{
     build_sccp_counterparty_proof_job_from_bundle_with_signer,
     build_sccp_message_transparent_inner_proof_from_artifact,
     build_sccp_message_transparent_open_verify_summary_from_bundle, burn_message_id,
-    canonical_burn_payload_bytes, canonical_governance_payload_bytes, canonical_sccp_payload_bytes,
-    commitment_leaf_hash, decode_nexus_bridge_finality_proof,
-    decode_nexus_sccp_message_transparent_proof, parliament_certificate_hash, payload_hash,
+    canonical_burn_payload_bytes, canonical_sccp_payload_bytes, commitment_leaf_hash,
+    decode_nexus_bridge_finality_proof, decode_nexus_sccp_message_transparent_proof, payload_hash,
     recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
     sccp_message_payload_kind_key, sccp_message_target_domain, sccp_payload_projection,
     summarize_sccp_message_transparent_open_verify_proof_from_artifact,
-    verify_burn_bundle_structure, verify_governance_bundle_structure,
-    verify_message_bundle_structure, verify_sccp_payload_structure,
+    verify_burn_bundle_structure, verify_burn_payload_structure, verify_message_bundle_structure,
+    verify_sccp_payload_structure,
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
@@ -5452,8 +5449,6 @@ pub async fn handle_v1_bridge_finality_bundle(
 
 static SCCP_BURN_BUNDLES: LazyLock<RwLock<BTreeMap<[u8; 32], NexusSccpBurnProofV1>>> =
     LazyLock::new(|| RwLock::new(BTreeMap::new()));
-static SCCP_GOVERNANCE_BUNDLES: LazyLock<RwLock<BTreeMap<[u8; 32], NexusSccpGovernanceProofV1>>> =
-    LazyLock::new(|| RwLock::new(BTreeMap::new()));
 static SCCP_MESSAGE_BUNDLES: LazyLock<RwLock<BTreeMap<[u8; 32], NexusSccpMessageProofV1>>> =
     LazyLock::new(|| RwLock::new(BTreeMap::new()));
 
@@ -5519,7 +5514,7 @@ fn sccp_bundle_response<T>(bundle: &T, accept: Option<&axum::http::HeaderValue>)
 where
     T: norito::core::NoritoSerialize + serde::Serialize,
 {
-    let format = match crate::utils::negotiate_response_format(accept) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
@@ -5578,7 +5573,7 @@ fn sccp_bundle_response_with_json_value<T>(
 where
     T: norito::core::NoritoSerialize + serde::Serialize,
 {
-    let format = match crate::utils::negotiate_response_format(accept) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
@@ -5779,8 +5774,6 @@ pub struct SccpCapabilitiesDto {
     pub proof_family: String,
     /// Legacy burn bundle fetch path.
     pub burn_bundle_path: String,
-    /// Legacy governance bundle fetch path.
-    pub governance_bundle_path: String,
     /// Generic SCCP message bundle fetch path.
     pub message_bundle_path: String,
     /// Runtime SCALE proof family accepted by the SORA SCCP pallet.
@@ -5791,10 +5784,6 @@ pub struct SccpCapabilitiesDto {
     #[serde(default)]
     #[norito(default)]
     pub runtime_verifier_backend: Option<String>,
-    /// Optional runtime SCALE governance-envelope fetch path.
-    #[serde(default)]
-    #[norito(default)]
-    pub governance_runtime_bundle_path: Option<String>,
     /// Optional runtime SCALE message-envelope fetch path.
     #[serde(default)]
     #[norito(default)]
@@ -5809,8 +5798,6 @@ pub struct SccpCapabilitiesDto {
     pub proof_manifest_path: String,
     /// Registry backend label used by legacy burn proofs.
     pub legacy_burn_registry_backend: String,
-    /// Registry backend label used by legacy governance proofs.
-    pub legacy_governance_registry_backend: String,
     /// Optional Torii path for outbound proof registration.
     #[norito(default)]
     pub proof_submit_path: Option<String>,
@@ -5977,13 +5964,9 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         local_chain: "sora".to_owned(),
         proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
         burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
-        governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
         message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
         runtime_proof_family: Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1.to_owned()),
         runtime_verifier_backend: Some(iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1.to_owned()),
-        governance_runtime_bundle_path: Some(
-            "/v1/sccp/proofs/governance/{message_id}/runtime-scale".to_owned(),
-        ),
         message_runtime_bundle_path: Some(
             "/v1/sccp/proofs/message/{message_id}/runtime-scale".to_owned(),
         ),
@@ -5992,7 +5975,6 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
         proof_manifest_path: "/v1/sccp/manifests".to_owned(),
         legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
-        legacy_governance_registry_backend: "bridge/sccp/governance-v1".to_owned(),
         #[cfg(feature = "app_api")]
         proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
         #[cfg(not(feature = "app_api"))]
@@ -6001,11 +5983,7 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         message_submit_path: Some("/v1/bridge/messages".to_owned()),
         #[cfg(not(feature = "app_api"))]
         message_submit_path: None,
-        message_payload_kinds: vec![
-            "asset_register".to_owned(),
-            "route_activate".to_owned(),
-            "transfer".to_owned(),
-        ],
+        message_payload_kinds: iroha_sccp::sccp_message_payload_kind_keys_v1(),
         codecs: sccp_codec_capabilities()?,
         counterparties: sccp_counterparty_capabilities()?,
     })
@@ -6032,33 +6010,7 @@ fn sccp_proof_manifest_snapshot() -> Result<SccpProofManifestSetDto> {
 
 #[cfg(feature = "app_api")]
 fn bridge_manifest_hash_for_seed(seed: &str) -> [u8; 32] {
-    <[u8; 32]>::from(iroha_crypto::Hash::new(seed.as_bytes()))
-}
-
-#[cfg(feature = "app_api")]
-fn sccp_merkle_proof_to_bridge_merkle(
-    proof: &SccpMerkleProofV1,
-) -> Result<iroha_crypto::MerkleProof<[u8; 32]>> {
-    let mut leaf_index = 0u32;
-    let mut audit_path = Vec::with_capacity(proof.steps.len());
-
-    for (depth, step) in proof.steps.iter().enumerate() {
-        if step.sibling_is_left {
-            if depth >= u32::BITS as usize {
-                return Err(conversion_error(format!(
-                    "SCCP Merkle proof depth {depth} exceeds bridge leaf_index width"
-                )));
-            }
-            leaf_index |= 1u32 << depth;
-        }
-        audit_path.push(Some(HashOf::<[u8; 32]>::from_untyped_unchecked(
-            Hash::prehashed(step.sibling_hash),
-        )));
-    }
-
-    Ok(iroha_crypto::MerkleProof::from_audit_path(
-        leaf_index, audit_path,
-    ))
+    iroha_sccp::sccp_bridge_manifest_hash_for_seed(seed)
 }
 
 #[cfg(feature = "app_api")]
@@ -6073,50 +6025,24 @@ fn bridge_proof_from_sccp_burn_bundle(
     let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof).ok_or_else(|| {
         conversion_error("SCCP burn bundle finality proof could not be decoded".to_owned())
     })?;
-    let proof = sccp_merkle_proof_to_bridge_merkle(&bundle.merkle_proof)?;
-    Ok(iroha_data_model::bridge::BridgeProof {
-        range: iroha_data_model::bridge::BridgeProofRange {
-            start_height: finality.height,
-            end_height: finality.height,
-        },
-        manifest_hash: bridge_manifest_hash_for_seed("iroha:sccp:bridge-proof:burn:v1"),
-        payload: iroha_data_model::bridge::BridgeProofPayload::Ics(
-            iroha_data_model::bridge::BridgeIcsProof {
-                state_root: bundle.commitment_root,
-                leaf_hash: commitment_leaf_hash(&bundle.commitment),
-                proof,
-                hash_function: iroha_data_model::bridge::BridgeHashFunction::Blake2b,
-            },
-        ),
-        pinned: false,
-    })
-}
-
-#[cfg(feature = "app_api")]
-fn bridge_proof_from_sccp_governance_bundle(
-    bundle: &NexusSccpGovernanceProofV1,
-) -> Result<iroha_data_model::bridge::BridgeProof> {
-    if !verify_governance_bundle_structure(bundle) {
-        return Err(conversion_error(
-            "SCCP governance bundle failed structural verification".to_owned(),
-        ));
-    }
-    let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof).ok_or_else(|| {
-        conversion_error("SCCP governance bundle finality proof could not be decoded".to_owned())
+    let proof_bytes = to_bytes(bundle).map_err(|err| {
+        conversion_error(format!(
+            "failed to encode SCCP burn bridge proof bundle: {err}"
+        ))
     })?;
-    let proof = sccp_merkle_proof_to_bridge_merkle(&bundle.merkle_proof)?;
     Ok(iroha_data_model::bridge::BridgeProof {
         range: iroha_data_model::bridge::BridgeProofRange {
             start_height: finality.height,
             end_height: finality.height,
         },
-        manifest_hash: bridge_manifest_hash_for_seed("iroha:sccp:bridge-proof:governance:v1"),
-        payload: iroha_data_model::bridge::BridgeProofPayload::Ics(
-            iroha_data_model::bridge::BridgeIcsProof {
-                state_root: bundle.commitment_root,
-                leaf_hash: commitment_leaf_hash(&bundle.commitment),
-                proof,
-                hash_function: iroha_data_model::bridge::BridgeHashFunction::Blake2b,
+        manifest_hash: iroha_sccp::sccp_burn_bridge_manifest_hash_v1(),
+        payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
+            iroha_data_model::bridge::BridgeTransparentProof {
+                proof: iroha_data_model::proof::ProofBox::new(
+                    iroha_sccp::SCCP_BURN_BRIDGE_PROOF_BACKEND_V1.to_owned(),
+                    proof_bytes,
+                ),
+                recursion_depth: None,
             },
         ),
         pinned: false,
@@ -6156,6 +6082,10 @@ fn sccp_message_backend_descriptor(payload: &SccpPayloadV1) -> Result<(String, [
         SccpPayloadV1::Transfer(payload) => {
             sccp_counterparty_domain(payload.dest_domain, payload.source_domain)?
         }
+        SccpPayloadV1::TokenAdd(payload) => payload.target_domain,
+        SccpPayloadV1::TokenPause(payload) | SccpPayloadV1::TokenResume(payload) => {
+            payload.target_domain
+        }
     };
     let manifest =
         iroha_sccp::sccp_proof_manifest_for_domain(counterparty_domain).ok_or_else(|| {
@@ -6171,15 +6101,6 @@ fn sccp_message_backend_descriptor(payload: &SccpPayloadV1) -> Result<(String, [
 #[cfg(feature = "app_api")]
 fn sccp_counterparty_for_burn_payload(payload: &BurnPayloadV1) -> Result<(u32, &'static str)> {
     let counterparty_domain = sccp_counterparty_domain(payload.dest_domain, payload.source_domain)?;
-    let backend_suffix = sccp_backend_suffix_for_domain(counterparty_domain)?;
-    Ok((counterparty_domain, backend_suffix))
-}
-
-#[cfg(feature = "app_api")]
-fn sccp_counterparty_for_governance_payload(
-    payload: &GovernancePayloadV1,
-) -> Result<(u32, &'static str)> {
-    let counterparty_domain = iroha_sccp::governance_target_domain(payload);
     let backend_suffix = sccp_backend_suffix_for_domain(counterparty_domain)?;
     Ok((counterparty_domain, backend_suffix))
 }
@@ -6211,111 +6132,6 @@ fn sccp_message_manifest_for_bundle(
             "unsupported SCCP domain for manifest discovery: {counterparty_domain}"
         ))
     })
-}
-
-#[cfg(test)]
-static SCCP_MESSAGE_PROOF_OVERRIDE_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
-    LazyLock::new(|| std::sync::Mutex::new(()));
-
-#[cfg(test)]
-static SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS: LazyLock<RwLock<HashSet<[u8; 32]>>> =
-    LazyLock::new(|| RwLock::new(HashSet::new()));
-
-#[cfg(test)]
-/// Serialize SCCP message-proof override tests and temporarily allow synthetic
-/// transparent proof generation for the selected message bundle.
-pub(crate) fn sccp_message_proof_override_guard_for_tests(message_id: [u8; 32]) -> impl Drop {
-    struct Guard {
-        _guard: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS
-                .write()
-                .expect("SCCP message proof override registry poisoned")
-                .clear();
-        }
-    }
-
-    let guard = SCCP_MESSAGE_PROOF_OVERRIDE_TEST_LOCK
-        .lock()
-        .expect("SCCP message proof override lock poisoned");
-    SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS
-        .write()
-        .expect("SCCP message proof override registry poisoned")
-        .insert(message_id);
-    Guard { _guard: guard }
-}
-
-#[cfg(test)]
-fn sccp_message_proof_override_enabled_for_tests(message_id: [u8; 32]) -> bool {
-    SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS
-        .read()
-        .expect("SCCP message proof override registry poisoned")
-        .contains(&message_id)
-}
-
-#[cfg(test)]
-#[derive(Encode)]
-struct SyntheticSccpTransparentProofArtifactV1 {
-    version: u8,
-    counterparty_domain: u32,
-    message_id: [u8; 32],
-    payload_hash: [u8; 32],
-}
-
-#[cfg(test)]
-fn synthetic_bridge_proof_from_sccp_message_bundle_for_tests(
-    bundle: &NexusSccpMessageProofV1,
-) -> Option<Result<iroha_data_model::bridge::BridgeProof>> {
-    if !sccp_message_proof_override_enabled_for_tests(bundle.commitment.message_id) {
-        return None;
-    }
-
-    let (backend, manifest_hash, counterparty_domain) =
-        match sccp_message_backend_descriptor(&bundle.payload) {
-            Ok(descriptor) => descriptor,
-            Err(err) => return Some(Err(err)),
-        };
-
-    let finality = match decode_nexus_bridge_finality_proof(&bundle.finality_proof) {
-        Some(finality) => finality,
-        None => {
-            return Some(Err(conversion_error(
-                "SCCP message bundle finality proof could not be decoded".to_owned(),
-            )));
-        }
-    };
-    let artifact = SyntheticSccpTransparentProofArtifactV1 {
-        version: 1,
-        counterparty_domain,
-        message_id: bundle.commitment.message_id,
-        payload_hash: bundle.commitment.payload_hash,
-    };
-    let proof_bytes = match to_bytes(&artifact) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            return Some(Err(conversion_error(format!(
-                "failed to encode synthetic SCCP transparent proof artifact: {err}"
-            ))));
-        }
-    };
-
-    Some(Ok(iroha_data_model::bridge::BridgeProof {
-        range: iroha_data_model::bridge::BridgeProofRange {
-            start_height: finality.height,
-            end_height: finality.height,
-        },
-        manifest_hash,
-        payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
-            iroha_data_model::bridge::BridgeTransparentProof {
-                proof: iroha_data_model::proof::ProofBox::new(backend, proof_bytes),
-                recursion_depth: Some(0),
-            },
-        ),
-        pinned: false,
-    }))
 }
 
 fn sccp_message_lane_disabled_message(
@@ -6362,10 +6178,6 @@ fn bridge_proof_from_sccp_message_bundle(
         return Err(conversion_error(
             "SCCP message bundle failed structural verification".to_owned(),
         ));
-    }
-    #[cfg(test)]
-    if let Some(result) = synthetic_bridge_proof_from_sccp_message_bundle_for_tests(bundle) {
-        return result;
     }
     if let Some(message) =
         sccp_message_lane_disabled_message(bundle, "transparent proof consumption")
@@ -6559,7 +6371,6 @@ mod sccp_message_backend_tests {
             payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
                 &payload,
             )),
-            parliament_certificate_hash: None,
         };
         let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
@@ -6985,7 +6796,6 @@ mod sccp_message_backend_tests {
                         route_id: b"nexus:eth:xor".to_vec(),
                     }),
                 )),
-                parliament_certificate_hash: None,
             }),
             commitment: SccpHubCommitmentV1 {
                 version: 1,
@@ -7025,7 +6835,6 @@ mod sccp_message_backend_tests {
                         route_id: b"nexus:eth:xor".to_vec(),
                     }),
                 )),
-                parliament_certificate_hash: None,
             },
             merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
             payload: SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -7089,7 +6898,6 @@ mod sccp_message_backend_tests {
                             },
                         )),
                     ),
-                    parliament_certificate_hash: None,
                 }),
                 block_header_bytes: vec![0x42; 4],
                 commit_qc: iroha_sccp::NexusCommitQcV1 {
@@ -7159,14 +6967,6 @@ fn bridge_receipt_from_message_bundle(
         asset_id: payload.asset_id.clone(),
         recipient: payload.recipient.clone(),
     }))
-}
-
-fn sccp_governance_message_kind(payload: &GovernancePayloadV1) -> SccpHubMessageKind {
-    match payload {
-        GovernancePayloadV1::Add(_) => SccpHubMessageKind::TokenAdd,
-        GovernancePayloadV1::Pause(_) => SccpHubMessageKind::TokenPause,
-        GovernancePayloadV1::Resume(_) => SccpHubMessageKind::TokenResume,
-    }
 }
 
 fn hash_of_to_h256<T>(hash: &iroha_crypto::HashOf<T>) -> [u8; 32] {
@@ -7339,6 +7139,10 @@ fn recent_message_projection_asset_id(projection: &SccpPayloadProjectionV1) -> O
         SccpPayloadProjectionV1::AssetRegister(item) => projection_text_value(&item.asset_id),
         SccpPayloadProjectionV1::RouteActivate(item) => projection_text_value(&item.asset_id),
         SccpPayloadProjectionV1::Transfer(item) => projection_text_value(&item.asset_id),
+        SccpPayloadProjectionV1::TokenAdd(item) => Some(hex::encode(item.sora_asset_id)),
+        SccpPayloadProjectionV1::TokenPause(item) | SccpPayloadProjectionV1::TokenResume(item) => {
+            Some(hex::encode(item.sora_asset_id))
+        }
     }
 }
 
@@ -7346,7 +7150,52 @@ fn recent_message_projection_route_id(projection: &SccpPayloadProjectionV1) -> O
     match projection {
         SccpPayloadProjectionV1::RouteActivate(item) => projection_text_value(&item.route_id),
         SccpPayloadProjectionV1::Transfer(item) => projection_text_value(&item.route_id),
-        SccpPayloadProjectionV1::AssetRegister(_) => None,
+        SccpPayloadProjectionV1::AssetRegister(_)
+        | SccpPayloadProjectionV1::TokenAdd(_)
+        | SccpPayloadProjectionV1::TokenPause(_)
+        | SccpPayloadProjectionV1::TokenResume(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod sccp_projection_tests {
+    use super::*;
+
+    #[test]
+    fn recent_message_projection_handles_sccp_token_controls() {
+        let sora_asset_id = [0x42; 32];
+        let expected_asset_id = hex::encode(sora_asset_id);
+        let projections = [
+            SccpPayloadProjectionV1::TokenAdd(iroha_sccp::SccpTokenAddProjectionV1 {
+                version: 1,
+                target_domain: 7,
+                nonce: 11,
+                sora_asset_id,
+                decimals: 18,
+                name: [0x01; 32],
+                symbol: [0x02; 32],
+            }),
+            SccpPayloadProjectionV1::TokenPause(iroha_sccp::SccpTokenControlProjectionV1 {
+                version: 1,
+                target_domain: 7,
+                nonce: 12,
+                sora_asset_id,
+            }),
+            SccpPayloadProjectionV1::TokenResume(iroha_sccp::SccpTokenControlProjectionV1 {
+                version: 1,
+                target_domain: 7,
+                nonce: 13,
+                sora_asset_id,
+            }),
+        ];
+
+        for projection in projections {
+            assert_eq!(
+                recent_message_projection_asset_id(&projection).as_deref(),
+                Some(expected_asset_id.as_str())
+            );
+            assert_eq!(recent_message_projection_route_id(&projection), None);
+        }
     }
 }
 
@@ -7467,174 +7316,17 @@ fn collect_recent_sccp_messages(
     Ok(SccpRecentMessagesDto { items })
 }
 
-fn min_votes_for_len(len: usize) -> u16 {
-    if len > 3 {
-        u16::try_from(((len.saturating_sub(1)) / 3) * 2 + 1).unwrap_or(u16::MAX)
-    } else {
-        u16::try_from(len).unwrap_or(u16::MAX)
-    }
-}
-
-fn parliament_epoch_for_height(state: &CoreState, height: u64) -> u64 {
-    let term_blocks = state.gov.parliament_term_blocks.max(1);
-    height / term_blocks
-}
-
-fn parliament_member_public_keys(account_id: &iroha_data_model::account::AccountId) -> Vec<String> {
-    match &account_id.controller {
-        iroha_data_model::account::controller::AccountController::Single(public_key) => {
-            vec![public_key.to_string()]
-        }
-        iroha_data_model::account::controller::AccountController::Multisig(policy) => policy
-            .members()
-            .iter()
-            .map(|member| member.public_key().to_string())
-            .collect(),
-    }
-}
-
-fn validate_parliament_certificate(
-    state: &CoreState,
-    certificate: &iroha_data_model::governance::types::ParliamentEnactmentCertificate,
-    payload: &GovernancePayloadV1,
-    height: u64,
-) -> Result<Vec<u8>> {
-    if certificate.payload.at_window.lower > certificate.payload.at_window.upper {
-        return Err(sccp_bad_request(
-            "parliament certificate has an invalid enactment window",
-        ));
-    }
-    if height < certificate.payload.at_window.lower || height > certificate.payload.at_window.upper
-    {
-        return Err(sccp_bad_request(
-            "requested proof height is outside the parliament enactment window",
-        ));
-    }
-
-    let expected_preimage_hash = payload_hash(&canonical_governance_payload_bytes(payload));
-    if certificate.payload.preimage_hash != expected_preimage_hash {
-        return Err(sccp_bad_request(
-            "parliament certificate preimage_hash does not match the SCCP governance payload",
-        ));
-    }
-
-    if certificate.signatures.signatures.is_empty() {
-        return Err(sccp_bad_request(
-            "parliament certificate must include at least one signature",
-        ));
-    }
-    if certificate.signatures.scheme
-        != iroha_data_model::governance::types::EnactmentSignatureScheme::SimpleThreshold
-    {
-        return Err(sccp_bad_request(
-            "unsupported parliament signature scheme for SCCP governance proof",
-        ));
-    }
-
-    let roster_epoch = parliament_epoch_for_height(state, height);
-    let world = state.world_view();
-    let Some(council_term) = world.council().get(&roster_epoch) else {
-        return Err(sccp_bad_request(format!(
-            "no persisted council roster found for parliament epoch {roster_epoch}"
-        )));
-    };
-    if council_term.members.is_empty() {
-        return Err(sccp_bad_request(
-            "persisted council roster for SCCP governance proof is empty",
-        ));
-    }
-
-    let roster_members: Vec<_> = council_term
-        .members
-        .iter()
-        .map(|member| NexusParliamentRosterMemberV1 {
-            signer: member.to_string(),
-            public_keys: parliament_member_public_keys(member),
-        })
-        .collect();
-    let roster_by_signer = roster_members
-        .iter()
-        .map(|member| (member.signer.as_str(), &member.public_keys))
-        .collect::<BTreeMap<_, _>>();
-    let required_signatures = min_votes_for_len(roster_members.len());
-
-    let mut seen_signers = BTreeSet::new();
-    for signature in &certificate.signatures.signatures {
-        if !seen_signers.insert(signature.signer.clone()) {
-            return Err(sccp_bad_request(
-                "parliament certificate contains duplicate signers",
-            ));
-        }
-        let signer_key = signature.signer.to_string();
-        let Some(allowed_public_keys) = roster_by_signer.get(signer_key.as_str()) else {
-            return Err(sccp_bad_request(
-                "parliament certificate signer is not a member of the anchored council roster",
-            ));
-        };
-        if !allowed_public_keys
-            .iter()
-            .any(|public_key| public_key == &signature.public_key.to_string())
-        {
-            return Err(sccp_bad_request(
-                "parliament certificate signer key is not authorized by the anchored council roster",
-            ));
-        }
-        signature
-            .signature
-            .verify(&signature.public_key, &certificate.payload)
-            .map_err(|err| {
-                sccp_bad_request(format!(
-                    "parliament certificate contains an invalid signature: {err}"
-                ))
-            })?;
-    }
-    if certificate.signatures.signatures.len() < usize::from(required_signatures) {
-        return Err(sccp_bad_request(format!(
-            "parliament certificate has {} signatures but requires {}",
-            certificate.signatures.signatures.len(),
-            required_signatures
-        )));
-    }
-
-    let payload_bytes = to_bytes(&certificate.payload).map_err(|err| {
-        sccp_internal_error(format!(
-            "failed to encode parliament enactment payload for SCCP bundle: {err}"
-        ))
-    })?;
-
-    to_bytes(&NexusParliamentCertificateV1 {
-        version: 1,
-        preimage_hash: certificate.payload.preimage_hash,
-        enactment_window_start: certificate.payload.at_window.lower,
-        enactment_window_end: certificate.payload.at_window.upper,
-        payload_bytes,
-        signature_scheme: NexusParliamentSignatureSchemeV1::SimpleThreshold,
-        roster_epoch,
-        roster_members,
-        required_signatures,
-        signatures: certificate
-            .signatures
-            .signatures
-            .iter()
-            .map(|signature| NexusParliamentSignatureV1 {
-                signer: signature.signer.to_string(),
-                public_key: signature.public_key.to_string(),
-                signature: signature.signature.payload().to_vec(),
-            })
-            .collect(),
-    })
-    .map_err(|err| {
-        sccp_internal_error(format!(
-            "failed to encode Nexus parliament certificate payload: {err}"
-        ))
-    })
-}
-
 pub fn publish_sccp_burn_bundle(
     state: &CoreState,
     height: u64,
     payload: BurnPayloadV1,
 ) -> Result<NexusSccpBurnProofV1> {
+    if !verify_burn_payload_structure(&payload) {
+        return Err(sccp_bad_request(
+            "SCCP burn payload failed structural verification",
+        ));
+    }
+
     let bridge_finality_proof = iroha_core::bridge::build_finality_proof(state, height)
         .map_err(map_bridge_finality_error)?;
     let commitment = SccpHubCommitmentV1 {
@@ -7643,7 +7335,6 @@ pub fn publish_sccp_burn_bundle(
         target_domain: payload.dest_domain,
         message_id: burn_message_id(&payload),
         payload_hash: payload_hash(&canonical_burn_payload_bytes(&payload)),
-        parliament_certificate_hash: None,
     };
     let commitment_root = commitment_leaf_hash(&commitment);
     let bundle = NexusSccpBurnProofV1 {
@@ -7657,41 +7348,6 @@ pub fn publish_sccp_burn_bundle(
     SCCP_BURN_BUNDLES
         .write()
         .expect("SCCP burn bundle registry poisoned")
-        .insert(bundle.commitment.message_id, bundle.clone());
-    Ok(bundle)
-}
-
-pub fn publish_sccp_governance_bundle(
-    state: &CoreState,
-    height: u64,
-    payload: GovernancePayloadV1,
-    certificate: iroha_data_model::governance::types::ParliamentEnactmentCertificate,
-) -> Result<NexusSccpGovernanceProofV1> {
-    let bridge_finality_proof = iroha_core::bridge::build_finality_proof(state, height)
-        .map_err(map_bridge_finality_error)?;
-    let parliament_certificate =
-        validate_parliament_certificate(state, &certificate, &payload, height)?;
-    let commitment = SccpHubCommitmentV1 {
-        version: 1,
-        kind: sccp_governance_message_kind(&payload),
-        target_domain: iroha_sccp::governance_target_domain(&payload),
-        message_id: iroha_sccp::governance_message_id(&payload),
-        payload_hash: payload_hash(&canonical_governance_payload_bytes(&payload)),
-        parliament_certificate_hash: Some(parliament_certificate_hash(&parliament_certificate)),
-    };
-    let commitment_root = commitment_leaf_hash(&commitment);
-    let bundle = NexusSccpGovernanceProofV1 {
-        version: 1,
-        commitment_root,
-        commitment,
-        merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
-        payload,
-        parliament_certificate,
-        finality_proof: build_sccp_finality_proof_bytes(&bridge_finality_proof, commitment_root)?,
-    };
-    SCCP_GOVERNANCE_BUNDLES
-        .write()
-        .expect("SCCP governance bundle registry poisoned")
         .insert(bundle.commitment.message_id, bundle.clone());
     Ok(bundle)
 }
@@ -7715,7 +7371,6 @@ pub fn publish_sccp_message_bundle(
         target_domain: sccp_message_target_domain(&payload),
         message_id: sccp_message_id(&payload),
         payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
-        parliament_certificate_hash: None,
     };
     let commitment_root = commitment_leaf_hash(&commitment);
     let bundle = NexusSccpMessageProofV1 {
@@ -7739,10 +7394,6 @@ pub(crate) fn clear_sccp_bundles_for_tests() {
         .write()
         .expect("SCCP burn bundle registry poisoned")
         .clear();
-    SCCP_GOVERNANCE_BUNDLES
-        .write()
-        .expect("SCCP governance bundle registry poisoned")
-        .clear();
     SCCP_MESSAGE_BUNDLES
         .write()
         .expect("SCCP message bundle registry poisoned")
@@ -7763,43 +7414,6 @@ pub async fn handle_v1_sccp_burn_bundle(
         .cloned()
         .ok_or_else(sccp_not_found)?;
     sccp_bundle_response(&bundle, accept.as_ref())
-}
-
-/// GET /v1/sccp/proofs/governance/{message_id} — Nexus SCCP governance bundle keyed by canonical message id.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sccp_governance_bundle(
-    message_id_hex: String,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
-    let bundle = SCCP_GOVERNANCE_BUNDLES
-        .read()
-        .expect("SCCP governance bundle registry poisoned")
-        .get(&message_id)
-        .cloned()
-        .ok_or_else(sccp_not_found)?;
-    sccp_bundle_response(&bundle, accept.as_ref())
-}
-
-/// GET /v1/sccp/proofs/governance/{message_id}/runtime-scale — SCALE-encoded runtime proof envelope for SORA pallet submission.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sccp_governance_runtime_envelope(
-    message_id_hex: String,
-) -> Result<Response> {
-    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
-    let bundle = SCCP_GOVERNANCE_BUNDLES
-        .read()
-        .expect("SCCP governance bundle registry poisoned")
-        .get(&message_id)
-        .cloned()
-        .ok_or_else(sccp_not_found)?;
-    let envelope = iroha_sccp::sccp_runtime_envelope_bytes_from_governance_bundle(&bundle)
-        .ok_or_else(|| {
-            sccp_internal_error(
-                "failed to convert SCCP governance bundle into runtime SCALE envelope",
-            )
-        })?;
-    sccp_runtime_envelope_response(envelope)
 }
 
 /// GET /v1/sccp/proofs/message/{message_id} — Nexus SCCP message bundle keyed by canonical message id.
@@ -13473,7 +13087,6 @@ pub async fn handle_post_bridge_proof_submit(
         public_key_hex,
         signature_b64,
         burn_bundle,
-        governance_bundle,
         message_bundle,
         creation_time_ms,
     } = req;
@@ -13486,14 +13099,6 @@ pub async fn handle_post_bridge_proof_submit(
                 .map_err(|err| conversion_error(format!("invalid burn_bundle: {err}")))
         })
         .transpose()?;
-    let governance_bundle = governance_bundle
-        .map(|value| {
-            let raw = json::to_string(&value)
-                .map_err(|err| conversion_error(format!("invalid governance_bundle: {err}")))?;
-            serde_json::from_str::<NexusSccpGovernanceProofV1>(&raw)
-                .map_err(|err| conversion_error(format!("invalid governance_bundle: {err}")))
-        })
-        .transpose()?;
     let message_bundle = message_bundle
         .map(|value| {
             let raw = json::to_string(&value)
@@ -13503,52 +13108,37 @@ pub async fn handle_post_bridge_proof_submit(
         })
         .transpose()?;
 
-    let bundle_count = usize::from(burn_bundle.is_some())
-        + usize::from(governance_bundle.is_some())
-        + usize::from(message_bundle.is_some());
+    let bundle_count = usize::from(burn_bundle.is_some()) + usize::from(message_bundle.is_some());
     if bundle_count != 1 {
         return Err(conversion_error(
-            "provide exactly one of burn_bundle, governance_bundle, or message_bundle".to_owned(),
+            "provide exactly one of burn_bundle or message_bundle".to_owned(),
         ));
     }
 
-    let (proof_kind, bridge_proof, counterparty_domain, counterparty_chain) = match (
-        burn_bundle.as_ref(),
-        governance_bundle.as_ref(),
-        message_bundle.as_ref(),
-    ) {
-        (Some(bundle), None, None) => {
-            let (counterparty_domain, counterparty_chain) =
-                sccp_counterparty_for_burn_payload(&bundle.payload)?;
-            (
-                "burn",
-                bridge_proof_from_sccp_burn_bundle(bundle)?,
-                counterparty_domain,
-                counterparty_chain.to_owned(),
-            )
-        }
-        (None, Some(bundle), None) => {
-            let (counterparty_domain, counterparty_chain) =
-                sccp_counterparty_for_governance_payload(&bundle.payload)?;
-            (
-                "governance",
-                bridge_proof_from_sccp_governance_bundle(bundle)?,
-                counterparty_domain,
-                counterparty_chain.to_owned(),
-            )
-        }
-        (None, None, Some(bundle)) => {
-            let (counterparty_domain, counterparty_chain) =
-                sccp_counterparty_for_message_payload(&bundle.payload)?;
-            (
-                "message",
-                bridge_proof_from_sccp_message_bundle(bundle, signer)?,
-                counterparty_domain,
-                counterparty_chain.to_owned(),
-            )
-        }
-        _ => unreachable!("bundle_count enforces exactly one populated SCCP bundle"),
-    };
+    let (proof_kind, bridge_proof, counterparty_domain, counterparty_chain) =
+        match (burn_bundle.as_ref(), message_bundle.as_ref()) {
+            (Some(bundle), None) => {
+                let (counterparty_domain, counterparty_chain) =
+                    sccp_counterparty_for_burn_payload(&bundle.payload)?;
+                (
+                    "burn",
+                    bridge_proof_from_sccp_burn_bundle(bundle)?,
+                    counterparty_domain,
+                    counterparty_chain.to_owned(),
+                )
+            }
+            (None, Some(bundle)) => {
+                let (counterparty_domain, counterparty_chain) =
+                    sccp_counterparty_for_message_payload(&bundle.payload)?;
+                (
+                    "message",
+                    bridge_proof_from_sccp_message_bundle(bundle, signer)?,
+                    counterparty_domain,
+                    counterparty_chain.to_owned(),
+                )
+            }
+            _ => unreachable!("bundle_count enforces exactly one populated SCCP bundle"),
+        };
 
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;
@@ -13740,6 +13330,9 @@ pub async fn handle_post_bridge_message_submit(
         SccpPayloadV1::AssetRegister(_) => "asset_register",
         SccpPayloadV1::RouteActivate(_) => "route_activate",
         SccpPayloadV1::Transfer(_) => "transfer",
+        SccpPayloadV1::TokenAdd(_) => "token_add",
+        SccpPayloadV1::TokenPause(_) => "token_pause",
+        SccpPayloadV1::TokenResume(_) => "token_resume",
     };
     let (counterparty_domain, counterparty_chain) =
         sccp_counterparty_for_message_payload(&message_bundle.payload)?;
@@ -16702,6 +16295,7 @@ mod multisig_contract_call_tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         };
@@ -16738,6 +16332,7 @@ mod multisig_contract_call_tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         };
@@ -18780,6 +18375,7 @@ mod multisig_selector_tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         };
@@ -23544,9 +23140,6 @@ pub struct BridgeProofSubmitDto {
     /// Optional live burn bundle fetched from `/v1/sccp/proofs/burn/{message_id}`.
     #[norito(default)]
     pub burn_bundle: Option<Value>,
-    /// Optional live governance bundle fetched from `/v1/sccp/proofs/governance/{message_id}`.
-    #[norito(default)]
-    pub governance_bundle: Option<Value>,
     /// Optional live generic message bundle fetched from `/v1/sccp/proofs/message/{message_id}`.
     #[norito(default)]
     pub message_bundle: Option<Value>,

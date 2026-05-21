@@ -1057,7 +1057,6 @@ const POINTER_CONSTRUCTORS: &[&str] = &[
     "nft_id",
     "domain",
     "domain_id",
-    "name",
     "json",
     "blob",
     "norito_bytes",
@@ -1517,6 +1516,21 @@ mod tests {
             warnings
                 .iter()
                 .any(|w| w.code == "duplicate-pointer-literal")
+        );
+    }
+
+    #[test]
+    fn lint_duplicate_json_name_literals_are_allowed() {
+        let program = parse(
+            r#"fn main() { let p = json_object(); let p = json_set_int(p, name("amount"), 1); let q = json_object(); let q = json_set_int(q, name("amount"), 2); }"#,
+        )
+        .unwrap();
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.code == "duplicate-pointer-literal"),
+            "JSON field names are cheap and intentionally repeated across payload builders"
         );
     }
 

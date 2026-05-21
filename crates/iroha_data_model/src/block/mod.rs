@@ -839,6 +839,8 @@ pub mod error {
             DaShardCursorViolation,
             /// Deterministic `NPoS` effects did not match the signed block header or local validation.
             NposEffectsMismatch,
+            /// SCCP commitment root does not match the block's recorded SCCP messages.
+            SccpCommitmentRootMismatch,
         }
     }
 
@@ -915,6 +917,9 @@ pub mod error {
                 BlockRejectionReason::NposEffectsMismatch => {
                     norito::json::write_json_string("NposEffectsMismatch", out);
                 }
+                BlockRejectionReason::SccpCommitmentRootMismatch => {
+                    norito::json::write_json_string("SccpCommitmentRootMismatch", out);
+                }
             }
         }
     }
@@ -957,6 +962,9 @@ pub mod error {
                 "DaProofPolicyMismatch" => Ok(BlockRejectionReason::DaProofPolicyMismatch),
                 "DaShardCursorViolation" => Ok(BlockRejectionReason::DaShardCursorViolation),
                 "NposEffectsMismatch" => Ok(BlockRejectionReason::NposEffectsMismatch),
+                "SccpCommitmentRootMismatch" => {
+                    Ok(BlockRejectionReason::SccpCommitmentRootMismatch)
+                }
                 other => Err(norito::json::Error::unknown_field(other)),
             }
         }
@@ -1032,6 +1040,9 @@ impl fmt::Display for error::BlockRejectionReason {
             }
             error::BlockRejectionReason::NposEffectsMismatch => {
                 f.write_str("NPoS consensus effects mismatch")
+            }
+            error::BlockRejectionReason::SccpCommitmentRootMismatch => {
+                f.write_str("SCCP commitment root mismatch")
             }
         }
     }

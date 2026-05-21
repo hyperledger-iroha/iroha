@@ -128,6 +128,7 @@ fn enact_inserts_manifest_and_marks_enacted() {
         features_bitmap: None,
         access_set_hints: None,
         entrypoints: None,
+        states: None,
         kotoba: None,
         provenance: None,
     }
@@ -271,6 +272,7 @@ fn enact_rejects_on_conflicting_existing_manifest() {
         features_bitmap: None,
         access_set_hints: None,
         entrypoints: None,
+        states: None,
         kotoba: None,
         provenance: None,
     }

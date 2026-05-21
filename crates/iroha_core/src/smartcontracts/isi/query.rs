@@ -541,9 +541,15 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
         use iroha_data_model as dm;
         fn decode_query<Q: norito::codec::Decode>(payload: &[u8]) -> Result<Q, Error> {
             let mut cursor = std::io::Cursor::new(payload);
-            Q::decode(&mut cursor).map_err(|_| {
+            let query = Q::decode(&mut cursor).map_err(|_| {
                 Error::Conversion("failed to decode iterable query payload".to_string())
-            })
+            })?;
+            if usize::try_from(cursor.position()).unwrap_or(usize::MAX) != payload.len() {
+                return Err(Error::Conversion(
+                    "iterable query payload had trailing bytes".to_string(),
+                ));
+            }
+            Ok(query)
         }
 
         fn run_dispatch<T, Q>(
@@ -566,7 +572,7 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
             let erased = dm::query::iter_query_inner::<T>(qbox)?;
             let concrete = match decode_query::<Q>(erased.payload()) {
                 Ok(q) => q,
-                Err(err) => return Some(Err(err)),
+                Err(_) => return None,
             };
             let iter =
                 match super::super::ValidQuery::execute(concrete, erased.predicate_cloned(), state)
@@ -616,6 +622,8 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
             dm::trigger::TriggerId => dm::query::trigger::prelude::FindActiveTriggerIds,
             dm::block::SignedBlock => dm::query::block::prelude::FindBlocks,
             dm::block::BlockHeader => dm::query::block::prelude::FindBlockHeaders,
+            dm::proof::ProofRecord => dm::query::proof::prelude::FindProofRecordsByBackend,
+            dm::proof::ProofRecord => dm::query::proof::prelude::FindProofRecordsByStatus,
             dm::proof::ProofRecord => dm::query::proof::prelude::FindProofRecords,
             dm::oracle::FeedConfig => dm::query::oracle::prelude::FindOracleFeeds,
             dm::events::data::oracle::FeedEventRecord =>
@@ -2090,7 +2098,8 @@ impl ValidQueryRequest {
                 {
                     let bytes = erased.payload();
                     let mut cur = bytes;
-                    Q::decode(&mut cur).ok()
+                    let query = Q::decode(&mut cur).ok()?;
+                    cur.is_empty().then_some(query)
                 }
 
                 #[allow(clippy::too_many_arguments)]
@@ -2350,10 +2359,81 @@ impl ValidQueryRequest {
                                 iroha_data_model::block::BlockHeader,
                                 iroha_data_model::query::block::prelude::FindBlockHeaders
                             ),
-                            QueryItemKind::ProofRecord => run_payload_or_default!(
-                                iroha_data_model::proof::ProofRecord,
-                                iroha_data_model::query::proof::prelude::FindProofRecords
-                            ),
+                            QueryItemKind::ProofRecord => {
+                                let pred = dec::<
+                                    iroha_data_model::query::dsl::CompoundPredicate<
+                                        iroha_data_model::proof::ProofRecord,
+                                    >,
+                                >(
+                                    &iter_query.predicate_bytes
+                                )?;
+                                let sel = dec::<
+                                    iroha_data_model::query::dsl::SelectorTuple<
+                                        iroha_data_model::proof::ProofRecord,
+                                    >,
+                                >(
+                                    &iter_query.selector_bytes
+                                )?;
+                                macro_rules! try_proof_query {
+                                    ($find:ty) => {{
+                                        let mut cursor =
+                                            std::io::Cursor::new(&iter_query.query_payload);
+                                        if let Ok(concrete) =
+                                            <$find as norito::codec::Decode>::decode(&mut cursor)
+                                            && usize::try_from(cursor.position())
+                                                .unwrap_or(usize::MAX)
+                                                == iter_query.query_payload.len()
+                                        {
+                                            let iter = ValidQuery::execute(
+                                                concrete.clone(),
+                                                pred.clone(),
+                                                state,
+                                            )?;
+                                            let output = handle_iter_start_stored_replayable(
+                                                iter,
+                                                concrete,
+                                                pred,
+                                                sel,
+                                                params,
+                                                limits,
+                                                live_query_store,
+                                                authority,
+                                                stored_cursor_budget,
+                                                replay_state.clone(),
+                                            )?;
+                                            return Ok(QueryResponse::Iterable(output));
+                                        }
+                                    }};
+                                }
+                                if !iter_query.query_payload.is_empty() {
+                                    try_proof_query!(
+                                        iroha_data_model::query::proof::prelude::FindProofRecordsByBackend
+                                    );
+                                    try_proof_query!(
+                                        iroha_data_model::query::proof::prelude::FindProofRecordsByStatus
+                                    );
+                                    return Err(Error::Conversion(
+                                        "failed to decode proof query payload".into(),
+                                    ));
+                                }
+                                let concrete =
+                                    iroha_data_model::query::proof::prelude::FindProofRecords;
+                                let iter =
+                                    ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
+                                let output = handle_iter_start_stored_replayable(
+                                    iter,
+                                    concrete,
+                                    pred,
+                                    sel,
+                                    params,
+                                    limits,
+                                    live_query_store,
+                                    authority,
+                                    stored_cursor_budget,
+                                    replay_state.clone(),
+                                )?;
+                                return Ok(QueryResponse::Iterable(output));
+                            }
                             QueryItemKind::AssetEscrowRecord => run_payload_or_default!(
                                 iroha_data_model::escrow::AssetEscrowRecord,
                                 iroha_data_model::query::escrow::prelude::FindAssetEscrows
@@ -3087,30 +3167,6 @@ impl ValidQueryRequest {
                 }
                 if let Some(resp) = run_dispatch::<
                     iroha_data_model::proof::ProofRecord,
-                    iroha_data_model::query::proof::prelude::FindProofRecords,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::proof::prelude::FindProofRecords,
-                        >(e)
-                        .or(Some(
-                            iroha_data_model::query::proof::prelude::FindProofRecords,
-                        ))
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::proof::ProofRecord,
                     iroha_data_model::query::proof::prelude::FindProofRecordsByBackend,
                     _,
                 >(
@@ -3147,6 +3203,27 @@ impl ValidQueryRequest {
                         try_decode_query::<
                             iroha_data_model::query::proof::prelude::FindProofRecordsByStatus,
                         >(e)
+                    },
+                )? {
+                    return Ok(resp);
+                }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::proof::ProofRecord,
+                    iroha_data_model::query::proof::prelude::FindProofRecords,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    replay_state.clone(),
+                    |e| {
+                        try_decode_query::<iroha_data_model::query::proof::prelude::FindProofRecords>(
+                            e,
+                        )
                     },
                 )? {
                     return Ok(resp);
@@ -3512,7 +3589,8 @@ impl ValidQueryRequest {
                 {
                     let bytes = erased.payload();
                     let mut cur = bytes;
-                    Q::decode(&mut cur).ok()
+                    let query = Q::decode(&mut cur).ok()?;
+                    cur.is_empty().then_some(query)
                 }
 
                 #[allow(clippy::too_many_arguments)]
@@ -3722,10 +3800,73 @@ impl ValidQueryRequest {
                                 iroha_data_model::block::BlockHeader,
                                 iroha_data_model::query::block::prelude::FindBlockHeaders
                             ),
-                            QueryItemKind::ProofRecord => run_payload_or_default!(
-                                iroha_data_model::proof::ProofRecord,
-                                iroha_data_model::query::proof::prelude::FindProofRecords
-                            ),
+                            QueryItemKind::ProofRecord => {
+                                let pred = dec::<
+                                    iroha_data_model::query::dsl::CompoundPredicate<
+                                        iroha_data_model::proof::ProofRecord,
+                                    >,
+                                >(
+                                    &iter_query.predicate_bytes
+                                )?;
+                                let sel = dec::<
+                                    iroha_data_model::query::dsl::SelectorTuple<
+                                        iroha_data_model::proof::ProofRecord,
+                                    >,
+                                >(
+                                    &iter_query.selector_bytes
+                                )?;
+                                macro_rules! try_proof_query {
+                                    ($find:ty) => {{
+                                        let mut cursor =
+                                            std::io::Cursor::new(&iter_query.query_payload);
+                                        if let Ok(concrete) =
+                                            <$find as norito::codec::Decode>::decode(&mut cursor)
+                                            && usize::try_from(cursor.position())
+                                                .unwrap_or(usize::MAX)
+                                                == iter_query.query_payload.len()
+                                        {
+                                            let iter = ValidQuery::execute(concrete, pred, state)?;
+                                            let (output, processed_items) =
+                                                apply_query_postprocessing_ephemeral_with_budget(
+                                                    iter,
+                                                    sel,
+                                                    params,
+                                                    limits,
+                                                    budget_items,
+                                                )?;
+                                            return Ok((
+                                                QueryResponse::Iterable(output),
+                                                processed_items,
+                                            ));
+                                        }
+                                    }};
+                                }
+                                if !iter_query.query_payload.is_empty() {
+                                    try_proof_query!(
+                                        iroha_data_model::query::proof::prelude::FindProofRecordsByBackend
+                                    );
+                                    try_proof_query!(
+                                        iroha_data_model::query::proof::prelude::FindProofRecordsByStatus
+                                    );
+                                    return Err(Error::Conversion(
+                                        "failed to decode proof query payload".into(),
+                                    ));
+                                }
+                                let iter = ValidQuery::execute(
+                                    iroha_data_model::query::proof::prelude::FindProofRecords,
+                                    pred,
+                                    state,
+                                )?;
+                                let (output, processed_items) =
+                                    apply_query_postprocessing_ephemeral_with_budget(
+                                        iter,
+                                        sel,
+                                        params,
+                                        limits,
+                                        budget_items,
+                                    )?;
+                                return Ok((QueryResponse::Iterable(output), processed_items));
+                            }
                             QueryItemKind::AssetEscrowRecord => run_payload_or_default!(
                                 iroha_data_model::escrow::AssetEscrowRecord,
                                 iroha_data_model::query::escrow::prelude::FindAssetEscrows
@@ -4149,7 +4290,7 @@ impl ValidQueryRequest {
                 }
                 if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::proof::ProofRecord,
-                    iroha_data_model::query::proof::prelude::FindProofRecords,
+                    iroha_data_model::query::proof::prelude::FindProofRecordsByBackend,
                     _,
                 >(
                     qbox,
@@ -4162,11 +4303,50 @@ impl ValidQueryRequest {
                     None,
                     |e| {
                         try_decode_query::<
-                                iroha_data_model::query::proof::prelude::FindProofRecords,
-                            >(e)
-                            .or(Some(
-                                iroha_data_model::query::proof::prelude::FindProofRecords,
-                            ))
+                            iroha_data_model::query::proof::prelude::FindProofRecordsByBackend,
+                        >(e)
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::proof::ProofRecord,
+                    iroha_data_model::query::proof::prelude::FindProofRecordsByStatus,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::proof::prelude::FindProofRecordsByStatus,
+                        >(e)
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::proof::ProofRecord,
+                    iroha_data_model::query::proof::prelude::FindProofRecords,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<iroha_data_model::query::proof::prelude::FindProofRecords>(
+                            e,
+                        )
                     },
                 )? {
                     return Ok((resp, processed_items));
@@ -7826,8 +8006,8 @@ mod tests {
         >::new();
         for record in [
             target.clone(),
-            same_backend_wrong_status,
-            wrong_backend_same_status,
+            same_backend_wrong_status.clone(),
+            wrong_backend_same_status.clone(),
         ] {
             state.world.proofs.insert(record.id.clone(), record.clone());
             proof_status_index
@@ -7858,7 +8038,31 @@ mod tests {
             &state_view,
         )?
         .collect::<Vec<_>>();
-        assert_eq!(matching, vec![target]);
+        assert_eq!(matching, vec![target.clone()]);
+
+        let backend_only = ValidQuery::execute(
+            iroha_data_model::query::proof::prelude::FindProofRecordsByBackend {
+                backend: "halo2/test".into(),
+            },
+            CompoundPredicate::<iroha_data_model::proof::ProofRecord>::PASS,
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        assert_eq!(
+            backend_only,
+            vec![target.clone(), same_backend_wrong_status.clone()],
+            "backend-specific proof query must not leak records from another backend",
+        );
+
+        let missing_backend = ValidQuery::execute(
+            iroha_data_model::query::proof::prelude::FindProofRecordsByBackend {
+                backend: "missing/backend".into(),
+            },
+            CompoundPredicate::<iroha_data_model::proof::ProofRecord>::PASS,
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
+        assert!(missing_backend.is_empty());
 
         let contradictory_backend = ValidQuery::execute(
             iroha_data_model::query::proof::prelude::FindProofRecords,

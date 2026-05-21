@@ -44,6 +44,8 @@ pub(super) struct KnownBlockCommitQcRecoveryRequestPlan {
     pub(super) body: bool,
 }
 
+const KNOWN_BLOCK_COMMIT_QC_VIEW_CHANGE_GRACE_MULTIPLIER: u32 = 8;
+
 pub(super) const fn known_block_commit_qc_recovery_request_plan(
     payload_materialized_locally: bool,
 ) -> KnownBlockCommitQcRecoveryRequestPlan {
@@ -4748,7 +4750,7 @@ impl Actor {
                     .then(|| self.recovery_missing_qc_reacquire_window())
                     .unwrap_or(Duration::ZERO),
             );
-        let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+        let view_change_window = Some(self.known_block_commit_qc_recovery_view_change_window());
         let topology = super::network_topology::Topology::new(filtered_targets.clone());
         let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
         let decision = super::plan_missing_block_fetch_with_mode(
@@ -4959,6 +4961,18 @@ impl Actor {
                 .phase_tracker
                 .current_view(height)
                 .is_some_and(|current_view| current_view > view)
+    }
+
+    fn known_block_commit_qc_recovery_view_change_window(&self) -> Duration {
+        let quorum_timeout = self.quorum_timeout(self.runtime_da_enabled());
+        let availability_timeout =
+            self.availability_timeout(quorum_timeout, self.runtime_da_enabled());
+        super::saturating_mul_duration(
+            quorum_timeout.max(Duration::from_millis(1)),
+            KNOWN_BLOCK_COMMIT_QC_VIEW_CHANGE_GRACE_MULTIPLIER,
+        )
+        .max(availability_timeout)
+        .max(quorum_timeout.saturating_add(self.recovery_missing_qc_reacquire_window()))
     }
 
     fn maybe_rotate_stalled_known_block_commit_qc_recovery(

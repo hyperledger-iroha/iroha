@@ -21,18 +21,6 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use tokio::{task::spawn_blocking, time::Instant};
 
-fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
-    const NEEDLES: [&str; 3] = [
-        "haven't got tx confirmation within",
-        "transaction queued for too long",
-        "Connection dropped without `Committed/Applied` or `Rejected` event",
-    ];
-    err.chain().any(|cause| {
-        let text = cause.to_string();
-        NEEDLES.iter().any(|needle| text.contains(needle))
-    })
-}
-
 fn produce_instructions(prefix: &str) -> (Vec<InstructionBox>, BTreeSet<DomainId>) {
     let domains = (0..4)
         .map(|domain_index: usize| {
@@ -48,6 +36,18 @@ fn produce_instructions(prefix: &str) -> (Vec<InstructionBox>, BTreeSet<DomainId
         .map(InstructionBox::from)
         .collect::<Vec<_>>();
     (instructions, expected)
+}
+
+fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
+    const NEEDLES: [&str; 3] = [
+        "haven't got tx confirmation within",
+        "transaction queued for too long",
+        "Connection dropped without `Committed/Applied` or `Rejected` event",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
 }
 
 async fn transaction_execution_should_produce_events(
@@ -83,7 +83,7 @@ async fn transaction_execution_should_produce_events(
             if let Err(err) = submit_result {
                 if is_tx_confirmation_timeout(&err) {
                     eprintln!(
-                        "warning: {context} confirmation timed out; continuing to wait for events"
+                        "warning: {context} confirmation timed out; continuing to wait for domain events"
                     );
                 } else {
                     return Err(err);

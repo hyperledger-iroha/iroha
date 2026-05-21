@@ -203,6 +203,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_json_object(&mut self, ident_token: &Token) -> ParseResult<String> {
+        let mut seen_keys = std::collections::BTreeSet::new();
         let mut out = String::from("{");
         if self.peek(TokenKind::RBrace) {
             self.bump();
@@ -225,9 +226,8 @@ impl<'a> Parser<'a> {
                 first = false;
             }
             let key_tok = self.bump();
-            let key = match key_tok.kind {
-                TokenKind::String(ref s) => s.clone(),
-                TokenKind::Ident(ref s) => s.clone(),
+            let key = match &key_tok.kind {
+                TokenKind::String(s) | TokenKind::Ident(s) => s.clone(),
                 _ => {
                     return Err(self.error(
                         key_tok,
@@ -235,6 +235,9 @@ impl<'a> Parser<'a> {
                     ));
                 }
             };
+            if !seen_keys.insert(key.clone()) {
+                return Err(self.error(key_tok, "duplicate key in `json!{}` object literal"));
+            }
             out.push('"');
             out.push_str(&escape_json_string(&key));
             out.push('"');
@@ -2767,6 +2770,47 @@ mod tests {
     }
 
     #[test]
+    fn parse_json_macro_rejects_trailing_comma_object() {
+        let src = r#"fn main() { let x = json!{ ok: true, }; }"#;
+        let err = parse(src).expect_err("trailing object comma must be rejected");
+        assert!(err.contains("json! object keys"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn parse_json_macro_rejects_trailing_comma_array() {
+        let src = r#"fn main() { let x = json![1, 2, ]; }"#;
+        let err = parse(src).expect_err("trailing array comma must be rejected");
+        assert!(
+            err.contains("unsupported value in `json!{}` macro"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_json_macro_rejects_duplicate_object_keys() {
+        for src in [
+            r#"fn main() { let x = json!{ dup: 1, dup: 2 }; }"#,
+            r#"fn main() { let x = json!{ dup: 1, "dup": 2 }; }"#,
+        ] {
+            let err = parse(src).expect_err("duplicate json object key must be rejected");
+            assert!(
+                err.contains("duplicate key in `json!{}` object literal"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_json_macro_rejects_nested_duplicate_object_keys() {
+        let src = r#"fn main() { let x = json!{ outer: { ok: true, ok: false } }; }"#;
+        let err = parse(src).expect_err("nested duplicate json object key must be rejected");
+        assert!(
+            err.contains("duplicate key in `json!{}` object literal"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn parse_contract_meta_rejects_integer_overflow_literal() {
         let src = r#"
         seiyaku C {
@@ -2967,6 +3011,60 @@ mod tests {
         assert!(matches!(trigger.filter, TriggerFilter::Time(_)));
         assert_eq!(trigger.authority.as_deref(), Some(authority.as_str()));
         assert_eq!(trigger.metadata.len(), 3);
+    }
+
+    #[test]
+    fn parse_trigger_decl_rejects_duplicate_control_fields() {
+        for (field, duplicate_line, expected) in [
+            ("call", "call run;", "duplicate `call` field"),
+            ("on", "on time pre_commit;", "duplicate `on` field"),
+            ("repeats", "repeats 2;", "duplicate `repeats` field"),
+            (
+                "authority",
+                r#"authority "alice";"#,
+                "duplicate `authority` field",
+            ),
+        ] {
+            let src = format!(
+                r#"
+            seiyaku C {{
+                kotoage fn run() {{}}
+                register_trigger wake {{
+                    call run;
+                    on time pre_commit;
+                    repeats 1;
+                    authority "bob";
+                    {duplicate_line}
+                }}
+            }}
+            "#
+            );
+            let err = parse(&src).unwrap_err();
+            assert!(err.contains(expected), "{field}: unexpected error: {err}");
+        }
+    }
+
+    #[test]
+    fn parse_trigger_decl_rejects_negative_and_overflow_repeats() {
+        for (repeats, expected) in [
+            ("-1", "repeats expects a non-negative integer literal"),
+            ("4294967296", "repeats integer literal out of range"),
+        ] {
+            let src = format!(
+                r#"
+            seiyaku C {{
+                kotoage fn run() {{}}
+                register_trigger wake {{
+                    call run;
+                    on time pre_commit;
+                    repeats {repeats};
+                }}
+            }}
+            "#
+            );
+            let err = parse(&src).unwrap_err();
+            assert!(err.contains(expected), "unexpected error: {err}");
+        }
     }
 
     #[test]

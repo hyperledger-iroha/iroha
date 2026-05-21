@@ -269,7 +269,7 @@ fn append_bootstrap_authority_overlay(
     for instruction in manifest.instructions() {
         if let Some(RegisterBox::Domain(register_domain)) =
             instruction.as_any().downcast_ref::<RegisterBox>()
-            && &register_domain.object().id == &authority.linked_domain
+            && register_domain.object().id == authority.linked_domain
         {
             has_linked_domain_registration = true;
         }

@@ -3418,6 +3418,81 @@ async fn vnext_dispatch_validation_queues_worker_and_accepts_result() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn vnext_validation_dispatch_filters_raw_commit_topology_snapshot() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let view = 0;
+    let parent = actor.state.latest_block_hash_fast();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let live_roster = actor.roster_for_live_vote_with_mode(height, actor.consensus_mode);
+    assert!(
+        !live_roster.is_empty(),
+        "test requires a non-empty live roster"
+    );
+    let transport_only_peer = PeerId::new(
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            .public_key()
+            .clone(),
+    );
+    {
+        let mut topology = actor.state.commit_topology.block();
+        topology.clear();
+        for peer in live_roster.iter().cloned() {
+            topology.push(peer);
+        }
+        topology.push(transport_only_peer.clone());
+        topology.commit();
+    }
+    assert!(
+        actor
+            .state
+            .commit_topology_snapshot()
+            .contains(&transport_only_peer),
+        "test setup must place the extra peer in the raw topology snapshot"
+    );
+    assert!(
+        !actor
+            .roster_for_live_vote_with_mode(height, actor.consensus_mode)
+            .contains(&transport_only_peer),
+        "live roster should filter peers that are not active validators"
+    );
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+
+    assert!(
+        actor.drive_vnext_validation_for_pending(block_hash, height, view, payload_hash),
+        "vNext validation should dispatch worker validation"
+    );
+    let queued_work = work_rx
+        .try_recv()
+        .expect("vNext dispatch should queue validation work");
+    assert!(
+        !queued_work.commit_topology.contains(&transport_only_peer),
+        "vNext validation must not use transport-only peers from the raw topology snapshot"
+    );
+    let queued_set: BTreeSet<_> = queued_work.commit_topology.iter().cloned().collect();
+    let live_set: BTreeSet<_> = live_roster.into_iter().collect();
+    assert_eq!(
+        queued_set, live_set,
+        "vNext validation should use the same active validator set as live voting"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn vnext_reject_validation_aborts_slot_and_removes_pending() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -12729,19 +12804,24 @@ async fn validation_accepts_signature_mismatch_for_non_validator_with_commit_qc(
 
     let mut pending = PendingBlock::new(block, payload_hash, block_height, block_view);
     pending.note_commit_qc_observed(actor.epoch_for_height(block_height));
-    let err = crate::block::BlockValidationError::SignatureVerification(
+    for signature_error in [
         crate::block::SignatureVerificationError::UnknownSignature,
-    );
-    let outcome = actor.should_accept_observer_signature_mismatch_with_commit_qc(
-        block_hash,
-        &pending,
-        &commit_roster,
-        &err,
-    );
-    assert!(
-        outcome,
-        "signature mismatch should be tolerated for non-validator peers once commit QC evidence exists"
-    );
+        crate::block::SignatureVerificationError::UnknownSignatory,
+        crate::block::SignatureVerificationError::MissingPop,
+        crate::block::SignatureVerificationError::LeaderMissing,
+    ] {
+        let err = crate::block::BlockValidationError::SignatureVerification(signature_error);
+        let outcome = actor.should_accept_observer_signature_mismatch_with_commit_qc(
+            block_hash,
+            &pending,
+            &commit_roster,
+            &err,
+        );
+        assert!(
+            outcome,
+            "{signature_error:?} should be tolerated for non-validator peers once commit QC evidence exists"
+        );
+    }
 
     harness.shutdown.send();
 }
@@ -32214,6 +32294,13 @@ async fn known_block_commit_qc_recovery_uses_reacquire_window_for_committed_tip(
     assert!(
         request.retry_window >= actor.recovery_missing_qc_reacquire_window(),
         "committed-tip QC reacquisition should use the missing-QC recovery window instead of the fast payload cadence"
+    );
+    let quorum_window = actor.quorum_timeout(actor.runtime_da_enabled());
+    let expected_view_change_floor =
+        super::saturating_mul_duration(quorum_window.max(Duration::from_millis(1)), 8);
+    assert!(
+        request.view_change_window.unwrap_or_default() >= expected_view_change_floor,
+        "known-block commit-QC recovery should keep fetching certificates before rotating the frontier view"
     );
 
     harness.shutdown.send();

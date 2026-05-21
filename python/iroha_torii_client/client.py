@@ -1197,13 +1197,11 @@ class SccpCapabilities:
     local_chain: str
     proof_family: str
     burn_bundle_path: str
-    governance_bundle_path: str
     message_bundle_path: str
     message_proof_path: str
     message_job_path: str
     proof_manifest_path: str
     burn_registry_backend: str
-    governance_registry_backend: str
     proof_submit_path: Optional[str]
     message_submit_path: Optional[str]
     message_payload_kinds: List[str]
@@ -1252,7 +1250,6 @@ class SccpHubCommitment:
     target_domain: int
     message_id: str
     payload_hash: str
-    parliament_certificate_hash: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -8296,10 +8293,6 @@ class ToriiClient:
                 record.get("burn_bundle_path"),
                 f"{context}.burn_bundle_path",
             ),
-            governance_bundle_path=ToriiClient._require_string(
-                record.get("governance_bundle_path"),
-                f"{context}.governance_bundle_path",
-            ),
             message_bundle_path=ToriiClient._require_string(
                 record.get("message_bundle_path"),
                 f"{context}.message_bundle_path",
@@ -8319,10 +8312,6 @@ class ToriiClient:
             burn_registry_backend=ToriiClient._require_string(
                 record.get("burn_registry_backend"),
                 f"{context}.burn_registry_backend",
-            ),
-            governance_registry_backend=ToriiClient._require_string(
-                record.get("governance_registry_backend"),
-                f"{context}.governance_registry_backend",
             ),
             proof_submit_path=ToriiClient._coerce_optional_string(
                 record.get("proof_submit_path"),
@@ -9088,14 +9077,6 @@ class ToriiClient:
             target_domain=ToriiClient._coerce_unsigned(record.get("target_domain"), f"{context}.target_domain"),
             message_id=ToriiClient._require_hex_string(record.get("message_id"), f"{context}.message_id"),
             payload_hash=ToriiClient._require_hex_string(record.get("payload_hash"), f"{context}.payload_hash"),
-            parliament_certificate_hash=(
-                ToriiClient._require_hex_string(
-                    record.get("parliament_certificate_hash"),
-                    f"{context}.parliament_certificate_hash",
-                )
-                if record.get("parliament_certificate_hash") is not None
-                else None
-            ),
         )
 
     @staticmethod

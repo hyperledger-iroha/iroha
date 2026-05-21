@@ -172,7 +172,7 @@ const SCCP_FINALITY_MODEL_VALUES = new Set([
   "SubstrateGrandpa",
 ]);
 const SCCP_PROOF_SECURITY_MODEL_VALUES = new Set(["RecursiveZk"]);
-const SCCP_ANCHOR_GOVERNANCE_VALUES = new Set(["SoraParliament"]);
+const SCCP_ANCHOR_GOVERNANCE_VALUES = new Set(["CryptographicProof"]);
 const SCCP_VERIFIER_TARGET_VALUES = new Set([
   "EvmContract",
   "SolanaProgram",
@@ -13390,10 +13390,6 @@ function normalizeSccpCapabilitiesResponse(payload) {
       record.burn_bundle_path,
       "sccp capabilities response.burn_bundle_path",
     ),
-    governanceBundlePath: requireNonEmptyString(
-      record.governance_bundle_path,
-      "sccp capabilities response.governance_bundle_path",
-    ),
     messageBundlePath: requireNonEmptyString(
       record.message_bundle_path,
       "sccp capabilities response.message_bundle_path",
@@ -13417,10 +13413,6 @@ function normalizeSccpCapabilitiesResponse(payload) {
     burnRegistryBackend: requireNonEmptyString(
       record.burn_registry_backend,
       "sccp capabilities response.burn_registry_backend",
-    ),
-    governanceRegistryBackend: requireNonEmptyString(
-      record.governance_registry_backend,
-      "sccp capabilities response.governance_registry_backend",
     ),
     proofSubmitPath: optionalString(
       record.proof_submit_path ?? null,
@@ -14312,13 +14304,6 @@ function normalizeSccpHubCommitment(value, context) {
     }),
     messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
     payloadHash: normalizeHex32String(record.payload_hash, `${context}.payload_hash`),
-    parliamentCertificateHash:
-      record.parliament_certificate_hash === undefined || record.parliament_certificate_hash === null
-        ? null
-        : normalizeHex32String(
-            record.parliament_certificate_hash,
-            `${context}.parliament_certificate_hash`,
-          ),
   };
 }
 

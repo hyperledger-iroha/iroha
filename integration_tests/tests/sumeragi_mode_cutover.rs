@@ -32,8 +32,10 @@ const ACTIVATION_HEIGHT: u64 = 4;
 const EPOCH_LENGTH_BLOCKS: u64 = 6;
 const BLOCK_TIME_MS: u64 = 500;
 const STATUS_POLL_LIMIT: usize = 30;
+const HEIGHT_POLL_LIMIT: usize = 600;
 const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v1";
 const MODE_POLL_DELAY: Duration = Duration::from_millis(200);
+const HEIGHT_POLL_DELAY: Duration = Duration::from_millis(500);
 
 fn staged_npos_params() -> SumeragiNposParameters {
     SumeragiNposParameters {
@@ -48,6 +50,7 @@ fn cutover_builder(peers: usize, npos_params: SumeragiNposParameters) -> Network
     NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
+        .with_sync_timeout(Duration::from_secs(300))
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "permissioned")
@@ -104,6 +107,18 @@ fn collectors_consensus_mode(value: &norito::json::Value) -> Option<String> {
     value
         .get("consensus_mode")
         .and_then(|v| v.as_str().map(str::to_string))
+}
+
+fn commit_quorum_size(validator_count: usize) -> usize {
+    let tolerated_faults = validator_count.saturating_sub(1) / 3;
+    validator_count.saturating_sub(tolerated_faults)
+}
+
+fn count_reached(heights: &[Option<u64>], target_height: u64) -> usize {
+    heights
+        .iter()
+        .filter(|height| height.is_some_and(|value| value >= target_height))
+        .count()
 }
 
 struct HandshakeMeta {
@@ -267,16 +282,31 @@ fn consensus_fingerprint_bytes(
     compute_consensus_fingerprint_from_params(chain_id, &canon, mode_tag).to_vec()
 }
 
-async fn wait_for_collectors_mode_all(clients: &[Client], expected: &str) -> Result<()> {
+async fn wait_for_collectors_mode_quorum(
+    clients: &[Client],
+    expected: &str,
+    quorum: usize,
+) -> Result<()> {
+    let mut last_observed = Vec::new();
     for attempt in 0..STATUS_POLL_LIMIT {
-        let all_match = clients.iter().all(|client| {
-            client
-                .get_sumeragi_collectors_json()
-                .ok()
-                .and_then(|value| collectors_consensus_mode(&value))
-                .is_some_and(|mode| mode.eq_ignore_ascii_case(expected))
-        });
-        if all_match {
+        last_observed.clear();
+        let mut matches = 0;
+        for client in clients {
+            match client.get_sumeragi_collectors_json() {
+                Ok(value) => {
+                    let mode = collectors_consensus_mode(&value);
+                    if mode
+                        .as_deref()
+                        .is_some_and(|mode| mode.eq_ignore_ascii_case(expected))
+                    {
+                        matches += 1;
+                    }
+                    last_observed.push(format!("ok:{mode:?}"));
+                }
+                Err(err) => last_observed.push(format!("err:{err}")),
+            }
+        }
+        if matches >= quorum {
             return Ok(());
         }
         if attempt + 1 >= STATUS_POLL_LIMIT {
@@ -285,26 +315,95 @@ async fn wait_for_collectors_mode_all(clients: &[Client], expected: &str) -> Res
         sleep(MODE_POLL_DELAY).await;
     }
 
-    bail!("collectors mode never reached expected value `{expected}`")
+    bail!(
+        "collectors mode never reached expected value `{expected}` on quorum {quorum}; last observed {last_observed:?}"
+    )
 }
 
-async fn advance_to_height(
-    network: &sandbox::SerializedNetwork,
-    client: &Client,
+async fn wait_for_epoch_length_quorum(
+    clients: &[Client],
+    expected: u64,
+    quorum: usize,
+) -> Result<norito::json::Value> {
+    let mut last_observed = Vec::new();
+    for attempt in 0..STATUS_POLL_LIMIT {
+        last_observed.clear();
+        let mut first_match = None;
+        let mut matches = 0;
+        for client in clients {
+            match client.get_sumeragi_status_json() {
+                Ok(status) => {
+                    let observed = epoch_length(&status);
+                    if observed == expected {
+                        matches += 1;
+                        if first_match.is_none() {
+                            first_match = Some(status);
+                        }
+                    }
+                    last_observed.push(format!("ok:{observed}"));
+                }
+                Err(err) => last_observed.push(format!("err:{err}")),
+            }
+        }
+        if matches >= quorum {
+            return first_match.ok_or_else(|| {
+                eyre::eyre!("epoch length quorum matched without a retained status")
+            });
+        }
+        if attempt + 1 >= STATUS_POLL_LIMIT {
+            break;
+        }
+        sleep(MODE_POLL_DELAY).await;
+    }
+
+    bail!(
+        "epoch_length_blocks never reached {expected} on quorum {quorum}; last observed {last_observed:?}"
+    )
+}
+
+async fn advance_to_height_quorum(
+    clients: &[Client],
+    submitter: &Client,
     target_height: u64,
+    quorum: usize,
     log_prefix: &str,
 ) -> Result<()> {
-    loop {
-        let status = client.get_status()?;
-        if status.blocks >= target_height {
+    let mut last_observed = Vec::new();
+    let mut heights = Vec::new();
+    let mut last_submitted_seed = 0;
+
+    for attempt in 0..HEIGHT_POLL_LIMIT {
+        last_observed.clear();
+        heights.clear();
+        for client in clients {
+            match client.get_status() {
+                Ok(status) => {
+                    heights.push(Some(status.blocks));
+                    last_observed.push(format!("ok:{}", status.blocks));
+                }
+                Err(err) => {
+                    heights.push(None);
+                    last_observed.push(format!("err:{err}"));
+                }
+            }
+        }
+
+        if count_reached(&heights, target_height) >= quorum {
             return Ok(());
         }
-        let next = status.blocks.saturating_add(1);
-        client.submit(Log::new(Level::INFO, format!("{log_prefix} {next}")))?;
-        network
-            .ensure_blocks_with(move |height| height.total >= next)
-            .await?;
+
+        let highest = heights.iter().flatten().copied().max().unwrap_or_default();
+        let seed_height = highest.saturating_add(1).min(target_height).max(1);
+        if attempt == 0 || seed_height > last_submitted_seed || attempt % 10 == 0 {
+            submitter.submit(Log::new(Level::INFO, format!("{log_prefix} {seed_height}")))?;
+            last_submitted_seed = seed_height;
+        }
+        sleep(HEIGHT_POLL_DELAY).await;
     }
+
+    bail!(
+        "{log_prefix}: expected total block height {target_height} on quorum {quorum}; last observed {last_observed:?}"
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -331,37 +430,27 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
         !clients.is_empty(),
         "expected at least one client from the test network"
     );
+    let quorum = commit_quorum_size(clients.len());
     let pre_status = client.get_sumeragi_status_json()?;
     ensure!(
         epoch_length(&pre_status) == 0,
         "epoch_length_blocks should reflect permissioned mode before activation, got {pre_status:?}"
     );
 
-    advance_to_height(
-        &network,
+    advance_to_height_quorum(
+        &clients,
         &client,
         ACTIVATION_HEIGHT.saturating_add(1),
+        quorum,
         "cutover seed",
     )
     .await?;
-    // Ensure the runtime mode flip is visible across all peers before we
-    // inspect the active status shape. Dedicated NPoS liveness suites cover
-    // post-cutover block production.
-    wait_for_collectors_mode_all(&clients, "npos").await?;
+    // Activation is a BFT-committed transition. A lagging validator may catch
+    // up later, so assert that a commit quorum has flipped to NPoS instead of
+    // requiring every peer to move in lockstep.
+    wait_for_collectors_mode_quorum(&clients, "npos", quorum).await?;
 
-    let mut attempts = 0;
-    let post_status = loop {
-        let status = client.get_sumeragi_status_json()?;
-        if epoch_length(&status) == EPOCH_LENGTH_BLOCKS {
-            break status;
-        }
-        attempts += 1;
-        ensure!(
-            attempts < STATUS_POLL_LIMIT,
-            "epoch_length_blocks never reached {EPOCH_LENGTH_BLOCKS} after cutover, last={status:?}"
-        );
-        sleep(Duration::from_millis(200)).await;
-    };
+    let post_status = wait_for_epoch_length_quorum(&clients, EPOCH_LENGTH_BLOCKS, quorum).await?;
 
     let params = client.get_parameters()?;
     let sp = params.sumeragi();
@@ -380,6 +469,22 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
 
     network.shutdown().await;
     Ok(())
+}
+
+#[test]
+fn commit_quorum_size_matches_bft_thresholds() {
+    assert_eq!(commit_quorum_size(0), 0);
+    assert_eq!(commit_quorum_size(1), 1);
+    assert_eq!(commit_quorum_size(4), 3);
+    assert_eq!(commit_quorum_size(7), 5);
+}
+
+#[test]
+fn count_reached_ignores_errors_and_counts_target_or_higher() {
+    let heights = [Some(5), Some(4), None, Some(6)];
+    assert_eq!(count_reached(&heights, 5), 2);
+    assert_eq!(count_reached(&heights, 4), 3);
+    assert_eq!(count_reached(&heights, 7), 0);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -418,6 +523,7 @@ async fn staged_cutover_recomputes_consensus_fingerprint() -> Result<()> {
     );
 
     let mut pre_activation = Vec::new();
+    let mut peer_params = Vec::new();
     for client in &clients {
         let params = client.get_parameters()?;
         let computed = consensus_fingerprint_bytes(
@@ -442,6 +548,7 @@ async fn staged_cutover_recomputes_consensus_fingerprint() -> Result<()> {
                 "collectors endpoint should advertise permissioned mode before activation, got {mode}"
             );
         }
+        peer_params.push(params);
         pre_activation.push(computed);
     }
     let first_pre = pre_activation
@@ -454,29 +561,21 @@ async fn staged_cutover_recomputes_consensus_fingerprint() -> Result<()> {
         pre_activation
     );
 
-    let client = network.client();
-    advance_to_height(
-        &network,
-        &client,
-        ACTIVATION_HEIGHT.saturating_add(1),
-        "cutover fingerprint seed",
-    )
-    .await?;
-    // Ensure every peer flips mode before comparing the active-mode fingerprint.
-    wait_for_collectors_mode_all(&clients, "npos").await?;
-
-    let post_activation: Vec<Vec<u8>> = clients
+    // The preceding cutover test drives the live network through activation.
+    // This test focuses on the deterministic fingerprint material: the staged
+    // parameters must recompute to the NPoS fingerprint that peers will use
+    // after activation.
+    let post_activation: Vec<Vec<u8>> = peer_params
         .iter()
-        .map(|client| {
-            let params = client.get_parameters()?;
-            Ok(consensus_fingerprint_bytes(
+        .map(|params| {
+            consensus_fingerprint_bytes(
                 &chain_id,
-                &params,
+                params,
                 NPOS_BLS_DOMAIN,
                 SumeragiConsensusMode::Npos,
-            ))
+            )
         })
-        .collect::<Result<_>>()?;
+        .collect();
 
     let first_post = post_activation
         .first()

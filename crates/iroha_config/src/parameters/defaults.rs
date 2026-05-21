@@ -895,9 +895,9 @@ pub mod network {
     /// Chosen conservatively to avoid IP fragmentation on typical Internet paths.
     pub const QUIC_DATAGRAM_MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1200_usize);
     /// Total receive buffer reserved for QUIC datagrams (bytes).
-    pub const QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
+    pub const QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES: NonZeroUsize = nonzero!(64 * 1024 * 1024_usize);
     /// Total send buffer reserved for QUIC datagrams (bytes).
-    pub const QUIC_DATAGRAM_SEND_BUFFER_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
+    pub const QUIC_DATAGRAM_SEND_BUFFER_BYTES: NonZeroUsize = nonzero!(64 * 1024 * 1024_usize);
 
     /// Enable SCION-guided outbound peer dialing.
     ///

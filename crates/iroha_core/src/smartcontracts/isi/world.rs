@@ -4098,6 +4098,7 @@ pub mod isi {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                states: None,
                 kotoba: None,
                 provenance: Some(provenance.clone()),
             };
@@ -6713,11 +6714,73 @@ pub mod isi {
         events
     }
 
+    fn invalid_bridge_proof(message: impl Into<String>) -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message.into(),
+        ))
+        .into()
+    }
+
+    fn is_reserved_sccp_manifest_hash(hash: &[u8; 32]) -> bool {
+        iroha_sccp::sccp_reserved_bridge_manifest_hashes_v1()
+            .into_iter()
+            .any(|reserved| &reserved == hash)
+    }
+
+    fn sccp_decode_finality_proof(
+        bytes: &[u8],
+    ) -> Result<iroha_sccp::NexusBridgeFinalityProofV1, Error> {
+        iroha_sccp::decode_nexus_bridge_finality_proof(bytes)
+            .ok_or_else(|| invalid_bridge_proof("SCCP bundle finality proof could not be decoded"))
+    }
+
+    fn validate_sccp_finality_against_state(
+        finality: &iroha_sccp::NexusBridgeFinalityProofV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        crate::bridge::verify_sccp_finality_proof_against_local_state(state_transaction, finality)
+            .map(|_| ())
+            .map_err(|err| {
+                invalid_bridge_proof(format!(
+                    "SCCP finality proof is not locally anchored: {err}"
+                ))
+            })
+    }
+
+    fn validate_sccp_burn_bridge_proof(
+        bundle: &iroha_sccp::NexusSccpBurnProofV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if !iroha_sccp::verify_burn_bundle_structure(bundle) {
+            return Err(invalid_bridge_proof(
+                "SCCP burn bundle failed structural verification",
+            ));
+        }
+        let finality = sccp_decode_finality_proof(&bundle.finality_proof)?;
+        validate_sccp_finality_against_state(&finality, state_transaction)
+    }
+
+    fn validate_sccp_message_transparent_bridge_proof(
+        artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if !iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(artifact)
+            || !iroha_sccp::verify_message_bundle_structure(&artifact.bundle)
+        {
+            return Err(invalid_bridge_proof(
+                "SCCP transparent message proof failed structural verification",
+            ));
+        }
+        let finality = sccp_decode_finality_proof(&artifact.bundle.finality_proof)?;
+        validate_sccp_finality_against_state(&finality, state_transaction)
+    }
+
     fn encode_and_validate_bridge_proof(
         proof: &iroha_data_model::bridge::BridgeProof,
-        zk_cfg: &iroha_config::parameters::actual::Zk,
-        current_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Vec<u8>, Error> {
+        let zk_cfg = &state_transaction.zk;
+        let current_height = state_transaction._curr_block.height.get();
         if !proof.range.is_valid() {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -6786,6 +6849,11 @@ pub mod isi {
 
         match &proof.payload {
             iroha_data_model::bridge::BridgeProofPayload::Ics(ics) => {
+                if is_reserved_sccp_manifest_hash(&proof.manifest_hash) {
+                    return Err(invalid_bridge_proof(
+                        "SCCP proofs must use typed SCCP bridge proof backends",
+                    ));
+                }
                 validate_bridge_ics_proof(ics, zk_cfg.merkle_depth)?;
             }
             iroha_data_model::bridge::BridgeProofPayload::TransparentZk(tp) => {
@@ -6796,17 +6864,59 @@ pub mod isi {
                         ),
                     ));
                 }
-                if tp.proof.backend.starts_with("sccp/stark-fri-v1/")
-                    && iroha_sccp::recover_nexus_sccp_message_transparent_proof(
-                        tp.proof.backend.as_str(),
-                        &tp.proof.bytes,
-                    )
-                    .is_none()
+                match tp.proof.backend.as_str() {
+                    iroha_sccp::SCCP_BURN_BRIDGE_PROOF_BACKEND_V1 => {
+                        if proof.manifest_hash != iroha_sccp::sccp_burn_bridge_manifest_hash_v1() {
+                            return Err(invalid_bridge_proof(
+                                "SCCP burn proof manifest hash mismatch",
+                            ));
+                        }
+                        let bundle = iroha_sccp::decode_nexus_sccp_burn_proof(&tp.proof.bytes)
+                            .ok_or_else(|| {
+                                invalid_bridge_proof(
+                                    "SCCP burn proof bundle bytes could not be decoded",
+                                )
+                            })?;
+                        validate_sccp_burn_bridge_proof(&bundle, state_transaction)?;
+                    }
+                    backend if backend.starts_with("sccp/stark-fri-v1/") => {
+                        let Some(artifact) =
+                            iroha_sccp::recover_nexus_sccp_message_transparent_proof(
+                                backend,
+                                &tp.proof.bytes,
+                            )
+                        else {
+                            return Err(invalid_bridge_proof(
+                                "SCCP transparent bridge proofs must decode as valid typed message artifacts",
+                            ));
+                        };
+                        if proof.manifest_hash
+                            != iroha_sccp::sccp_bridge_manifest_hash_for_seed(
+                                &artifact.manifest_seed,
+                            )
+                        {
+                            return Err(invalid_bridge_proof(
+                                "SCCP message proof manifest hash mismatch",
+                            ));
+                        }
+                        validate_sccp_message_transparent_bridge_proof(
+                            &artifact,
+                            state_transaction,
+                        )?;
+                    }
+                    _ if is_reserved_sccp_manifest_hash(&proof.manifest_hash) => {
+                        return Err(invalid_bridge_proof(
+                            "reserved SCCP manifests require typed SCCP bridge proof backends",
+                        ));
+                    }
+                    _ => {}
+                }
+                if tp.proof.backend.starts_with("sccp/")
+                    && !is_reserved_sccp_manifest_hash(&proof.manifest_hash)
                 {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
-                            "SCCP transparent bridge proofs must decode as valid typed message artifacts"
-                                .into(),
+                            "SCCP bridge proofs must use a reserved SCCP manifest hash".into(),
                         ),
                     ));
                 }
@@ -7022,11 +7132,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let current_height = state_transaction._curr_block.height.get();
-            let encoded = encode_and_validate_bridge_proof(
-                &self.proof,
-                &state_transaction.zk,
-                current_height,
-            )?;
+            let encoded = encode_and_validate_bridge_proof(&self.proof, state_transaction)?;
             let proof_size = encoded.len();
             let backend_label = self.proof.backend_label();
             let commitment = hash_bridge_proof(&backend_label, &encoded);
@@ -19599,6 +19705,7 @@ pub mod isi {
                 features_bitmap: None,
                 access_set_hints: None,
                 entrypoints: None,
+                states: None,
                 kotoba: None,
                 provenance: None,
             };
@@ -20559,14 +20666,17 @@ pub mod isi {
                 state_ro: &impl StateReadOnly,
             ) -> Result<impl Iterator<Item = iroha_data_model::proof::ProofRecord>, Error>
             {
-                let backend = self.backend;
+                let backend = self.backend.to_string();
+                let requested_backend = backend.clone();
                 // Own the backend-range results because the returned iterator cannot borrow the
                 // query's owned backend string after this function returns.
                 let proofs = state_ro
                     .world()
                     .proofs_by_backend_iter(&backend)
                     .map(|(_, rec)| rec)
-                    .filter(move |rec| filter.applies(rec))
+                    .filter(move |rec| {
+                        rec.id.backend.as_str() == requested_backend.as_str() && filter.applies(rec)
+                    })
                     .cloned()
                     .collect::<Vec<_>>();
                 Ok(proofs.into_iter())
@@ -20583,13 +20693,14 @@ pub mod isi {
             ) -> Result<impl Iterator<Item = iroha_data_model::proof::ProofRecord>, Error>
             {
                 let status = self.status;
+                let requested_status = status;
                 // Own the status-index results because the returned iterator cannot borrow the
                 // query's owned status value after this function returns.
                 let proofs = state_ro
                     .world()
                     .proofs_by_status_iter(&status)
                     .map(|(_, rec)| rec)
-                    .filter(move |rec| filter.applies(rec))
+                    .filter(move |rec| rec.status == requested_status && filter.applies(rec))
                     .cloned()
                     .collect::<Vec<_>>();
                 Ok(proofs.into_iter())

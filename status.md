@@ -1,6 +1,337 @@
 # Status
 
-Last updated: 2026-05-20
+Last updated: 2026-05-21
+
+## 2026-05-21 Iroha-first contract devex hardening follow-up
+
+- `iroha contract dev doctor` now loads manifest profile client configs, reaches
+  the configured Torii endpoint, reports signer/default-gas/fee-asset/block
+  height state, and fails closed when the selected profile is not usable.
+- `iroha contract dev call`, `view`, and `smoke` now resolve profile client
+  configs the same way as top-level CLI calls, validate typed payloads from
+  compiled artifact metadata, and execute manifest smoke declarations against
+  live deployments instead of only parsing them.
+- Generated Kagami localnet start scripts prefer debug `irohad` builds for
+  first-release contract development, expose
+  `IROHA_LOCALNET_FAUCET_RESERVE_RETRIES`, and detach peer processes with
+  Python `start_new_session=True` when available so generated localnets survive
+  non-interactive wrapper exits.
+- Kotodama lint/compiler fixes removed noisy duplicate-field diagnostics for
+  JSON field-name literals and made loop-phi lowering deterministic, keeping
+  locked contract builds stable.
+- SoraSwap's native manifest workflow was validated end to end against a live
+  local Nexus deployment: profile-aware doctor, deploy, native dev smoke, and
+  legacy local smoke all completed successfully.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_kagami start_and_stop_scripts_are_executable -- --nocapture`
+  - `cargo check -p iroha_cli --bin iroha`
+  - `cargo check -p iroha_torii`
+  - `cargo test -p kotodama_lang lint_duplicate_json_name_literals_are_allowed -- --nocapture`
+  - `cargo test -p kotodama_lang loop_phi_lowering_is_deterministic -- --nocapture`
+  - `cargo test -p iroha_cli dev_build_manifest_emits_interface_source_map_and_budget_sidecars -- --nocapture`
+  - `cargo test -p iroha_cli prepare_dev_smoke_cases_validates_payloads_and_profile_defaults -- --nocapture`
+  - `cargo build -p iroha_cli --bin iroha -p iroha_kagami --bin kagami -p irohad --bin irohad -p ivm --bin koto_compile -p ivm --bin koto_test -p ivm --bin koto_lint`
+  - `cargo build -p iroha_kagami --bin kagami`
+
+## 2026-05-20 Iroha-first contract developer workflow
+
+- Added the first-release `iroha contract dev` workflow for manifest-based
+  smart-contract repositories: build, check, test, doctor, schema, deploy,
+  resume, call, view, and smoke declaration parsing.
+- `koto_compile` can now emit stable interface JSON via `--interface-out`, and
+  compiled contract manifests include state-key schema summaries derived from
+  embedded CNTR metadata.
+- Kotodama now injects a small first-release prelude on demand, including
+  authority/owner checks, basis-point fee math, checked amount arithmetic,
+  signed JSON verification, JSON field access, and `block_height()` access
+  through the existing host surface.
+- Focused validation passed:
+  - `cargo check -p iroha_cli --bin iroha`
+  - `cargo test -p kotodama_lang first_release_prelude_helpers_are_available_without_imports -- --nocapture`
+  - `cargo test -p kotodama_lang manifest_state_descriptors_use_canonical_type_names -- --nocapture`
+  - `cargo test -p iroha_cli dev_build_manifest_emits_interface_source_map_and_budget_sidecars -- --nocapture`
+  - `cargo test -p ivm interface_json_serialization_has_schema_sections --bin koto_compile -- --nocapture`
+  - `cargo build -p iroha_cli --bin iroha -p ivm --bin koto_compile -p ivm --bin koto_test -p ivm --bin koto_lint`
+  - `cargo test -p ivm contract_artifact -- --nocapture`
+
+## 2026-05-20 LFDT governance feedback response
+
+- Added a root `SECURITY.md` aligned with the LF Decentralized Trust security
+  policy template, using LFDT security email plus GitHub private vulnerability
+  reporting as the approved intake paths and listing three initial Iroha
+  security triage maintainers.
+- Added README compliance badges for GitHub license, OpenSSF Best Practices
+  project 960, and OpenSSF Scorecard. Scorecard intentionally uses
+  `github.com/hyperledger/iroha` because the Scorecard API resolves that
+  redirected repository path while `github.com/hyperledger-iroha/iroha` is not
+  currently indexed.
+- Added a weekly/push OpenSSF Scorecard workflow that publishes SARIF and
+  public badge/API results with the required `security-events: write` and
+  `id-token: write` permissions.
+- Moved localized root Markdown companions into
+  `docs/i18n/root/<locale>/...`, kept English root files canonical, and updated
+  the i18n helper/tests so future root translations are generated under that
+  directory instead of back into the repository root.
+- Replaced the long public `roadmap.md` with a concise roadmap and moved the
+  detailed open-work backlog to `docs/source/engineering_backlog.md`.
+- Added `docs/source/community.md`, centering public community-building on the
+  official X account (`https://x.com/hl_iroha/`) and monthly X Spaces, with
+  links to LFDT, Telegram, Discord, and GitHub channels.
+- Validation:
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/scorecard.yml"); puts "scorecard yaml ok"'`
+  - `python3 -m pytest pytests/scripts/sync_docs_i18n_test.py`
+  - `python3 scripts/sync_docs_i18n.py --check` still reports the pre-existing
+    200 missing translation stubs for unrelated docs; this governance-response
+    pass does not add new missing i18n stubs.
+  - Badge URL checks returned HTTP 200/302 as expected for OpenSSF Best
+    Practices, OpenSSF Scorecard, and the GitHub license badge.
+
+## 2026-05-20 WSV/Kura and query stabilization follow-up
+
+- Kept WSV recovery on the memory-only path and tightened the surrounding
+  query/test corridor instead of adding durable WSV state.
+- `Client::submit_blocking` confirmation now waits for the transaction's own
+  applied status when polling is enabled, rather than treating an observed
+  applied block as sufficient by itself. This closes the race where a follow-up
+  query could hit Torii before the submitted transaction was visible.
+- Proof query scenarios now use supported first-release backends only:
+  `halo2/ipa` plus STARK/Fri. The proof query test polls all/backend/status
+  result sets to absorb normal multi-peer query visibility delay after
+  `VerifyProof`.
+- SCCP token add, pause, and resume projections now populate recent-message
+  asset ids from the SORA asset id and report no route id, matching the new
+  token-control payload shape.
+- QUIC datagram send/receive buffer defaults are now 64 MiB
+  (`67108864` bytes) instead of 1 MiB, with the config snapshot updated.
+- Focused validation passed:
+  - `CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test network_functional extra_functional::unstable_network::unstable_network_9_peers_2_faults -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p iroha_core --lib fastpq_proof_snapshots_for_same_block_flush_as_single_sidecar_update -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha tx_confirmation_stream_tests::committed_block_event_waits_for_applied -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test queries_and_proofs queries::account::find_accounts_with_asset -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test queries_and_proofs queries::proof::proof_query_scenarios -- --test-threads=1 --nocapture` (before the later polling hardening)
+  - `env -u LOG_FORMAT RUST_TEST_THREADS=1 CARGO_TARGET_DIR=target/codex-autoscale-params IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/soramitsudev/iroha/target/iroha-test-network/debug/iroha3d target/codex-autoscale-params/debug/deps/queries_and_proofs-5d1140de19a0c614 queries::proof::proof_query_scenarios --test-threads=1 --nocapture`
+  - `env -u LOG_FORMAT RUST_TEST_THREADS=1 CARGO_TARGET_DIR=target/codex-autoscale-params IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/soramitsudev/iroha/target/iroha-test-network/debug/iroha3d target/codex-autoscale-params/debug/deps/queries_and_proofs-5d1140de19a0c614 --test-threads=1 --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test queries_and_proofs queries::proof::proof_query_scenarios --no-run`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo test -p iroha_torii --lib recent_message_projection_handles_sccp_token_controls -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo test -p iroha_torii --lib sccp -- --test-threads=1 --nocapture`
+  - `env -u LOG_FORMAT target/codex-autoscale-params/debug/deps/fixtures-81f97a218bdf7f57 minimal_config_snapshot --nocapture`
+  - `rustfmt --edition 2024 integration_tests/tests/queries/proof.rs crates/iroha_torii/src/routing.rs crates/iroha_config/src/parameters/defaults.rs crates/iroha_config/tests/fixtures.rs crates/iroha/src/client.rs`
+  - `cargo fmt --all -- --check`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo clippy -p iroha_config --tests -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo clippy -p iroha --lib -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo clippy -p iroha_torii --lib -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo clippy -p integration_tests --test queries_and_proofs --test network_functional -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo clippy -p integration_tests --test nexus_and_streaming -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo build --workspace`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo test --workspace --no-run`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test nexus_and_streaming routed_submit_response -- --test-threads=1 --nocapture`
+  - `git diff --check`
+  - `scripts/check_no_scale.sh`
+- The patched proof scenario and the full `queries_and_proofs` binary are now
+  green. Full workspace build and full workspace test-target compilation are
+  also green. The broad test compile exposed a missing
+  `RoutedTransactionSubmitResponse` import in the `nexus_and_streaming`
+  integration test module; that narrow compile blocker was fixed and covered
+  with focused clippy plus routed-submit transient tests. The earlier local
+  loader stall was cleared by terminating stuck child test executables; no
+  `cargo` or `rustc` process was killed.
+
+## 2026-05-20 SCCP audit hardening
+
+- SCCP commitment roots are now consensus-validated: blocks recompute the root
+  from committed `RecordSccpMessage` instructions and reject mismatches, including
+  non-empty roots on blocks with no SCCP messages, before empty-block policy.
+  Rejections surface as `SccpCommitmentRootMismatch`.
+- SCCP proof execution now fails closed against local state. Burn and message
+  bundles must anchor to the locally committed block header, SCCP root, and
+  trusted commit QC projection; the full trusted QC is reverified with core
+  finality checks.
+- SCCP token add, token pause, and token resume operations are ordinary SCCP
+  message payloads verified through the cryptographic message-proof path. The
+  bridge no longer accepts parliament certificates as transaction proofs.
+- SCCP bridge manifests are reserved away from generic ICS submissions. Burn
+  submissions are stored as typed transparent proof boxes carrying the full
+  Norito-encoded SCCP bundle bytes under SCCP backend labels, while typed
+  message artifacts retain their transparent path with local finality binding.
+- SCCP transparent message proof recovery now fails closed on raw message-bundle
+  bytes. The verifier only accepts typed `NexusSccpMessageTransparentProofV1`
+  artifacts whose embedded OpenVerify/FASTPQ proof validates against the
+  canonical SCCP statement.
+- Torii no longer has a test-only synthetic SCCP transparent-proof override.
+  Message submission with settlement data now follows the same proof gate as
+  production and rejects disabled lanes before settlement scaffolding.
+- SCCP transparent proof negative coverage now includes OpenVerify auxiliary
+  data injection, public-input column tampering, backend proof byte tampering,
+  cross-bundle replay, raw OpenVerify envelope recovery, and truncated typed
+  artifact recovery.
+- Additional SCCP adversarial coverage rejects wrong OpenVerify backend tags,
+  wrong circuit ids, schema descriptor tampering, malformed or non-v1 nested
+  OpenProof payloads, message-bundle finality-root mismatches, commitment
+  payload-hash tampering, post-commitment payload substitution, and truncated
+  finality bytes.
+- Further SCCP negative coverage now rejects finality/QC header-field
+  tampering, message bundle version/target/message-id/Merkle-path tampering,
+  burn bundle message-id/payload-hash/Merkle-path tampering, and Torii proof
+  submit requests that provide zero or two SCCP bundle families.
+- Latest SCCP adversarial coverage rejects corrupted runtime envelopes,
+  malformed OpenVerify summary envelope shapes, finality proofs with empty
+  signer bitmaps or malformed version/key/bitmap fields, invalid burn payload
+  domain/version edges, and Torii burn publication of structurally invalid
+  payloads before registry insertion.
+- Additional SCCP cryptographic-negative coverage now exercises real
+  secp256k1 EVM attestation payloads and rejects malformed attestation ABI
+  offsets/lengths, empty or duplicate attestations, signer-address mismatches,
+  native-proof hash replay, public-input hash replay, message-id replay, and
+  noncanonical appended envelope bytes.
+- EVM SCCP submission verification now also binds submission-package metadata
+  to the active manifest. Negative coverage rejects package version, proof
+  family, verifier backend, envelope encoding, submission kind, entrypoint,
+  argument-list, argument-byte, and encoded-envelope tampering.
+- Transfer payload validation now requires sender and recipient codecs to match
+  the source and destination domain account codecs. Asset and route codec policy
+  remains on the existing supported-codec checks for compatibility with current
+  fixtures.
+- Focused validation is green with `cargo check -p iroha_sccp`,
+  `cargo check -p iroha_torii`,
+  `cargo test -p iroha_sccp --lib token_control`,
+  `cargo test -p iroha_torii --lib sccp_token_control_message_bundle_endpoint_roundtrips_json`,
+  `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k sccp`,
+  a pure `node --input-type=module` SCCP helper smoke, `cargo fmt --all`, and
+  `git diff --check`. The broader JS Torii test file still requires a refreshed
+  native binding checksum before it can start.
+- Additional SCCP audit validation is green with `cargo test -p iroha_sccp`,
+  `cargo test -p iroha_core bridge`, and
+  `cargo test -p iroha_torii --lib sccp -- --test-threads=1`. The broad
+  `cargo test -p iroha_torii sccp` command reached green SCCP lib coverage
+  before a later zero-match integration target was terminated by SIGTERM, so the
+  SCCP Torii handler coverage was rerun serially to avoid the shared registry
+  race in those tests.
+- Raw-bundle recovery hardening was rechecked with
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib transparent -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib runtime_envelope -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib burn_payload_structure -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib transparent_fastpq_open_verify_summary -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib canonical_message_payload_decoder -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_attestation_envelope_decoder -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_submission_package_verifier_rejects_attestation -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_submission_package_verifier_rejects_digest -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_submission_package_verifier_rejects_metadata -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_submission_package_verifier_rejects_argument -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_submission_package -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib message_bundle_structure -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib finality_proof_structure -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib burn_bundle -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_torii --lib bridge_proof_submit_rejects_ -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_torii --lib publish_sccp_burn_bundle_rejects_structurally_invalid_payload -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_torii --lib sccp_lane_disabled -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_torii --lib bridge_message_submit_rejects_disabled_inbound_transfer_lane -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo check -p iroha_sccp`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo check -p iroha_core`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo check -p iroha_torii`,
+  `cargo fmt --all -- --check`, and `git diff --check`.
+
+## 2026-05-20 Adversarial coverage expansion
+
+- Kotodama parser negative coverage now rejects malformed `json!` trailing
+  commas, duplicate `json!` object keys at top level and nested levels,
+  duplicate trigger control fields (`call`, `on`, `repeats`, `authority`),
+  negative `repeats`, and `repeats` values outside the v1 `u32` trigger ABI
+  range.
+- Sumeragi JSON client helpers now consistently request JSON and fail closed
+  with contextual errors for malformed or duplicate-key successful payloads,
+  including parameterized VRF endpoints, operator-signed endpoints, and non-OK
+  response bodies/statuses. Additional coverage asserts VRF/operator non-OK
+  responses preserve endpoint context, status, and body text, and that evidence
+  count/list helpers reject malformed or duplicate-key successful payloads.
+- Evidence list filter coverage now verifies adversarial `kind` values remain
+  literal query values and cannot inject sibling `limit` or `offset`
+  parameters, including control-character and `=` payloads. Zero-valued
+  `limit`/`offset` and blank `kind` values are kept explicit instead of being
+  silently dropped.
+- The shared JSON success decoder now has coverage for trailing payload data
+  after an otherwise valid JSON value, preventing concatenated JSON from being
+  accepted as a clean response.
+- Realistic localnet throughput helper coverage now includes zero-load target
+  boundaries, partial-capacity rounding, saturation-style queue samples, and
+  exact phase matching against whitespace/control-character variants. Near
+  `u64::MAX` target-block capacity cases verify `div_ceil` arithmetic does not
+  overflow at release-scale counters.
+- SCCP transfer payload validation now enforces chain-specific sender and
+  recipient codecs by source/destination domain, with focused positive inbound
+  coverage and negative wrong-codec coverage.
+- SCCP bridge transaction proofs no longer use parliament certificates; channel
+  governance remains outside the transaction-proof path.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p kotodama_lang parse_json_macro_rejects_trailing_comma_object -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p kotodama_lang parse_json_macro_rejects_trailing_comma_array -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p kotodama_lang parse_json_macro_rejects_duplicate_object_keys -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p kotodama_lang parse_json_macro_rejects_nested_duplicate_object_keys -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p kotodama_lang parse_trigger_decl_rejects_duplicate_control_fields -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p kotodama_lang parse_trigger_decl_rejects_negative_and_overflow_repeats -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib sumeragi_json_endpoints_ -- --nocapture`
+  (`2 passed`),
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib sumeragi_vrf_json_endpoints_request_json_and_reject_malformed_payloads -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib sumeragi_vrf_json_endpoints_reject_non_ok_responses_with_context -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib sumeragi_operator_json_endpoints_reject_duplicate_key_payloads -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib sumeragi_operator_json_endpoints_reject_non_ok_responses_with_context -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib sumeragi_json_endpoints_reject_non_ok_responses_with_context -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib evidence_filter_param_entries_preserve_adversarial_kind_literal -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib evidence_filter_param_entries_preserve_control_characters_and_equals -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib evidence_filter_param_entries_preserve_zero_values_and_blank_kind -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib get_evidence_list_percent_encodes_control_character_kind_filter -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib get_evidence_list_preserves_zero_and_blank_filter_params -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib get_evidence_count_rejects_malformed_success_payload -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib get_evidence_list_rejects_duplicate_key_success_payload -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib parse_json_ok_response_non_ok_error_includes_status_context_and_body -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib parse_json_ok_response_rejects_trailing_payload_after_valid_json -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p integration_tests --test consensus_and_da realistic_target_blocks_zero_transactions_never_inflates_default -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p integration_tests --test consensus_and_da realistic_target_blocks_rounds_up_partial_capacity -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p integration_tests --test consensus_and_da realistic_target_blocks_handles_near_max_capacity_without_overflow -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p integration_tests --test consensus_and_da max_queue_size_for_phase_counts_all_matching_statuses_without_summing -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p integration_tests --test consensus_and_da max_queue_size_for_phase_requires_exact_phase_match -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha_sccp --lib codec_validation -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo clippy -p kotodama_lang --lib -- -D warnings`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo clippy -p iroha --lib -- -D warnings`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo clippy -p integration_tests --test consensus_and_da -- -D warnings`,
+  and
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo clippy -p iroha_sccp --lib -- -D warnings`.
+  Hygiene is green with `cargo fmt --all -- --check`, `git diff --check`,
+  and `scripts/check_no_scale.sh`; `Cargo.lock` remains unchanged.
+
+## 2026-05-20 WSV/Kura query, proof, and event closure
+
+- WSV remains memory-only. Follow-up fixes kept committed state readback in the
+  in-memory query path while leaving block durability in Kura.
+- Proof iterable queries now dispatch by declared payload shape for backend,
+  status, and generic proof lookups, require full payload consumption, and
+  defensively recheck backend/status filters when serving indexed records.
+  Proof hash lookup coverage now uses the canonical core proof hash.
+- The Rust client maps Torii `410 Gone` cursor responses to
+  `QueryExecutionFail::Expired` even when the body cannot be decoded as a
+  Norito validation envelope, preserving stored-cursor expiry semantics.
+- Integration harnesses now poll committed readback for SNS leases, role and
+  trigger visibility, scheduled subscription startup, and trigger asset effects
+  instead of assuming a single peer query observes the just-committed mutation
+  immediately.
+- Focused validation is green with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test queries_and_proofs -- --nocapture`
+  (`23 passed`),
+  `CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test events_and_triggers -- --nocapture`
+  (`36 passed`),
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha garbled_gone_is_treated_as_expired -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_core find_proof_records_intersects_backend_and_status_indexes -- --nocapture`,
+  and
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_data_model proof_backend_query_payload_roundtrips -- --nocapture`.
+- Strict focused clippy is green with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo clippy -p iroha -p iroha_core -p iroha_data_model -p iroha_test_network --lib -- -D warnings`
+  and
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo clippy -p integration_tests --test queries_and_proofs --test events_and_triggers -- -D warnings`.
+  Hygiene is green with `cargo fmt --all -- --check`, `git diff --check`, and
+  `scripts/check_no_scale.sh`. Workspace test-target compilation is green with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test --workspace --no-run`
+  (CUDA helper crates fell back because `nvcc` is not installed on this host).
 
 ## 2026-05-20 Soracloud Webapp Auth Smoke Stabilization
 
@@ -342,15 +673,60 @@ Last updated: 2026-05-20
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_torii --lib da_ingest_error_response_negotiates_error_envelopes -- --nocapture`,
   and
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_torii --lib negotiate_json_only -- --nocapture`
-  (`2 passed`).
+  (`2 passed`). The REST-style JSON-default negotiation follow-up is green with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha_torii negotiate_json_preferred -- --nocapture`,
+  plus handler coverage for `core_info_handlers_ok`,
+  `pipeline_status_handler_returns_queued`, and
+  `pipeline_status_handler_returns_typed_norito_when_requested`.
+- Client JSON helpers now request JSON consistently and route malformed or
+  duplicate-key successful responses through the same contextual fail-closed
+  decoder. Evidence list filters preserve adversarial `kind` values as literal
+  query values rather than allowing sibling-parameter injection. Focused client
+  validation is green with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib sumeragi_json_endpoints_ -- --nocapture`
+  (`2 passed`),
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib sumeragi_vrf_json_endpoints_request_json_and_reject_malformed_payloads -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib sumeragi_operator_endpoints_ -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib sumeragi_operator_json_endpoints_reject_duplicate_key_payloads -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha --lib get_evidence_count_fetches_json -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test -p iroha --lib get_evidence_list_includes_query_params -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib parse_json_ok_response_ -- --nocapture`
+  (`4 passed`, including malformed and duplicate-key JSON rejection),
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib evidence_filter_param_entries_preserve_adversarial_kind_literal -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p iroha --lib get_evidence_list_percent_encodes_adversarial_kind_filter -- --nocapture`,
+  and
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo clippy -p iroha --lib -- -D warnings`.
+- Serialized `core_api` integration validation is green after the REST-style
+  JSON-default negotiation fix with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-current-validate IROHA_TEST_NETWORK_PARALLELISM=1 cargo test -p integration_tests --test core_api -- --test-threads=1 --nocapture`
+  (`171 passed; 0 failed; 4 ignored`).
+- Realistic localnet throughput helper validation is green with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-current-validate cargo test -p integration_tests --test consensus_and_da realistic_target_blocks_cover_load_capacity -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-current-validate cargo test -p integration_tests --test consensus_and_da max_queue_size_for_phase_filters_samples -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p integration_tests --test consensus_and_da realistic_target_blocks_handle_extreme_counters -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p integration_tests --test consensus_and_da realistic_target_blocks_zero_transactions_never_inflates_default -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p integration_tests --test consensus_and_da max_queue_size_for_phase_ignores_adversarial_non_matching_samples -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo test -p integration_tests --test consensus_and_da max_queue_size_for_phase_counts_all_matching_statuses_without_summing -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo clippy -p integration_tests --test consensus_and_da -- -D warnings`,
+  and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-current-validate cargo clippy -p iroha_kagami --example taira_kaigi_localnet -- -D warnings`.
 - Hygiene is green with
   `rustfmt --edition 2024 --check crates/iroha/src/client.rs crates/iroha_core/src/state.rs integration_tests/tests/nexus/autoscale_localnet.rs`,
-  `cargo fmt --all -- --check`, and `git diff --check`. The Rust workspace
+  `cargo fmt --all -- --check`, `git diff --check`, and
+  `scripts/check_no_scale.sh`; `Cargo.lock` remains unchanged. The Rust workspace
   builds with
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo build --workspace`
   (43m44s; optional CUDA kernels were skipped because `nvcc` is not installed).
-- Kotlin/Java SDK Gradle validation was attempted, but this host has no Java
-  runtime visible to `/usr/libexec/java_home` or `./gradlew`.
+  Strict lint and test-target compilation are also green with
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo clippy --workspace --all-targets -- -D warnings`
+  and
+  `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test --workspace --no-run`.
+- Kotlin/Java SDK validation is green with explicit Homebrew JDK 21 via
+  `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --console=plain`,
+  Kotlin Android release artifact builds
+  `./gradlew :client-android:assembleRelease :offline-wallet-android:assembleRelease --quiet`,
+  and Java/Android
+  `./gradlew test --console=plain`.
 
 ## 2026-05-19 Torii queue default headroom
 
