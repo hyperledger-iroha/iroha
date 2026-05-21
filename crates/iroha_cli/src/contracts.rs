@@ -2,8 +2,7 @@
 
 use std::{
     collections::BTreeMap,
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
     str::FromStr,
@@ -874,7 +873,8 @@ impl DevSchemaArgs {
             }
             fs::write(&path, markdown)
                 .wrap_err_with(|| format!("failed to write {}", path.display()))?;
-            context.print_data(&norito::json!({ "ok": true, "schema": (path.display().to_string()) }))
+            context
+                .print_data(&norito::json!({ "ok": true, "schema": (path.display().to_string()) }))
         } else {
             context.println(markdown)
         }
@@ -882,7 +882,11 @@ impl DevSchemaArgs {
 }
 
 impl DevDeployArgs {
-    fn run_with_action<C: RunContext>(self, context: &mut C, action: DevDeployAction) -> Result<()> {
+    fn run_with_action<C: RunContext>(
+        self,
+        context: &mut C,
+        action: DevDeployAction,
+    ) -> Result<()> {
         let _ = dev_build_manifest(&self.manifest.manifest, true)?;
         match action {
             DevDeployAction::Deploy => AppDeployArgs {
@@ -921,10 +925,8 @@ impl DevCallArgs {
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
         )?;
-        let profile_config = load_dev_profile_config(
-            manifest_dir,
-            manifest.profiles.get(&self.manifest.profile),
-        )?;
+        let profile_config =
+            load_dev_profile_config(manifest_dir, manifest.profiles.get(&self.manifest.profile))?;
         let client = dev_client_from_profile(context, profile_config.as_ref());
         let authority = resolve_dev_contract_authority(
             context,
@@ -944,8 +946,10 @@ impl DevCallArgs {
             .map(|value| crate::resolve_account_id(context, value))
             .transpose()
             .wrap_err("failed to resolve --fee-sponsor")?;
-        let contract_alias =
-            resolve_contract_manifest_alias(&contract.alias, manifest.default_dataspace.as_deref())?;
+        let contract_alias = resolve_contract_manifest_alias(
+            &contract.alias,
+            manifest.default_dataspace.as_deref(),
+        )?;
         let payload = load_contract_payload_value(
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
@@ -977,7 +981,7 @@ impl DevCallArgs {
                 r#final: status.r#final,
             })
         } else {
-            context.print_data(&value)
+            context.print_data(&contract_submit_only_response(value))
         }
     }
 }
@@ -998,18 +1002,18 @@ impl DevViewArgs {
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
         )?;
-        let profile_config = load_dev_profile_config(
-            manifest_dir,
-            manifest.profiles.get(&self.manifest.profile),
-        )?;
+        let profile_config =
+            load_dev_profile_config(manifest_dir, manifest.profiles.get(&self.manifest.profile))?;
         let client = dev_client_from_profile(context, profile_config.as_ref());
         let authority = resolve_dev_contract_authority(
             context,
             profile_config.as_ref(),
             self.authority.as_deref(),
         )?;
-        let contract_alias =
-            resolve_contract_manifest_alias(&contract.alias, manifest.default_dataspace.as_deref())?;
+        let contract_alias = resolve_contract_manifest_alias(
+            &contract.alias,
+            manifest.default_dataspace.as_deref(),
+        )?;
         let payload = load_contract_payload_value(
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
@@ -1098,7 +1102,7 @@ impl DevSmokeArgs {
                             "final": (status.r#final),
                         })
                     } else {
-                        submit
+                        contract_submit_only_response(submit)
                     }
                 }
             };
@@ -1163,7 +1167,13 @@ fn validate_dev_payload_for_contract(
             &contract.name,
         )?);
     let payload = load_contract_payload_value(payload_json, payload_file)?;
-    validate_dev_payload_value_for_contract(manifest_dir, contract, &artifact_path, entrypoint, payload.as_ref())
+    validate_dev_payload_value_for_contract(
+        manifest_dir,
+        contract,
+        &artifact_path,
+        entrypoint,
+        payload.as_ref(),
+    )
 }
 
 fn validate_dev_payload_value_for_contract(
@@ -1210,13 +1220,15 @@ fn load_dev_profile_config(
     let path = resolve_manifest_path(manifest_dir, client_config);
     Config::load(LoadPath::Explicit(path.clone()))
         .map(Some)
-        .map_err(|report| eyre!("failed to load profile client config `{}`: {report}", path.display()))
+        .map_err(|report| {
+            eyre!(
+                "failed to load profile client config `{}`: {report}",
+                path.display()
+            )
+        })
 }
 
-fn dev_client_from_profile<C: RunContext>(
-    context: &C,
-    profile_config: Option<&Config>,
-) -> Client {
+fn dev_client_from_profile<C: RunContext>(context: &C, profile_config: Option<&Config>) -> Client {
     profile_config
         .cloned()
         .map(Client::new)
@@ -1365,7 +1377,10 @@ fn dev_build_manifest(manifest_path: &Path, locked: bool) -> Result<norito::json
             .artifact
             .as_ref()
             .map(|path| resolve_manifest_path(manifest_dir, path))
-            .unwrap_or(default_contract_artifact_path(manifest_path, &contract.name)?);
+            .unwrap_or(default_contract_artifact_path(
+                manifest_path,
+                &contract.name,
+            )?);
         let manifest_out = dev_sidecar_path(&artifact_path, ".manifest.json");
         let interface_out = dev_sidecar_path(&artifact_path, ".interface.json");
         let source_map_out = dev_sidecar_path(&artifact_path, ".source-map.json");
@@ -1381,8 +1396,16 @@ fn dev_build_manifest(manifest_path: &Path, locked: bool) -> Result<norito::json
             .map_err(|err| eyre!("failed to compile `{}`: {err}", source_path.display()))?;
 
         write_or_check(&artifact_path, &program, locked)?;
-        write_or_check_text(&manifest_out, &norito::json::to_json_pretty(&contract_manifest)?, locked)?;
-        write_or_check_text(&interface_out, &dev_interface_json(&contract_manifest)?, locked)?;
+        write_or_check_text(
+            &manifest_out,
+            &norito::json::to_json_pretty(&contract_manifest)?,
+            locked,
+        )?;
+        write_or_check_text(
+            &interface_out,
+            &dev_interface_json(&contract_manifest)?,
+            locked,
+        )?;
         write_or_check_text(&source_map_out, &dev_source_map_json(&report)?, locked)?;
         write_or_check_text(&budget_out, &dev_budget_json(&report)?, locked)?;
 
@@ -1496,10 +1519,7 @@ fn dev_run_tests(
         if filter.is_some_and(|needle| !rendered.contains(needle)) {
             continue;
         }
-        run_dev_tool(
-            "koto_test",
-            &[mode.into(), path.as_os_str().to_owned()],
-        )?;
+        run_dev_tool("koto_test", &[mode.into(), path.as_os_str().to_owned()])?;
         executed.push(rendered);
     }
     Ok(norito::json!({
@@ -1558,7 +1578,8 @@ fn write_or_check(path: &Path, bytes: &[u8], locked: bool) -> Result<()> {
         return Ok(());
     }
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).wrap_err_with(|| format!("failed to create {}", parent.display()))?;
+        fs::create_dir_all(parent)
+            .wrap_err_with(|| format!("failed to create {}", parent.display()))?;
     }
     fs::write(path, bytes).wrap_err_with(|| format!("failed to write {}", path.display()))
 }
@@ -1683,9 +1704,8 @@ fn render_dev_schema_markdown(
             continue;
         };
         for entrypoint in entrypoints {
-            let Some(entrypoint_name) = entrypoint
-                .get("name")
-                .and_then(norito::json::Value::as_str)
+            let Some(entrypoint_name) =
+                entrypoint.get("name").and_then(norito::json::Value::as_str)
             else {
                 continue;
             };
@@ -1922,7 +1942,7 @@ impl Run for DeployArgs {
                 r#final: status.r#final,
             })?;
         } else {
-            context.print_data(&v)?;
+            context.print_data(&contract_submit_only_response(v))?;
         }
         Ok(())
     }
@@ -1939,9 +1959,12 @@ pub struct DeriveAddressArgs {
     /// Successful deploy nonce consumed for address derivation
     #[arg(long)]
     pub deploy_nonce: u64,
+    /// Public network profile used for Bech32m contract-address derivation
+    #[arg(long)]
+    pub profile: Option<String>,
     /// Explicit chain discriminant used for Bech32m contract-address derivation
     #[arg(long)]
-    pub chain_discriminant: u16,
+    pub chain_discriminant: Option<u16>,
     /// Optional numeric dataspace id override for non-default dataspaces
     #[arg(long)]
     pub dataspace_id: Option<u64>,
@@ -1949,7 +1972,9 @@ pub struct DeriveAddressArgs {
 
 impl Run for DeriveAddressArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let authority = parse_account_address(&self.authority, Some(self.chain_discriminant))
+        let (profile_name, chain_discriminant) =
+            resolve_network_context(self.profile.as_deref(), self.chain_discriminant)?;
+        let authority = parse_account_address(&self.authority, Some(chain_discriminant))
             .map_err(|err| eyre!(err.to_string()))
             .wrap_err("failed to resolve --authority")?
             .address
@@ -1958,7 +1983,7 @@ impl Run for DeriveAddressArgs {
             .wrap_err("failed to decode --authority")?;
         let dataspace_id = resolve_contract_dataspace_id_hint(&self.dataspace, self.dataspace_id)?;
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            self.chain_discriminant,
+            chain_discriminant,
             &authority,
             self.deploy_nonce,
             dataspace_id,
@@ -1971,10 +1996,50 @@ impl Run for DeriveAddressArgs {
             "dataspace": (self.dataspace),
             "dataspace_id": (dataspace_id.as_u64()),
             "deploy_nonce": (self.deploy_nonce),
-            "chain_discriminant": (self.chain_discriminant),
+            "profile": (profile_name),
+            "chain_discriminant": (chain_discriminant),
             "contract_address": (contract_address),
         }))?;
         Ok(())
+    }
+}
+
+fn resolve_network_context(
+    profile: Option<&str>,
+    chain_discriminant: Option<u16>,
+) -> Result<(Option<String>, u16)> {
+    match (
+        profile.map(str::trim).filter(|value| !value.is_empty()),
+        chain_discriminant,
+    ) {
+        (Some(profile_name), Some(actual)) => {
+            let expected = iroha_torii_shared::network_profile(profile_name).ok_or_else(|| {
+                eyre!(
+                    "unknown network profile `{profile_name}` (supported: {})",
+                    iroha_torii_shared::network_profile_names()
+                )
+            })?;
+            if expected.chain_discriminant != actual {
+                eyre::bail!(
+                    "network profile mismatch: profile `{}` expects chain_discriminant={}, actual chain_discriminant={}",
+                    expected.name,
+                    expected.chain_discriminant,
+                    actual
+                );
+            }
+            Ok((Some(expected.name.to_owned()), actual))
+        }
+        (Some(profile_name), None) => {
+            let expected = iroha_torii_shared::network_profile(profile_name).ok_or_else(|| {
+                eyre!(
+                    "unknown network profile `{profile_name}` (supported: {})",
+                    iroha_torii_shared::network_profile_names()
+                )
+            })?;
+            Ok((Some(expected.name.to_owned()), expected.chain_discriminant))
+        }
+        (None, Some(chain_discriminant)) => Ok((None, chain_discriminant)),
+        (None, None) => eyre::bail!("provide --profile or --chain-discriminant"),
     }
 }
 
@@ -2007,19 +2072,19 @@ struct ContractSubmissionWaitResponse {
     r#final: iroha_torii_shared::PipelineTransactionStatusResponse,
 }
 
+fn contract_submit_only_response(submit: norito::json::Value) -> norito::json::Value {
+    norito::json!({
+        "submit": submit,
+        "finalized": false,
+    })
+}
+
 fn extract_submitted_transaction_hash(
     value: &norito::json::Value,
 ) -> Result<HashOf<iroha::data_model::transaction::SignedTransaction>> {
     let tx_hash_hex = value
         .as_object()
-        .and_then(|map| {
-            map.get("tx_hash_hex").or_else(|| {
-                map.get("contracts")
-                    .and_then(norito::json::Value::as_array)
-                    .and_then(|contracts| contracts.first())
-                    .and_then(|contract| contract.get("tx_hash_hex"))
-            })
-        })
+        .and_then(|map| map.get("tx_hash_hex"))
         .and_then(norito::json::Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| eyre!("response missing `tx_hash_hex`"))?;
@@ -2125,7 +2190,7 @@ impl Run for CallArgs {
                 r#final: status.r#final,
             })?;
         } else {
-            context.print_data(&value)?;
+            context.print_data(&contract_submit_only_response(value))?;
         }
         Ok(())
     }
@@ -3641,10 +3706,7 @@ mod tests {
         program
     }
 
-    fn embedded_entrypoint(
-        program: &[u8],
-        name: &str,
-    ) -> ivm::EmbeddedEntrypointDescriptor {
+    fn embedded_entrypoint(program: &[u8], name: &str) -> ivm::EmbeddedEntrypointDescriptor {
         let parsed = ivm::ProgramMetadata::parse(program).expect("parse contract metadata");
         parsed
             .contract_interface
@@ -3736,7 +3798,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_submitted_transaction_hash_falls_back_to_first_contract_receipt() {
+    fn extract_submitted_transaction_hash_rejects_nested_contract_receipt() {
         let value = norito::json!({
             "contracts": [
                 {
@@ -3745,11 +3807,51 @@ mod tests {
             ]
         });
 
-        let hash = extract_submitted_transaction_hash(&value).expect("extract hash");
+        let err = extract_submitted_transaction_hash(&value)
+            .expect_err("nested contract receipt hash should not be accepted");
+
+        assert!(err.to_string().contains("response missing `tx_hash_hex`"));
+    }
+
+    #[test]
+    fn resolve_network_context_accepts_public_profile() {
+        let (profile, chain_discriminant) =
+            resolve_network_context(Some("taira"), None).expect("resolve profile");
+
+        assert_eq!(profile.as_deref(), Some("taira"));
+        assert_eq!(
+            chain_discriminant,
+            iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
+        );
+    }
+
+    #[test]
+    fn resolve_network_context_rejects_profile_discriminant_mismatch() {
+        let err = resolve_network_context(Some("taira"), Some(753))
+            .expect_err("profile mismatch should fail");
+
+        assert!(
+            err.to_string()
+                .contains("profile `taira` expects chain_discriminant=369")
+        );
+    }
+
+    #[test]
+    fn contract_submit_only_response_marks_unfinalized() {
+        let response = contract_submit_only_response(norito::json!({ "tx_hash_hex": "deadbeef" }));
 
         assert_eq!(
-            hash.to_string(),
-            "3333333333333333333333333333333333333333333333333333333333333333"
+            response
+                .get("finalized")
+                .and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            response
+                .get("submit")
+                .and_then(|submit| submit.get("tx_hash_hex"))
+                .and_then(norito::json::Value::as_str),
+            Some("deadbeef")
         );
     }
 
@@ -3866,7 +3968,9 @@ mod tests {
 
         let report = dev_build_manifest(&manifest_path, false).expect("dev build");
         assert_eq!(
-            report.get("contract_count").and_then(norito::json::Value::as_u64),
+            report
+                .get("contract_count")
+                .and_then(norito::json::Value::as_u64),
             Some(1)
         );
         assert!(artifacts_dir.join("greeter.to").exists());
@@ -3994,7 +4098,8 @@ mod tests {
         let err = normalize_local_contract_payload(&submit, Some(&missing))
             .expect_err("missing required field fails");
         assert!(
-            err.to_string().contains("missing contract payload field `amount`"),
+            err.to_string()
+                .contains("missing contract payload field `amount`"),
             "unexpected error: {err}"
         );
 
@@ -4159,7 +4264,8 @@ mod tests {
         let rendered = format!("{err:?}");
         assert!(
             rendered.contains("invalid payload for smoke `array_payload`")
-                && rendered.contains("contract payload must be a JSON object keyed by parameter name"),
+                && rendered
+                    .contains("contract payload must be a JSON object keyed by parameter name"),
             "unexpected error: {rendered}"
         );
     }
@@ -4348,8 +4454,8 @@ mod tests {
     #[test]
     fn local_contract_schema_validation_rejects_malformed_nested_shapes() {
         for raw in ["(int", "int)", "(int,,bool)", "(bytes,(int,)"] {
-            let err = parse_local_contract_schema_type(raw)
-                .expect_err("malformed schema type must fail");
+            let err =
+                parse_local_contract_schema_type(raw).expect_err("malformed schema type must fail");
             assert!(
                 err.to_string().contains("contract schema type")
                     || err.to_string().contains("unsupported contract schema type"),
@@ -4357,8 +4463,8 @@ mod tests {
             );
         }
 
-        let tuple_schema = parse_local_contract_schema_type("(int,(bool,bytes))")
-            .expect("nested tuple schema");
+        let tuple_schema =
+            parse_local_contract_schema_type("(int,(bool,bytes))").expect("nested tuple schema");
         validate_local_contract_value(
             &tuple_schema,
             &norito::json!([7, [true, "0x00"]]),
@@ -4385,12 +4491,9 @@ mod tests {
             parse_local_contract_schema_type("DataSpaceId").expect("dataspace schema");
         validate_local_contract_value(&dataspace_schema, &norito::json!(0_i64), "dataspace")
             .expect("zero dataspace id is valid");
-        let err = validate_local_contract_value(
-            &dataspace_schema,
-            &norito::json!(-1_i64),
-            "dataspace",
-        )
-        .expect_err("negative dataspace id must fail");
+        let err =
+            validate_local_contract_value(&dataspace_schema, &norito::json!(-1_i64), "dataspace")
+                .expect_err("negative dataspace id must fail");
         assert!(
             err.to_string()
                 .contains("contract payload field `dataspace` does not match the declared schema"),
@@ -4450,8 +4553,7 @@ mod tests {
             .expect_err("malformed interface JSON must fail");
         let rendered = format!("{err:?}");
         assert!(
-            rendered.contains("failed to parse")
-                && rendered.contains("bad.interface.json"),
+            rendered.contains("failed to parse") && rendered.contains("bad.interface.json"),
             "unexpected error: {rendered}"
         );
     }
@@ -4476,8 +4578,7 @@ mod tests {
             .expect_err("missing interface JSON must fail");
         let rendered = format!("{err:?}");
         assert!(
-            rendered.contains("failed to read")
-                && rendered.contains("missing.interface.json"),
+            rendered.contains("failed to read") && rendered.contains("missing.interface.json"),
             "unexpected error: {rendered}"
         );
     }

@@ -64,6 +64,31 @@ Last updated: 2026-05-21
   and policy-jury commit/reveal as a remaining hardening layer over the signed
   clear-ballot path.
 
+## 2026-05-21 Soracloud first-release CLI cleanup
+
+- Promoted Soracloud to the top-level `iroha soracloud ...` namespace, with
+  app commands under `iroha soracloud app ...`, service commands under
+  `iroha soracloud service ...`, and model/HF/agent helpers under their own
+  namespaces. The previous nested parser path is now rejected.
+- Added app-level `simulate` and standardized app reports across doctor,
+  simulate, release, deploy, upgrade, and status outputs using the
+  `SoracloudAppReportV1` phase shape.
+- Made app release run manifest sync and doctor gates even with `--skip-build`,
+  repairing manifest hash drift from existing artifacts before app-infra
+  submission.
+- Updated generated app scripts and docs to prefer packaged `IROHA_BIN`, then
+  `PATH` `iroha`, with source checkout fallback only through explicit
+  `IROHA_SOURCE_DIR`/`IROHA_MANIFEST_PATH`.
+- Added JS SDK TypeScript declarations for the app report shape and updated the
+  lifecycle docs around `iroha soracloud app release` and `simulate`.
+- Focused validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/main_shared.rs crates/iroha_cli/src/soracloud.rs crates/iroha/src/config/user.rs`
+  - `cargo check -p iroha_cli --bin iroha`
+  - `cargo test -p iroha_cli soracloud_top_level_app_parser_replaces_nested_app_path -- --nocapture`
+  - `cargo test -p iroha_cli soracloud_service_model_hf_and_agent_parsers_are_namespaced -- --nocapture`
+  - `cargo test -p iroha_cli --bin iroha soracloud -- --nocapture`
+  - `node --test javascript/iroha_js/test/soracloud.test.js javascript/iroha_js/test/toriiClient.test.js`
+
 ## 2026-05-21 Iroha-first contract devex hardening follow-up
 
 - `iroha contract dev doctor` now loads manifest profile client configs, reaches

@@ -36,6 +36,8 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
+/// SoraSwap DeFi-native instruction handlers.
+pub mod soraswap;
 pub mod space_directory;
 /// Public lane staking instruction handlers.
 pub mod staking;
@@ -136,6 +138,19 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::rwa::ReleaseRwa>,
     dispatch_instruction::<iroha_data_model::isi::rwa::ForceTransferRwa>,
     dispatch_instruction::<iroha_data_model::isi::rwa::SetRwaControls>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::SoraSwapInstructionBox>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::SubmitSoraSwapIntent>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::SettleSoraSwapIntent>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::RegisterSoraSwapVault>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::RecordSoraSwapVaultRequest>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::RegisterSoraSwapOperator>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::RecordSoraSwapOperatorHeartbeat>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::ConfigureSoraSwapDlmmHook>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::RecordSoraSwapHookExecution>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::RegisterSoraSwapMarginMarket>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::UpdateSoraSwapMarginAccount>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::RegisterSoraSwapRwaMarket>,
+    dispatch_instruction::<iroha_data_model::isi::soraswap::ReportSoraSwapRwaNav>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ApprovePinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RetirePinManifest>,

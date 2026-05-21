@@ -54,7 +54,7 @@ URLs.
 Static site only:
 
 ```bash
-iroha app soracloud init \
+iroha soracloud service init \
   --template site \
   --service-name docs_portal \
   --service-version 1.0.0 \
@@ -64,7 +64,7 @@ iroha app soracloud init \
 Hosted HTTP service only:
 
 ```bash
-iroha app soracloud init \
+iroha soracloud service init \
   --template http-service \
   --service-name live_search \
   --service-version 1.0.0 \
@@ -74,7 +74,7 @@ iroha app soracloud init \
 Root-bound single-api app:
 
 ```bash
-iroha app soracloud app init \
+iroha soracloud app init \
   --template single-api \
   --app-name docs_portal \
   --app-version 1.0.0 \
@@ -84,7 +84,7 @@ iroha app soracloud app init \
 Mixed split app:
 
 ```bash
-iroha app soracloud app init \
+iroha soracloud app init \
   --template split-app \
   --app-name hayahi \
   --app-version 1.0.0 \
@@ -97,7 +97,7 @@ The split-app scaffold produces:
 - `frontend/`
 - `services/live/`
 - `services/vault/`
-- `local-dev.sh`
+- `dev.sh`
 - `build-and-sync.sh`
 - `deploy.sh`
 - `upgrade.sh`
@@ -110,7 +110,7 @@ The single-api scaffold produces:
 - `app_manifest.json`
 - `web/`
 - `services/api/`
-- `local-dev.sh`
+- `dev.sh`
 - `build-and-sync.sh`
 - `deploy.sh`
 - `upgrade.sh`
@@ -130,18 +130,18 @@ Hosted HTTP service:
 
 ```bash
 cd .soracloud-live
-iroha app soracloud local-plan --container ./container_manifest.json --service ./service_manifest.json
+iroha soracloud service plan --container ./container_manifest.json --service ./service_manifest.json
 ./build-and-sync.sh
-iroha app soracloud build-and-sync --container ./container_manifest.json --service ./service_manifest.json --dry-run
+iroha soracloud service build --container ./container_manifest.json --service ./service_manifest.json --dry-run
 ```
 
 Hosted HTTP service local development:
 
 ```bash
 cd .soracloud-live
-iroha app soracloud local-plan --container ./container_manifest.json --service ./service_manifest.json
-./local-dev.sh
-iroha app soracloud local-dev --container ./container_manifest.json --service ./service_manifest.json --dry-run
+iroha soracloud service plan --container ./container_manifest.json --service ./service_manifest.json
+./dev.sh
+iroha soracloud service dev --container ./container_manifest.json --service ./service_manifest.json --dry-run
 ```
 
 Hosted HTTP deploy and upgrade wrappers:
@@ -149,15 +149,15 @@ Hosted HTTP deploy and upgrade wrappers:
 ```bash
 cd .soracloud-live
 TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha app soracloud deploy-workspace --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha app soracloud deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha app soracloud upgrade-workspace --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha app soracloud upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha app soracloud status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha app soracloud config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha app soracloud secret-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha app soracloud rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha soracloud service status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha soracloud service config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha soracloud service secret-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha soracloud service rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
 Before treating a hosted-HTTP release as complete, run both backend-specific
@@ -228,7 +228,7 @@ service-bound Soracloud commands such as `hf-deploy`, `hf-status`, `hf-lease-ren
 `model-upload-encryption-recipient`, `model-upload-register`, and
 `model-upload-status`. For `status`, the
 manifest-pair form also keeps the same local route and workspace-script
-projection that `local-plan` reports. The direct `deploy` and `upgrade`
+projection that `plan` reports. The direct `deploy` and `upgrade`
 commands now keep that same local projection in their response as well, and
 manifest-pair `config-*`, `secret-*`, `rollback`, `rollout`, HF, training-job,
 and model registry/status responses attach it under `service_plan`.
@@ -238,15 +238,15 @@ Root-bound single-api app:
 ```bash
 cd .soracloud-docs-portal
 ./build-and-sync.sh
-iroha app soracloud app build-and-sync --manifest ./app_manifest.json --dry-run
+iroha soracloud app build --manifest ./app_manifest.json --dry-run
 ```
 
 Root-bound single-api local development:
 
 ```bash
 cd .soracloud-docs-portal
-./local-dev.sh
-iroha app soracloud app local-dev --manifest ./app_manifest.json --dry-run
+./dev.sh
+iroha soracloud app dev --manifest ./app_manifest.json --dry-run
 ```
 
 Split app:
@@ -254,15 +254,15 @@ Split app:
 ```bash
 cd .soracloud-hayahi
 ./build-and-sync.sh
-iroha app soracloud app build-and-sync --manifest ./app_manifest.json --dry-run
+iroha soracloud app build --manifest ./app_manifest.json --dry-run
 ```
 
-Split app local development:
+Split app development:
 
 ```bash
 cd .soracloud-hayahi
-./local-dev.sh
-iroha app soracloud app local-dev --manifest ./app_manifest.json --dry-run
+./dev.sh
+iroha soracloud app dev --manifest ./app_manifest.json --dry-run
 ```
 
 Expected outputs:
@@ -282,9 +282,9 @@ Single hosted service:
 
 ```bash
 cd .soracloud-live
-iroha app soracloud local-plan --container ./container_manifest.json --service ./service_manifest.json
+iroha soracloud service plan --container ./container_manifest.json --service ./service_manifest.json
 ./build-and-sync.sh
-iroha app soracloud build-and-sync --container ./container_manifest.json --service ./service_manifest.json --dry-run
+iroha soracloud service build --container ./container_manifest.json --service ./service_manifest.json --dry-run
 ```
 
 Whole single-api app:
@@ -292,7 +292,7 @@ Whole single-api app:
 ```bash
 cd .soracloud-docs-portal
 ./build-and-sync.sh
-iroha app soracloud app build-and-sync --manifest ./app_manifest.json --dry-run
+iroha soracloud app build --manifest ./app_manifest.json --dry-run
 ```
 
 Whole split app:
@@ -300,13 +300,13 @@ Whole split app:
 ```bash
 cd .soracloud-hayahi
 ./build-and-sync.sh
-iroha app soracloud app build-and-sync --manifest ./app_manifest.json --dry-run
+iroha soracloud app build --manifest ./app_manifest.json --dry-run
 ```
 
-Inspect the split app locally before deploy:
+Inspect the split apply before deploy:
 
 ```bash
-iroha app soracloud app local-plan \
+iroha soracloud app plan \
   --manifest .soracloud-hayahi/app_manifest.json
 ```
 
@@ -314,9 +314,9 @@ App-wide sync is the recommended path for mixed deployments because each
 service reference can declare its own `bundle_file`, letting one command
 refresh every `bundle_hash` and referenced container manifest hash before
 deployment. The same path also works for single-api apps, where the manifest
-tracks `services/api/build/api-service.to`. The local-plan output also reports
+tracks `services/api/build/api-service.to`. The plan output also reports
 the root `manifest_path`, root `hostname`, and the manifest-adjacent root
-scripts that the generated workspace and CLI wrappers use for `local-dev`,
+scripts that the generated workspace and CLI wrappers use for `dev`,
 `build-and-sync`, `deploy`, and `upgrade`.
 
 ## 4. Publish Frontend Assets
@@ -334,7 +334,7 @@ For a split app you normally do not need a separate manual packaging step.
 
 For a single-api app you also normally do not need a separate manual packaging
 step because `app deploy` publishes `web/dist` directly from the app manifest.
-`iroha app soracloud app deploy` publishes the declared `static_site.dist_dir`
+`iroha soracloud app deploy` publishes the declared `static_site.dist_dir`
 from the app manifest as part of the app-wide deploy flow, and now returns the
 same root manifest/hostname/workspace metadata, frontend publish projection,
 and per-service manifest metadata that `app status` reports.
@@ -359,7 +359,7 @@ Single hosted HTTP service:
 ```bash
 cd .soracloud-live
 TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha app soracloud deploy-workspace --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 ```
 
 Single-api app:
@@ -367,7 +367,7 @@ Single-api app:
 ```bash
 cd .soracloud-docs-portal
 TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud app deploy --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 ```
 
 Split app:
@@ -377,24 +377,24 @@ cd .soracloud-hayahi
 ./doctor.sh
 TORII_URL=http://127.0.0.1:8080 ./release.sh
 TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha app soracloud app doctor --manifest ./app_manifest.json
-iroha app soracloud app doctor-workspace --manifest ./app_manifest.json --dry-run
-iroha app soracloud app doctor-workspace --manifest ./app_manifest.json
-iroha app soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha app soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+iroha soracloud app doctor --manifest ./app_manifest.json
+iroha soracloud app doctor --manifest ./app_manifest.json --dry-run
+iroha soracloud app doctor --manifest ./app_manifest.json
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
-`app doctor-workspace` and `app release-workspace` resolve and run the same
+`app doctor` and `app release` resolve and run the same
 root `doctor.sh` and `release.sh` scripts adjacent to `app_manifest.json`, so
 the split-app happy path stays on the manifest-driven CLI surface.
 
-Those generated root scripts resolve `IROHA_CLI_BIN`, `IROHA_BIN`,
-`IROHA_CARGO_TARGET_DIR/.../iroha`, `CARGO_TARGET_DIR/.../iroha`,
-`IROHA_MANIFEST_PATH`, and finally `PATH` `iroha`, so local app workspaces
-can target a nearby `iroha_cli` checkout without requiring a globally
-installed wrapper. When you drive the fallback through `IROHA_MANIFEST_PATH`,
+Those generated root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`,
+then an explicit source checkout via `IROHA_SOURCE_DIR` or
+`IROHA_MANIFEST_PATH`, so local app workspaces can target a nearby
+`iroha_cli` checkout without requiring a globally installed source wrapper.
+When you drive the fallback through `IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`,
 set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to keep Cargo package and
 artifact state isolated from other local builds.
 
@@ -411,8 +411,8 @@ The app deploy flow:
 - split-app: deploys the hosted `services/live` API
 - split-app: deploys the deterministic `services/vault` API
 - split-app: the recommended scaffolded path is `./doctor.sh` followed by `./release.sh`
-- split-app: the equivalent manifest-driven CLI path is `app doctor-workspace`
-  followed by `app release-workspace`
+- split-app: the equivalent manifest-driven CLI path is `app doctor`
+  followed by `app release`
 - both modes: return the root app `manifest_path`, root `workspace_dir`, root
   `workspace_scripts`, root `hostname`, the top-level app `routes` split, and
   one manifest-derived service entry per app service
@@ -422,13 +422,13 @@ The app deploy flow:
 Check service state:
 
 ```bash
-iroha app soracloud status --torii-url http://127.0.0.1:8080
+iroha soracloud service status --torii-url http://127.0.0.1:8080
 ```
 
 Check the app-scoped projection for a single-api app:
 
 ```bash
-iroha app soracloud app status \
+iroha soracloud app status \
   --manifest .soracloud-docs-portal/app_manifest.json \
   --torii-url http://127.0.0.1:8080
 ```
@@ -436,7 +436,7 @@ iroha app soracloud app status \
 Check the app-scoped projection for a split app:
 
 ```bash
-iroha app soracloud app status \
+iroha soracloud app status \
   --manifest .soracloud-hayahi/app_manifest.json \
   --torii-url http://127.0.0.1:8080
 ```
@@ -452,9 +452,9 @@ Expected checks for a single-api app:
 
 - `/` serves the root-bound frontend from the published static site
 - `/api/healthz` resolves to the deterministic API service
-- `./local-dev.sh` serves the frontend locally with `/api` proxied to the local
+- `./dev.sh` serves the frontend locally with `/api` proxied to the local
   API shim
-- `iroha app soracloud app local-dev --manifest ... --dry-run` resolves the same
+- `iroha soracloud app dev --manifest ... --dry-run` resolves the same
   manifest-adjacent entrypoint from the app manifest
 - the frontend uses same-host `/api` calls instead of a hard-coded external base
 
@@ -463,19 +463,19 @@ Expected checks for a split app:
 - `/api/v1/search*` resolves to the hosted live API
 - `/api/auth*` resolves to the deterministic vault API
 - `/api/v1/user*` resolves to the deterministic vault API
-- `iroha app soracloud app local-plan` reports the same route split from the app manifest,
+- `iroha soracloud app plan` reports the same route split from the app manifest,
   plus each child service `container_manifest_path`, `service_manifest_path`,
   `workspace_dir`, and discovered child scripts such as `dev.sh`, `build.sh`,
   and `verify-build.sh`
-- `iroha app soracloud app status` keeps both manifest services visible even if
+- `iroha soracloud app status` keeps both manifest services visible even if
   only one of them currently appears in the Torii control-plane payload
-- `iroha app soracloud app status` also reports the expected frontend
+- `iroha soracloud app status` also reports the expected frontend
   `/sorafs/cid/<cid>/` URL template for CID-only apps or the root-binding URL
   for root-bound frontend apps
 - the live service reports lease-backed volume mounts
 - the frontend loads from a SoraFS CID URL and still targets `/api`
-- `iroha app soracloud app local-dev --manifest ... --dry-run` resolves the
-  same mixed-app local entrypoint before execution
+- `iroha soracloud app dev --manifest ... --dry-run` resolves the
+  same mixed-app entrypoint before execution
 
 ## 7. Upgrade and Redeploy
 
@@ -484,15 +484,15 @@ After rebuilding artifacts, rerun:
 ```bash
 cd .soracloud-live
 TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha app soracloud upgrade-workspace --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 
 cd .soracloud-docs-portal
 TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 
 cd .soracloud-hayahi
 TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 ```
 
 Each generated `upgrade.sh` reruns `./build-and-sync.sh` first, then submits
@@ -503,39 +503,39 @@ the matching hosted-service or app-wide upgrade command.
 - Keep generated manifests under version control.
 - Use `single-api` when one deterministic `/api` service is enough and the
   frontend should stay bound at `/` on the same host.
-- Use `./local-dev.sh` for root-bound single-api iteration, which keeps `/api`
+- Use `./dev.sh` for root-bound single-api iteration, which keeps `/api`
   same-host and proxies it to the local deterministic API shim.
-- Use `iroha app soracloud app build-and-sync --manifest ... --dry-run` when
+- Use `iroha soracloud app build --manifest ... --dry-run` when
   you want the CLI to resolve the generated root rebuild path from the app manifest.
 - Use `./upgrade.sh` after validating a new single-api build when you want the
   scaffolded app-wide upgrade path instead of raw CLI calls.
 - Use `http-service` for hosted collectors, SSE, and shared caches.
-- Use `iroha app soracloud local-dev --container ... --service ... --dry-run`
-  or `iroha app soracloud build-and-sync --container ... --service ... --dry-run`
+- Use `iroha soracloud service dev --container ... --service ... --dry-run`
+  or `iroha soracloud service build --container ... --service ... --dry-run`
   when you want the CLI to resolve the generated hosted-service root scripts
   from the manifest pair first and return the same route and workspace-script
-  projection that `local-plan` reports.
-- Use `iroha app soracloud deploy-workspace --container ... --service ... --torii-url ... --dry-run`
-  or `iroha app soracloud upgrade-workspace --container ... --service ... --torii-url ... --dry-run`
+  projection that `plan` reports.
+- Use `iroha soracloud service deploy --container ... --service ... --torii-url ... --dry-run`
+  or `iroha soracloud service upgrade --container ... --service ... --torii-url ... --dry-run`
   when you want the CLI to resolve the hosted-service deploy or upgrade entrypoint
   before executing the generated root script, while keeping the same service
   plan metadata in the dry-run output.
 - Keep wallet auth and confidential user state on the IVM plane.
 - Persist hosted mutable state through declared `lease_volumes`, not ad hoc
   local directories.
-- Use `./local-dev.sh` for local mixed-app iteration, which proxies `/api/v1/*`
+- Use `./dev.sh` for local mixed-app iteration, which proxies `/api/v1/*`
   to the live service and `/api/auth*` plus `/api/v1/user*` to the vault dev
   shim while keeping `VITE_PUBLIC_API_BASE=/api`.
 - Use `./build-and-sync.sh` before deploy or upgrade to rebuild the frontend,
   or call `./deploy.sh` or `./upgrade.sh` directly to let the scaffold rerun
   the rebuild and manifest sync path for you.
-- Use `iroha app soracloud app local-dev --manifest ... --dry-run` or
-  `iroha app soracloud app build-and-sync --manifest ... --dry-run` when you
+- Use `iroha soracloud app dev --manifest ... --dry-run` or
+  `iroha soracloud app build --manifest ... --dry-run` when you
   want the CLI to resolve the generated root scripts from the app manifest first;
   those dry-run outputs also carry the same child service and route plan that
-  `app local-plan` reports.
-- Use `iroha app soracloud app deploy-workspace --manifest ... --torii-url ... --dry-run`
-  or `iroha app soracloud app upgrade-workspace --manifest ... --torii-url ... --dry-run`
+  `app plan` reports.
+- Use `iroha soracloud app deploy --manifest ... --torii-url ... --dry-run`
+  or `iroha soracloud app upgrade --manifest ... --torii-url ... --dry-run`
   for the same manifest-resolved child service and route projection before the
   root deploy or upgrade script runs.
   when you want the CLI to resolve the generated deploy or upgrade entrypoint

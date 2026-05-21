@@ -39,6 +39,7 @@ use iroha_smart_contract::data_model::{
         UpsertProviderCredit,
         bridge::RecordBridgeReceipt,
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
+        soraswap::SoraSwapInstructionBox,
     },
     prelude::*,
     visit::Visit,
@@ -296,6 +297,9 @@ impl InstructionDispatch for InstructionBox {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<RepoMarginCallIsi>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SoraSwapInstructionBox>() {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<RegisterPinManifest>() {

@@ -14,7 +14,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Default I105 prefix for Sora Nexus (see `address_prefix_registry.json`).
+/// Minamoto I105 prefix used by tests (runtime commands require an explicit context).
+#[cfg(test)]
 const DEFAULT_I105_PREFIX: u16 = 753;
 
 #[derive(clap::Subcommand, Debug)]
@@ -45,13 +46,12 @@ pub struct Convert {
     /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
+    /// Public network profile to use for I105 parsing/rendering.
+    #[arg(long)]
+    profile: Option<String>,
     /// Network prefix to use when emitting i105 output.
-    #[arg(
-        long = "network-prefix",
-        value_name = "PREFIX",
-        default_value_t = DEFAULT_I105_PREFIX
-    )]
-    network_prefix: u16,
+    #[arg(long = "network-prefix", value_name = "PREFIX")]
+    network_prefix: Option<u16>,
     /// Desired output format (defaults to I105).
     #[arg(long = "format", value_enum, default_value_t = OutputFormat::I105)]
     format: OutputFormat,
@@ -59,17 +59,21 @@ pub struct Convert {
 
 impl Convert {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let input = parse_address_input(self.input.as_str(), self.expect_prefix)
+        let network_context =
+            resolve_address_network_context(self.profile.as_deref(), self.network_prefix)?;
+        let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix)?;
+        let input = parse_address_input(self.input.as_str(), Some(expect_prefix))
             .wrap_err("failed to parse address literal")?;
 
         if self.format == OutputFormat::Json {
-            let summary = AddressSummary::build(&input, self.network_prefix)
+            let summary = AddressSummary::build(&input, network_context.chain_discriminant)
                 .wrap_err("failed to build address summary")?;
             return context.print_data(&summary);
         }
 
-        let output = encode_address_literal(&input, self.network_prefix, self.format)
-            .wrap_err("failed to encode address output")?;
+        let output =
+            encode_address_literal(&input, network_context.chain_discriminant, self.format)
+                .wrap_err("failed to encode address output")?;
 
         context.println_data(output)
     }
@@ -91,13 +95,12 @@ pub struct Audit {
     /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
+    /// Public network profile to use for I105 parsing/rendering.
+    #[arg(long)]
+    profile: Option<String>,
     /// Network prefix to use when emitting i105 output.
-    #[arg(
-        long = "network-prefix",
-        value_name = "PREFIX",
-        default_value_t = DEFAULT_I105_PREFIX
-    )]
-    network_prefix: u16,
+    #[arg(long = "network-prefix", value_name = "PREFIX")]
+    network_prefix: Option<u16>,
     /// Succeed even if parse errors were encountered (allow auditing large dumps).
     #[arg(long = "allow-errors")]
     allow_errors: bool,
@@ -113,16 +116,20 @@ impl Audit {
         if inputs.is_empty() {
             eyre::bail!("no addresses provided");
         }
+        let network_context =
+            resolve_address_network_context(self.profile.as_deref(), self.network_prefix)?;
+        let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix)?;
 
         let mut stats = AddressAuditStats::default();
         let mut entries = Vec::with_capacity(inputs.len());
         for (index, raw) in inputs.into_iter().enumerate() {
-            match parse_address_input(raw.as_str(), self.expect_prefix) {
+            match parse_address_input(raw.as_str(), Some(expect_prefix)) {
                 Ok(parsed) => {
-                    let summary = AddressSummary::build(&parsed, self.network_prefix)
-                        .wrap_err_with(|| {
-                            format!("failed to summarise address at index {index}")
-                        })?;
+                    let summary =
+                        AddressSummary::build(&parsed, network_context.chain_discriminant)
+                            .wrap_err_with(|| {
+                                format!("failed to summarise address at index {index}")
+                            })?;
                     stats.record_summary(&summary);
                     entries.push(AddressAuditEntry {
                         input: raw,
@@ -208,13 +215,12 @@ pub struct Normalize {
     /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
+    /// Public network profile to use for I105 parsing/rendering.
+    #[arg(long)]
+    profile: Option<String>,
     /// Network prefix to use when emitting i105 output.
-    #[arg(
-        long = "network-prefix",
-        value_name = "PREFIX",
-        default_value_t = DEFAULT_I105_PREFIX
-    )]
-    network_prefix: u16,
+    #[arg(long = "network-prefix", value_name = "PREFIX")]
+    network_prefix: Option<u16>,
     /// Desired output format (defaults to I105).
     #[arg(long = "format", value_enum, default_value_t = OutputFormat::I105)]
     format: OutputFormat,
@@ -231,7 +237,15 @@ impl Normalize {
             eyre::bail!("no addresses provided");
         }
 
-        let outputs = self.process_entries(&inputs, context.i18n())?;
+        let network_context =
+            resolve_address_network_context(self.profile.as_deref(), self.network_prefix)?;
+        let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix)?;
+        let outputs = self.process_entries(
+            &inputs,
+            context.i18n(),
+            network_context.chain_discriminant,
+            expect_prefix,
+        )?;
         if outputs.is_empty() {
             return Ok(());
         }
@@ -253,10 +267,16 @@ impl Normalize {
         Ok(())
     }
 
-    fn process_entries(&self, inputs: &[String], i18n: &Localizer) -> Result<Vec<String>> {
+    fn process_entries(
+        &self,
+        inputs: &[String],
+        i18n: &Localizer,
+        network_prefix: u16,
+        expect_prefix: u16,
+    ) -> Result<Vec<String>> {
         let mut outputs = Vec::new();
         for (index, raw) in inputs.iter().enumerate() {
-            let parsed = match parse_address_input(raw.as_str(), self.expect_prefix) {
+            let parsed = match parse_address_input(raw.as_str(), Some(expect_prefix)) {
                 Ok(parsed) => parsed,
                 Err(err) => {
                     if self.allow_errors {
@@ -267,24 +287,99 @@ impl Normalize {
                         .wrap_err_with(|| format!("failed to parse address at index {index}"));
                 }
             };
-            let rendered = self.render_output(&parsed)?;
+            let rendered = self.render_output(&parsed, network_prefix)?;
             outputs.push(rendered);
         }
         Ok(outputs)
     }
 
-    fn render_output(&self, parsed: &ParsedAddressInput) -> Result<String> {
+    fn render_output(&self, parsed: &ParsedAddressInput, network_prefix: u16) -> Result<String> {
         if self.format == OutputFormat::Json {
-            let summary = AddressSummary::build(parsed, self.network_prefix)
+            let summary = AddressSummary::build(parsed, network_prefix)
                 .wrap_err("failed to build address summary")?;
             let summary_value = json::to_value(&summary)
                 .map_err(|err| eyre::eyre!("failed to encode address summary: {err}"))?;
             return json::to_string(&summary_value)
                 .map_err(|err| eyre::eyre!("failed to serialise address summary: {err}"));
         }
-        encode_address_literal(parsed, self.network_prefix, self.format)
+        encode_address_literal(parsed, network_prefix, self.format)
             .map_err(|err| eyre::eyre!(err.to_string()))
     }
+}
+
+#[derive(Debug)]
+struct AddressNetworkContext {
+    profile: Option<String>,
+    chain_discriminant: u16,
+}
+
+fn resolve_address_network_context(
+    profile: Option<&str>,
+    network_prefix: Option<u16>,
+) -> Result<AddressNetworkContext> {
+    match (
+        profile.map(str::trim).filter(|value| !value.is_empty()),
+        network_prefix,
+    ) {
+        (Some(profile_name), Some(actual)) => {
+            let expected = iroha_torii_shared::network_profile(profile_name).ok_or_else(|| {
+                eyre::eyre!(
+                    "unknown network profile `{profile_name}` (supported: {})",
+                    iroha_torii_shared::network_profile_names()
+                )
+            })?;
+            if expected.chain_discriminant != actual {
+                eyre::bail!(
+                    "network profile mismatch: profile `{}` expected chain_discriminant={}, actual chain_discriminant={}",
+                    expected.name,
+                    expected.chain_discriminant,
+                    actual
+                );
+            }
+            Ok(AddressNetworkContext {
+                profile: Some(expected.name.to_owned()),
+                chain_discriminant: actual,
+            })
+        }
+        (Some(profile_name), None) => {
+            let expected = iroha_torii_shared::network_profile(profile_name).ok_or_else(|| {
+                eyre::eyre!(
+                    "unknown network profile `{profile_name}` (supported: {})",
+                    iroha_torii_shared::network_profile_names()
+                )
+            })?;
+            Ok(AddressNetworkContext {
+                profile: Some(expected.name.to_owned()),
+                chain_discriminant: expected.chain_discriminant,
+            })
+        }
+        (None, Some(network_prefix)) => Ok(AddressNetworkContext {
+            profile: None,
+            chain_discriminant: network_prefix,
+        }),
+        (None, None) => eyre::bail!("provide --profile or --network-prefix"),
+    }
+}
+
+fn resolve_address_expect_prefix(
+    context: &AddressNetworkContext,
+    expect_prefix: Option<u16>,
+) -> Result<u16> {
+    if let Some(actual) = expect_prefix
+        && actual != context.chain_discriminant
+    {
+        if let Some(profile) = context.profile.as_deref() {
+            eyre::bail!(
+                "network profile mismatch: profile `{profile}` expected chain_discriminant={}, actual expect_prefix={actual}",
+                context.chain_discriminant
+            );
+        }
+        eyre::bail!(
+            "network prefix mismatch: network_prefix={} actual expect_prefix={actual}",
+            context.chain_discriminant
+        );
+    }
+    Ok(expect_prefix.unwrap_or(context.chain_discriminant))
 }
 
 #[derive(JsonSerialize)]
@@ -603,14 +698,15 @@ mod tests {
             input: None,
             output: None,
             expect_prefix: Some(DEFAULT_I105_PREFIX),
-            network_prefix: DEFAULT_I105_PREFIX,
+            profile: None,
+            network_prefix: Some(DEFAULT_I105_PREFIX),
             format: OutputFormat::Json,
             allow_errors: false,
         };
 
         let i18n = test_i18n();
         let outputs = cmd
-            .process_entries(&[literal], &i18n)
+            .process_entries(&[literal], &i18n, DEFAULT_I105_PREFIX, DEFAULT_I105_PREFIX)
             .expect("normalize succeeds");
         assert_eq!(outputs.len(), 1);
         assert!(
@@ -628,6 +724,34 @@ mod tests {
         assert!(
             message.contains("bad input"),
             "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn address_network_context_requires_profile_or_prefix() {
+        let err = resolve_address_network_context(None, None)
+            .expect_err("missing network context should fail");
+
+        assert!(
+            err.to_string()
+                .contains("provide --profile or --network-prefix")
+        );
+    }
+
+    #[test]
+    fn address_network_context_resolves_profile_and_rejects_mismatch() {
+        let context =
+            resolve_address_network_context(Some("taira"), None).expect("profile resolves");
+        assert_eq!(
+            context.chain_discriminant,
+            iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
+        );
+
+        let err = resolve_address_network_context(Some("taira"), Some(DEFAULT_I105_PREFIX))
+            .expect_err("profile mismatch should fail");
+        assert!(
+            err.to_string()
+                .contains("profile `taira` expected chain_discriminant=369")
         );
     }
 

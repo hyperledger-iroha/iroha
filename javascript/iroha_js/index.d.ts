@@ -9438,6 +9438,41 @@ export interface SoracloudAppInfraDraft {
   };
 }
 
+export interface SoracloudAppReportPhaseV1 {
+  name:
+    | "build"
+    | "sync_manifests"
+    | "doctor"
+    | "publish"
+    | "sign"
+    | "submit"
+    | "status"
+    | "verify";
+  ok: boolean;
+  skipped: boolean;
+  diagnostics: string[];
+}
+
+export interface SoracloudAppReportServiceV1 {
+  service_name: string;
+  execution_plane: string;
+  runtime: string;
+}
+
+export interface SoracloudAppReportV1 {
+  schema_version: "soracloud.app.report.v1";
+  app_name: string;
+  manifest_path: string;
+  ok: boolean;
+  phases: SoracloudAppReportPhaseV1[];
+  app_infra_manifest_hash?: string;
+  routes: Array<Record<string, unknown>>;
+  services: SoracloudAppReportServiceV1[];
+  static_site?: Record<string, unknown>;
+  blockers: string[];
+  next_action: string;
+}
+
 export function buildSoracloudHfDeployDraft(
   input: SoracloudHfDeployDraftInput,
 ): SoracloudHfDeployDraft;
