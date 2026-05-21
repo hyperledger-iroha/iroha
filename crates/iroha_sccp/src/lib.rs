@@ -3701,6 +3701,17 @@ fn verify_sccp_evm_submission_package(
     manifest: &SccpProofManifestV1,
     proof: &NexusSccpMessageTransparentProofV1,
 ) -> bool {
+    if proof.submission_package.version != 1
+        || proof.submission_package.proof_family != manifest.proof_family
+        || proof.submission_package.verifier_backend != manifest.verifier_backend
+        || proof.submission_package.envelope_encoding
+            != sccp_submission_envelope_encoding(&manifest.submission_template)
+        || proof.submission_package.submission_kind != manifest.submission_template.submission_kind
+        || proof.submission_package.verifier_entrypoint
+            != manifest.submission_template.verifier_entrypoint
+    {
+        return false;
+    }
     let SccpPlatformSubmissionPayloadV1::EvmContractCall(payload) =
         &proof.submission_package.platform_payload
     else {
@@ -4921,7 +4932,8 @@ pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityP
     if qc.signers_bitmap.len() != roster_len.div_ceil(8) {
         return false;
     }
-    signer_indices_from_bitmap(&qc.signers_bitmap, roster_len).is_some()
+    signer_indices_from_bitmap(&qc.signers_bitmap, roster_len)
+        .is_some_and(|indices| !indices.is_empty())
 }
 
 pub fn nexus_commit_vote_preimage(chain_id: &str, certificate: &NexusCommitQcV1) -> Vec<u8> {
@@ -4940,7 +4952,7 @@ pub fn verify_burn_bundle_structure(bundle: &NexusSccpBurnProofV1) -> bool {
     if bundle.version != 1 {
         return false;
     }
-    if bundle.payload.version != 1 || !is_supported_domain(bundle.payload.source_domain) {
+    if !verify_burn_payload_structure(&bundle.payload) {
         return false;
     }
     let Some(finality_proof) = decode_nexus_bridge_finality_proof(&bundle.finality_proof) else {
@@ -4948,12 +4960,6 @@ pub fn verify_burn_bundle_structure(bundle: &NexusSccpBurnProofV1) -> bool {
     };
     if !verify_nexus_bridge_finality_proof_structure(&finality_proof)
         || finality_proof.commitment_root != bundle.commitment_root
-    {
-        return false;
-    }
-    if !is_supported_domain(bundle.payload.dest_domain)
-        || bundle.payload.dest_domain == bundle.payload.source_domain
-        || bundle.payload.dest_domain == 0 && bundle.payload.source_domain == 0
     {
         return false;
     }
@@ -4968,6 +4974,14 @@ pub fn verify_burn_bundle_structure(bundle: &NexusSccpBurnProofV1) -> bool {
     }
 
     merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof) == bundle.commitment_root
+}
+
+pub fn verify_burn_payload_structure(payload: &BurnPayloadV1) -> bool {
+    payload.version == 1
+        && is_supported_domain(payload.source_domain)
+        && is_supported_domain(payload.dest_domain)
+        && payload.dest_domain != payload.source_domain
+        && !(payload.dest_domain == SCCP_DOMAIN_SORA && payload.source_domain == SCCP_DOMAIN_SORA)
 }
 
 pub fn verify_message_bundle_structure(bundle: &NexusSccpMessageProofV1) -> bool {
@@ -5133,6 +5147,165 @@ mod tests {
         }
     }
 
+    fn sample_burn_bundle(nonce: u64) -> NexusSccpBurnProofV1 {
+        let payload = BurnPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_ETH,
+            dest_domain: SCCP_DOMAIN_SORA,
+            nonce,
+            sora_asset_id: [0x11; 32],
+            amount: 42,
+            recipient: [0x22; 32],
+        };
+        let commitment = SccpHubCommitmentV1 {
+            version: 1,
+            kind: SccpHubMessageKind::Burn,
+            target_domain: payload.dest_domain,
+            message_id: burn_message_id(&payload),
+            payload_hash: payload_hash(&canonical_burn_payload_bytes(&payload)),
+        };
+        let commitment_root = commitment_leaf_hash(&commitment);
+        NexusSccpBurnProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
+            payload,
+            finality_proof: sample_finality_proof(commitment_root),
+        }
+    }
+
+    fn sample_tron_transfer_bundle(nonce: u64) -> NexusSccpMessageProofV1 {
+        sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_TRON,
+            nonce,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 100 + u128::from(nonce),
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: SCCP_CODEC_TRON_BASE58CHECK,
+            recipient: b"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:tron:xor".to_vec(),
+        }))
+    }
+
+    fn sample_evm_transfer_bundle(nonce: u64) -> NexusSccpMessageProofV1 {
+        sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_ETH,
+            nonce,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 100 + u128::from(nonce),
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        }))
+    }
+
+    #[cfg(feature = "std")]
+    fn sample_valid_evm_submission_proof(
+        nonce: u64,
+    ) -> (SccpProofManifestV1, NexusSccpMessageTransparentProofV1) {
+        let bundle = sample_evm_transfer_bundle(nonce);
+        let mut manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("eth manifest");
+        manifest.production_ready = true;
+        manifest.disabled_reason = None;
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let inner =
+            build_sccp_message_transparent_inner_proof(&bundle, &manifest).expect("inner proof");
+        let native_proof_bytes = vec![0xAA, 0xBB, 0xCC, 0xDD];
+        let destination_binding =
+            build_sccp_evm_destination_binding(&manifest, [0x11; 32], [0x33; 20], [0x22; 20]);
+        let payload = build_sccp_evm_contract_submission_payload(
+            &manifest,
+            &native_proof_bytes,
+            &public_inputs,
+            inner.statement_hash,
+            &destination_binding,
+            &sample_secp256k1_signer(),
+        )
+        .expect("evm payload");
+        let platform_payload = SccpPlatformSubmissionPayloadV1::EvmContractCall(payload);
+        let arguments =
+            sccp_submission_argument_values(&manifest.submission_template, &platform_payload)
+                .expect("argument values");
+        let submission_package = SccpCounterpartySubmissionPackageV1 {
+            version: 1,
+            proof_family: manifest.proof_family.clone(),
+            verifier_backend: manifest.verifier_backend.clone(),
+            envelope_encoding: sccp_submission_envelope_encoding(&manifest.submission_template),
+            submission_kind: manifest.submission_template.submission_kind.clone(),
+            verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
+            platform_payload,
+            arguments: arguments.clone(),
+            envelope_bytes: encode_sccp_submission_envelope(
+                &manifest.submission_template,
+                &arguments,
+            ),
+        };
+        let proof = NexusSccpMessageTransparentProofV1 {
+            version: 1,
+            local_domain: manifest.local_domain,
+            counterparty_domain: manifest.counterparty_domain,
+            security_model: manifest.security_model,
+            anchor_governance: manifest.anchor_governance,
+            destination_binding,
+            proof_family: manifest.proof_family.clone(),
+            verifier_backend: manifest.verifier_backend.clone(),
+            message_backend: manifest.message_backend.clone(),
+            registry_backend: manifest.registry_backend.clone(),
+            manifest_seed: manifest.manifest_seed.clone(),
+            finality_model: manifest.finality_model,
+            verifier_target: manifest.verifier_target,
+            public_inputs,
+            proof_bytes: native_proof_bytes,
+            submission_package,
+            bundle,
+        };
+        assert!(verify_sccp_evm_submission_package(&manifest, &proof));
+        (manifest, proof)
+    }
+
+    #[cfg(feature = "std")]
+    fn evm_payload_from_proof(
+        proof: &NexusSccpMessageTransparentProofV1,
+    ) -> SccpEvmContractSubmissionPayloadV1 {
+        let SccpPlatformSubmissionPayloadV1::EvmContractCall(payload) =
+            &proof.submission_package.platform_payload
+        else {
+            panic!("sample proof must contain an EVM submission payload");
+        };
+        payload.clone()
+    }
+
+    #[cfg(feature = "std")]
+    fn replace_evm_payload(
+        proof: &mut NexusSccpMessageTransparentProofV1,
+        manifest: &SccpProofManifestV1,
+        payload: SccpEvmContractSubmissionPayloadV1,
+    ) {
+        let platform_payload = SccpPlatformSubmissionPayloadV1::EvmContractCall(payload);
+        let arguments =
+            sccp_submission_argument_values(&manifest.submission_template, &platform_payload)
+                .expect("argument values");
+        proof.submission_package.platform_payload = platform_payload;
+        proof.submission_package.arguments = arguments.clone();
+        proof.submission_package.envelope_bytes =
+            encode_sccp_submission_envelope(&manifest.submission_template, &arguments);
+    }
+
     #[test]
     fn burn_bundle_roundtrip_structure_verifies() {
         let payload = BurnPayloadV1 {
@@ -5224,6 +5397,30 @@ mod tests {
     }
 
     #[test]
+    fn runtime_envelope_rejects_corrupted_message_bundles() {
+        let valid = sample_tron_transfer_bundle(90);
+        assert!(sccp_runtime_envelope_from_message_bundle(&valid).is_some());
+
+        let mut bundle = valid.clone();
+        bundle.commitment.message_id[0] ^= 0x01;
+        assert!(sccp_runtime_envelope_from_message_bundle(&bundle).is_none());
+        assert!(sccp_runtime_envelope_bytes_from_message_bundle(&bundle).is_none());
+
+        let mut bundle = valid.clone();
+        bundle.finality_proof.truncate(4);
+        assert!(sccp_runtime_envelope_from_message_bundle(&bundle).is_none());
+        assert!(sccp_runtime_envelope_bytes_from_message_bundle(&bundle).is_none());
+
+        let mut bundle = valid;
+        let SccpPayloadV1::Transfer(payload) = &mut bundle.payload else {
+            panic!("sample_tron_transfer_bundle must produce a transfer");
+        };
+        payload.route_id.push(b'!');
+        assert!(sccp_runtime_envelope_from_message_bundle(&bundle).is_none());
+        assert!(sccp_runtime_envelope_bytes_from_message_bundle(&bundle).is_none());
+    }
+
+    #[test]
     fn token_control_payloads_are_ordinary_sccp_messages() {
         let add = SccpPayloadV1::TokenAdd(TokenAddPayloadV1 {
             version: 1,
@@ -5265,32 +5462,59 @@ mod tests {
 
     #[test]
     fn burn_bundle_rejects_mismatched_finality_root() {
-        let payload = BurnPayloadV1 {
-            version: 1,
-            source_domain: SCCP_DOMAIN_ETH,
-            dest_domain: SCCP_DOMAIN_SORA,
-            nonce: 7,
-            sora_asset_id: [1u8; 32],
-            amount: 42,
-            recipient: [2u8; 32],
-        };
-        let commitment = SccpHubCommitmentV1 {
-            version: 1,
-            kind: SccpHubMessageKind::Burn,
-            target_domain: SCCP_DOMAIN_SORA,
-            message_id: burn_message_id(&payload),
-            payload_hash: payload_hash(&canonical_burn_payload_bytes(&payload)),
-        };
-        let commitment_root = commitment_leaf_hash(&commitment);
-        let bundle = NexusSccpBurnProofV1 {
-            version: 1,
-            commitment_root,
-            commitment,
-            merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
-            payload,
-            finality_proof: sample_finality_proof([0xabu8; 32]),
-        };
+        let mut bundle = sample_burn_bundle(7);
+        bundle.finality_proof = sample_finality_proof([0xabu8; 32]);
         assert!(!verify_burn_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn burn_bundle_rejects_commitment_message_id_tampering() {
+        let mut bundle = sample_burn_bundle(8);
+        bundle.commitment.message_id[0] ^= 0x01;
+
+        assert!(!verify_burn_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn burn_bundle_rejects_commitment_payload_hash_tampering() {
+        let mut bundle = sample_burn_bundle(9);
+        bundle.commitment.payload_hash[0] ^= 0x01;
+
+        assert!(!verify_burn_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn burn_bundle_rejects_merkle_path_tampering() {
+        let mut bundle = sample_burn_bundle(10);
+        bundle.merkle_proof.steps.push(SccpMerkleStepV1 {
+            sibling_hash: [0x44; 32],
+            sibling_is_left: true,
+        });
+
+        assert!(!verify_burn_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn burn_payload_structure_rejects_bad_domain_and_version_edges() {
+        let valid = sample_burn_bundle(11).payload;
+        assert!(verify_burn_payload_structure(&valid));
+
+        let mut payload = valid.clone();
+        payload.version = 2;
+        assert!(!verify_burn_payload_structure(&payload));
+
+        let mut payload = valid.clone();
+        payload.source_domain = 0xFFFF_FFFE;
+        assert!(!verify_burn_payload_structure(&payload));
+
+        let mut payload = valid.clone();
+        payload.dest_domain = payload.source_domain;
+        assert!(!verify_burn_payload_structure(&payload));
+
+        let mut payload = valid;
+        payload.source_domain = SCCP_DOMAIN_SORA;
+        payload.dest_domain = SCCP_DOMAIN_SORA;
+        assert!(!verify_burn_payload_structure(&payload));
     }
 
     #[test]
@@ -5444,6 +5668,207 @@ mod tests {
             &bundle,
             &manifest,
             &public_inputs,
+        ));
+    }
+
+    #[test]
+    fn transparent_fastpq_verifier_rejects_wrong_open_verify_backend_tag() {
+        let bundle = sample_tron_transfer_bundle(38);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode envelope");
+        env.backend = BackendTag::Groth16;
+        let tampered = to_bytes(&env).expect("encode tampered envelope");
+
+        assert!(!verify_sccp_message_transparent_inner_proof_bytes(
+            &tampered,
+            &bundle,
+            &manifest,
+            &public_inputs,
+        ));
+    }
+
+    #[test]
+    fn transparent_fastpq_verifier_rejects_wrong_circuit_id() {
+        let bundle = sample_tron_transfer_bundle(39);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode envelope");
+        env.circuit_id.push_str("-fork");
+        let tampered = to_bytes(&env).expect("encode tampered envelope");
+
+        assert!(!verify_sccp_message_transparent_inner_proof_bytes(
+            &tampered,
+            &bundle,
+            &manifest,
+            &public_inputs,
+        ));
+    }
+
+    #[test]
+    fn transparent_fastpq_verifier_rejects_schema_descriptor_tampering() {
+        let bundle = sample_tron_transfer_bundle(40);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode envelope");
+        env.public_inputs.push(0x99);
+        let tampered = to_bytes(&env).expect("encode tampered envelope");
+
+        assert!(!verify_sccp_message_transparent_inner_proof_bytes(
+            &tampered,
+            &bundle,
+            &manifest,
+            &public_inputs,
+        ));
+    }
+
+    #[test]
+    fn transparent_fastpq_verifier_rejects_malformed_open_proof_payload() {
+        let bundle = sample_tron_transfer_bundle(41);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode envelope");
+        env.proof_bytes = vec![0x01, 0x02, 0x03];
+        let tampered = to_bytes(&env).expect("encode tampered envelope");
+
+        assert!(!verify_sccp_message_transparent_inner_proof_bytes(
+            &tampered,
+            &bundle,
+            &manifest,
+            &public_inputs,
+        ));
+    }
+
+    #[test]
+    fn transparent_fastpq_verifier_rejects_non_v1_open_proof() {
+        let bundle = sample_tron_transfer_bundle(42);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&env.proof_bytes).expect("decode open proof");
+        open.version = 2;
+        env.proof_bytes = to_bytes(&open).expect("encode tampered open proof");
+        let tampered = to_bytes(&env).expect("encode tampered envelope");
+
+        assert!(!verify_sccp_message_transparent_inner_proof_bytes(
+            &tampered,
+            &bundle,
+            &manifest,
+            &public_inputs,
+        ));
+    }
+
+    #[test]
+    fn transparent_fastpq_verifier_rejects_auxiliary_envelope_data() {
+        let bundle = sample_tron_transfer_bundle(31);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode envelope");
+        env.aux.push(0xAA);
+        let tampered = to_bytes(&env).expect("encode tampered envelope");
+
+        assert!(!verify_sccp_message_transparent_inner_proof_bytes(
+            &tampered,
+            &bundle,
+            &manifest,
+            &public_inputs,
+        ));
+    }
+
+    #[test]
+    fn transparent_fastpq_verifier_rejects_tampered_public_input_columns() {
+        let bundle = sample_tron_transfer_bundle(32);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&env.proof_bytes).expect("decode open proof");
+        open.public_inputs[0][0][0] ^= 0x01;
+        env.proof_bytes = to_bytes(&open).expect("encode tampered open proof");
+        let tampered = to_bytes(&env).expect("encode tampered envelope");
+
+        assert!(!verify_sccp_message_transparent_inner_proof_bytes(
+            &tampered,
+            &bundle,
+            &manifest,
+            &public_inputs,
+        ));
+    }
+
+    #[test]
+    fn transparent_fastpq_verifier_rejects_tampered_backend_proof_bytes() {
+        let bundle = sample_tron_transfer_bundle(33);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&env.proof_bytes).expect("decode open proof");
+        let byte = open
+            .envelope_bytes
+            .last_mut()
+            .expect("backend proof bytes must be present");
+        *byte ^= 0x01;
+        env.proof_bytes = to_bytes(&open).expect("encode tampered open proof");
+        let tampered = to_bytes(&env).expect("encode tampered envelope");
+
+        assert!(!verify_sccp_message_transparent_inner_proof_bytes(
+            &tampered,
+            &bundle,
+            &manifest,
+            &public_inputs,
+        ));
+    }
+
+    #[test]
+    fn transparent_fastpq_verifier_rejects_cross_bundle_replay() {
+        let source_bundle = sample_tron_transfer_bundle(34);
+        let replay_target_bundle = sample_tron_transfer_bundle(35);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let replay_target_public_inputs =
+            sccp_message_transparent_public_inputs(&replay_target_bundle)
+                .expect("message public inputs");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&source_bundle, &manifest)
+                .expect("proof");
+
+        assert!(!verify_sccp_message_transparent_inner_proof_bytes(
+            &proof_bytes,
+            &replay_target_bundle,
+            &manifest,
+            &replay_target_public_inputs,
         ));
     }
 
@@ -5640,6 +6065,51 @@ mod tests {
     }
 
     #[test]
+    fn transparent_fastpq_open_verify_summary_rejects_bad_envelope_shapes() {
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![[0x55; 32]]],
+            envelope_bytes: vec![0xAA, 0xBB, 0xCC],
+        };
+        let mut env = OpenVerifyEnvelope {
+            backend: BackendTag::Stark,
+            circuit_id: SCCP_TRANSPARENT_OPEN_VERIFY_CIRCUIT_ID_V1.to_owned(),
+            vk_hash: [0x66; 32],
+            public_inputs: vec![0x77, 0x88, 0x99],
+            proof_bytes: norito::to_bytes(&open).expect("encode open proof"),
+            aux: Vec::new(),
+        };
+
+        let mut wrong_backend = env.clone();
+        wrong_backend.backend = BackendTag::Groth16;
+        assert!(
+            summarize_sccp_message_transparent_open_verify_proof(
+                &norito::to_bytes(&wrong_backend).expect("encode wrong backend envelope"),
+            )
+            .is_none()
+        );
+
+        let mut malformed_open = env.clone();
+        malformed_open.proof_bytes = vec![0x01, 0x02];
+        assert!(
+            summarize_sccp_message_transparent_open_verify_proof(
+                &norito::to_bytes(&malformed_open).expect("encode malformed open envelope"),
+            )
+            .is_none()
+        );
+
+        let mut non_v1_open = open;
+        non_v1_open.version = 2;
+        env.proof_bytes = norito::to_bytes(&non_v1_open).expect("encode non-v1 open proof");
+        assert!(
+            summarize_sccp_message_transparent_open_verify_proof(
+                &norito::to_bytes(&env).expect("encode non-v1 open envelope"),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn proof_manifests_mark_current_counterparty_lanes_non_production() {
         for domain in SCCP_CORE_REMOTE_DOMAINS {
             let manifest = sccp_proof_manifest_for_domain(domain).expect("manifest");
@@ -5766,6 +6236,72 @@ mod tests {
     }
 
     #[test]
+    fn transparent_message_proof_recovery_rejects_raw_open_verify_envelope_bytes() {
+        let bundle = sample_tron_transfer_bundle(36);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+
+        assert!(
+            recover_nexus_sccp_message_transparent_proof("sccp/stark-fri-v1/tron", &proof_bytes)
+                .is_none()
+        );
+        assert!(decode_nexus_sccp_message_transparent_proof(&proof_bytes).is_none());
+    }
+
+    #[test]
+    fn transparent_message_proof_recovery_rejects_truncated_typed_artifact_bytes() {
+        let bundle = sample_tron_transfer_bundle(37);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof_cell = vec![0xAA, 0xBB];
+        let proof_bytes = to_bytes(&NexusSccpMessageTransparentProofV1 {
+            version: 1,
+            local_domain: manifest.local_domain,
+            counterparty_domain: manifest.counterparty_domain,
+            security_model: manifest.security_model,
+            anchor_governance: manifest.anchor_governance,
+            destination_binding: manifest.destination_binding.clone(),
+            proof_family: manifest.proof_family.clone(),
+            verifier_backend: manifest.verifier_backend.clone(),
+            message_backend: manifest.message_backend.clone(),
+            registry_backend: manifest.registry_backend.clone(),
+            manifest_seed: manifest.manifest_seed.clone(),
+            finality_model: manifest.finality_model,
+            verifier_target: manifest.verifier_target,
+            public_inputs: public_inputs.clone(),
+            proof_bytes: proof_cell.clone(),
+            submission_package: SccpCounterpartySubmissionPackageV1 {
+                version: 1,
+                proof_family: manifest.proof_family.clone(),
+                verifier_backend: manifest.verifier_backend.clone(),
+                envelope_encoding: "tron_tvm_abi_v1".to_owned(),
+                submission_kind: "contract_call".to_owned(),
+                verifier_entrypoint: "verify_sccp_message".to_owned(),
+                platform_payload: SccpPlatformSubmissionPayloadV1::TronContractCall(
+                    SccpTronContractSubmissionPayloadV1 {
+                        proof_bytes: proof_cell,
+                        public_inputs: sccp_evm_public_input_word_struct(&public_inputs),
+                        statement_hash: [0u8; 32],
+                    },
+                ),
+                arguments: Vec::new(),
+                envelope_bytes: vec![0xCC],
+            },
+            bundle,
+        })
+        .expect("encode typed artifact");
+        let truncated = &proof_bytes[..proof_bytes.len().saturating_sub(3)];
+
+        assert!(
+            recover_nexus_sccp_message_transparent_proof("sccp/stark-fri-v1/tron", truncated)
+                .is_none()
+        );
+        assert!(decode_nexus_sccp_message_transparent_proof(truncated).is_none());
+    }
+
+    #[test]
     fn canonical_message_payload_roundtrips() {
         let payload = SccpPayloadV1::RouteActivate(RouteActivatePayloadV1 {
             version: 1,
@@ -5781,6 +6317,29 @@ mod tests {
         let decoded = decode_canonical_sccp_payload_bytes(&encoded).expect("decode payload");
         assert_eq!(decoded, payload);
         assert!(verify_sccp_payload_structure(&decoded));
+    }
+
+    #[test]
+    fn canonical_message_payload_decoder_rejects_truncated_trailing_and_unknown_bytes() {
+        let payload = SccpPayloadV1::RouteActivate(RouteActivatePayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            target_domain: SCCP_DOMAIN_TRON,
+            nonce: 10,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:tron:xor".to_vec(),
+        });
+        let encoded = canonical_sccp_payload_bytes(&payload);
+
+        assert!(decode_canonical_sccp_payload_bytes(&[]).is_none());
+        assert!(decode_canonical_sccp_payload_bytes(&[0xFF]).is_none());
+        assert!(decode_canonical_sccp_payload_bytes(&encoded[..encoded.len() - 1]).is_none());
+
+        let mut trailing = encoded;
+        trailing.push(0x00);
+        assert!(decode_canonical_sccp_payload_bytes(&trailing).is_none());
     }
 
     #[test]
@@ -6101,16 +6660,164 @@ mod tests {
     }
 
     #[test]
+    fn message_bundle_structure_rejects_version_tampering() {
+        let mut bundle = sample_tron_transfer_bundle(84);
+        bundle.version = 2;
+        assert!(!verify_message_bundle_structure(&bundle));
+
+        let mut bundle = sample_tron_transfer_bundle(85);
+        bundle.commitment.version = 2;
+        assert!(!verify_message_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn message_bundle_structure_rejects_target_domain_tampering() {
+        let mut bundle = sample_tron_transfer_bundle(86);
+        bundle.commitment.target_domain = SCCP_DOMAIN_TON;
+
+        assert!(!verify_message_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn message_bundle_structure_rejects_message_id_tampering() {
+        let mut bundle = sample_tron_transfer_bundle(87);
+        bundle.commitment.message_id[0] ^= 0x01;
+
+        assert!(!verify_message_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn message_bundle_structure_rejects_merkle_path_tampering() {
+        let mut bundle = sample_tron_transfer_bundle(88);
+        bundle.merkle_proof.steps.push(SccpMerkleStepV1 {
+            sibling_hash: [0x55; 32],
+            sibling_is_left: false,
+        });
+
+        assert!(!verify_message_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn message_bundle_structure_rejects_mismatched_finality_root() {
+        let mut bundle = sample_tron_transfer_bundle(80);
+        bundle.finality_proof = sample_finality_proof([0x42; 32]);
+
+        assert!(!verify_message_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn message_bundle_structure_rejects_payload_hash_tampering() {
+        let mut bundle = sample_tron_transfer_bundle(81);
+        bundle.commitment.payload_hash[0] ^= 0x01;
+
+        assert!(!verify_message_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn message_bundle_structure_rejects_payload_substitution_after_commitment() {
+        let mut bundle = sample_tron_transfer_bundle(82);
+        let SccpPayloadV1::Transfer(payload) = &mut bundle.payload else {
+            panic!("sample_tron_transfer_bundle must produce a transfer");
+        };
+        payload.amount += 1;
+
+        assert!(!verify_message_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn message_bundle_structure_rejects_truncated_finality_bytes() {
+        let mut bundle = sample_tron_transfer_bundle(83);
+        bundle.finality_proof.truncate(3);
+
+        assert!(!verify_message_bundle_structure(&bundle));
+    }
+
+    #[test]
     fn finality_proof_structure_rejects_bad_bitmap_and_empty_pop() {
         let commitment_root = [0x88; 32];
         let mut proof = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
             .expect("decode proof");
+
+        proof.commit_qc.signers_bitmap = vec![0b0000_0000];
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
 
         proof.commit_qc.signers_bitmap = vec![0b0000_0010];
         assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
 
         proof.commit_qc.signers_bitmap = vec![0b0000_0001];
         proof.commit_qc.validator_set_pops[0].clear();
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+    }
+
+    #[test]
+    fn finality_proof_structure_rejects_version_key_and_bitmap_edges() {
+        let commitment_root = [0x8A; 32];
+        let valid = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
+            .expect("decode proof");
+
+        let mut proof = valid.clone();
+        proof.commit_qc.version = 2;
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.commit_qc.validator_set_hash_version = 2;
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.commit_qc.validator_public_keys[0].clear();
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.commit_qc.signers_bitmap = vec![0b0000_0001, 0b0000_0000];
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid;
+        proof.commit_qc.signers_bitmap.clear();
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+    }
+
+    #[test]
+    fn finality_proof_structure_rejects_header_and_qc_field_tampering() {
+        let commitment_root = [0x89; 32];
+        let valid = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
+            .expect("decode proof");
+
+        let mut proof = valid.clone();
+        proof.height = 0;
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.block_header_bytes.clear();
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.commit_qc.phase = NexusConsensusPhaseV1::Prepare;
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.commit_qc.height += 1;
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.commit_qc.subject_block_hash[0] ^= 0x01;
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.commit_qc.mode_tag.clear();
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.commit_qc.validator_public_keys.clear();
+        proof.commit_qc.validator_set_pops.clear();
+        proof.commit_qc.signers_bitmap.clear();
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.commit_qc.validator_set_pops.pop();
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid;
+        proof.commit_qc.bls_aggregate_signature.clear();
         assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
     }
 
@@ -6756,6 +7463,203 @@ mod tests {
         };
 
         assert!(!verify_sccp_evm_submission_package(&manifest, &proof));
+    }
+
+    #[test]
+    fn evm_attestation_envelope_decoder_rejects_malformed_offsets_and_lengths() {
+        let (_manifest, proof) = sample_valid_evm_submission_proof(53);
+        let payload = evm_payload_from_proof(&proof);
+        assert!(decode_sccp_evm_attestation_envelope(&payload.proof_bytes).is_some());
+
+        let mut truncated = payload.proof_bytes.clone();
+        truncated.truncate(32 * 7 - 1);
+        assert!(decode_sccp_evm_attestation_envelope(&truncated).is_none());
+
+        let mut bad_offset = payload.proof_bytes.clone();
+        bad_offset[32 * 7 - 1] = 0xE1;
+        assert!(decode_sccp_evm_attestation_envelope(&bad_offset).is_none());
+
+        let mut bad_signature_len = payload.proof_bytes;
+        bad_signature_len[32 * 7 + 31] = 64;
+        assert!(decode_sccp_evm_attestation_envelope(&bad_signature_len).is_none());
+    }
+
+    #[test]
+    fn evm_submission_package_verifier_rejects_attestation_signature_replay_edges() {
+        let (manifest, proof) = sample_valid_evm_submission_proof(54);
+        let valid_payload = evm_payload_from_proof(&proof);
+
+        let mut empty_signatures = proof.clone();
+        let mut payload = valid_payload.clone();
+        payload.attestation.signatures.clear();
+        payload.proof_bytes =
+            encode_sccp_evm_attestation_envelope(&payload.attestation).expect("encode envelope");
+        replace_evm_payload(&mut empty_signatures, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &empty_signatures
+        ));
+
+        let mut duplicate_signature = proof.clone();
+        let mut payload = valid_payload.clone();
+        payload
+            .attestation
+            .signatures
+            .push(payload.attestation.signatures[0].clone());
+        payload.proof_bytes =
+            encode_sccp_evm_attestation_envelope(&payload.attestation).expect("encode envelope");
+        replace_evm_payload(&mut duplicate_signature, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &duplicate_signature
+        ));
+
+        let mut signer_address_mismatch = proof;
+        let mut payload = valid_payload;
+        payload.attestation.signatures[0].signer_address[0] ^= 0x01;
+        payload.proof_bytes =
+            encode_sccp_evm_attestation_envelope(&payload.attestation).expect("encode envelope");
+        replace_evm_payload(&mut signer_address_mismatch, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &signer_address_mismatch
+        ));
+    }
+
+    #[test]
+    fn evm_submission_package_verifier_rejects_digest_and_envelope_replay_edges() {
+        let (manifest, proof) = sample_valid_evm_submission_proof(55);
+        let valid_payload = evm_payload_from_proof(&proof);
+
+        let mut native_proof_replay = proof.clone();
+        native_proof_replay.proof_bytes.push(0xEE);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &native_proof_replay
+        ));
+
+        let mut message_id_replay = proof.clone();
+        let mut payload = valid_payload.clone();
+        payload.attestation.message_id[0] ^= 0x01;
+        payload.proof_bytes =
+            encode_sccp_evm_attestation_envelope(&payload.attestation).expect("encode envelope");
+        replace_evm_payload(&mut message_id_replay, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &message_id_replay
+        ));
+
+        let mut public_input_hash_replay = proof.clone();
+        let mut payload = valid_payload.clone();
+        payload.public_inputs_hash[0] ^= 0x01;
+        replace_evm_payload(&mut public_input_hash_replay, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &public_input_hash_replay
+        ));
+
+        let mut noncanonical_envelope = proof;
+        let mut payload = valid_payload;
+        payload.proof_bytes.push(0x00);
+        replace_evm_payload(&mut noncanonical_envelope, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &noncanonical_envelope
+        ));
+    }
+
+    #[test]
+    fn evm_submission_package_verifier_rejects_metadata_tampering() {
+        let (manifest, proof) = sample_valid_evm_submission_proof(56);
+
+        let mut version = proof.clone();
+        version.submission_package.version = 2;
+        assert!(!verify_sccp_evm_submission_package(&manifest, &version));
+
+        let mut proof_family = proof.clone();
+        proof_family
+            .submission_package
+            .proof_family
+            .push_str("-fork");
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &proof_family
+        ));
+
+        let mut verifier_backend = proof.clone();
+        verifier_backend.submission_package.verifier_backend.key = "evm/fork".to_owned();
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &verifier_backend
+        ));
+
+        let mut envelope_encoding = proof.clone();
+        envelope_encoding.submission_package.envelope_encoding = "abi_tuple_v2".to_owned();
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &envelope_encoding
+        ));
+
+        let mut submission_kind = proof.clone();
+        submission_kind.submission_package.submission_kind = "delegate_call".to_owned();
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &submission_kind
+        ));
+
+        let mut verifier_entrypoint = proof;
+        verifier_entrypoint
+            .submission_package
+            .verifier_entrypoint
+            .push_str("Fork");
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &verifier_entrypoint
+        ));
+    }
+
+    #[test]
+    fn evm_submission_package_verifier_rejects_argument_and_envelope_tampering() {
+        let (manifest, proof) = sample_valid_evm_submission_proof(57);
+
+        let mut mutated_argument_bytes = proof.clone();
+        mutated_argument_bytes.submission_package.arguments[0].bytes[0] ^= 0x01;
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &mutated_argument_bytes
+        ));
+
+        let mut missing_argument = proof.clone();
+        missing_argument.submission_package.arguments.pop();
+        missing_argument.submission_package.envelope_bytes = encode_sccp_submission_envelope(
+            &manifest.submission_template,
+            &missing_argument.submission_package.arguments,
+        );
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &missing_argument
+        ));
+
+        let mut duplicate_argument = proof.clone();
+        duplicate_argument
+            .submission_package
+            .arguments
+            .push(duplicate_argument.submission_package.arguments[0].clone());
+        duplicate_argument.submission_package.envelope_bytes = encode_sccp_submission_envelope(
+            &manifest.submission_template,
+            &duplicate_argument.submission_package.arguments,
+        );
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &duplicate_argument
+        ));
+
+        let mut envelope_bytes = proof;
+        envelope_bytes.submission_package.envelope_bytes[0] ^= 0x01;
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &envelope_bytes
+        ));
     }
 
     #[test]

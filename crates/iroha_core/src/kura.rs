@@ -4777,12 +4777,20 @@ impl PipelineRecoverySidecar {
                     norito::json::to_value(&tx.hash.to_string()).expect("serialize tx hash"),
                 );
                 entry.insert(
+                    "read_count".to_string(),
+                    norito::json::to_value(&tx.read_count()).expect("serialize read count"),
+                );
+                entry.insert(
+                    "write_count".to_string(),
+                    norito::json::to_value(&tx.write_count()).expect("serialize write count"),
+                );
+                entry.insert(
                     "reads".to_string(),
-                    norito::json::to_value(&tx.reads).expect("serialize read count"),
+                    norito::json::to_value(&tx.reads).expect("serialize sampled reads"),
                 );
                 entry.insert(
                     "writes".to_string(),
-                    norito::json::to_value(&tx.writes).expect("serialize write count"),
+                    norito::json::to_value(&tx.writes).expect("serialize sampled writes"),
                 );
                 norito::json::Value::Object(entry)
             })
@@ -4878,10 +4886,48 @@ pub struct PipelineDagSnapshot {
 pub struct PipelineTxSnapshot {
     /// Transaction hash to correlate with block entries.
     pub hash: HashOf<TransactionEntrypoint>,
-    /// Sorted list of state keys read during execution.
+    /// Optional sampled state keys read during execution.
     pub reads: Vec<String>,
-    /// Sorted list of state keys written during execution.
+    /// Optional sampled state keys written during execution.
     pub writes: Vec<String>,
+    /// Total number of state keys read during execution.
+    #[norito(default)]
+    pub read_count: u32,
+    /// Total number of state keys written during execution.
+    #[norito(default)]
+    pub write_count: u32,
+}
+
+impl PipelineTxSnapshot {
+    /// Create a compact tx access summary without embedding the full key lists.
+    #[must_use]
+    pub fn compact(
+        hash: HashOf<TransactionEntrypoint>,
+        read_count: usize,
+        write_count: usize,
+    ) -> Self {
+        Self {
+            hash,
+            reads: Vec::new(),
+            writes: Vec::new(),
+            read_count: u32::try_from(read_count).unwrap_or(u32::MAX),
+            write_count: u32::try_from(write_count).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// Total number of read keys represented by this snapshot.
+    #[must_use]
+    pub fn read_count(&self) -> u32 {
+        self.read_count
+            .max(u32::try_from(self.reads.len()).unwrap_or(u32::MAX))
+    }
+
+    /// Total number of write keys represented by this snapshot.
+    #[must_use]
+    pub fn write_count(&self) -> u32 {
+        self.write_count
+            .max(u32::try_from(self.writes.len()).unwrap_or(u32::MAX))
+    }
 }
 
 /// ZK proof artifacts captured alongside pipeline metadata.
@@ -4899,6 +4945,11 @@ pub struct PipelineProofSnapshot {
 }
 
 /// FASTPQ proof artifact captured after block commit for local AXT packaging and audits.
+///
+/// Sidecar persistence stores compact metadata-only snapshots to keep per-block
+/// recovery metadata bounded under sustained throughput. Full proof payloads
+/// should be exported through dedicated proof artifact paths rather than folded
+/// into the pipeline sidecar.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct FastpqProofSnapshot {
     /// Block height the proof belongs to.
@@ -4917,13 +4968,63 @@ pub struct FastpqProofSnapshot {
     pub trace_commitment: Hash,
     /// Stable digest of the Norito-encoded FASTPQ proof bytes.
     pub proof_digest: Hash,
-    /// Canonical transition batch proven by the FASTPQ proof.
+    /// Canonical transition batch proven by the FASTPQ proof, or compact public inputs for sidecars.
     pub batch: fastpq_prover::TransitionBatch,
-    /// Norito-encoded FASTPQ proof bytes.
+    /// Norito-encoded FASTPQ proof bytes; empty when persisted as sidecar metadata.
     pub proof: Vec<u8>,
 }
 
 impl FastpqProofSnapshot {
+    /// Create a compact sidecar snapshot from a proven batch without embedding
+    /// transition rows or proof bytes.
+    #[must_use]
+    pub fn compact_from_batch(
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        entry_hash: Hash,
+        batch_index: u32,
+        batch: &fastpq_prover::TransitionBatch,
+        trace_commitment: Hash,
+        proof_digest: Hash,
+    ) -> Self {
+        let transition_count = u32::try_from(batch.transitions.len()).unwrap_or(u32::MAX);
+        let compact_batch =
+            fastpq_prover::TransitionBatch::new(batch.parameter.clone(), batch.public_inputs);
+        Self {
+            height,
+            block_hash,
+            entry_hash,
+            batch_index,
+            parameter: batch.parameter.clone(),
+            transition_count,
+            trace_commitment,
+            proof_digest,
+            batch: compact_batch,
+            proof: Vec::new(),
+        }
+    }
+
+    /// Return a bounded sidecar representation while retaining proof identity.
+    #[must_use]
+    pub fn compact_for_sidecar(&self) -> Self {
+        let compact_batch = fastpq_prover::TransitionBatch::new(
+            self.batch.parameter.clone(),
+            self.batch.public_inputs,
+        );
+        Self {
+            height: self.height,
+            block_hash: self.block_hash,
+            entry_hash: self.entry_hash,
+            batch_index: self.batch_index,
+            parameter: self.parameter.clone(),
+            transition_count: self.transition_count,
+            trace_commitment: self.trace_commitment,
+            proof_digest: self.proof_digest,
+            batch: compact_batch,
+            proof: Vec::new(),
+        }
+    }
+
     /// Return `true` when both snapshots describe the same proof attachment.
     #[must_use]
     pub fn same_attachment(&self, other: &Self) -> bool {
@@ -5217,6 +5318,7 @@ impl Kura {
         snapshot: FastpqProofSnapshot,
     ) -> FastpqProofEnqueueResult {
         let telemetry = FastpqProofSidecarTelemetry;
+        let snapshot = snapshot.compact_for_sidecar();
         let max_bytes = self
             .fastpq_proof_sidecar_max_bytes
             .load(Ordering::Relaxed)
@@ -5488,7 +5590,7 @@ impl Kura {
             {
                 continue;
             }
-            sidecar.fastpq_proofs.push((*snapshot).clone());
+            sidecar.fastpq_proofs.push(snapshot.compact_for_sidecar());
             added = added.saturating_add(1);
         }
         if added == 0 {
@@ -12791,6 +12893,36 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_tx_snapshot_compact_omits_keys_and_preserves_counts() {
+        let hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"compact-pipeline-tx-snapshot",
+        ));
+        let snapshot = PipelineTxSnapshot::compact(hash, usize::MAX, 7);
+
+        assert!(snapshot.reads.is_empty());
+        assert!(snapshot.writes.is_empty());
+        assert_eq!(snapshot.read_count(), u32::MAX);
+        assert_eq!(snapshot.write_count(), 7);
+    }
+
+    #[test]
+    fn pipeline_tx_snapshot_legacy_key_lists_contribute_counts() {
+        let hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"legacy-pipeline-tx-snapshot",
+        ));
+        let snapshot = PipelineTxSnapshot {
+            hash,
+            reads: vec!["state:alpha".to_owned(), "state:beta".to_owned()],
+            writes: vec!["state:gamma".to_owned()],
+            read_count: 0,
+            write_count: 0,
+        };
+
+        assert_eq!(snapshot.read_count(), 2);
+        assert_eq!(snapshot.write_count(), 1);
+    }
+
+    #[test]
     fn pipeline_sidecar_enqueue_flushes() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
@@ -12922,9 +13054,12 @@ mod tests {
         assert_eq!(kura.flush_fastpq_proof_snapshots(), 1);
 
         let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
-        assert_eq!(got.fastpq_proofs, vec![snapshot.clone()]);
+        let compact = snapshot.compact_for_sidecar();
+        assert_eq!(got.fastpq_proofs, vec![compact.clone()]);
+        assert!(got.fastpq_proofs[0].proof.is_empty());
+        assert!(got.fastpq_proofs[0].batch.transitions.is_empty());
         assert!(got.fastpq_proofs[0].decode_proof().is_err());
-        assert_eq!(kura.fastpq_proofs_for_block(1), vec![snapshot]);
+        assert_eq!(kura.fastpq_proofs_for_block(1), vec![compact]);
 
         let duplicate = got.fastpq_proofs[0].clone();
         assert!(matches!(
@@ -12934,6 +13069,69 @@ mod tests {
         assert_eq!(kura.flush_fastpq_proof_snapshots(), 1);
         let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
         assert_eq!(got.fastpq_proofs.len(), 1);
+    }
+
+    #[test]
+    fn fastpq_proof_snapshot_persists_compact_metadata_only() {
+        use iroha_config::base::WithOrigin;
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        let block_hash = store_dummy_blocks(&kura, 1)[0];
+        kura.write_pipeline_metadata(&PipelineRecoverySidecar::new(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [0u8; 32],
+                key_count: 0,
+            },
+            Vec::new(),
+        ));
+
+        let mut snapshot = sample_fastpq_snapshot(1, block_hash, 128 * 1024);
+        snapshot.batch.push(fastpq_prover::StateTransition::new(
+            b"state-key".to_vec(),
+            vec![0x01; 1024],
+            vec![0x02; 1024],
+            fastpq_prover::OperationKind::Transfer,
+        ));
+        snapshot.transition_count = u32::try_from(snapshot.batch.transitions.len()).unwrap();
+        assert!(matches!(
+            kura.enqueue_fastpq_proof_snapshot(snapshot.clone()),
+            FastpqProofEnqueueResult::Enqueued { .. }
+        ));
+        assert_eq!(kura.flush_fastpq_proof_snapshots(), 1);
+
+        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
+        let persisted = got.fastpq_proofs.first().expect("proof summary persisted");
+        assert_eq!(persisted.proof_digest, snapshot.proof_digest);
+        assert_eq!(persisted.trace_commitment, snapshot.trace_commitment);
+        assert_eq!(persisted.transition_count, 1);
+        assert!(persisted.proof.is_empty());
+        assert!(persisted.batch.transitions.is_empty());
+        assert!(persisted.batch.metadata.is_empty());
+        assert_eq!(persisted.batch.public_inputs, snapshot.batch.public_inputs);
     }
 
     #[test]

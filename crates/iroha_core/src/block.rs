@@ -1417,11 +1417,7 @@ mod pipeline_recovery_tests {
             fingerprint: [0x44; 32],
             key_count: 1,
         };
-        let txs = vec![PipelineTxSnapshot {
-            hash: call_hash,
-            reads: Vec::new(),
-            writes: Vec::new(),
-        }];
+        let txs = vec![PipelineTxSnapshot::compact(call_hash, 0, 0)];
 
         let sidecar_mismatch = PipelineRecoverySidecar::new(height, other_hash, dag, txs.clone());
         assert!(
@@ -8313,10 +8309,12 @@ pub(crate) mod valid {
                 let txs_sidecar: Vec<PipelineTxSnapshot> = prepared_txs
                     .iter()
                     .zip(access.iter())
-                    .map(|(prepared, aset)| PipelineTxSnapshot {
-                        hash: prepared.metadata.entrypoint_hash,
-                        reads: aset.read_keys.iter().cloned().collect(),
-                        writes: aset.write_keys.iter().cloned().collect(),
+                    .map(|(prepared, aset)| {
+                        PipelineTxSnapshot::compact(
+                            prepared.metadata.entrypoint_hash,
+                            aset.read_keys.len(),
+                            aset.write_keys.len(),
+                        )
                     })
                     .collect();
 

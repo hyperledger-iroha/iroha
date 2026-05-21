@@ -363,25 +363,20 @@ fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob, kura
             Ok(output) => {
                 proved = proved.saturating_add(1);
                 if let Some(kura) = kura {
-                    if let Some((entry_hash, batch_index, transition_count)) =
-                        entry_hash.and_then(|entry_hash| {
-                            let batch_index = u32::try_from(idx).ok()?;
-                            let transition_count = u32::try_from(batch.transitions.len()).ok()?;
-                            Some((entry_hash, batch_index, transition_count))
-                        })
-                    {
-                        match kura.enqueue_fastpq_proof_snapshot(FastpqProofSnapshot {
-                            height: job.height,
-                            block_hash: job.block_hash,
+                    if let Some((entry_hash, batch_index)) = entry_hash.and_then(|entry_hash| {
+                        let batch_index = u32::try_from(idx).ok()?;
+                        Some((entry_hash, batch_index))
+                    }) {
+                        let snapshot = FastpqProofSnapshot::compact_from_batch(
+                            job.height,
+                            job.block_hash,
                             entry_hash,
                             batch_index,
-                            parameter: batch.parameter.clone(),
-                            transition_count,
-                            trace_commitment: output.trace_commitment,
-                            proof_digest: output.proof_digest,
-                            batch: batch.clone(),
-                            proof: output.proof_bytes.clone(),
-                        }) {
+                            &batch,
+                            output.trace_commitment,
+                            output.proof_digest,
+                        );
+                        match kura.enqueue_fastpq_proof_snapshot(snapshot) {
                             FastpqProofEnqueueResult::Enqueued { .. } => {
                                 persisted = persisted.saturating_add(1);
                             }

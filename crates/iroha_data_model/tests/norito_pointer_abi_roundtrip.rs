@@ -45,6 +45,7 @@ fn manifest_pointer_roundtrip() {
             dynamic_writes: Vec::new(),
         }),
         entrypoints: None,
+        states: None,
         kotoba: None,
         provenance: None,
     };

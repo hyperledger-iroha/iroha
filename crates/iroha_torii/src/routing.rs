@@ -146,7 +146,8 @@ use iroha_sccp::{
     recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
     sccp_message_payload_kind_key, sccp_message_target_domain, sccp_payload_projection,
     summarize_sccp_message_transparent_open_verify_proof_from_artifact,
-    verify_burn_bundle_structure, verify_message_bundle_structure, verify_sccp_payload_structure,
+    verify_burn_bundle_structure, verify_burn_payload_structure, verify_message_bundle_structure,
+    verify_sccp_payload_structure,
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
@@ -7320,6 +7321,12 @@ pub fn publish_sccp_burn_bundle(
     height: u64,
     payload: BurnPayloadV1,
 ) -> Result<NexusSccpBurnProofV1> {
+    if !verify_burn_payload_structure(&payload) {
+        return Err(sccp_bad_request(
+            "SCCP burn payload failed structural verification",
+        ));
+    }
+
     let bridge_finality_proof = iroha_core::bridge::build_finality_proof(state, height)
         .map_err(map_bridge_finality_error)?;
     let commitment = SccpHubCommitmentV1 {
@@ -16272,6 +16279,7 @@ mod multisig_contract_call_tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         };
@@ -16308,6 +16316,7 @@ mod multisig_contract_call_tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         };
@@ -18288,6 +18297,7 @@ mod multisig_selector_tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         };

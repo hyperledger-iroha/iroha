@@ -571,6 +571,36 @@ iroha ledger account list filter '{"Atom": {"Id": {"Domain": {"Atom": {"Equals":
 iroha ledger asset list filter '{"Or": [{"Atom": {"Id": {"Definition": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}, {"Atom": {"Id": {"Account": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}]}'
 ```
 
+### Contract Developer Workflow
+
+Use `iroha contract dev` when a repository has an `iroha.contracts.toml`
+manifest. The manifest is the source of truth for contract sources, aliases,
+profiles, Kotodama tests, and smoke declarations.
+
+```bash
+iroha contract dev doctor --manifest iroha.contracts.toml --profile local
+iroha contract dev check --manifest iroha.contracts.toml --profile local
+iroha contract dev build --manifest iroha.contracts.toml --profile local
+iroha contract dev test --manifest iroha.contracts.toml --coverage
+iroha contract dev schema --manifest iroha.contracts.toml --out docs/interface.md
+```
+
+`build` emits compiled `.to` artifacts plus `.manifest.json`,
+`.interface.json`, `.source-map.json`, and `.budget.json` sidecars next to each
+configured artifact. `check --locked` rejects missing or stale generated files,
+which lets CI fail when checked-in interfaces or payload examples drift from the
+Kotodama source.
+
+`deploy`, `resume`, `call`, and `view` resolve contracts by manifest name and
+reuse the existing contract app/deploy/call machinery with typed payload
+validation from the compiled artifact when it is available.
+
+`doctor`, `call`, `view`, and `smoke` honor the selected profile's client
+config, signer, default gas, and fee asset settings. `doctor` probes the live
+Torii endpoint, block-height host surface, signature syscall availability, and
+manifest admission path; `smoke` executes the manifest's declared view/call
+cases against the resolved profile instead of acting as a parse-only check.
+
 ### Execute IVM transaction
 
 Use `--file` to specify a path to the IVM bytecode file (typically a `.to` file produced by compiling Kotodama `.ko` source):

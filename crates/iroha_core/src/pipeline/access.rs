@@ -2735,6 +2735,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: Some(hints_a.clone()),
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         }
@@ -2768,6 +2769,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: Some(hints_b.clone()),
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         }
@@ -2817,6 +2819,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: Some(hints),
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         }
@@ -2908,6 +2911,7 @@ mod tests {
                 dynamic_writes: Vec::new(),
             }),
             entrypoints: Some(entrypoints),
+            states: None,
             kotoba: None,
             provenance: None,
         }
@@ -2988,6 +2992,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: Some(entrypoints),
+            states: None,
             kotoba: None,
             provenance: None,
         }
@@ -3068,6 +3073,7 @@ mod tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: Some(entrypoints),
+            states: None,
             kotoba: None,
             provenance: None,
         }
