@@ -305,8 +305,9 @@ public final class ToriiOfflineNoteV2IssuerClient: OfflineNoteV2IssuerClient {
             nonce: nonce
         )
         let signer = try SigningKey.ed25519(privateKey: canonicalAuth.privateKey)
+        let signature = try signer.sign(message)
         var signed = unsigned
-        signed["signature_base64"] = try signer.sign(message).base64EncodedString()
+        signed["signature_base64"] = signature.base64EncodedString()
         return signed
     }
 
@@ -383,7 +384,16 @@ private func sortedJSONData(_ value: [String: Any]) throws -> Data {
     guard JSONSerialization.isValidJSONObject(value) else {
         throw ToriiOfflineNoteV2IssuerClientError.invalidJSON("request")
     }
-    return try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+    // `.withoutEscapingSlashes` is required for canonical-body interop:
+    // server reconstructs bytes via `norito::json::to_vec`, which never
+    // escapes `/`. Base64 fields (`offline_public_key`, attestation
+    // signatures, etc.) routinely contain `/`, so omitting this option
+    // makes the signed bytes diverge from the server's reconstruction
+    // and every refill / issue fails with 403 OFFLINE_V2_SIGNATURE_INVALID.
+    return try JSONSerialization.data(
+        withJSONObject: value,
+        options: [.sortedKeys, .withoutEscapingSlashes]
+    )
 }
 
 private func parseKeyCertificate(_ value: [String: Any]) throws -> OfflineNoteKeyCertificateV2 {

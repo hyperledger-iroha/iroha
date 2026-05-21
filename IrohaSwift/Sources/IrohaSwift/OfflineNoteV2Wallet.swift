@@ -879,10 +879,16 @@ public final class OfflineNoteV2Wallet {
             throw OfflineNoteV2WalletError.missingIssuerClient
         }
         let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)
+        // Pass the full `name#domain` assetDefinitionId to Torii — the
+        // internal `assetId` is the SDK's 2-part `name#account` form
+        // (domain stripped by walletAssetId), so deriving the definition
+        // id from it would drop the domain and the server would reject
+        // with `OFFLINE_V2_INVALID_ASSET` (400) because Iroha asset
+        // definition ids are always `name#domain`.
         let context = try await issuerClient.prepareLoad(
             chainId: chainId,
             accountId: accountId,
-            assetDefinitionId: assetDefinition(from: assetId),
+            assetDefinitionId: assetDefinitionId,
             amount: amount
         )
         try requireTrustedCertificate(context.keyCertificate, expectedAccountId: accountId)
@@ -902,7 +908,7 @@ public final class OfflineNoteV2Wallet {
         let request = OfflineNoteV2IssueRequest(
             chainId: chainId,
             accountId: accountId,
-            assetDefinitionId: assetDefinition(from: assetId),
+            assetDefinitionId: assetDefinitionId,
             assetId: assetId,
             amount: amount,
             loadContext: context,
@@ -968,7 +974,10 @@ public final class OfflineNoteV2Wallet {
             chainId: chainId,
             paymentRequestId: paymentRequestId,
             accountId: accountId,
-            assetDefinitionId: assetDefinition(from: assetId),
+            // Preserve the full `name#domain` assetDefinitionId for the
+            // peer / Torii — the SDK-internal `assetId` is the 2-part
+            // `name#account` form and would drop the domain otherwise.
+            assetDefinitionId: assetDefinitionId,
             assetId: assetId,
             amount: note.amount,
             keyCertificate: keyCertificate,
