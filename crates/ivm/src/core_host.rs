@@ -100,6 +100,16 @@ fn decode_json_blob_hex_literal(raw: &str) -> Result<Vec<u8>, VMError> {
     hex::decode(raw).map_err(|_| VMError::DecodeError)
 }
 
+fn decode_json_blob_payload(payload: &[u8]) -> Result<Json, VMError> {
+    if let Ok(json) = decode_from_bytes(payload) {
+        return Ok(json);
+    }
+
+    let raw = core::str::from_utf8(payload).map_err(|_| VMError::DecodeError)?;
+    let value = njson::parse_value(raw).map_err(|_| VMError::DecodeError)?;
+    Ok(Json::from(value))
+}
+
 #[allow(dead_code)]
 impl CachedProofEntry {
     fn is_applicable_for_slot(&self, slot: Option<u64>, manifest_root: Option<[u8; 32]>) -> bool {
@@ -1740,7 +1750,7 @@ impl IVMHost for CoreHost {
                 Ok(Self::json_gas(input_len, body.len()))
             }
             syscalls::SYSCALL_JSON_DECODE => {
-                // r10 = &NoritoBytes / &Json / raw-JSON Blob -> r10 = &Json
+                // r10 = &NoritoBytes / &Json / native-Norito Json Blob / raw-JSON Blob -> r10 = &Json
                 let r10_before = vm.register(10);
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!("[CoreHost] JSON_DECODE enter r10=0x{r10_before:08x}");
@@ -1762,12 +1772,7 @@ impl IVMHost for CoreHost {
                     PointerType::NoritoBytes | PointerType::Json => {
                         decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?
                     }
-                    PointerType::Blob => {
-                        let raw =
-                            core::str::from_utf8(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                        let value = njson::parse_value(raw).map_err(|_| VMError::DecodeError)?;
-                        Json::from(value)
-                    }
+                    PointerType::Blob => decode_json_blob_payload(tlv.payload)?,
                     _ => return Err(VMError::NoritoInvalid),
                 };
                 let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
@@ -3388,6 +3393,29 @@ mod tests {
         vm.set_register(10, 0);
         vm.run().expect("run");
         assert_eq!(vm.register(10), 0);
+    }
+
+    #[test]
+    fn json_decode_accepts_norito_json_blob_payload() {
+        let mut vm = IVM::new(u64::MAX);
+        let mut host = CoreHost::new();
+        let json = Json::from_str_norito(
+            r#"{"fastpq_binding":{"verified_effect_type":"aed_to_pkr_settlement"}}"#,
+        )
+        .expect("json");
+        let encoded = norito::to_bytes(&json).expect("encode json");
+        let ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::Blob, &encoded))
+            .expect("alloc blob");
+
+        vm.set_register(10, ptr);
+        host.syscall(syscalls::SYSCALL_JSON_DECODE, &mut vm)
+            .expect("decode native JSON blob");
+
+        let out = vm.memory.validate_tlv(vm.register(10)).expect("json tlv");
+        assert_eq!(out.type_id, PointerType::Json);
+        let decoded: Json = norito::decode_from_bytes(out.payload).expect("decode output json");
+        assert_eq!(decoded, json);
     }
 
     #[test]

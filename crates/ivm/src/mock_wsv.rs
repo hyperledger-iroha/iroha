@@ -94,6 +94,16 @@ fn decode_json_blob_hex_literal(raw: &str) -> Result<Vec<u8>, VMError> {
     hex::decode(raw).map_err(|_| VMError::DecodeError)
 }
 
+fn decode_json_blob_payload(payload: &[u8]) -> Result<Json, VMError> {
+    if let Ok(json) = decode_from_bytes(payload) {
+        return Ok(json);
+    }
+
+    let raw = core::str::from_utf8(payload).map_err(|_| VMError::DecodeError)?;
+    let value = njson::parse_value(raw).map_err(|_| VMError::DecodeError)?;
+    Ok(Json::from(value))
+}
+
 impl DataspaceAxtPolicy {
     fn to_model_entry(&self) -> AxtPolicyEntry {
         AxtPolicyEntry {
@@ -3841,13 +3851,8 @@ impl IVMHost for WsvHost {
                     PointerType::NoritoBytes | PointerType::Json => {
                         decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?
                     }
-                    // Devex: accept raw JSON bytes too (validated and canonicalised).
-                    PointerType::Blob => {
-                        let raw =
-                            core::str::from_utf8(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                        let value = njson::parse_value(raw).map_err(|_| VMError::DecodeError)?;
-                        iroha_primitives::json::Json::from(value)
-                    }
+                    // Devex: accept native Norito JSON and raw JSON blobs.
+                    PointerType::Blob => decode_json_blob_payload(tlv.payload)?,
                     _ => return Err(VMError::NoritoInvalid),
                 };
                 let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
@@ -7962,6 +7967,38 @@ mod tests_null_decode {
         assert_ne!(out_ptr, 0);
         let out = vm.memory.validate_tlv(out_ptr).expect("validate tlv");
         assert_eq!(out.type_id, PointerType::Json);
+    }
+
+    #[test]
+    fn json_decode_accepts_norito_json_blob_payload() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+        let json = Json::from_str_norito(
+            r#"{"fastpq_binding":{"verified_effect_type":"aed_to_pkr_settlement"}}"#,
+        )
+        .expect("json");
+        let encoded = norito::to_bytes(&json).expect("encode json");
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Blob, &encoded))
+            .expect("alloc tlv");
+
+        vm.set_register(10, ptr);
+        call_syscall(&mut vm, syscalls::SYSCALL_JSON_DECODE)
+            .expect("native JSON blob should be accepted");
+
+        let out = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("validate tlv");
+        assert_eq!(out.type_id, PointerType::Json);
+        let decoded: Json = norito::decode_from_bytes(out.payload).expect("decode output json");
+        assert_eq!(decoded, json);
     }
 
     #[test]

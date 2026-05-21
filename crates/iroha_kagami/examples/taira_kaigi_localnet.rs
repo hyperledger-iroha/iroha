@@ -705,7 +705,9 @@ mod tests {
         let seeded = manifest
             .into_builder()
             .next_transaction()
-            .append_instruction(Register::domain(Domain::new(bootstrap.linked_domain.clone())))
+            .append_instruction(Register::domain(Domain::new(
+                bootstrap.linked_domain.clone(),
+            )))
             .append_instruction(Register::account(Account::new(
                 bootstrap.account_id.clone(),
             )))
@@ -771,7 +773,9 @@ mod tests {
         let seeded = manifest
             .into_builder()
             .next_transaction()
-            .append_instruction(Register::domain(Domain::new(bootstrap.linked_domain.clone())))
+            .append_instruction(Register::domain(Domain::new(
+                bootstrap.linked_domain.clone(),
+            )))
             .append_instruction(Register::account(Account::new(
                 bootstrap.account_id.clone(),
             )))

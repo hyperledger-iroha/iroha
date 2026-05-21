@@ -2575,8 +2575,7 @@ mod tests {
         assert!(set.read_keys.contains("*"));
 
         let writes = vec!["state:*".to_owned()];
-        let set =
-            access_set_from_hint_keys(&[], &writes, &[], &[]).expect("state wildcard hint");
+        let set = access_set_from_hint_keys(&[], &writes, &[], &[]).expect("state wildcard hint");
         assert!(set.write_keys.contains("state:*"));
     }
 
