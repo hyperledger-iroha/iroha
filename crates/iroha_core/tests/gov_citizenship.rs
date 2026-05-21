@@ -16,7 +16,9 @@ use iroha_data_model::{
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
 };
-use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
+use iroha_executor_data_model::permission::governance::{
+    CanManageParliament, CanSubmitGovernanceBallot,
+};
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
@@ -151,6 +153,9 @@ fn citizenship_gate_blocks_and_allows_governance() {
     Grant::account_permission(ballot_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant ballot permission");
+    Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant parliament management permission");
 
     // Council persistence should fail without a citizen bond.
     let council_res = iroha_data_model::isi::governance::PersistCouncilForEpoch {
@@ -259,6 +264,9 @@ fn citizenship_records_persist_across_transactions() {
     let header_2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block_2 = state.block(header_2);
     let mut stx_2 = block_2.transaction();
+    Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx_2)
+        .expect("grant parliament management permission");
     iroha_data_model::isi::governance::PersistCouncilForEpoch {
         epoch: 1,
         members: vec![ALICE_ID.clone()],

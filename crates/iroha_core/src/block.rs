@@ -11407,7 +11407,7 @@ pub(crate) mod valid {
                 },
                 types::{BlobDigest, StorageTicketId},
             },
-            isi::{Log, error::Mismatch},
+            isi::{InstructionBox, Log, error::Mismatch},
             metadata::Metadata,
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
@@ -11426,7 +11426,10 @@ pub(crate) mod valid {
                 SoraStateMutationOperationV1,
             },
             sorafs::pin_registry::ManifestDigest,
-            transaction::{TransactionBuilder, error::TransactionLimitError},
+            transaction::{
+                Executable, IvmBytecode, IvmProved, TransactionBuilder,
+                error::TransactionLimitError,
+            },
         };
         use iroha_logger::Level;
         use iroha_primitives::time::TimeSource;
@@ -11801,10 +11804,16 @@ pub(crate) mod valid {
                 .expect("valid chain id");
             let (account_id, keypair) = gen_account_in("sccp");
             let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&sccp_transfer_payload());
+            let overlay = vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload_bytes),
+            )];
             let tx = TransactionBuilder::new(chain_id, account_id)
-                .with_instructions([iroha_data_model::isi::bridge::RecordSccpMessage::new(
-                    payload_bytes,
-                )])
+                .with_executable(Executable::IvmProved(IvmProved {
+                    bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+                    overlay: overlay.into(),
+                    events_commitment: Hash::new(b"events"),
+                    gas_policy_commitment: Hash::new(b"gas"),
+                }))
                 .sign(keypair.private_key());
             AcceptedTransaction::new_unchecked(Cow::Owned(tx))
         }

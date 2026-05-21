@@ -224,9 +224,7 @@ pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> R
     }
 
     let request = test_domain_register_request(domain, &client.account)?;
-    let transaction =
-        client.build_transaction_from_items([RegisterSnsName::new(request)], Metadata::default());
-    match client.submit_transaction(&transaction) {
+    match client.submit_blocking(RegisterSnsName::new(request)) {
         Ok(_) => {
             if wait_for_domain_registration_lease(client, domain)? {
                 Ok(())
@@ -277,6 +275,41 @@ pub fn ensure_domain_registration_lease_for_network(
     Ok(())
 }
 
+fn ensure_domain_registration_leases(client: &Client, domains: &BTreeSet<DomainId>) -> Result<()> {
+    let mut registrations = Vec::new();
+    for domain in domains {
+        if domain_registration_ready_to_client(client, domain)? {
+            continue;
+        }
+        let request = test_domain_register_request(domain, &client.account)?;
+        registrations.push(RegisterSnsName::new(request));
+    }
+
+    if !registrations.is_empty() {
+        match client.submit_all_blocking(registrations) {
+            Ok(_) => {}
+            Err(err) if is_duplicate_sns_selector_error(&err) => {
+                for domain in domains {
+                    ensure_domain_registration_lease(client, domain)?;
+                }
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    for domain in domains {
+        if !wait_for_domain_registration_lease(client, domain)? {
+            return Err(eyre!(
+                "domain `{domain}` SNS lease was not visible within {:?}",
+                TEST_SNS_LEASE_VISIBILITY_TIMEOUT
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Ensure SNS leases exist for every runtime `Register<Domain>` instruction in an executable.
 pub fn ensure_domain_registration_leases_for_executable(
     client: &Client,
@@ -294,31 +327,7 @@ pub fn ensure_domain_registration_leases_for_executable(
             domains.insert(register_domain.object.id.clone());
         }
     }
-    let mut registrations = Vec::new();
-    for domain in &domains {
-        if domain_registration_ready_to_client(client, domain)? {
-            continue;
-        }
-        let request = test_domain_register_request(domain, &client.account)?;
-        registrations.push(RegisterSnsName::new(request));
-    }
-    if !registrations.is_empty() {
-        let transaction = client.build_transaction_from_items(registrations, Metadata::default());
-        match client.submit_transaction(&transaction) {
-            Ok(_) => {}
-            Err(err) if is_duplicate_sns_selector_error(&err) => {}
-            Err(err) => return Err(err),
-        }
-    }
-    for domain in domains {
-        if !wait_for_domain_registration_lease(client, &domain)? {
-            return Err(eyre!(
-                "domain `{domain}` SNS lease was not visible within {:?}",
-                TEST_SNS_LEASE_VISIBILITY_TIMEOUT
-            ));
-        }
-    }
-    Ok(())
+    ensure_domain_registration_leases(client, &domains)
 }
 
 /// Ensure SNS leases exist on every peer for every runtime `Register<Domain>` instruction in an
@@ -339,8 +348,28 @@ pub fn ensure_domain_registration_leases_for_network_executable(
             domains.insert(register_domain.object.id.clone());
         }
     }
-    for domain in domains {
-        ensure_domain_registration_lease_for_network(network, &domain)?;
+
+    let mut peers = network.peers().iter().collect::<Vec<_>>();
+    peers.sort_by(|left, right| left.id().cmp(&right.id()));
+    let clients = peers
+        .into_iter()
+        .map(NetworkPeer::client)
+        .collect::<Vec<_>>();
+    let Some((primary, replicas)) = clients.split_first() else {
+        return Ok(());
+    };
+
+    ensure_domain_registration_leases(primary, &domains)?;
+    for client in replicas {
+        for domain in &domains {
+            if !wait_for_domain_registration_lease(client, domain)? {
+                return Err(eyre!(
+                    "domain `{domain}` SNS lease was not visible to peer `{}` within {:?}",
+                    client.torii_url,
+                    TEST_SNS_LEASE_VISIBILITY_TIMEOUT
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -9114,12 +9143,44 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_sns_selector_error_detects_nested_registration_conflict() {
+        let report = Err::<(), Report>(eyre!("selector `domain:bridge` is already registered"))
+            .wrap_err("SNS lease batch failed")
+            .unwrap_err();
+
+        assert!(is_duplicate_sns_selector_error(&report));
+    }
+
+    #[test]
+    fn duplicate_sns_selector_error_ignores_unrelated_selector_failures() {
+        let report = eyre!("selector `domain:bridge` failed policy validation");
+
+        assert!(!is_duplicate_sns_selector_error(&report));
+    }
+
+    #[test]
     fn torii_request_error_is_transient_detects_query_timeout() {
         let report = eyre!(
             "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: error sending request for url\n   1: operation timed out"
         );
 
         assert!(torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_detects_connection_reset_transport() {
+        let report = eyre!(
+            "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: error sending request for url\n   1: connection reset"
+        );
+
+        assert!(torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_requires_http_transport_context() {
+        let report = eyre!("connection reset while applying local validation");
+
+        assert!(!torii_request_error_is_transient(&report));
     }
 
     #[test]

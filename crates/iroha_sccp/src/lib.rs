@@ -1,4 +1,7 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+//! SCCP payload, proof, and counterparty submission helpers for Iroha bridge flows.
+//!
+//! The crate targets the Rust standard library. The historical `std` feature is
+//! kept as a compatibility alias for workspace consumers that still enable it.
 #![allow(missing_docs)]
 #![allow(missing_copy_implementations)]
 
@@ -10,19 +13,16 @@ use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
 };
+use fastpq_prover::{
+    OperationKind as FastpqOperationKind, Prover as FastpqProver,
+    PublicInputs as FastpqPublicInputs, StateTransition as FastpqStateTransition,
+    TransitionBatch as FastpqTransitionBatch,
+};
+use iroha_crypto::{Algorithm, EcdsaSecp256k1Sha256, KeyPair};
+use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+use norito::to_bytes;
 use sha2::{Digest, Sha256};
 use tiny_keccak::Hasher;
-#[cfg(feature = "std")]
-use {
-    fastpq_prover::{
-        OperationKind as FastpqOperationKind, Prover as FastpqProver,
-        PublicInputs as FastpqPublicInputs, StateTransition as FastpqStateTransition,
-        TransitionBatch as FastpqTransitionBatch,
-    },
-    iroha_crypto::{Algorithm, EcdsaSecp256k1Sha256, KeyPair},
-    iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
-    norito::to_bytes,
-};
 
 pub const SCCP_DOMAIN_SORA: u32 = 0;
 pub const SCCP_DOMAIN_ETH: u32 = 1;
@@ -385,10 +385,7 @@ mod serde_utils {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct BurnPayloadV1 {
     pub version: u8,
     pub source_domain: u32,
@@ -405,10 +402,7 @@ pub struct BurnPayloadV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct TokenAddPayloadV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -425,10 +419,7 @@ pub struct TokenAddPayloadV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct TokenControlPayloadV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -440,10 +431,7 @@ pub struct TokenControlPayloadV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct AssetRegisterPayloadV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -458,10 +446,7 @@ pub struct AssetRegisterPayloadV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct RouteActivatePayloadV1 {
     pub version: u8,
     pub source_domain: u32,
@@ -478,10 +463,7 @@ pub struct RouteActivatePayloadV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct TransferPayloadV1 {
     pub version: u8,
     pub source_domain: u32,
@@ -507,10 +489,7 @@ pub struct TransferPayloadV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpPayloadV1 {
     AssetRegister(AssetRegisterPayloadV1),
     RouteActivate(RouteActivatePayloadV1),
@@ -531,10 +510,7 @@ impl SccpPayloadV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpHubMessageKind {
     Burn,
     TokenAdd,
@@ -547,10 +523,7 @@ pub enum SccpHubMessageKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpHubCommitmentV1 {
     pub version: u8,
     pub kind: SccpHubMessageKind,
@@ -563,10 +536,7 @@ pub struct SccpHubCommitmentV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpMerkleStepV1 {
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub sibling_hash: H256,
@@ -575,20 +545,14 @@ pub struct SccpMerkleStepV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpMerkleProofV1 {
     pub steps: Vec<SccpMerkleStepV1>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum NexusConsensusPhaseV1 {
     Prepare = 1,
     Commit = 2,
@@ -597,10 +561,7 @@ pub enum NexusConsensusPhaseV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct NexusCommitQcV1 {
     pub version: u8,
     pub phase: NexusConsensusPhaseV1,
@@ -625,10 +586,7 @@ pub struct NexusCommitQcV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct NexusBridgeFinalityProofV1 {
     pub version: u8,
     pub chain_id: String,
@@ -645,10 +603,7 @@ pub struct NexusBridgeFinalityProofV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct NexusSccpBurnProofV1 {
     pub version: u8,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
@@ -662,10 +617,7 @@ pub struct NexusSccpBurnProofV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct NexusSccpMessageProofV1 {
     pub version: u8,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
@@ -757,10 +709,7 @@ pub struct SccpRuntimeProofEnvelopeV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpMessageTransparentPublicInputsV1 {
     pub version: u8,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
@@ -778,10 +727,7 @@ pub struct SccpMessageTransparentPublicInputsV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct NexusSccpMessageTransparentProofV1 {
     pub version: u8,
     pub local_domain: u32,
@@ -805,10 +751,7 @@ pub struct NexusSccpMessageTransparentProofV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpTransparentChainFamilyV1 {
     Evm,
     Solana,
@@ -819,10 +762,7 @@ pub enum SccpTransparentChainFamilyV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpMessageTransparentInnerProofV1 {
     pub version: u8,
     pub chain_family: SccpTransparentChainFamilyV1,
@@ -866,10 +806,7 @@ pub struct SccpOpenVerifyEnvelopeSummaryV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpNormalizedCodecValueV1 {
     TextUtf8 { value: String },
     EvmHex { bytes: [u8; 20] },
@@ -881,10 +818,7 @@ pub enum SccpNormalizedCodecValueV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpAssetRegisterProjectionV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -896,10 +830,7 @@ pub struct SccpAssetRegisterProjectionV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpRouteActivateProjectionV1 {
     pub version: u8,
     pub source_domain: u32,
@@ -911,10 +842,7 @@ pub struct SccpRouteActivateProjectionV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpTransferProjectionV1 {
     pub version: u8,
     pub source_domain: u32,
@@ -930,10 +858,7 @@ pub struct SccpTransferProjectionV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpTokenAddProjectionV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -946,10 +871,7 @@ pub struct SccpTokenAddProjectionV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpTokenControlProjectionV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -959,10 +881,7 @@ pub struct SccpTokenControlProjectionV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpPayloadProjectionV1 {
     AssetRegister(SccpAssetRegisterProjectionV1),
     RouteActivate(SccpRouteActivateProjectionV1),
@@ -974,10 +893,7 @@ pub enum SccpPayloadProjectionV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpSubmissionArgumentV1 {
     pub key: String,
     pub description: String,
@@ -985,10 +901,7 @@ pub struct SccpSubmissionArgumentV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpCounterpartySubmissionTemplateV1 {
     pub version: u8,
     pub encoding: String,
@@ -999,10 +912,7 @@ pub struct SccpCounterpartySubmissionTemplateV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpCounterpartyProofJobV1 {
     pub version: u8,
     pub chain_family: SccpTransparentChainFamilyV1,
@@ -1029,10 +939,7 @@ pub struct SccpCounterpartyProofJobV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpProofFinalityModelV1 {
     EthereumBeaconExecution,
     BscValidatorSet,
@@ -1044,10 +951,7 @@ pub enum SccpProofFinalityModelV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpProofVerifierTargetV1 {
     EvmContract,
     SolanaProgram,
@@ -1058,30 +962,21 @@ pub enum SccpProofVerifierTargetV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpProofSecurityModelV1 {
     RecursiveZk,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpAnchorGovernanceV1 {
     CryptographicProof,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpDestinationVerifierPlanV1 {
     #[default]
     Unknown,
@@ -1121,14 +1016,12 @@ impl core::str::FromStr for SccpDestinationVerifierPlanV1 {
     }
 }
 
-#[cfg(feature = "std")]
 impl norito::json::FastJsonWrite for SccpDestinationVerifierPlanV1 {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
     }
 }
 
-#[cfg(feature = "std")]
 impl norito::json::JsonDeserialize for SccpDestinationVerifierPlanV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1142,32 +1035,27 @@ impl norito::json::JsonDeserialize for SccpDestinationVerifierPlanV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpDestinationRolloutV1 {
     pub version: u8,
     pub verifier_plan: SccpDestinationVerifierPlanV1,
     pub immutable_verifier_ready: bool,
     pub anchors_ready: bool,
     #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "std", norito(default))]
+    #[norito(default)]
     pub verifier_identity: Option<String>,
     #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "std", norito(default))]
+    #[norito(default)]
     pub verifier_code_hash: Option<String>,
     #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "std", norito(default))]
+    #[norito(default)]
     pub anchor_id: Option<String>,
     #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "std", norito(default))]
+    #[norito(default)]
     pub blockers: Vec<String>,
 }
 
@@ -1186,16 +1074,11 @@ impl Default for SccpDestinationRolloutV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpDestinationBindingV1 {
     pub version: u8,
     pub key: String,
@@ -1203,16 +1086,17 @@ pub struct SccpDestinationBindingV1 {
     pub binding_hash: H256,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[norito(tag = "family", content = "detail", rename_all = "snake_case")]
 pub enum SccpVerifierBackendFamilyV1 {
     EvmSecp256k1Keccak,
@@ -1222,32 +1106,22 @@ pub enum SccpVerifierBackendFamilyV1 {
     SubstrateRuntime,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpVerifierBackendV1 {
     pub version: u8,
     pub family: SccpVerifierBackendFamilyV1,
     pub key: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpSubmissionArgumentValueV1 {
     pub key: String,
     pub encoding: String,
@@ -1255,16 +1129,11 @@ pub struct SccpSubmissionArgumentValueV1 {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpEvmWordPublicInputsV1 {
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub message_id: H256,
@@ -1280,16 +1149,11 @@ pub struct SccpEvmWordPublicInputsV1 {
     pub finality_block_hash: H256,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpEvmAttestationSignatureV1 {
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub signer_address: Vec<u8>,
@@ -1297,16 +1161,11 @@ pub struct SccpEvmAttestationSignatureV1 {
     pub signature_bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpEvmAttestationEnvelopeV1 {
     pub version: u8,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
@@ -1321,16 +1180,11 @@ pub struct SccpEvmAttestationEnvelopeV1 {
     pub signatures: Vec<SccpEvmAttestationSignatureV1>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpEvmContractSubmissionPayloadV1 {
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub proof_bytes: Vec<u8>,
@@ -1343,16 +1197,11 @@ pub struct SccpEvmContractSubmissionPayloadV1 {
     pub attestation: SccpEvmAttestationEnvelopeV1,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpTronContractSubmissionPayloadV1 {
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub proof_bytes: Vec<u8>,
@@ -1361,16 +1210,11 @@ pub struct SccpTronContractSubmissionPayloadV1 {
     pub statement_hash: H256,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[allow(clippy::struct_field_names)]
 pub struct SccpSolanaProgramSubmissionPayloadV1 {
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
@@ -1381,16 +1225,11 @@ pub struct SccpSolanaProgramSubmissionPayloadV1 {
     pub bundle_bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[allow(clippy::struct_field_names)]
 pub struct SccpTonInternalMessageSubmissionPayloadV1 {
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
@@ -1401,16 +1240,11 @@ pub struct SccpTonInternalMessageSubmissionPayloadV1 {
     pub bundle_cell: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[allow(clippy::struct_field_names)]
 pub struct SccpSubstrateRuntimeSubmissionPayloadV1 {
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
@@ -1421,16 +1255,11 @@ pub struct SccpSubstrateRuntimeSubmissionPayloadV1 {
     pub bundle_bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[norito(tag = "platform", content = "payload", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum SccpPlatformSubmissionPayloadV1 {
@@ -1441,16 +1270,11 @@ pub enum SccpPlatformSubmissionPayloadV1 {
     SubstrateRuntimeCall(SccpSubstrateRuntimeSubmissionPayloadV1),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpCounterpartySubmissionPackageV1 {
     pub version: u8,
     pub proof_family: String,
@@ -1466,10 +1290,7 @@ pub struct SccpCounterpartySubmissionPackageV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "std",
-    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
-)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpProofManifestV1 {
     pub version: u8,
     pub local_domain: u32,
@@ -1491,11 +1312,11 @@ pub struct SccpProofManifestV1 {
     pub required_public_inputs: Vec<String>,
     pub message_payload_kinds: Vec<String>,
     #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "std", norito(default))]
+    #[norito(default)]
     pub destination_rollout: SccpDestinationRolloutV1,
     pub production_ready: bool,
     #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "std", norito(default))]
+    #[norito(default)]
     pub disabled_reason: Option<String>,
     pub submission_template: SccpCounterpartySubmissionTemplateV1,
 }
@@ -1697,19 +1518,16 @@ pub fn sccp_manifest_seed_for_domain(domain: u32) -> Option<String> {
     ))
 }
 
-#[cfg(feature = "std")]
 /// Compute the bridge proof manifest hash used by SCCP proof submissions.
 pub fn sccp_bridge_manifest_hash_for_seed(seed: &str) -> H256 {
     <[u8; 32]>::from(iroha_crypto::Hash::new(seed.as_bytes()))
 }
 
-#[cfg(feature = "std")]
 /// Return the reserved manifest hash for SCCP burn bundle bridge proofs.
 pub fn sccp_burn_bridge_manifest_hash_v1() -> H256 {
     sccp_bridge_manifest_hash_for_seed(SCCP_BURN_BRIDGE_PROOF_MANIFEST_SEED_V1)
 }
 
-#[cfg(feature = "std")]
 /// Return all manifest hashes reserved for typed SCCP bridge proof submissions.
 pub fn sccp_reserved_bridge_manifest_hashes_v1() -> Vec<H256> {
     let mut hashes = vec![sccp_burn_bridge_manifest_hash_v1()];
@@ -2240,24 +2058,34 @@ pub fn sccp_payload_projection(payload: &SccpPayloadV1) -> Option<SccpPayloadPro
     }
 }
 
-#[cfg(feature = "std")]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_signer(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
 ) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_counterparty_proof_job_from_bundle_internal(bundle, Some(signer))
+    build_sccp_counterparty_proof_job_from_bundle_internal(bundle, None, Some(signer))
 }
 
-#[cfg(feature = "std")]
+pub fn build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer(
+    bundle: &NexusSccpMessageProofV1,
+    destination_binding: &SccpDestinationBindingV1,
+    signer: &KeyPair,
+) -> Option<SccpCounterpartyProofJobV1> {
+    build_sccp_counterparty_proof_job_from_bundle_internal(
+        bundle,
+        Some(destination_binding),
+        Some(signer),
+    )
+}
+
 pub fn build_sccp_counterparty_proof_job_from_bundle(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_counterparty_proof_job_from_bundle_internal(bundle, None)
+    build_sccp_counterparty_proof_job_from_bundle_internal(bundle, None, None)
 }
 
-#[cfg(feature = "std")]
 fn build_sccp_counterparty_proof_job_from_bundle_internal(
     bundle: &NexusSccpMessageProofV1,
+    platform_destination_binding: Option<&SccpDestinationBindingV1>,
     signer: Option<&KeyPair>,
 ) -> Option<SccpCounterpartyProofJobV1> {
     if !verify_message_bundle_structure(bundle) {
@@ -2277,60 +2105,9 @@ fn build_sccp_counterparty_proof_job_from_bundle_internal(
         bundle,
         &manifest,
         &proof_bytes,
+        platform_destination_binding,
         signer,
     )?;
-
-    Some(SccpCounterpartyProofJobV1 {
-        version: 1,
-        chain_family,
-        chain: chain.to_owned(),
-        local_domain: manifest.local_domain,
-        counterparty_domain,
-        security_model: manifest.security_model,
-        anchor_governance: manifest.anchor_governance,
-        destination_binding: manifest.destination_binding.clone(),
-        proof_family: manifest.proof_family,
-        verifier_backend: manifest.verifier_backend,
-        message_backend: manifest.message_backend,
-        registry_backend: manifest.registry_backend,
-        manifest_seed: manifest.manifest_seed,
-        finality_model: manifest.finality_model,
-        verifier_target: manifest.verifier_target,
-        public_inputs,
-        payload_kind: sccp_message_payload_kind_key(&bundle.payload).to_owned(),
-        payload_projection,
-        submission_template: manifest.submission_template,
-        submission_package,
-        bundle: bundle.clone(),
-    })
-}
-
-#[cfg(not(feature = "std"))]
-pub fn build_sccp_counterparty_proof_job_from_bundle(
-    bundle: &NexusSccpMessageProofV1,
-) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_counterparty_proof_job_from_bundle_internal(bundle)
-}
-
-#[cfg(not(feature = "std"))]
-fn build_sccp_counterparty_proof_job_from_bundle_internal(
-    bundle: &NexusSccpMessageProofV1,
-) -> Option<SccpCounterpartyProofJobV1> {
-    if !verify_message_bundle_structure(bundle) {
-        return None;
-    }
-    let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
-    let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
-    if !sccp_manifest_is_production_ready(&manifest) {
-        return None;
-    }
-    let chain_family = sccp_transparent_chain_family_for_domain(counterparty_domain)?;
-    let chain = sccp_chain_key_for_domain(counterparty_domain)?;
-    let public_inputs = sccp_message_transparent_public_inputs(bundle)?;
-    let payload_projection = sccp_payload_projection(&bundle.payload)?;
-    let proof_bytes = build_sccp_message_transparent_fastpq_proof_bytes(bundle, &manifest)?;
-    let submission_package =
-        build_sccp_counterparty_submission_package(bundle, &manifest, &proof_bytes)?;
 
     Some(SccpCounterpartyProofJobV1 {
         version: 1,
@@ -2791,19 +2568,16 @@ fn sccp_evm_attestation_digest(
     keccak256_bytes(&payload)
 }
 
-#[cfg(feature = "std")]
 fn sccp_evm_signer_public_key_bytes(signer: &KeyPair) -> Option<Vec<u8>> {
     (signer.algorithm() == Algorithm::Secp256k1).then(|| signer.public_key().to_bytes().1.to_vec())
 }
 
-#[cfg(feature = "std")]
 fn sccp_evm_signer_address(signer: &KeyPair) -> Option<[u8; 20]> {
     let public_key =
         EcdsaSecp256k1Sha256::parse_public_key(&sccp_evm_signer_public_key_bytes(signer)?).ok()?;
     Some(EcdsaSecp256k1Sha256::evm_address(&public_key))
 }
 
-#[cfg(feature = "std")]
 fn sccp_evm_sign_digest(signer: &KeyPair, digest: &H256) -> Option<[u8; 65]> {
     if signer.algorithm() != Algorithm::Secp256k1 {
         return None;
@@ -2813,7 +2587,6 @@ fn sccp_evm_sign_digest(signer: &KeyPair, digest: &H256) -> Option<[u8; 65]> {
     EcdsaSecp256k1Sha256::sign_prehash_recoverable(digest, &secret_key).ok()
 }
 
-#[cfg(feature = "std")]
 fn build_sccp_evm_contract_submission_payload(
     manifest: &SccpProofManifestV1,
     native_proof_bytes: &[u8],
@@ -2856,14 +2629,21 @@ fn build_sccp_platform_submission_payload(
     public_inputs: &SccpMessageTransparentPublicInputsV1,
     bundle: &NexusSccpMessageProofV1,
     destination_binding: Option<&SccpDestinationBindingV1>,
-    #[cfg(feature = "std")] signer: Option<&KeyPair>,
+    signer: Option<&KeyPair>,
 ) -> Option<SccpPlatformSubmissionPayloadV1> {
+    if destination_binding.is_some()
+        && !matches!(
+            manifest.verifier_target,
+            SccpProofVerifierTargetV1::EvmContract
+        )
+    {
+        return None;
+    }
     let canonical_public_inputs =
         canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
     let canonical_bundle = canonical_nexus_sccp_message_bundle_bytes(bundle);
     let inner = build_sccp_message_transparent_inner_proof(bundle, manifest)?;
     Some(match manifest.verifier_target {
-        #[cfg(feature = "std")]
         SccpProofVerifierTargetV1::EvmContract => SccpPlatformSubmissionPayloadV1::EvmContractCall(
             build_sccp_evm_contract_submission_payload(
                 manifest,
@@ -2874,8 +2654,6 @@ fn build_sccp_platform_submission_payload(
                 signer?,
             )?,
         ),
-        #[cfg(not(feature = "std"))]
-        SccpProofVerifierTargetV1::EvmContract => return None,
         SccpProofVerifierTargetV1::SolanaProgram => {
             SccpPlatformSubmissionPayloadV1::SolanaProgramInstruction(
                 SccpSolanaProgramSubmissionPayloadV1 {
@@ -3000,17 +2778,21 @@ fn sccp_submission_argument_values(
         .collect::<Option<Vec<_>>>()
 }
 
-#[cfg(feature = "std")]
 pub fn build_sccp_counterparty_submission_package_with_signer(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
     proof_bytes: &[u8],
     signer: &KeyPair,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
-    build_sccp_counterparty_submission_package_internal(bundle, manifest, proof_bytes, Some(signer))
+    build_sccp_counterparty_submission_package_internal(
+        bundle,
+        manifest,
+        proof_bytes,
+        None,
+        Some(signer),
+    )
 }
 
-#[cfg(feature = "std")]
 pub fn build_sccp_counterparty_submission_package_with_destination_binding_and_signer(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -3018,47 +2800,28 @@ pub fn build_sccp_counterparty_submission_package_with_destination_binding_and_s
     destination_binding: &SccpDestinationBindingV1,
     signer: &KeyPair,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
-    if !sccp_manifest_is_production_ready(manifest) {
-        return None;
-    }
-    let public_inputs = sccp_message_transparent_public_inputs(bundle)?;
-    let platform_payload = build_sccp_platform_submission_payload(
+    build_sccp_counterparty_submission_package_internal(
+        bundle,
         manifest,
         proof_bytes,
-        &public_inputs,
-        bundle,
         Some(destination_binding),
         Some(signer),
-    )?;
-    let arguments =
-        sccp_submission_argument_values(&manifest.submission_template, &platform_payload)?;
-    Some(SccpCounterpartySubmissionPackageV1 {
-        version: 1,
-        proof_family: manifest.proof_family.clone(),
-        verifier_backend: manifest.verifier_backend.clone(),
-        envelope_encoding: sccp_submission_envelope_encoding(&manifest.submission_template),
-        submission_kind: manifest.submission_template.submission_kind.clone(),
-        verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
-        platform_payload,
-        envelope_bytes: encode_sccp_submission_envelope(&manifest.submission_template, &arguments),
-        arguments,
-    })
+    )
 }
 
-#[cfg(feature = "std")]
 pub fn build_sccp_counterparty_submission_package(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
     proof_bytes: &[u8],
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
-    build_sccp_counterparty_submission_package_internal(bundle, manifest, proof_bytes, None)
+    build_sccp_counterparty_submission_package_internal(bundle, manifest, proof_bytes, None, None)
 }
 
-#[cfg(feature = "std")]
 fn build_sccp_counterparty_submission_package_internal(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
     proof_bytes: &[u8],
+    destination_binding: Option<&SccpDestinationBindingV1>,
     signer: Option<&KeyPair>,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
     if !sccp_manifest_is_production_ready(manifest) {
@@ -3070,49 +2833,8 @@ fn build_sccp_counterparty_submission_package_internal(
         proof_bytes,
         &public_inputs,
         bundle,
-        None,
+        destination_binding,
         signer,
-    )?;
-    let arguments =
-        sccp_submission_argument_values(&manifest.submission_template, &platform_payload)?;
-    Some(SccpCounterpartySubmissionPackageV1 {
-        version: 1,
-        proof_family: manifest.proof_family.clone(),
-        verifier_backend: manifest.verifier_backend.clone(),
-        envelope_encoding: sccp_submission_envelope_encoding(&manifest.submission_template),
-        submission_kind: manifest.submission_template.submission_kind.clone(),
-        verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
-        platform_payload,
-        envelope_bytes: encode_sccp_submission_envelope(&manifest.submission_template, &arguments),
-        arguments,
-    })
-}
-
-#[cfg(not(feature = "std"))]
-pub fn build_sccp_counterparty_submission_package(
-    bundle: &NexusSccpMessageProofV1,
-    manifest: &SccpProofManifestV1,
-    proof_bytes: &[u8],
-) -> Option<SccpCounterpartySubmissionPackageV1> {
-    build_sccp_counterparty_submission_package_internal(bundle, manifest, proof_bytes)
-}
-
-#[cfg(not(feature = "std"))]
-fn build_sccp_counterparty_submission_package_internal(
-    bundle: &NexusSccpMessageProofV1,
-    manifest: &SccpProofManifestV1,
-    proof_bytes: &[u8],
-) -> Option<SccpCounterpartySubmissionPackageV1> {
-    if !sccp_manifest_is_production_ready(manifest) {
-        return None;
-    }
-    let public_inputs = sccp_message_transparent_public_inputs(bundle)?;
-    let platform_payload = build_sccp_platform_submission_payload(
-        manifest,
-        proof_bytes,
-        &public_inputs,
-        bundle,
-        None,
     )?;
     let arguments =
         sccp_submission_argument_values(&manifest.submission_template, &platform_payload)?;
@@ -3260,7 +2982,6 @@ pub fn build_sccp_message_transparent_inner_proof_from_artifact(
     build_sccp_message_transparent_inner_proof_from_bundle(&artifact.bundle)
 }
 
-#[cfg(feature = "std")]
 fn sccp_message_transparent_fastpq_public_inputs(
     inner: &SccpMessageTransparentInnerProofV1,
 ) -> FastpqPublicInputs {
@@ -3280,7 +3001,6 @@ fn sccp_message_transparent_fastpq_public_inputs(
     }
 }
 
-#[cfg(feature = "std")]
 fn sccp_message_transparent_open_verify_schema_descriptor(
     manifest: &SccpProofManifestV1,
 ) -> Vec<u8> {
@@ -3323,7 +3043,6 @@ fn sccp_message_transparent_open_verify_schema_descriptor(
     descriptor
 }
 
-#[cfg(feature = "std")]
 fn canonical_sccp_message_transparent_fastpq_verifier_bytes(
     manifest: &SccpProofManifestV1,
 ) -> Option<Vec<u8>> {
@@ -3365,7 +3084,6 @@ fn canonical_sccp_message_transparent_fastpq_verifier_bytes(
     Some(verifier)
 }
 
-#[cfg(feature = "std")]
 fn sccp_message_transparent_fastpq_verifier_commitment(
     manifest: &SccpProofManifestV1,
 ) -> Option<H256> {
@@ -3376,7 +3094,6 @@ fn sccp_message_transparent_fastpq_verifier_commitment(
     Some(hasher.finalize().into())
 }
 
-#[cfg(feature = "std")]
 fn sccp_message_transparent_public_input_columns(
     public_inputs: &SccpMessageTransparentPublicInputsV1,
 ) -> Vec<Vec<[u8; 32]>> {
@@ -3394,7 +3111,6 @@ fn sccp_message_transparent_public_input_columns(
     ]
 }
 
-#[cfg(feature = "std")]
 fn sccp_open_verify_backend_key(backend: BackendTag) -> &'static str {
     match backend {
         BackendTag::Halo2IpaPasta => "halo2-ipa-pasta",
@@ -3405,12 +3121,10 @@ fn sccp_open_verify_backend_key(backend: BackendTag) -> &'static str {
     }
 }
 
-#[cfg(feature = "std")]
 fn saturating_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
-#[cfg(feature = "std")]
 fn decode_sccp_message_transparent_open_verify_envelope(
     proof_bytes: &[u8],
 ) -> Option<(OpenVerifyEnvelope, StarkFriOpenProofV1)> {
@@ -3425,7 +3139,6 @@ fn decode_sccp_message_transparent_open_verify_envelope(
     Some((env, open))
 }
 
-#[cfg(feature = "std")]
 fn decode_sccp_message_transparent_open_verify_proof(
     proof_bytes: &[u8],
 ) -> Option<(
@@ -3438,7 +3151,6 @@ fn decode_sccp_message_transparent_open_verify_proof(
     Some((env, open, proof))
 }
 
-#[cfg(feature = "std")]
 pub fn summarize_sccp_message_transparent_open_verify_proof(
     proof_bytes: &[u8],
 ) -> Option<SccpOpenVerifyEnvelopeSummaryV1> {
@@ -3462,14 +3174,12 @@ pub fn summarize_sccp_message_transparent_open_verify_proof(
     })
 }
 
-#[cfg(feature = "std")]
 pub fn summarize_sccp_message_transparent_open_verify_proof_from_artifact(
     artifact: &NexusSccpMessageTransparentProofV1,
 ) -> Option<SccpOpenVerifyEnvelopeSummaryV1> {
     summarize_sccp_message_transparent_open_verify_proof(&artifact.proof_bytes)
 }
 
-#[cfg(feature = "std")]
 pub fn build_sccp_message_transparent_open_verify_summary_from_bundle(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<SccpOpenVerifyEnvelopeSummaryV1> {
@@ -3482,7 +3192,6 @@ pub fn build_sccp_message_transparent_open_verify_summary_from_bundle(
     summarize_sccp_message_transparent_open_verify_proof(&proof_bytes)
 }
 
-#[cfg(feature = "std")]
 fn build_sccp_message_transparent_fastpq_batch(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -3519,7 +3228,6 @@ fn build_sccp_message_transparent_fastpq_batch(
     Some(batch)
 }
 
-#[cfg(feature = "std")]
 fn build_sccp_message_transparent_fastpq_raw_proof_bytes(
     batch: &FastpqTransitionBatch,
 ) -> Option<Vec<u8>> {
@@ -3530,7 +3238,6 @@ fn build_sccp_message_transparent_fastpq_raw_proof_bytes(
     to_bytes(&proof).ok()
 }
 
-#[cfg(feature = "std")]
 fn build_sccp_message_transparent_fastpq_proof_bytes(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -3554,35 +3261,34 @@ fn build_sccp_message_transparent_fastpq_proof_bytes(
     to_bytes(&env).ok()
 }
 
-#[cfg(feature = "std")]
 pub fn build_nexus_sccp_message_transparent_proof_with_signer(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
-    build_nexus_sccp_message_transparent_proof_internal(bundle, Some(signer))
+    build_nexus_sccp_message_transparent_proof_internal(bundle, None, Some(signer))
+}
+
+pub fn build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer(
+    bundle: &NexusSccpMessageProofV1,
+    destination_binding: &SccpDestinationBindingV1,
+    signer: &KeyPair,
+) -> Option<NexusSccpMessageTransparentProofV1> {
+    build_nexus_sccp_message_transparent_proof_internal(
+        bundle,
+        Some(destination_binding),
+        Some(signer),
+    )
 }
 
 pub fn build_nexus_sccp_message_transparent_proof(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
-    #[cfg(not(feature = "std"))]
-    {
-        let _ = bundle;
-        return None;
-    }
-
-    #[cfg(feature = "std")]
-    {
-        return build_nexus_sccp_message_transparent_proof_internal(bundle, None);
-    }
-
-    #[allow(unreachable_code)]
-    None
+    build_nexus_sccp_message_transparent_proof_internal(bundle, None, None)
 }
 
-#[cfg(feature = "std")]
 fn build_nexus_sccp_message_transparent_proof_internal(
     bundle: &NexusSccpMessageProofV1,
+    platform_destination_binding: Option<&SccpDestinationBindingV1>,
     signer: Option<&KeyPair>,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
     let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
@@ -3596,6 +3302,7 @@ fn build_nexus_sccp_message_transparent_proof_internal(
         bundle,
         &manifest,
         &proof_bytes,
+        platform_destination_binding,
         signer,
     )?;
     Some(NexusSccpMessageTransparentProofV1 {
@@ -3633,38 +3340,25 @@ fn verify_sccp_message_transparent_inner_proof_bytes(
         return false;
     }
 
-    #[cfg(feature = "std")]
+    let Some(batch) = build_sccp_message_transparent_fastpq_batch(bundle, manifest) else {
+        return false;
+    };
+    let Some((env, open, proof)) = decode_sccp_message_transparent_open_verify_proof(proof_bytes)
+    else {
+        return false;
+    };
+    if env.circuit_id != SCCP_TRANSPARENT_OPEN_VERIFY_CIRCUIT_ID_V1
+        || env.vk_hash
+            != sccp_message_transparent_fastpq_verifier_commitment(manifest).unwrap_or([0u8; 32])
+        || env.public_inputs != sccp_message_transparent_open_verify_schema_descriptor(manifest)
+        || !env.aux.is_empty()
+        || open.public_inputs != sccp_message_transparent_public_input_columns(public_inputs)
     {
-        let Some(batch) = build_sccp_message_transparent_fastpq_batch(bundle, manifest) else {
-            return false;
-        };
-        let Some((env, open, proof)) =
-            decode_sccp_message_transparent_open_verify_proof(proof_bytes)
-        else {
-            return false;
-        };
-        if env.circuit_id != SCCP_TRANSPARENT_OPEN_VERIFY_CIRCUIT_ID_V1
-            || env.vk_hash
-                != sccp_message_transparent_fastpq_verifier_commitment(manifest)
-                    .unwrap_or([0u8; 32])
-            || env.public_inputs != sccp_message_transparent_open_verify_schema_descriptor(manifest)
-            || !env.aux.is_empty()
-            || open.public_inputs != sccp_message_transparent_public_input_columns(public_inputs)
-        {
-            return false;
-        }
-        fastpq_prover::verify(&batch, &proof).is_ok()
+        return false;
     }
-
-    #[cfg(not(feature = "std"))]
-    {
-        let _ = proof_bytes;
-        let _ = expected;
-        false
-    }
+    fastpq_prover::verify(&batch, &proof).is_ok()
 }
 
-#[cfg(feature = "std")]
 fn verify_sccp_evm_attestation_signatures(
     signatures: &[SccpEvmAttestationSignatureV1],
     digest: &H256,
@@ -3696,7 +3390,6 @@ fn verify_sccp_evm_attestation_signatures(
     true
 }
 
-#[cfg(feature = "std")]
 fn verify_sccp_evm_submission_package(
     manifest: &SccpProofManifestV1,
     proof: &NexusSccpMessageTransparentProofV1,
@@ -3783,14 +3476,6 @@ fn verify_sccp_evm_submission_package(
     arguments == proof.submission_package.arguments
         && encode_sccp_submission_envelope(&manifest.submission_template, &arguments)
             == proof.submission_package.envelope_bytes
-}
-
-#[cfg(not(feature = "std"))]
-fn verify_sccp_evm_submission_package(
-    _manifest: &SccpProofManifestV1,
-    _proof: &NexusSccpMessageTransparentProofV1,
-) -> bool {
-    false
 }
 
 pub fn verify_nexus_sccp_message_transparent_proof_structure(
@@ -4349,6 +4034,19 @@ pub fn decode_canonical_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<SccpP
     cursor.is_finished().then_some(payload)
 }
 
+fn h256_is_nonzero(value: &H256) -> bool {
+    value.iter().any(|byte| *byte != 0)
+}
+
+fn fixed_ascii_field_is_non_empty(value: &[u8; 32]) -> bool {
+    value
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(value.as_slice(), |end| &value[..end])
+        .iter()
+        .any(|byte| *byte != 0)
+}
+
 pub fn verify_sccp_payload_structure(payload: &SccpPayloadV1) -> bool {
     let target_domain = sccp_message_target_domain(payload);
     if !is_supported_domain(target_domain) {
@@ -4391,9 +4089,17 @@ pub fn verify_sccp_payload_structure(payload: &SccpPayloadV1) -> bool {
                 && validate_sccp_codec_bytes(payload.recipient_codec, &payload.recipient)
                 && validate_sccp_codec_bytes(payload.route_id_codec, &payload.route_id)
         }
-        SccpPayloadV1::TokenAdd(payload) => payload.version == 1,
+        SccpPayloadV1::TokenAdd(payload) => {
+            payload.version == 1
+                && is_supported_domain(payload.target_domain)
+                && h256_is_nonzero(&payload.sora_asset_id)
+                && fixed_ascii_field_is_non_empty(&payload.name)
+                && fixed_ascii_field_is_non_empty(&payload.symbol)
+        }
         SccpPayloadV1::TokenPause(payload) | SccpPayloadV1::TokenResume(payload) => {
             payload.version == 1
+                && is_supported_domain(payload.target_domain)
+                && h256_is_nonzero(&payload.sora_asset_id)
         }
     }
 }
@@ -4833,56 +4539,24 @@ fn push_runtime_finality(out: &mut Vec<u8>, finality: &SccpRuntimeFinalityProofV
     push_u16(out, finality.signature_count);
 }
 
-#[cfg(feature = "std")]
 pub fn decode_nexus_bridge_finality_proof(
     proof_bytes: &[u8],
 ) -> Option<NexusBridgeFinalityProofV1> {
     norito::decode_from_bytes(proof_bytes).ok()
 }
 
-#[cfg(not(feature = "std"))]
-pub fn decode_nexus_bridge_finality_proof(
-    proof_bytes: &[u8],
-) -> Option<NexusBridgeFinalityProofV1> {
-    let _ = proof_bytes;
-    None
-}
-
-#[cfg(feature = "std")]
 pub fn decode_nexus_sccp_burn_proof(proof_bytes: &[u8]) -> Option<NexusSccpBurnProofV1> {
     norito::decode_from_bytes(proof_bytes).ok()
 }
 
-#[cfg(not(feature = "std"))]
-pub fn decode_nexus_sccp_burn_proof(proof_bytes: &[u8]) -> Option<NexusSccpBurnProofV1> {
-    let _ = proof_bytes;
-    None
-}
-
-#[cfg(feature = "std")]
 pub fn decode_nexus_sccp_message_proof(proof_bytes: &[u8]) -> Option<NexusSccpMessageProofV1> {
     norito::decode_from_bytes(proof_bytes).ok()
 }
 
-#[cfg(not(feature = "std"))]
-pub fn decode_nexus_sccp_message_proof(proof_bytes: &[u8]) -> Option<NexusSccpMessageProofV1> {
-    let _ = proof_bytes;
-    None
-}
-
-#[cfg(feature = "std")]
 pub fn decode_nexus_sccp_message_transparent_proof(
     proof_bytes: &[u8],
 ) -> Option<NexusSccpMessageTransparentProofV1> {
     norito::decode_from_bytes(proof_bytes).ok()
-}
-
-#[cfg(not(feature = "std"))]
-pub fn decode_nexus_sccp_message_transparent_proof(
-    proof_bytes: &[u8],
-) -> Option<NexusSccpMessageTransparentProofV1> {
-    let _ = proof_bytes;
-    None
 }
 
 pub fn recover_nexus_sccp_message_transparent_proof(
@@ -4982,6 +4656,9 @@ pub fn verify_burn_payload_structure(payload: &BurnPayloadV1) -> bool {
         && is_supported_domain(payload.dest_domain)
         && payload.dest_domain != payload.source_domain
         && !(payload.dest_domain == SCCP_DOMAIN_SORA && payload.source_domain == SCCP_DOMAIN_SORA)
+        && h256_is_nonzero(&payload.sora_asset_id)
+        && payload.amount != 0
+        && h256_is_nonzero(&payload.recipient)
 }
 
 pub fn verify_message_bundle_structure(bundle: &NexusSccpMessageProofV1) -> bool {
@@ -5147,6 +4824,13 @@ mod tests {
         }
     }
 
+    fn assert_rejects_message_payload(payload: SccpPayloadV1) {
+        assert!(!verify_sccp_payload_structure(&payload), "{payload:?}");
+        assert!(!verify_message_bundle_structure(&sample_message_bundle(
+            payload
+        )));
+    }
+
     fn sample_burn_bundle(nonce: u64) -> NexusSccpBurnProofV1 {
         let payload = BurnPayloadV1 {
             version: 1,
@@ -5213,7 +4897,6 @@ mod tests {
         }))
     }
 
-    #[cfg(feature = "std")]
     fn sample_valid_evm_submission_proof(
         nonce: u64,
     ) -> (SccpProofManifestV1, NexusSccpMessageTransparentProofV1) {
@@ -5261,7 +4944,7 @@ mod tests {
             counterparty_domain: manifest.counterparty_domain,
             security_model: manifest.security_model,
             anchor_governance: manifest.anchor_governance,
-            destination_binding,
+            destination_binding: manifest.destination_binding.clone(),
             proof_family: manifest.proof_family.clone(),
             verifier_backend: manifest.verifier_backend.clone(),
             message_backend: manifest.message_backend.clone(),
@@ -5278,7 +4961,6 @@ mod tests {
         (manifest, proof)
     }
 
-    #[cfg(feature = "std")]
     fn evm_payload_from_proof(
         proof: &NexusSccpMessageTransparentProofV1,
     ) -> SccpEvmContractSubmissionPayloadV1 {
@@ -5290,7 +4972,6 @@ mod tests {
         payload.clone()
     }
 
-    #[cfg(feature = "std")]
     fn replace_evm_payload(
         proof: &mut NexusSccpMessageTransparentProofV1,
         manifest: &SccpProofManifestV1,
@@ -5461,6 +5142,66 @@ mod tests {
     }
 
     #[test]
+    fn token_payload_structure_rejects_empty_required_fields() {
+        let add = TokenAddPayloadV1 {
+            version: 1,
+            target_domain: SCCP_DOMAIN_SORA,
+            nonce: 1,
+            sora_asset_id: [0x11; 32],
+            decimals: 18,
+            name: [b'N'; 32],
+            symbol: [b'X'; 32],
+        };
+        assert!(verify_sccp_payload_structure(&SccpPayloadV1::TokenAdd(add)));
+
+        let mut payload = add;
+        payload.target_domain = 0xFFFF_FFFE;
+        assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenAdd(
+            payload
+        )));
+
+        let mut payload = add;
+        payload.sora_asset_id = [0; 32];
+        assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenAdd(
+            payload
+        )));
+
+        let mut payload = add;
+        payload.name = [0; 32];
+        assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenAdd(
+            payload
+        )));
+
+        let mut payload = add;
+        payload.symbol = [0; 32];
+        assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenAdd(
+            payload
+        )));
+
+        let control = TokenControlPayloadV1 {
+            version: 1,
+            target_domain: SCCP_DOMAIN_ETH,
+            nonce: 2,
+            sora_asset_id: [0x22; 32],
+        };
+        assert!(verify_sccp_payload_structure(&SccpPayloadV1::TokenPause(
+            control
+        )));
+
+        let mut payload = control;
+        payload.target_domain = 0xFFFF_FFFE;
+        assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenPause(
+            payload
+        )));
+
+        let mut payload = control;
+        payload.sora_asset_id = [0; 32];
+        assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenResume(
+            payload
+        )));
+    }
+
+    #[test]
     fn burn_bundle_rejects_mismatched_finality_root() {
         let mut bundle = sample_burn_bundle(7);
         bundle.finality_proof = sample_finality_proof([0xabu8; 32]);
@@ -5514,6 +5255,23 @@ mod tests {
         let mut payload = valid;
         payload.source_domain = SCCP_DOMAIN_SORA;
         payload.dest_domain = SCCP_DOMAIN_SORA;
+        assert!(!verify_burn_payload_structure(&payload));
+    }
+
+    #[test]
+    fn burn_payload_structure_rejects_zero_value_fields() {
+        let valid = sample_burn_bundle(12).payload;
+
+        let mut payload = valid;
+        payload.sora_asset_id = [0; 32];
+        assert!(!verify_burn_payload_structure(&payload));
+
+        let mut payload = valid;
+        payload.amount = 0;
+        assert!(!verify_burn_payload_structure(&payload));
+
+        let mut payload = valid;
+        payload.recipient = [0; 32];
         assert!(!verify_burn_payload_structure(&payload));
     }
 
@@ -6370,6 +6128,106 @@ mod tests {
             decode_sccp_normalized_codec_value(SCCP_CODEC_TEXT_UTF8, b""),
             None
         );
+    }
+
+    #[test]
+    fn message_payload_structure_rejects_adversarial_asset_route_and_transfer_edges() {
+        const UNKNOWN_DOMAIN: u32 = 0xFFFF_FFFE;
+
+        let asset = AssetRegisterPayloadV1 {
+            version: 1,
+            target_domain: SCCP_DOMAIN_ETH,
+            home_domain: SCCP_DOMAIN_SORA,
+            nonce: 1,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            decimals: 18,
+        };
+        assert!(verify_sccp_payload_structure(
+            &SccpPayloadV1::AssetRegister(asset.clone())
+        ));
+
+        let mut payload = asset.clone();
+        payload.version = 2;
+        assert_rejects_message_payload(SccpPayloadV1::AssetRegister(payload));
+
+        let mut payload = asset.clone();
+        payload.home_domain = UNKNOWN_DOMAIN;
+        assert_rejects_message_payload(SccpPayloadV1::AssetRegister(payload));
+
+        let mut payload = asset.clone();
+        payload.asset_id.clear();
+        assert_rejects_message_payload(SccpPayloadV1::AssetRegister(payload));
+
+        let route = RouteActivatePayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            target_domain: SCCP_DOMAIN_ETH,
+            nonce: 2,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        };
+        assert!(verify_sccp_payload_structure(
+            &SccpPayloadV1::RouteActivate(route.clone())
+        ));
+
+        let mut payload = route.clone();
+        payload.source_domain = payload.target_domain;
+        assert_rejects_message_payload(SccpPayloadV1::RouteActivate(payload));
+
+        let mut payload = route.clone();
+        payload.source_domain = UNKNOWN_DOMAIN;
+        assert_rejects_message_payload(SccpPayloadV1::RouteActivate(payload));
+
+        let mut payload = route.clone();
+        payload.route_id.clear();
+        assert_rejects_message_payload(SccpPayloadV1::RouteActivate(payload));
+
+        let mut payload = route.clone();
+        payload.route_id_codec = SCCP_CODEC_EVM_HEX;
+        assert_rejects_message_payload(SccpPayloadV1::RouteActivate(payload));
+
+        let transfer = TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_ETH,
+            nonce: 3,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        };
+        assert!(verify_sccp_payload_structure(&SccpPayloadV1::Transfer(
+            transfer.clone()
+        )));
+
+        let mut payload = transfer.clone();
+        payload.dest_domain = payload.source_domain;
+        assert_rejects_message_payload(SccpPayloadV1::Transfer(payload));
+
+        let mut payload = transfer.clone();
+        payload.asset_home_domain = UNKNOWN_DOMAIN;
+        assert_rejects_message_payload(SccpPayloadV1::Transfer(payload));
+
+        let mut payload = transfer.clone();
+        payload.asset_id.clear();
+        assert_rejects_message_payload(SccpPayloadV1::Transfer(payload));
+
+        let mut payload = transfer.clone();
+        payload.amount = 0;
+        assert_rejects_message_payload(SccpPayloadV1::Transfer(payload));
+
+        let mut payload = transfer;
+        payload.route_id.clear();
+        assert_rejects_message_payload(SccpPayloadV1::Transfer(payload));
     }
 
     #[test]
@@ -7377,6 +7235,94 @@ mod tests {
     }
 
     #[test]
+    fn evm_submission_package_builder_accepts_explicit_deployment_binding() {
+        let bundle = sample_evm_transfer_bundle(58);
+        let mut manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("eth manifest");
+        manifest.production_ready = true;
+        manifest.disabled_reason = None;
+        let signer = sample_secp256k1_signer();
+        let native_proof_bytes = vec![0xAA, 0xBB, 0xCC];
+        let deployment_binding =
+            build_sccp_evm_destination_binding(&manifest, [0x11; 32], [0x33; 20], [0x22; 20]);
+        let submission_package =
+            build_sccp_counterparty_submission_package_with_destination_binding_and_signer(
+                &bundle,
+                &manifest,
+                &native_proof_bytes,
+                &deployment_binding,
+                &signer,
+            )
+            .expect("explicit EVM deployment binding builds a submission package");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof = NexusSccpMessageTransparentProofV1 {
+            version: 1,
+            local_domain: manifest.local_domain,
+            counterparty_domain: manifest.counterparty_domain,
+            security_model: manifest.security_model,
+            anchor_governance: manifest.anchor_governance,
+            destination_binding: manifest.destination_binding.clone(),
+            proof_family: manifest.proof_family.clone(),
+            verifier_backend: manifest.verifier_backend.clone(),
+            message_backend: manifest.message_backend.clone(),
+            registry_backend: manifest.registry_backend.clone(),
+            manifest_seed: manifest.manifest_seed.clone(),
+            finality_model: manifest.finality_model,
+            verifier_target: manifest.verifier_target,
+            public_inputs,
+            proof_bytes: native_proof_bytes,
+            submission_package,
+            bundle,
+        };
+
+        let payload = evm_payload_from_proof(&proof);
+        assert_eq!(payload.destination_binding, deployment_binding);
+        assert_eq!(proof.destination_binding, manifest.destination_binding);
+        assert!(verify_sccp_evm_submission_package(&manifest, &proof));
+    }
+
+    #[test]
+    fn evm_submission_package_builder_requires_explicit_deployment_binding_once_enabled() {
+        let bundle = sample_evm_transfer_bundle(59);
+        let mut manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("eth manifest");
+        manifest.production_ready = true;
+        manifest.disabled_reason = None;
+        let signer = sample_secp256k1_signer();
+
+        assert!(
+            build_sccp_counterparty_submission_package_with_signer(
+                &bundle,
+                &manifest,
+                &[0xAA, 0xBB],
+                &signer,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn submission_package_builder_rejects_explicit_evm_binding_on_non_evm_manifest() {
+        let bundle = sample_tron_transfer_bundle(60);
+        let mut manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        manifest.production_ready = true;
+        manifest.disabled_reason = None;
+        let signer = sample_secp256k1_signer();
+        let deployment_binding =
+            build_sccp_evm_destination_binding(&manifest, [0x11; 32], [0x33; 20], [0x22; 20]);
+
+        assert!(
+            build_sccp_counterparty_submission_package_with_destination_binding_and_signer(
+                &bundle,
+                &manifest,
+                &[0xAA, 0xBB],
+                &deployment_binding,
+                &signer,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn evm_submission_package_verifier_rejects_destination_binding_mismatch() {
         let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
@@ -7435,7 +7381,7 @@ mod tests {
             counterparty_domain: manifest.counterparty_domain,
             security_model: manifest.security_model,
             anchor_governance: manifest.anchor_governance,
-            destination_binding: destination_binding.clone(),
+            destination_binding: manifest.destination_binding.clone(),
             proof_family: manifest.proof_family.clone(),
             verifier_backend: manifest.verifier_backend.clone(),
             message_backend: manifest.message_backend.clone(),
@@ -7565,6 +7511,47 @@ mod tests {
         assert!(!verify_sccp_evm_submission_package(
             &manifest,
             &noncanonical_envelope
+        ));
+    }
+
+    #[test]
+    fn evm_submission_package_verifier_rejects_platform_and_envelope_substitutions() {
+        let (manifest, proof) = sample_valid_evm_submission_proof(61);
+        let valid_payload = evm_payload_from_proof(&proof);
+
+        let mut platform_swap = proof.clone();
+        platform_swap.submission_package.platform_payload =
+            SccpPlatformSubmissionPayloadV1::TronContractCall(
+                SccpTronContractSubmissionPayloadV1 {
+                    proof_bytes: valid_payload.proof_bytes.clone(),
+                    public_inputs: valid_payload.public_inputs.clone(),
+                    statement_hash: valid_payload.statement_hash,
+                },
+            );
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &platform_swap
+        ));
+
+        let mut decoded_envelope_divergence = proof.clone();
+        let mut payload = valid_payload.clone();
+        let mut decoded_only = payload.attestation.clone();
+        decoded_only.signatures.clear();
+        payload.proof_bytes =
+            encode_sccp_evm_attestation_envelope(&decoded_only).expect("encode envelope");
+        replace_evm_payload(&mut decoded_envelope_divergence, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &decoded_envelope_divergence
+        ));
+
+        let mut empty_binding_key = proof;
+        let mut payload = valid_payload;
+        payload.destination_binding.key.clear();
+        replace_evm_payload(&mut empty_binding_key, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &empty_binding_key
         ));
     }
 

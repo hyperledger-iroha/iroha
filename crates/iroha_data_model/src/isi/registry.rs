@@ -263,6 +263,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::ApproveGovernanceProposal>,
     #[cfg(feature = "governance")]
+    InstructionRegistry::register_slice::<governance::CastParliamentBallot>,
+    #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::PersistCouncilForEpoch>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::RecordCitizenServiceOutcome>,

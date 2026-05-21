@@ -19,7 +19,9 @@ use iroha_data_model::{
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
 };
-use iroha_executor_data_model::permission::governance::CanRecordCitizenService;
+use iroha_executor_data_model::permission::governance::{
+    CanManageParliament, CanRecordCitizenService,
+};
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
@@ -93,6 +95,10 @@ fn council_persist_enforces_service_discipline() {
         .execute(&ALICE_ID, &mut tx)
         .expect("citizen bond succeeds");
 
+        Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .expect("grant parliament management permission");
+
         PersistCouncilForEpoch {
             epoch: 1,
             members: vec![ALICE_ID.clone()],
@@ -142,6 +148,10 @@ fn council_persist_enforces_service_discipline() {
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("citizen bond succeeds");
+
+        Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .expect("grant parliament management permission");
 
         PersistCouncilForEpoch {
             epoch: 1,

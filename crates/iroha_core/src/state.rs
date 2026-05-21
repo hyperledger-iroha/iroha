@@ -5930,6 +5930,8 @@ impl GovernanceStageApprovals {
             .or_insert_with(|| GovernanceStageApproval {
                 epoch,
                 approvers: BTreeSet::new(),
+                rejections: BTreeSet::new(),
+                abstentions: BTreeSet::new(),
                 required,
                 quorum_bps,
             });
@@ -5940,6 +5942,8 @@ impl GovernanceStageApprovals {
             *entry = GovernanceStageApproval {
                 epoch,
                 approvers: BTreeSet::new(),
+                rejections: BTreeSet::new(),
+                abstentions: BTreeSet::new(),
                 required,
                 quorum_bps,
             };
@@ -5954,6 +5958,15 @@ impl GovernanceStageApprovals {
             .get(&body)
             .is_some_and(|record| record.epoch == epoch && record.quorum_met())
     }
+
+    /// Check whether the rejection quorum for a given body is satisfied for the epoch.
+    #[must_use]
+    pub fn rejection_quorum_met(&self, body: ParliamentBody, epoch: u64) -> bool {
+        self.stages.get(&body).is_some_and(|record| {
+            record.epoch == epoch
+                && u32::try_from(record.rejections.len()).unwrap_or(u32::MAX) >= record.required
+        })
+    }
 }
 
 /// Approval record for a specific parliament body.
@@ -5966,6 +5979,12 @@ pub struct GovernanceStageApproval {
     /// Recorded approvers.
     #[norito(default)]
     pub approvers: BTreeSet<AccountId>,
+    /// Recorded rejecters.
+    #[norito(default)]
+    pub rejections: BTreeSet<AccountId>,
+    /// Recorded abstainers.
+    #[norito(default)]
+    pub abstentions: BTreeSet<AccountId>,
     /// Required approvals to reach quorum.
     pub required: u32,
     /// Quorum requirement in basis points used to derive `required`.
@@ -5975,7 +5994,46 @@ pub struct GovernanceStageApproval {
 impl GovernanceStageApproval {
     /// Record a new approval; returns true if inserted.
     pub fn record(&mut self, account: AccountId) -> bool {
-        self.approvers.insert(account)
+        self.record_decision(
+            account,
+            iroha_data_model::isi::governance::ParliamentDecision::Approve,
+        )
+    }
+
+    /// Record a signed stage decision; returns true if the effective decision changed.
+    pub fn record_decision(
+        &mut self,
+        account: AccountId,
+        decision: iroha_data_model::isi::governance::ParliamentDecision,
+    ) -> bool {
+        let already_recorded = match decision {
+            iroha_data_model::isi::governance::ParliamentDecision::Approve => {
+                self.approvers.contains(&account)
+            }
+            iroha_data_model::isi::governance::ParliamentDecision::Reject => {
+                self.rejections.contains(&account)
+            }
+            iroha_data_model::isi::governance::ParliamentDecision::Abstain => {
+                self.abstentions.contains(&account)
+            }
+        };
+        if already_recorded {
+            return false;
+        }
+        self.approvers.remove(&account);
+        self.rejections.remove(&account);
+        self.abstentions.remove(&account);
+        match decision {
+            iroha_data_model::isi::governance::ParliamentDecision::Approve => {
+                self.approvers.insert(account)
+            }
+            iroha_data_model::isi::governance::ParliamentDecision::Reject => {
+                self.rejections.insert(account)
+            }
+            iroha_data_model::isi::governance::ParliamentDecision::Abstain => {
+                self.abstentions.insert(account)
+            }
+        }
     }
 
     /// Whether quorum has been reached.
@@ -7520,6 +7578,8 @@ pub struct StateTransaction<'block, 'state> {
     pub current_dataspace_id: Option<DataSpaceId>,
     /// Gas used by the last executed transaction (IVM path). Set by executor.
     pub last_tx_gas_used: u64,
+    /// True while applying an overlay whose IVM proof was verified for this transaction.
+    pub(crate) sccp_recording_proof_verified: bool,
     /// Block-level gas limit, captured at the beginning of this block.
     pub gas_limit_per_block: u64,
     /// Gas used in this block so far, captured when this transaction started.
@@ -20133,17 +20193,16 @@ impl State {
                             match proposal {
                                 Some(proposal) => {
                                     let approval_epoch = proposal.approval_epoch(fallback_epoch);
-                                    match proposal.kind {
-                                        iroha_data_model::governance::types::ProposalKind::DeployContract(_) => {
-                                            approval.quorum_met(
-                                                ParliamentBody::RulesCommittee,
-                                                approval_epoch,
-                                            ) && approval.quorum_met(
-                                                ParliamentBody::AgendaCouncil,
-                                                approval_epoch,
-                                            )
-                                        }
-                                        iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => [
+                                    let required_bodies: &[ParliamentBody] = match proposal.kind {
+                                        iroha_data_model::governance::types::ProposalKind::DeployContract(_) => &[
+                                            ParliamentBody::RulesCommittee,
+                                            ParliamentBody::AgendaCouncil,
+                                            ParliamentBody::InterestPanel,
+                                            ParliamentBody::ReviewPanel,
+                                            ParliamentBody::PolicyJury,
+                                            ParliamentBody::OversightCommittee,
+                                        ],
+                                        iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => &[
                                             ParliamentBody::RulesCommittee,
                                             ParliamentBody::AgendaCouncil,
                                             ParliamentBody::InterestPanel,
@@ -20151,10 +20210,13 @@ impl State {
                                             ParliamentBody::PolicyJury,
                                             ParliamentBody::OversightCommittee,
                                             ParliamentBody::FmaCommittee,
-                                        ]
-                                        .into_iter()
-                                        .all(|body| approval.quorum_met(body, approval_epoch)),
-                                    }
+                                        ],
+                                    };
+                                    required_bodies.iter().copied().all(|body| {
+                                        approval.quorum_met(body, approval_epoch)
+                                            && !approval
+                                                .rejection_quorum_met(body, approval_epoch)
+                                    })
                                 }
                                 None => false,
                             }
@@ -20279,6 +20341,19 @@ impl State {
                     None
                 };
                 if decision_ready {
+                    if prop_id_opt
+                        .and_then(|pid| wtx.governance_proposals.get(&pid).cloned())
+                        .is_some_and(|proposal| {
+                            matches!(
+                                proposal.status,
+                                super::state::GovernanceProposalStatus::Approved
+                                    | super::state::GovernanceProposalStatus::Rejected
+                                    | super::state::GovernanceProposalStatus::Enacted
+                            )
+                        })
+                    {
+                        continue;
+                    }
                     // Threshold checks: turnout and approval ratio
                     let turnout = approve.saturating_add(reject);
                     let decision_approve = if turnout >= sb.gov.min_turnout {
@@ -25343,6 +25418,7 @@ impl<'state> StateBlock<'state> {
             current_lane_id: None,
             current_dataspace_id: None,
             last_tx_gas_used: 0,
+            sccp_recording_proof_verified: false,
             gas_limit_per_block: self.gas_limit_per_block,
             gas_used_in_block_so_far: self.gas_used_in_block,
             confidential_gas_used_in_tx: 0,
@@ -55965,5 +56041,51 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
 
         assert_eq!(state.chain_id, *super::DEFAULT_TEST_CHAIN_ID);
+    }
+
+    #[test]
+    fn governance_stage_decisions_are_equal_and_mutually_exclusive() {
+        let first = iroha_data_model::account::AccountId::new(
+            iroha_crypto::KeyPair::from_seed(
+                b"stage-decision-first".to_vec(),
+                iroha_crypto::Algorithm::Ed25519,
+            )
+            .public_key()
+            .clone(),
+        );
+        let second = iroha_data_model::account::AccountId::new(
+            iroha_crypto::KeyPair::from_seed(
+                b"stage-decision-second".to_vec(),
+                iroha_crypto::Algorithm::Ed25519,
+            )
+            .public_key()
+            .clone(),
+        );
+        let mut record = GovernanceStageApproval {
+            epoch: 1,
+            approvers: BTreeSet::new(),
+            rejections: BTreeSet::new(),
+            abstentions: BTreeSet::new(),
+            required: 2,
+            quorum_bps: 6_667,
+        };
+
+        assert!(record.record_decision(
+            first.clone(),
+            iroha_data_model::isi::governance::ParliamentDecision::Approve,
+        ));
+        assert!(record.record_decision(
+            first.clone(),
+            iroha_data_model::isi::governance::ParliamentDecision::Reject,
+        ));
+        assert!(!record.approvers.contains(&first));
+        assert!(record.rejections.contains(&first));
+        assert_eq!(record.rejections.len(), 1);
+
+        assert!(record.record_decision(
+            second,
+            iroha_data_model::isi::governance::ParliamentDecision::Reject,
+        ));
+        assert!(u32::try_from(record.rejections.len()).unwrap_or(u32::MAX) >= record.required);
     }
 }

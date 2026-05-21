@@ -36108,9 +36108,12 @@ impl Actor {
             || existing_worker_backlog
             || queue_active_backlog
             || unresolved_rbc_backlog;
-        let backlog_recent_progress_grace = self.backlog_extended_view_change_timeout(
-            self.rebroadcast_cooldown().max(Duration::from_millis(500)),
-            true,
+        let backlog_recent_progress_grace = self.cap_active_block_production_gap(
+            self.backlog_extended_view_change_timeout(
+                self.rebroadcast_cooldown().max(Duration::from_millis(500)),
+                true,
+            ),
+            active_block_production_sla,
         );
 
         let mut stalled_pending = 0usize;
@@ -36515,7 +36518,7 @@ impl Actor {
             frontier_repair_exhaustion_window,
             active_block_production_sla,
         );
-        let resilience_ingress_backlog_active =
+        let resilience_ingress_queued =
             self.config.resilience.enabled && Self::frontier_consensus_ingress_queued(queue_depths);
         let same_height_rbc_sender_activity_active = self.config.resilience.enabled
             && height == frontier_height
@@ -36545,7 +36548,10 @@ impl Actor {
             );
             return false;
         }
-        if recovery_backlog_stalled && same_height_rbc_sender_activity_active {
+        if recovery_backlog_stalled
+            && same_height_rbc_sender_activity_active
+            && max_pending_stall < frontier_repair_exhaustion_window
+        {
             debug!(
                 height,
                 view,
@@ -36560,8 +36566,7 @@ impl Actor {
             && height == frontier_height
             && recovery_backlog_stalled
             && queue_active_backlog
-            && max_pending_stall >= frontier_repair_exhaustion_window
-            && !resilience_ingress_backlog_active;
+            && max_pending_stall >= frontier_repair_exhaustion_window;
         if force_frontier_view_advance_after_repair {
             warn!(
                 height,
@@ -36592,7 +36597,8 @@ impl Actor {
             && height == frontier_height
             && recovery_backlog_stalled
             && queue_active_backlog
-            && resilience_ingress_backlog_active
+            && resilience_ingress_queued
+            && max_pending_stall < frontier_repair_exhaustion_window
         {
             debug!(
                 height,

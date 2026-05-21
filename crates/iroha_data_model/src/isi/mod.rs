@@ -1351,6 +1351,12 @@ impl From<crate::isi::governance::ApproveGovernanceProposal> for InstructionBox 
         InstructionBox(Box::new(i))
     }
 }
+#[cfg(feature = "governance")]
+impl From<crate::isi::governance::CastParliamentBallot> for InstructionBox {
+    fn from(i: crate::isi::governance::CastParliamentBallot) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::ministry::SubmitAgendaProposal> for InstructionBox {
     fn from(i: crate::isi::ministry::SubmitAgendaProposal) -> Self {
         InstructionBox(Box::new(i))

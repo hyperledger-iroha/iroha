@@ -3490,6 +3490,8 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceStageApproval>();
             total = total.saturating_add(self.approvers.measured_bytes_extra());
+            total = total.saturating_add(self.rejections.measured_bytes_extra());
+            total = total.saturating_add(self.abstentions.measured_bytes_extra());
             total
         }
     }
@@ -4485,6 +4487,8 @@ mod tests {
         let mut approval = crate::state::GovernanceStageApproval {
             epoch: 1,
             approvers: BTreeSet::new(),
+            rejections: BTreeSet::new(),
+            abstentions: BTreeSet::new(),
             required: 2,
             quorum_bps: 5000,
         };

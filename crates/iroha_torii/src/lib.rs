@@ -8387,6 +8387,31 @@ async fn handler_gov_ballot_plain(
     .await
 }
 
+#[cfg(feature = "app_api")]
+async fn handler_gov_parliament_ballot(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: crate::utils::extractors::NoritoJson<crate::gov::ParliamentBallotDto>,
+) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/gov/parliament/ballots",
+        true,
+    )
+    .await?;
+    crate::gov::handle_gov_parliament_ballot(
+        app.chain_id.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        body,
+    )
+    .await
+}
+
 async fn handler_gov_finalize(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -25351,6 +25376,7 @@ async fn handler_sccp_message_runtime_envelope(
 async fn handler_sccp_message_artifact(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
+    axum::extract::Query(evm_destination): axum::extract::Query<routing::SccpEvmDestinationQuery>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
@@ -25389,6 +25415,7 @@ async fn handler_sccp_message_artifact(
         app.state.as_ref(),
         &app.da_receipt_signer,
         message_id,
+        evm_destination,
         accept,
     )
     .await?
@@ -25398,6 +25425,7 @@ async fn handler_sccp_message_artifact(
 async fn handler_sccp_message_job(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
+    axum::extract::Query(evm_destination): axum::extract::Query<routing::SccpEvmDestinationQuery>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
@@ -25432,6 +25460,7 @@ async fn handler_sccp_message_job(
         app.state.as_ref(),
         &app.da_receipt_signer,
         message_id,
+        evm_destination,
         accept,
     )
     .await?
@@ -35283,6 +35312,10 @@ impl Torii {
                     post(handler_gov_ballot_plain),
                 )
                 .route(
+                    iroha_torii_shared::uri::GOV_PARLIAMENT_BALLOT,
+                    post(handler_gov_parliament_ballot),
+                )
+                .route(
                     iroha_torii_shared::uri::GOV_FINALIZE,
                     post(handler_gov_finalize),
                 )
@@ -38677,6 +38710,7 @@ pub(crate) mod tests_runtime_handlers {
             SoranetPrivacyEventV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
         },
         transaction::{
+            Executable, IvmBytecode, IvmProved,
             error::TransactionRejectionReason,
             signed::{
                 SealedTransactionReveal, SignedTransaction, TransactionBuilder,
@@ -46604,10 +46638,19 @@ pub(crate) mod tests_runtime_handlers {
         let keypair = KeyPair::random();
         let chain: ChainId = "sccp-message-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([iroha_data_model::isi::bridge::RecordSccpMessage::new(
+        let overlay = vec![
+            iroha_data_model::isi::bridge::RecordSccpMessage::new(
                 iroha_sccp::canonical_sccp_payload_bytes(&payload),
-            )])
+            )
+            .into(),
+        ];
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+                overlay: overlay.into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            }))
             .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(
@@ -46989,6 +47032,7 @@ pub(crate) mod tests_runtime_handlers {
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
+            routing::SccpEvmDestinationQuery::default(),
             None,
         )
         .await
@@ -47026,6 +47070,7 @@ pub(crate) mod tests_runtime_handlers {
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
+            routing::SccpEvmDestinationQuery::default(),
             None,
         )
         .await
@@ -47063,6 +47108,7 @@ pub(crate) mod tests_runtime_handlers {
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
+            routing::SccpEvmDestinationQuery::default(),
             None,
         )
         .await
@@ -47305,6 +47351,9 @@ pub(crate) mod tests_runtime_handlers {
                 signature_b64: None,
                 burn_bundle: None,
                 message_bundle: Some(bundle_value),
+                network_id_hex: None,
+                verifier_address_hex: None,
+                bridge_address_hex: None,
                 creation_time_ms: Some(84),
             }),
         )
@@ -47338,6 +47387,9 @@ pub(crate) mod tests_runtime_handlers {
                 signature_b64: None,
                 burn_bundle: None,
                 message_bundle: None,
+                network_id_hex: None,
+                verifier_address_hex: None,
+                bridge_address_hex: None,
                 creation_time_ms: Some(85),
             }),
         )
@@ -47431,6 +47483,9 @@ pub(crate) mod tests_runtime_handlers {
                 signature_b64: None,
                 burn_bundle: Some(burn_bundle_value),
                 message_bundle: Some(message_bundle_value),
+                network_id_hex: None,
+                verifier_address_hex: None,
+                bridge_address_hex: None,
                 creation_time_ms: Some(86),
             }),
         )

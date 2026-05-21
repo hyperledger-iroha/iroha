@@ -845,6 +845,15 @@ struct OverlayInstructionExecutionContext {
     contract_runtime_context: Option<crate::executor::ContractRuntimeExecutionContext>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum TxOverlaySource {
+    #[default]
+    Instructions,
+    ContractCall,
+    Ivm,
+    IvmProved,
+}
+
 /// Overlay of a transaction's intended operations.
 #[derive(Debug, Clone, Default)]
 pub struct TxOverlay {
@@ -852,6 +861,7 @@ pub struct TxOverlay {
     execution_contexts: Option<Vec<OverlayInstructionExecutionContext>>,
     ivm_gas_used: Option<u64>,
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+    source: TxOverlaySource,
     byte_size: OnceLock<usize>,
 }
 
@@ -881,6 +891,18 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: None,
             durable_state_overlay: BTreeMap::new(),
+            source: TxOverlaySource::Instructions,
+            byte_size: OnceLock::new(),
+        }
+    }
+
+    fn from_ivm_proved_instructions(instrs: Vec<InstructionBox>) -> Self {
+        Self {
+            instructions: instrs,
+            execution_contexts: None,
+            ivm_gas_used: None,
+            durable_state_overlay: BTreeMap::new(),
+            source: TxOverlaySource::IvmProved,
             byte_size: OnceLock::new(),
         }
     }
@@ -892,6 +914,7 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay: BTreeMap::new(),
+            source: TxOverlaySource::Ivm,
             byte_size: OnceLock::new(),
         }
     }
@@ -907,6 +930,7 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay,
+            source: TxOverlaySource::Ivm,
             byte_size: OnceLock::new(),
         }
     }
@@ -930,6 +954,7 @@ impl TxOverlay {
             execution_contexts: Some(execution_contexts),
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay,
+            source: TxOverlaySource::ContractCall,
             byte_size: OnceLock::new(),
         }
     }
@@ -990,51 +1015,7 @@ impl TxOverlay {
         state_tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
     ) -> Result<(), ValidationFail> {
-        let executor = state_tx.world.executor.clone();
-        let mut instruction_index = 0usize;
-        // Execute instructions directly; avoid registry-based roundtrips.
-        for chunk_instrs in self.instructions.chunks(self.instructions.len().max(1)) {
-            for instr in chunk_instrs {
-                if let Some(dvp) = instr.as_any().downcast_ref::<DvpIsi>() {
-                    admission_validate_dvp(authority, state_tx, dvp)
-                        .map_err(ValidationFail::from)?;
-                } else if let Some(pvp) = instr.as_any().downcast_ref::<PvpIsi>() {
-                    admission_validate_pvp(authority, state_tx, pvp)
-                        .map_err(ValidationFail::from)?;
-                }
-                if let Some(reg_asset_definition) = extract_register_asset_definition(instr) {
-                    ensure_asset_definition_registration_allowed(
-                        state_tx,
-                        authority,
-                        &reg_asset_definition,
-                    )?;
-                }
-                if let Some(execution_contexts) = self.execution_contexts.as_ref() {
-                    let execution_context = &execution_contexts[instruction_index];
-                    executor.execute_borrowed_overlay_instruction(
-                        state_tx,
-                        &execution_context.authority,
-                        instr,
-                        execution_context.contract_runtime_context.as_ref(),
-                    )?;
-                } else {
-                    executor
-                        .execute_borrowed_overlay_instruction(state_tx, authority, instr, None)?;
-                }
-                instruction_index = instruction_index.saturating_add(1);
-            }
-        }
-        for (path, value) in &self.durable_state_overlay {
-            if let Some(stored) = value {
-                state_tx
-                    .world
-                    .smart_contract_state
-                    .insert(path.clone(), stored.clone());
-            } else {
-                state_tx.world.smart_contract_state.remove(path.clone());
-            }
-        }
-        Ok(())
+        self.apply_inner(state_tx, authority, self.instructions.len().max(1))
     }
 
     /// Apply the overlay with a specific chunk size (number of instructions per chunk).
@@ -1048,51 +1029,66 @@ impl TxOverlay {
         authority: &AccountId,
         chunk_size: usize,
     ) -> Result<(), ValidationFail> {
-        let executor = state_tx.world.executor.clone();
-        let chunk = chunk_size.max(1);
-        let mut instruction_index = 0usize;
-        for chunk_instrs in self.instructions.chunks(chunk) {
-            for instr in chunk_instrs {
-                if let Some(dvp) = instr.as_any().downcast_ref::<DvpIsi>() {
-                    admission_validate_dvp(authority, state_tx, dvp)
-                        .map_err(ValidationFail::from)?;
-                } else if let Some(pvp) = instr.as_any().downcast_ref::<PvpIsi>() {
-                    admission_validate_pvp(authority, state_tx, pvp)
-                        .map_err(ValidationFail::from)?;
+        self.apply_inner(state_tx, authority, chunk_size.max(1))
+    }
+
+    fn apply_inner(
+        &self,
+        state_tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        chunk: usize,
+    ) -> Result<(), ValidationFail> {
+        let prior_sccp_recording_proof_verified = state_tx.sccp_recording_proof_verified;
+        state_tx.sccp_recording_proof_verified = self.source == TxOverlaySource::IvmProved;
+        let result = (|| -> Result<(), ValidationFail> {
+            let executor = state_tx.world.executor.clone();
+            let mut instruction_index = 0usize;
+            for chunk_instrs in self.instructions.chunks(chunk) {
+                for instr in chunk_instrs {
+                    if let Some(dvp) = instr.as_any().downcast_ref::<DvpIsi>() {
+                        admission_validate_dvp(authority, state_tx, dvp)
+                            .map_err(ValidationFail::from)?;
+                    } else if let Some(pvp) = instr.as_any().downcast_ref::<PvpIsi>() {
+                        admission_validate_pvp(authority, state_tx, pvp)
+                            .map_err(ValidationFail::from)?;
+                    }
+                    if let Some(reg_asset_definition) = extract_register_asset_definition(instr) {
+                        ensure_asset_definition_registration_allowed(
+                            state_tx,
+                            authority,
+                            &reg_asset_definition,
+                        )?;
+                    }
+                    if let Some(execution_contexts) = self.execution_contexts.as_ref() {
+                        let execution_context = &execution_contexts[instruction_index];
+                        executor.execute_borrowed_overlay_instruction(
+                            state_tx,
+                            &execution_context.authority,
+                            instr,
+                            execution_context.contract_runtime_context.as_ref(),
+                        )?;
+                    } else {
+                        executor.execute_borrowed_overlay_instruction(
+                            state_tx, authority, instr, None,
+                        )?;
+                    }
+                    instruction_index = instruction_index.saturating_add(1);
                 }
-                if let Some(reg_asset_definition) = extract_register_asset_definition(instr) {
-                    ensure_asset_definition_registration_allowed(
-                        state_tx,
-                        authority,
-                        &reg_asset_definition,
-                    )?;
-                }
-                if let Some(execution_contexts) = self.execution_contexts.as_ref() {
-                    let execution_context = &execution_contexts[instruction_index];
-                    executor.execute_borrowed_overlay_instruction(
-                        state_tx,
-                        &execution_context.authority,
-                        instr,
-                        execution_context.contract_runtime_context.as_ref(),
-                    )?;
+            }
+            for (path, value) in &self.durable_state_overlay {
+                if let Some(stored) = value {
+                    state_tx
+                        .world
+                        .smart_contract_state
+                        .insert(path.clone(), stored.clone());
                 } else {
-                    executor
-                        .execute_borrowed_overlay_instruction(state_tx, authority, instr, None)?;
+                    state_tx.world.smart_contract_state.remove(path.clone());
                 }
-                instruction_index = instruction_index.saturating_add(1);
             }
-        }
-        for (path, value) in &self.durable_state_overlay {
-            if let Some(stored) = value {
-                state_tx
-                    .world
-                    .smart_contract_state
-                    .insert(path.clone(), stored.clone());
-            } else {
-                state_tx.world.smart_contract_state.remove(path.clone());
-            }
-        }
-        Ok(())
+            Ok(())
+        })();
+        state_tx.sccp_recording_proof_verified = prior_sccp_recording_proof_verified;
+        result
     }
 }
 
@@ -1445,7 +1441,7 @@ where
             let mut instrs: Vec<InstructionBox> = proved.overlay.iter().cloned().collect();
             prune_redundant_contract_ops(state_ro, &mut instrs);
             let _ = gas_limit; // still required for admission (fees), even when skipping VM.
-            Ok(TxOverlay::from_instructions(instrs))
+            Ok(TxOverlay::from_ivm_proved_instructions(instrs))
         }
     }
 }
@@ -1861,7 +1857,7 @@ where
             let mut instrs: Vec<InstructionBox> = proved.overlay.iter().cloned().collect();
             prune_redundant_contract_ops(state_ro, &mut instrs);
             Ok(PreparedTxOverlay::new(
-                TxOverlay::from_instructions(instrs),
+                TxOverlay::from_ivm_proved_instructions(instrs),
                 None,
             ))
         }
@@ -2260,6 +2256,7 @@ mod tests {
     use iroha_data_model::{
         ChainId, Registrable, domain::DomainId, isi::smart_contract_code::RemoveSmartContractBytes,
     };
+    use iroha_test_samples::gen_account_in;
 
     use super::*;
 
@@ -2290,6 +2287,87 @@ mod tests {
         assert_eq!(overlay.byte_size(), expected);
         assert_eq!(overlay.byte_size.get(), Some(&expected));
         assert_eq!(overlay.byte_size(), expected);
+    }
+
+    fn sccp_record_instruction() -> InstructionBox {
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 1,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        iroha_data_model::isi::bridge::RecordSccpMessage::new(
+            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+        )
+        .into()
+    }
+
+    fn sccp_overlay_state() -> (crate::state::State, AccountId) {
+        let (authority, _) = gen_account_in("wonderland");
+        let domain = iroha_data_model::domain::Domain::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+        )
+        .build(&authority);
+        let account = build_wonderland_account(&authority);
+        let world = crate::state::World::with([domain], [account], []);
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query_handle = crate::query::store::LiveQueryStore::start_test();
+        (
+            crate::state::State::new_with_chain(world, kura, query_handle, ChainId::from("chain")),
+            authority,
+        )
+    }
+
+    #[test]
+    fn plain_overlay_rejects_sccp_recording() {
+        let (state, authority) = sccp_overlay_state();
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            nonzero_ext::nonzero!(1_u64),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut tx = block.transaction();
+        let overlay = TxOverlay::from_instructions(vec![sccp_record_instruction()]);
+
+        let err = overlay
+            .apply_with_chunk(&mut tx, &authority, 1)
+            .expect_err("plain overlay must not record SCCP messages");
+        assert!(
+            err.to_string().contains("requires verified IVM proof"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ivm_proved_overlay_allows_sccp_recording() {
+        let (state, authority) = sccp_overlay_state();
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            nonzero_ext::nonzero!(1_u64),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut tx = block.transaction();
+        let overlay = TxOverlay::from_ivm_proved_instructions(vec![sccp_record_instruction()]);
+
+        overlay
+            .apply_with_chunk(&mut tx, &authority, 1)
+            .expect("verified IVM-proved overlay may record SCCP messages");
     }
 
     #[test]

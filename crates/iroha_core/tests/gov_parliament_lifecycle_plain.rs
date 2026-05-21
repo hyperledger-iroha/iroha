@@ -25,7 +25,8 @@ use iroha_data_model::{
     smart_contract::manifest::{ContractManifest, ManifestProvenance},
 };
 use iroha_executor_data_model::permission::governance::{
-    CanEnactGovernance, CanProposeContractDeployment, CanSubmitGovernanceBallot,
+    CanEnactGovernance, CanManageParliament, CanProposeContractDeployment,
+    CanSubmitGovernanceBallot,
 };
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
@@ -181,6 +182,11 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         .execute(&proposer_id, &mut stx_1)
         .expect("grant enact permission");
 
+    let manage_parliament_perm: Permission = CanManageParliament.into();
+    Grant::account_permission(manage_parliament_perm, proposer_id.clone())
+        .execute(&proposer_id, &mut stx_1)
+        .expect("grant parliament management permission");
+
     for citizen in &citizens {
         let ballot_perm: Permission = CanSubmitGovernanceBallot {
             referendum_id: "sora-parliament-lifecycle".to_string(),
@@ -275,32 +281,24 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         .get(&0)
         .cloned()
         .expect("parliament bodies for epoch 0");
-    let rules_signer = stage_bodies
-        .rosters
-        .get(&ParliamentBody::RulesCommittee)
-        .and_then(|roster| roster.members.first())
-        .cloned()
-        .expect("rules committee signer");
-    let agenda_signer = stage_bodies
-        .rosters
-        .get(&ParliamentBody::AgendaCouncil)
-        .and_then(|roster| roster.members.first())
-        .cloned()
-        .expect("agenda council signer");
-
-    ApproveGovernanceProposal {
-        body: ParliamentBody::RulesCommittee,
-        proposal_id,
+    for body in [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::PolicyJury,
+        ParliamentBody::OversightCommittee,
+    ] {
+        let signer = stage_bodies
+            .rosters
+            .get(&body)
+            .and_then(|roster| roster.members.first())
+            .cloned()
+            .expect("parliament body signer");
+        ApproveGovernanceProposal { body, proposal_id }
+            .execute(&signer, &mut stx_1)
+            .expect("parliament body approval");
     }
-    .execute(&rules_signer, &mut stx_1)
-    .expect("rules approval");
-
-    ApproveGovernanceProposal {
-        body: ParliamentBody::AgendaCouncil,
-        proposal_id,
-    }
-    .execute(&agenda_signer, &mut stx_1)
-    .expect("agenda approval");
 
     for (idx, citizen) in citizens.iter().enumerate() {
         let direction = if idx < 12 { 0 } else { 1 };

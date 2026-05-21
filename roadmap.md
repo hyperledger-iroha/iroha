@@ -30,6 +30,9 @@ and public release-readiness notes.
   execution, data availability, operator workflows, and SDK integration.
 - Complete the remaining independent-lane consensus, DA/RBC, and cross-lane
   relay validation needed for the first public Nexus release.
+- Keep SCCP bridge submission permissionless while requiring outbound message
+  records to originate from verified IVM-proved overlays and explicit
+  deployment bindings for production-ready EVM lanes.
 - Keep live-network signing inputs runtime-only and continue using generated
   per-validator deployment bundles rather than hand-edited production configs.
 
@@ -97,4 +100,5 @@ replay coverage, and updated operator runbooks when defaults change.
   reviewers and subsystem owners.
 
 **Next checkpoints:** monthly X Spaces cadence, clearer contributor onboarding,
-and public follow-up notes for LFDT governance review items.
+public follow-up notes for LFDT governance review items, and commit/reveal
+hardening for SORA Parliament policy juries.
