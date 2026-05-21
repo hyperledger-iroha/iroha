@@ -1222,7 +1222,9 @@ fn lower_function_named(
         });
     }
     let state_env = state_env_snapshot();
-    for (name, ty) in state_env.iter() {
+    let mut state_entries = state_env.iter().collect::<Vec<_>>();
+    state_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (name, ty) in state_entries {
         register_state_value_metadata(&mut ctx, name, ty, name);
     }
     for (param, tmp) in param_temps {
@@ -1657,7 +1659,9 @@ fn push_copy(block: &mut BasicBlock, dest: Temp, src: Temp) {
 
 fn initialize_loop_phi(ctx: &mut LowerCtx, vars: &HashMap<String, Temp>) -> HashMap<String, Temp> {
     let mut phi = HashMap::new();
-    for (name, temp) in vars {
+    let mut entries = vars.iter().collect::<Vec<_>>();
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (name, temp) in entries {
         let slot = ctx.new_temp();
         ctx.current_instr(Instr::Copy {
             dest: slot,
@@ -1671,7 +1675,9 @@ fn initialize_loop_phi(ctx: &mut LowerCtx, vars: &HashMap<String, Temp>) -> Hash
 fn copy_env_to_loop_phi(ctx: &mut LowerCtx, env: &HashMap<String, Temp>) {
     if let Some(phi) = ctx.current_loop_phi() {
         let mut copies: Vec<(Temp, Temp)> = Vec::new();
-        for (name, dest) in phi {
+        let mut entries = phi.iter().collect::<Vec<_>>();
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for (name, dest) in entries {
             if let Some(src) = env.get(name) {
                 copies.push((*dest, *src));
             }

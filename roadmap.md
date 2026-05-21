@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-05-20
+Last updated: 2026-05-21
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -42,6 +42,9 @@ runbooks, and testnet-driven feedback from wallet and service integrations.
 
 - Keep the Iroha Virtual Machine syscall and pointer-ABI surface deterministic
   across hardware and peers.
+- Make `iroha contract dev` the default first-release contract workflow,
+  including manifest-sourced builds, generated interfaces, schema docs,
+  profile-aware doctor/smoke commands, and Kotodama test/debug loops.
 - Finish compiler-derived access descriptors for remaining opaque host helper
   syscalls.
 - Preserve canonical Norito headers and wire layouts for blocks, transactions,

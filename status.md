@@ -1,6 +1,59 @@
 # Status
 
-Last updated: 2026-05-20
+Last updated: 2026-05-21
+
+## 2026-05-21 Iroha-first contract devex hardening follow-up
+
+- `iroha contract dev doctor` now loads manifest profile client configs, reaches
+  the configured Torii endpoint, reports signer/default-gas/fee-asset/block
+  height state, and fails closed when the selected profile is not usable.
+- `iroha contract dev call`, `view`, and `smoke` now resolve profile client
+  configs the same way as top-level CLI calls, validate typed payloads from
+  compiled artifact metadata, and execute manifest smoke declarations against
+  live deployments instead of only parsing them.
+- Generated Kagami localnet start scripts prefer debug `irohad` builds for
+  first-release contract development, expose
+  `IROHA_LOCALNET_FAUCET_RESERVE_RETRIES`, and detach peer processes with
+  Python `start_new_session=True` when available so generated localnets survive
+  non-interactive wrapper exits.
+- Kotodama lint/compiler fixes removed noisy duplicate-field diagnostics for
+  JSON field-name literals and made loop-phi lowering deterministic, keeping
+  locked contract builds stable.
+- SoraSwap's native manifest workflow was validated end to end against a live
+  local Nexus deployment: profile-aware doctor, deploy, native dev smoke, and
+  legacy local smoke all completed successfully.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_kagami start_and_stop_scripts_are_executable -- --nocapture`
+  - `cargo check -p iroha_cli --bin iroha`
+  - `cargo check -p iroha_torii`
+  - `cargo test -p kotodama_lang lint_duplicate_json_name_literals_are_allowed -- --nocapture`
+  - `cargo test -p kotodama_lang loop_phi_lowering_is_deterministic -- --nocapture`
+  - `cargo test -p iroha_cli dev_build_manifest_emits_interface_source_map_and_budget_sidecars -- --nocapture`
+  - `cargo test -p iroha_cli prepare_dev_smoke_cases_validates_payloads_and_profile_defaults -- --nocapture`
+  - `cargo build -p iroha_cli --bin iroha -p iroha_kagami --bin kagami -p irohad --bin irohad -p ivm --bin koto_compile -p ivm --bin koto_test -p ivm --bin koto_lint`
+  - `cargo build -p iroha_kagami --bin kagami`
+
+## 2026-05-20 Iroha-first contract developer workflow
+
+- Added the first-release `iroha contract dev` workflow for manifest-based
+  smart-contract repositories: build, check, test, doctor, schema, deploy,
+  resume, call, view, and smoke declaration parsing.
+- `koto_compile` can now emit stable interface JSON via `--interface-out`, and
+  compiled contract manifests include state-key schema summaries derived from
+  embedded CNTR metadata.
+- Kotodama now injects a small first-release prelude on demand, including
+  authority/owner checks, basis-point fee math, checked amount arithmetic,
+  signed JSON verification, JSON field access, and `block_height()` access
+  through the existing host surface.
+- Focused validation passed:
+  - `cargo check -p iroha_cli --bin iroha`
+  - `cargo test -p kotodama_lang first_release_prelude_helpers_are_available_without_imports -- --nocapture`
+  - `cargo test -p kotodama_lang manifest_state_descriptors_use_canonical_type_names -- --nocapture`
+  - `cargo test -p iroha_cli dev_build_manifest_emits_interface_source_map_and_budget_sidecars -- --nocapture`
+  - `cargo test -p ivm interface_json_serialization_has_schema_sections --bin koto_compile -- --nocapture`
+  - `cargo build -p iroha_cli --bin iroha -p ivm --bin koto_compile -p ivm --bin koto_test -p ivm --bin koto_lint`
+  - `cargo test -p ivm contract_artifact -- --nocapture`
 
 ## 2026-05-20 LFDT governance feedback response
 

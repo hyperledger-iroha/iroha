@@ -16272,6 +16272,7 @@ mod multisig_contract_call_tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         };
@@ -16308,6 +16309,7 @@ mod multisig_contract_call_tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         };
@@ -18288,6 +18290,7 @@ mod multisig_selector_tests {
             features_bitmap: None,
             access_set_hints: None,
             entrypoints: None,
+            states: None,
             kotoba: None,
             provenance: None,
         };
