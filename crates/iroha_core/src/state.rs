@@ -28535,6 +28535,19 @@ mod replay_validation_tests {
 
     use super::*;
 
+    fn run_replay_validation_test_on_stack(name: &'static str, test: fn()) {
+        // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
+        // platform-default worker stack for these integration-heavy scenarios.
+        let handle = std::thread::Builder::new()
+            .name(name.to_owned())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn replay validation test");
+        if let Err(payload) = handle.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
     fn new_genesis_account(
         account_id: &iroha_data_model::account::AccountId,
     ) -> iroha_data_model::account::NewAccount {
@@ -28931,8 +28944,15 @@ mod replay_validation_tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn replay_rotates_topology_for_npos_prf_leader() {
+        run_replay_validation_test_on_stack(
+            "replay_rotates_topology_for_npos_prf_leader",
+            replay_rotates_topology_for_npos_prf_leader_impl,
+        );
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn replay_rotates_topology_for_npos_prf_leader_impl() {
         use std::borrow::Cow;
 
         use iroha_crypto::{Algorithm, KeyPair};
