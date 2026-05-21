@@ -71,12 +71,14 @@ class OfflineNoteV2TransferPayload(
 class OfflineNoteV2TransferStreamResult(
     payload: ByteArray?,
     val token: OfflineNoteV2PaymentToken?,
+    val receiveRequest: OfflineNoteV2ReceiveRequest?,
+    val receiptAck: OfflineNoteV2ReceiptAck?,
     val receivedChunks: Int,
     val totalChunks: Int,
     val recoveredChunks: Int,
 ) {
     private val _payload = payload?.copyOf()
-    val isComplete: Boolean get() = token != null
+    val isComplete: Boolean get() = _payload != null
     val progress: Double get() = if (totalChunks == 0) 0.0 else receivedChunks / totalChunks.toDouble()
 
     fun payload(): ByteArray? = _payload?.copyOf()
@@ -88,15 +90,25 @@ class OfflineNoteV2TransferStreamReceiver {
 
     fun ingestFrame(frameBytes: ByteArray): OfflineNoteV2TransferStreamResult {
         val result = decoder.ingest(frameBytes)
-        val token = result.payload?.let {
-            require(result.payloadKind == OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2) {
-                "QR stream payload kind is not a payment token"
+        var token: OfflineNoteV2PaymentToken? = null
+        var receiveRequest: OfflineNoteV2ReceiveRequest? = null
+        var receiptAck: OfflineNoteV2ReceiptAck? = null
+        result.payload?.let { payload ->
+            when (result.payloadKind) {
+                OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2 ->
+                    token = OfflineNoteV2PaymentTokenCodec.decodeQrPayload(payload)
+                OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_REQUEST_V2 ->
+                    receiveRequest = OfflineNoteV2ReceiveRequestCodec.decodeQrPayload(payload)
+                OfflineQrStream.PayloadKind.OFFLINE_RECEIPT_ACK_V2 ->
+                    receiptAck = OfflineNoteV2ReceiptAckCodec.decodeQrPayload(payload)
+                else -> throw IllegalArgumentException("QR stream payload kind is not an Offline Note V2 payload")
             }
-            OfflineNoteV2PaymentTokenCodec.decodeQrPayload(it)
         }
         return OfflineNoteV2TransferStreamResult(
             payload = result.payload,
             token = token,
+            receiveRequest = receiveRequest,
+            receiptAck = receiptAck,
             receivedChunks = result.receivedChunks,
             totalChunks = result.totalChunks,
             recoveredChunks = result.recoveredChunks,
@@ -107,9 +119,12 @@ class OfflineNoteV2TransferStreamReceiver {
 /** Canonical Offline Note V2 payment-token handoff helpers for QR, NFC, and nearby transports. */
 object OfflineNoteV2TransferHandoff {
     const val PAYMENT_TOKEN_CONTENT_TYPE: String = "application/vnd.iroha.offline.payment-token-v2+norito"
-    const val RECEIVE_CHALLENGE_CONTENT_TYPE: String =
-        "application/vnd.iroha.offline.receive-challenge-v1+octet-stream"
-    const val RECEIPT_ACK_CONTENT_TYPE: String = "application/vnd.iroha.offline.receipt-ack-v1+octet-stream"
+    const val RECEIVE_REQUEST_CONTENT_TYPE: String =
+        "application/vnd.iroha.offline.receive-request-v2+norito"
+    const val RECEIPT_ACK_CONTENT_TYPE: String = "application/vnd.iroha.offline.receipt-ack-v2+norito"
+    const val TEXT_PAYMENT_TOKEN_CONTENT_TYPE: String = "text/vnd.iroha.offline.payment-token-v2"
+    const val TEXT_RECEIVE_REQUEST_CONTENT_TYPE: String = "text/vnd.iroha.offline.receive-request-v2"
+    const val TEXT_RECEIPT_ACK_CONTENT_TYPE: String = "text/vnd.iroha.offline.receipt-ack-v2"
     const val NEARBY_SERVICE_NAME: String = "iroha-pay-v2"
     const val NFC_EXTERNAL_TYPE: String = "org.hyperledger.iroha:offline-payment-v2"
     const val DEFAULT_NFC_AID_HEX: String = OfflineNoteV2NfcApduProtocol.AID_HEX
@@ -149,6 +164,52 @@ object OfflineNoteV2TransferHandoff {
         OfflineNoteV2PaymentTokenCodec.decodeNorito(rawPayload)
 
     @JvmStatic
+    fun rawReceiveRequestBytes(request: OfflineNoteV2ReceiveRequest): ByteArray =
+        OfflineNoteV2ReceiveRequestCodec.encodeNorito(request)
+
+    @JvmStatic
+    fun receiveRequestPayload(
+        request: OfflineNoteV2ReceiveRequest,
+        modality: OfflineNoteV2TransferModality,
+    ): OfflineNoteV2TransferPayload =
+        OfflineNoteV2TransferPayload(modality, RECEIVE_REQUEST_CONTENT_TYPE, rawReceiveRequestBytes(request))
+
+    @JvmStatic
+    fun decodeReceiveRequest(payload: OfflineNoteV2TransferPayload): OfflineNoteV2ReceiveRequest {
+        require(payload.contentType == RECEIVE_REQUEST_CONTENT_TYPE) {
+            "Transfer payload content type is not a receive request"
+        }
+        return OfflineNoteV2ReceiveRequestCodec.decodeNorito(payload.payload())
+    }
+
+    @JvmStatic
+    fun decodeReceiveRequest(rawPayload: ByteArray): OfflineNoteV2ReceiveRequest =
+        OfflineNoteV2ReceiveRequestCodec.decodeNorito(rawPayload)
+
+    @JvmStatic
+    fun rawReceiptAckBytes(ack: OfflineNoteV2ReceiptAck): ByteArray =
+        OfflineNoteV2ReceiptAckCodec.encodeNorito(ack)
+
+    @JvmStatic
+    fun receiptAckPayload(
+        ack: OfflineNoteV2ReceiptAck,
+        modality: OfflineNoteV2TransferModality,
+    ): OfflineNoteV2TransferPayload =
+        OfflineNoteV2TransferPayload(modality, RECEIPT_ACK_CONTENT_TYPE, rawReceiptAckBytes(ack))
+
+    @JvmStatic
+    fun decodeReceiptAck(payload: OfflineNoteV2TransferPayload): OfflineNoteV2ReceiptAck {
+        require(payload.contentType == RECEIPT_ACK_CONTENT_TYPE) {
+            "Transfer payload content type is not a receipt ACK"
+        }
+        return OfflineNoteV2ReceiptAckCodec.decodeNorito(payload.payload())
+    }
+
+    @JvmStatic
+    fun decodeReceiptAck(rawPayload: ByteArray): OfflineNoteV2ReceiptAck =
+        OfflineNoteV2ReceiptAckCodec.decodeNorito(rawPayload)
+
+    @JvmStatic
     fun qrStreamingFrameBytes(token: OfflineNoteV2PaymentToken): List<ByteArray> =
         qrStreamingFrameBytes(token, QR_STREAMING_OPTIONS)
 
@@ -158,6 +219,28 @@ object OfflineNoteV2TransferHandoff {
         options: OfflineQrStream.Options,
     ): List<ByteArray> =
         OfflineNoteV2PaymentTokenCodec.encodeQrFrameBytes(token, options)
+
+    @JvmStatic
+    fun qrStreamingFrameBytes(request: OfflineNoteV2ReceiveRequest): List<ByteArray> =
+        qrStreamingFrameBytes(request, QR_STREAMING_OPTIONS)
+
+    @JvmStatic
+    fun qrStreamingFrameBytes(
+        request: OfflineNoteV2ReceiveRequest,
+        options: OfflineQrStream.Options,
+    ): List<ByteArray> =
+        OfflineNoteV2ReceiveRequestCodec.encodeQrFrameBytes(request, options)
+
+    @JvmStatic
+    fun qrStreamingFrameBytes(ack: OfflineNoteV2ReceiptAck): List<ByteArray> =
+        qrStreamingFrameBytes(ack, QR_STREAMING_OPTIONS)
+
+    @JvmStatic
+    fun qrStreamingFrameBytes(
+        ack: OfflineNoteV2ReceiptAck,
+        options: OfflineQrStream.Options,
+    ): List<ByteArray> =
+        OfflineNoteV2ReceiptAckCodec.encodeQrFrameBytes(ack, options)
 
     @JvmStatic
     fun nfcFrameBytes(token: OfflineNoteV2PaymentToken): List<ByteArray> =
@@ -185,6 +268,21 @@ object OfflineNoteV2TransferHandoff {
         )
 
     @JvmStatic
+    fun nfcReceiptAckWriteApdus(ack: OfflineNoteV2ReceiptAck): List<ByteArray> =
+        nfcReceiptAckWriteApdus(ack, OfflineNoteV2NfcApduProtocol.ANDROID_SAFE_CHUNK_BYTES)
+
+    @JvmStatic
+    fun nfcReceiptAckWriteApdus(
+        ack: OfflineNoteV2ReceiptAck,
+        maxChunkLength: Int,
+    ): List<ByteArray> =
+        OfflineNoteV2NfcApduProtocol.writePayloadApdus(
+            OfflineNoteV2NfcPayloadKind.RECEIPT_ACK,
+            rawReceiptAckBytes(ack),
+            maxChunkLength,
+        )
+
+    @JvmStatic
     fun nearbyPayload(token: OfflineNoteV2PaymentToken): OfflineNoteV2TransferPayload =
         paymentTokenPayload(token, OfflineNoteV2TransferModality.NEARBY)
 
@@ -199,6 +297,18 @@ object OfflineNoteV2TransferHandoff {
     @JvmStatic
     fun decodeNearbyPaymentToken(envelopeBytes: ByteArray): OfflineNoteV2PaymentToken =
         OfflineNoteV2NearbyEnvelope.decode(envelopeBytes).paymentToken()
+
+    @JvmStatic
+    fun nearbyReceiptAckEnvelopeBytes(ack: OfflineNoteV2ReceiptAck): ByteArray =
+        OfflineNoteV2NearbyEnvelope(
+            kind = OfflineNoteV2NearbyMessageKind.RECEIPT_ACK,
+            payload = rawReceiptAckBytes(ack),
+            contentType = RECEIPT_ACK_CONTENT_TYPE,
+        ).encoded()
+
+    @JvmStatic
+    fun decodeNearbyReceiptAck(envelopeBytes: ByteArray): OfflineNoteV2ReceiptAck =
+        OfflineNoteV2NearbyEnvelope.decode(envelopeBytes).receiptAck()
 
     @JvmStatic
     fun nearbyFrameBytes(token: OfflineNoteV2PaymentToken): List<ByteArray> =

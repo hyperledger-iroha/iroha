@@ -447,7 +447,7 @@ public final class OfflineNoteV2NfcApduProtocol {
 
   /** NFC APDU payload kind. */
   public enum PayloadKind {
-    RECEIVE_CHALLENGE(1),
+    RECEIVE_REQUEST(1),
     PAYMENT_TOKEN(2),
     RECEIPT_ACK(3);
 

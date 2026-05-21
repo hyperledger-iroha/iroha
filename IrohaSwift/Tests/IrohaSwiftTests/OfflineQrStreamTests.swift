@@ -67,6 +67,78 @@ final class OfflineQrStreamTests: XCTestCase {
         }
     }
 
+    func testTransferTextPayloadCodecRoundTripsKindsAndMapsQrPayloadKind() throws {
+        let payload = Data(#"{"version":2}"#.utf8)
+        let challenge = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .receiveRequest)
+        let payment = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .paymentToken)
+        let ack = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .receiptAck)
+
+        XCTAssertTrue(challenge.hasPrefix(OfflineNoteV2TransferTextPayloadCodec.receiveRequestPrefix))
+        XCTAssertTrue(payment.hasPrefix(OfflineNoteV2TransferTextPayloadCodec.paymentTokenPrefix))
+        XCTAssertTrue(ack.hasPrefix(OfflineNoteV2TransferTextPayloadCodec.receiptAckPrefix))
+        XCTAssertEqual(
+            OfflineNoteV2TransferTextPayloadCodec.payloadKind(for: challenge),
+            .offlineReceiveRequestV2
+        )
+        XCTAssertEqual(
+            OfflineNoteV2TransferTextPayloadCodec.payloadKind(for: payment),
+            .offlinePaymentTokenV2
+        )
+        XCTAssertEqual(
+            OfflineNoteV2TransferTextPayloadCodec.payloadKind(for: ack),
+            .offlineReceiptAckV2
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2TransferTextPayloadCodec.decode(challenge, expectedKind: .receiveRequest).payload,
+            payload
+        )
+        XCTAssertThrowsError(try OfflineNoteV2TransferTextPayloadCodec.decode(payment, expectedKind: .receiveRequest))
+    }
+
+    func testTransferTextNearbyEnvelopeRoundTripsKinds() throws {
+        let payload = Data(#"{"version":2}"#.utf8)
+        let challenge = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .receiveRequest)
+        let payment = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .paymentToken)
+        let ack = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .receiptAck)
+        let pairing = try OfflineNoteV2NearbyPairingChallenge(assetName: "nearby_pairing_stars")
+
+        let challengeBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+            payload: challenge,
+            kind: .receiveRequest,
+            pairingChallenge: pairing
+        )
+        let paymentBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+            payload: payment,
+            kind: .paymentToken
+        )
+        let ackBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+            payload: ack,
+            kind: .receiptAck
+        )
+
+        let decodedChallenge = try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+            from: challengeBytes,
+            expectedKind: .receiveRequest
+        )
+        let decodedPayment = try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+            from: paymentBytes,
+            expectedKind: .paymentToken
+        )
+        let decodedAck = try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+            from: ackBytes,
+            expectedKind: .receiptAck
+        )
+
+        XCTAssertEqual(decodedChallenge.kind, .receiveRequest)
+        XCTAssertEqual(decodedChallenge.payload, challenge)
+        XCTAssertEqual(decodedChallenge.pairingChallenge, pairing)
+        XCTAssertEqual(decodedPayment.kind, .paymentToken)
+        XCTAssertEqual(decodedPayment.payload, payment)
+        XCTAssertEqual(decodedAck.kind, .receiptAck)
+        XCTAssertEqual(decodedAck.payload, ack)
+        XCTAssertThrowsError(try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(from: paymentBytes, expectedKind: .receiptAck))
+    }
+
     func testQrStreamRejectsAdversarialEnvelopeAndChunkShapes() throws {
         let payload = makePayload(length: 300)
         let frames = try OfflineQrStreamEncoder.encodeFrames(
@@ -167,7 +239,7 @@ final class OfflineQrStreamTests: XCTestCase {
         XCTAssertNoThrow(try repeatedHeaderDecoder.ingest(frameBytes: header.encode()))
         XCTAssertThrowsError(
             try repeatedHeaderDecoder.ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
-                setUInt16LE(&envelope, offset: 10, value: OfflineQrPayloadKind.offlineReceiveChallengeV2.rawValue)
+                setUInt16LE(&envelope, offset: 10, value: OfflineQrPayloadKind.offlineReceiveRequestV2.rawValue)
             })
         )
 
@@ -383,6 +455,8 @@ final class OfflineQrStreamTests: XCTestCase {
 
         let decoder = OfflineQrStreamDecoder()
         var lastResult: OfflineQrStreamDecodeResult?
+        let context = CIContext()
+        try requireQrDetectorAvailable(context: context)
 
         for (index, textFrame) in textFrames.enumerated() {
             // Step 1: Generate QR image with CIFilter (same as sender)
@@ -401,18 +475,15 @@ final class OfflineQrStreamTests: XCTestCase {
                 continue
             }
 
-            // Scale QR to reasonable pixel size for Vision
-            let scale = CGAffineTransform(scaleX: 10, y: 10)
-            let scaledImage = ciImage.transformed(by: scale)
-            let context = CIContext()
-            guard let cgImage = context.createCGImage(scaledImage, from: scaledImage.extent) else {
+            guard let cgImage = renderedQrImage(ciImage, context: context) else {
                 XCTFail("Frame \(index): cannot create CGImage")
                 continue
             }
+            let renderedImage = CIImage(cgImage: cgImage)
 
             // Step 2: Detect with Vision, falling back to CoreImage on simulator runtimes
             // where Vision barcode inference resources are not installed.
-            guard let detected = try detectQrString(cgImage: cgImage, ciImage: scaledImage, context: context) else {
+            guard let detected = try detectQrString(cgImage: cgImage, ciImage: renderedImage, context: context) else {
                 XCTFail("Frame \(index): QR detector found no payload")
                 continue
             }
@@ -466,6 +537,63 @@ final class OfflineQrStreamTests: XCTestCase {
             .features(in: ciImage)
             .compactMap { ($0 as? CIQRCodeFeature)?.messageString }
             .first
+    }
+
+    private func requireQrDetectorAvailable(context: CIContext) throws {
+        let sentinel = "qr-detector-health-check"
+        guard let textData = sentinel.data(using: .utf8),
+              let filter = CIFilter(name: "CIQRCodeGenerator")
+        else {
+            throw XCTSkip("QR detector health check could not be built")
+        }
+        filter.setValue(textData, forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let ciImage = filter.outputImage,
+              let cgImage = renderedQrImage(ciImage, context: context)
+        else {
+            throw XCTSkip("QR detector health check image could not be rendered")
+        }
+        let detected = try detectQrString(cgImage: cgImage, ciImage: CIImage(cgImage: cgImage), context: context)
+        guard detected == sentinel else {
+            throw XCTSkip("Platform QR detector unavailable in this runtime")
+        }
+    }
+
+    private func renderedQrImage(
+        _ image: CIImage,
+        context: CIContext,
+        quietZoneModules: Int = 4,
+        scale: Int = 10
+    ) -> CGImage? {
+        guard let rawImage = context.createCGImage(image, from: image.extent) else {
+            return nil
+        }
+        let width = (rawImage.width + quietZoneModules * 2) * scale
+        let height = (rawImage.height + quietZoneModules * 2) * scale
+        guard let bitmap = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+        bitmap.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        bitmap.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        bitmap.interpolationQuality = .none
+        bitmap.draw(
+            rawImage,
+            in: CGRect(
+                x: quietZoneModules * scale,
+                y: quietZoneModules * scale,
+                width: rawImage.width * scale,
+                height: rawImage.height * scale
+            )
+        )
+        return bitmap.makeImage()
     }
 
     private func makePayload(length: Int) -> Data {

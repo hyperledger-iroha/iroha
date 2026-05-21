@@ -43,6 +43,8 @@ public final class OfflineNoteV2Test {
     nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
     paymentTokenCodecRoundTripsNoritoTextAndQrFrames();
+    receiveRequestCodecRoundTripsNoritoTextAndQrFrames();
+    receiptAckCodecRoundTripsNoritoTextAndQrFrames();
     qrStreamRejectsAdversarialEnvelopesAndChunkShapes();
     transferHandoffSupportsQrNfcAndNearbyPayloads();
     transferHandoffRejectsAdversarialStreamsAndMetadata();
@@ -586,6 +588,128 @@ public final class OfflineNoteV2Test {
         "canonical QR token id");
   }
 
+  private static void receiveRequestCodecRoundTripsNoritoTextAndQrFrames() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2ReceiveRequest request = receiveRequestFixture(fixture);
+
+    final byte[] norito = OfflineNoteV2ReceiveRequestCodec.encodeNorito(request);
+    final OfflineNoteV2ReceiveRequest noritoDecoded =
+        OfflineNoteV2ReceiveRequestCodec.decodeNorito(norito);
+    assertEquals(request.paymentRequestId(), noritoDecoded.paymentRequestId(), "receive request id");
+    assertEquals(request.accountId(), noritoDecoded.accountId(), "receive request account");
+    assertEquals(request.assetId(), noritoDecoded.assetId(), "receive request asset");
+    assertEquals(request.canonicalAmount(), noritoDecoded.canonicalAmount(), "receive request amount");
+    assertEquals(
+        request.outputCommitmentHex(),
+        noritoDecoded.outputCommitmentHex(),
+        "receive request output commitment");
+    assertEquals(
+        hex(request.keyCertificate().payloadHash()),
+        hex(noritoDecoded.keyCertificate().payloadHash()),
+        "receive request certificate");
+
+    final String text = OfflineNoteV2ReceiveRequestCodec.encodeText(request);
+    assertTrue(
+        text.startsWith(OfflineNoteV2ReceiveRequestCodec.TEXT_PREFIX),
+        "receive request text prefix");
+    assertEquals(
+        request.outputCommitmentHex(),
+        OfflineNoteV2ReceiveRequestCodec.decodeText(text).outputCommitmentHex(),
+        "receive request text output commitment");
+
+    final List<byte[]> frames =
+        OfflineNoteV2ReceiveRequestCodec.encodeQrFrameBytes(
+            request, new OfflineQrStream.Options(180, 2));
+    final OfflineQrStream.Decoder decoder = new OfflineQrStream.Decoder();
+    byte[] payload = null;
+    for (final byte[] frame : frames) {
+      final OfflineQrStream.DecodeResult result = decoder.ingest(frame);
+      assertTrue(
+          OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_REQUEST_V2 == result.payloadKind(),
+          "receive request QR kind");
+      if (result.payload() != null) {
+        payload = result.payload();
+      }
+    }
+    assertTrue(payload != null, "receive request QR payload");
+    assertEquals(
+        request.outputCommitmentHex(),
+        OfflineNoteV2ReceiveRequestCodec.decodeQrPayload(payload).outputCommitmentHex(),
+        "receive request QR output commitment");
+  }
+
+  private static void receiptAckCodecRoundTripsNoritoTextAndQrFrames() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final OfflineNoteV2PaymentToken token =
+        OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")));
+    final OfflineNoteV2ReceiptAck ack =
+        OfflineNoteV2ReceiptAck.fromPaymentToken(
+            token,
+            string(payment, "recipient_account_id"),
+            longValue(obj(fixture, "receipt_ack"), "accepted_at_ms"));
+
+    final byte[] norito = OfflineNoteV2ReceiptAckCodec.encodeNorito(ack);
+    final OfflineNoteV2ReceiptAck noritoDecoded =
+        OfflineNoteV2ReceiptAckCodec.decodeNorito(norito);
+    assertEquals(ack.chainId(), noritoDecoded.chainId(), "receipt ACK chain id");
+    assertEquals(
+        ack.paymentRequestId(),
+        noritoDecoded.paymentRequestId(),
+        "receipt ACK payment request id");
+    assertEquals(ack.tokenIdHex(), noritoDecoded.tokenIdHex(), "receipt ACK token id");
+    assertEquals(
+        ack.recipientAccountId(),
+        noritoDecoded.recipientAccountId(),
+        "receipt ACK recipient account");
+    assertTrue(noritoDecoded.matchesPaymentToken(token), "receipt ACK matches token");
+
+    final String text = OfflineNoteV2ReceiptAckCodec.encodeText(ack);
+    assertTrue(
+        text.startsWith(OfflineNoteV2ReceiptAckCodec.TEXT_PREFIX),
+        "receipt ACK text prefix");
+    assertEquals(
+        ack.tokenIdHex(),
+        OfflineNoteV2ReceiptAckCodec.decodeText(text).tokenIdHex(),
+        "receipt ACK text token id");
+
+    final List<byte[]> frames =
+        OfflineNoteV2ReceiptAckCodec.encodeQrFrameBytes(ack, new OfflineQrStream.Options(180, 2));
+    final OfflineQrStream.Decoder decoder = new OfflineQrStream.Decoder();
+    byte[] payload = null;
+    for (final byte[] frame : frames) {
+      final OfflineQrStream.DecodeResult result = decoder.ingest(frame);
+      assertTrue(
+          OfflineQrStream.PayloadKind.OFFLINE_RECEIPT_ACK_V2 == result.payloadKind(),
+          "receipt ACK QR kind");
+      if (result.payload() != null) {
+        payload = result.payload();
+      }
+    }
+    assertTrue(payload != null, "receipt ACK QR payload");
+    assertEquals(
+        ack.tokenIdHex(),
+        OfflineNoteV2ReceiptAckCodec.decodeQrPayload(payload).tokenIdHex(),
+        "receipt ACK QR token id");
+  }
+
+  private static OfflineNoteV2ReceiveRequest receiveRequestFixture(
+      final Map<String, Object> fixture) {
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    return new OfflineNoteV2ReceiveRequest(
+        string(derivation, "chain_id"),
+        string(derivation, "payment_request_id"),
+        string(payment, "recipient_account_id"),
+        string(payment, "asset_definition_id"),
+        string(payment, "asset_definition_id") + "#" + string(payment, "recipient_account_id"),
+        string(payment, "amount"),
+        certificate(obj(payment, "recipient_key_certificate")),
+        hexBytes(string(derivation, "recipient_output_commitment")));
+  }
+
   private static void qrStreamRejectsAdversarialEnvelopesAndChunkShapes() {
     final byte[] payload = new byte[300];
     for (int index = 0; index < payload.length; index++) {
@@ -773,7 +897,7 @@ public final class OfflineNoteV2Test {
                       writeUInt16LE(
                           envelope,
                           10,
-                          OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_CHALLENGE_V2.value());
+                          OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_REQUEST_V2.value());
                       return envelope;
                     })),
         "conflicting repeated header should fail");
@@ -930,6 +1054,12 @@ public final class OfflineNoteV2Test {
             hexBytes(string(payment, "token_id")),
             audit(fixture),
             longValue(payment, "created_at_ms"));
+    final OfflineNoteV2ReceiveRequest receiveRequest = receiveRequestFixture(fixture);
+    final OfflineNoteV2ReceiptAck receiptAck =
+        OfflineNoteV2ReceiptAck.fromPaymentToken(
+            token,
+            string(payment, "recipient_account_id"),
+            longValue(obj(fixture, "receipt_ack"), "accepted_at_ms"));
     final byte[] canonicalPayload = base64Bytes(string(sdkInterop, "payment_token_norito_base64"));
 
     final OfflineNoteV2TransferHandoff.OfflineNoteV2TransferCapabilities capabilities =
@@ -965,6 +1095,39 @@ public final class OfflineNoteV2Test {
         token.tokenIdHex(),
         OfflineNoteV2TransferHandoff.decodePaymentToken(nearby).tokenIdHex(),
         "nearby token id");
+    final OfflineNoteV2NearbyEnvelope textChallenge =
+        new OfflineNoteV2NearbyEnvelope(
+            OfflineNoteV2NearbyEnvelope.Kind.CHALLENGE,
+            OfflineNoteV2ReceiveRequestCodec.encodeText(receiveRequest).getBytes(StandardCharsets.UTF_8),
+            OfflineNoteV2TransferHandoff.TEXT_RECEIVE_REQUEST_CONTENT_TYPE,
+            OfflineNoteV2NearbyEnvelope.PairingChallenge.random());
+    final OfflineNoteV2NearbyEnvelope decodedTextChallenge =
+        OfflineNoteV2NearbyEnvelope.decode(textChallenge.encoded());
+    assertEquals(
+        receiveRequest.outputCommitmentHex(),
+        decodedTextChallenge.receiveRequest().outputCommitmentHex(),
+        "nearby text challenge payload");
+    final OfflineNoteV2NearbyEnvelope textPayment =
+        new OfflineNoteV2NearbyEnvelope(
+            OfflineNoteV2NearbyEnvelope.Kind.PAYMENT,
+            OfflineNoteV2PaymentTokenCodec.encodeText(token).getBytes(StandardCharsets.UTF_8),
+            OfflineNoteV2TransferHandoff.TEXT_PAYMENT_TOKEN_CONTENT_TYPE);
+    assertEquals(
+        token.tokenIdHex(),
+        OfflineNoteV2NearbyEnvelope.decode(textPayment.encoded()).paymentToken().tokenIdHex(),
+        "nearby text payment payload");
+    final OfflineNoteV2TransferHandoff.OfflineNoteV2TransferPayload ackPayload =
+        OfflineNoteV2TransferHandoff.receiptAckPayload(
+            receiptAck, OfflineNoteV2TransferHandoff.OfflineNoteV2TransferModality.NEARBY);
+    assertEquals(
+        receiptAck.tokenIdHex(),
+        OfflineNoteV2TransferHandoff.decodeReceiptAck(ackPayload).tokenIdHex(),
+        "nearby receipt ACK payload");
+    final byte[] nearbyAckBytes = OfflineNoteV2TransferHandoff.nearbyReceiptAckEnvelopeBytes(receiptAck);
+    assertEquals(
+        receiptAck.tokenIdHex(),
+        OfflineNoteV2TransferHandoff.decodeNearbyReceiptAck(nearbyAckBytes).tokenIdHex(),
+        "nearby receipt ACK envelope");
 
     final List<Object> expectedFrameObjects = list(obj(sdkInterop, "payment_token_qr_v1"), "frames");
     final List<String> expectedFrames = new ArrayList<>();
@@ -1481,13 +1644,19 @@ public final class OfflineNoteV2Test {
     final OfflineNoteV2PaymentToken token =
         OfflineNoteV2PaymentTokenCodec.decodeNorito(
             base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")));
+    final OfflineNoteV2ReceiveRequest receiveRequest = receiveRequestFixture(fixture);
+    final OfflineNoteV2ReceiptAck receiptAck =
+        OfflineNoteV2ReceiptAck.fromPaymentToken(
+            token,
+            string(obj(fixture, "payment_token"), "recipient_account_id"),
+            longValue(obj(fixture, "receipt_ack"), "accepted_at_ms"));
     final OfflineNoteV2NearbyEnvelope.PairingChallenge challenge =
         new OfflineNoteV2NearbyEnvelope.PairingChallenge(" nearby_pairing_bird ");
     final OfflineNoteV2NearbyEnvelope challengeEnvelope =
         new OfflineNoteV2NearbyEnvelope(
             OfflineNoteV2NearbyEnvelope.Kind.CHALLENGE,
-            "receive-challenge".getBytes(StandardCharsets.UTF_8),
-            OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE,
+            OfflineNoteV2TransferHandoff.rawReceiveRequestBytes(receiveRequest),
+            OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE,
             challenge);
     final byte[] paymentBytes = OfflineNoteV2TransferHandoff.nearbyPaymentEnvelopeBytes(token);
     final OfflineNoteV2NearbyEnvelope paymentEnvelope =
@@ -1495,7 +1664,7 @@ public final class OfflineNoteV2Test {
     final OfflineNoteV2NearbyEnvelope ackEnvelope =
         new OfflineNoteV2NearbyEnvelope(
             OfflineNoteV2NearbyEnvelope.Kind.RECEIPT_ACK,
-            "accepted-locally".getBytes(StandardCharsets.UTF_8),
+            OfflineNoteV2TransferHandoff.rawReceiptAckBytes(receiptAck),
             OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE);
 
     assertTrue(
@@ -1503,25 +1672,18 @@ public final class OfflineNoteV2Test {
             OfflineNoteV2NearbyEnvelope.decode(challengeEnvelope.encoded()).pairingChallenge()),
         "challenge pairing roundtrip");
     assertTrue(paymentEnvelope.kind() == OfflineNoteV2NearbyEnvelope.Kind.PAYMENT, "payment kind");
+    assertEquals(
+        receiveRequest.outputCommitmentHex(),
+        OfflineNoteV2NearbyEnvelope.decode(challengeEnvelope.encoded()).receiveRequest().outputCommitmentHex(),
+        "receive request");
     assertEquals(token.tokenIdHex(), paymentEnvelope.paymentToken().tokenIdHex(), "payment token");
     assertEquals(
         token.tokenIdHex(),
         OfflineNoteV2TransferHandoff.decodeNearbyPaymentToken(paymentBytes).tokenIdHex(),
         "payment token handoff decode");
     assertTrue(
-        Arrays.equals(
-            "accepted-locally".getBytes(StandardCharsets.UTF_8),
-            OfflineNoteV2NearbyEnvelope.decode(ackEnvelope.encoded()).payload()),
+        OfflineNoteV2NearbyEnvelope.decode(ackEnvelope.encoded()).receiptAck().matchesPaymentToken(token),
         "ACK payload");
-
-    final byte[] legacyPairing =
-        ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"cmVjZWl2ZS1jaGFsbGVuZ2U\","
-                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
-                + "\"pairingChallenge\":{\"assetName\":\"nearby_pairing_bird\"}}")
-            .getBytes(StandardCharsets.UTF_8);
-    assertTrue(
-        challenge.equals(OfflineNoteV2NearbyEnvelope.decode(legacyPairing).pairingChallenge()),
-        "legacy object pairing challenge");
   }
 
   private static void nearbyEnvelopeRejectsAdversarialMessages() throws Exception {
@@ -1538,7 +1700,7 @@ public final class OfflineNoteV2Test {
             new OfflineNoteV2NearbyEnvelope(
                 OfflineNoteV2NearbyEnvelope.Kind.CHALLENGE,
                 "challenge".getBytes(StandardCharsets.UTF_8),
-                OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE),
+                OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE),
         "challenge without pairing should fail");
     assertThrows(
         () ->
@@ -1568,7 +1730,7 @@ public final class OfflineNoteV2Test {
             new OfflineNoteV2NearbyEnvelope(
                 OfflineNoteV2NearbyEnvelope.Kind.RECEIPT_ACK,
                 "ok".getBytes(StandardCharsets.UTF_8),
-                OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE),
+                OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE),
         "receipt ACK content type downgrade should fail");
 
     final byte[] unsupportedVersion =
@@ -1577,7 +1739,7 @@ public final class OfflineNoteV2Test {
             .getBytes(StandardCharsets.UTF_8);
     final byte[] fractionalVersion =
         ("{\"version\":1.5,\"kind\":\"challenge\",\"payload\":\"YQ\","
-                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-request-v2+norito\","
                 + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] unknownField =
@@ -1587,16 +1749,16 @@ public final class OfflineNoteV2Test {
             .getBytes(StandardCharsets.UTF_8);
     final byte[] challengeContentTypeDowngrade =
         ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"YQ\","
-                + "\"contentType\":\"application/vnd.iroha.offline.receipt-ack-v1+octet-stream\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receipt-ack-v2+norito\","
                 + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] ackContentTypeDowngrade =
         ("{\"version\":1,\"kind\":\"receipt_ack\",\"payload\":\"b2s\","
-                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\"}")
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-request-v2+norito\"}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] paddedPayload =
         ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"YQ==\","
-                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-request-v2+norito\","
                 + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
             .getBytes(StandardCharsets.UTF_8);
     assertThrows(
@@ -1620,22 +1782,22 @@ public final class OfflineNoteV2Test {
     final byte[] topLevelArray = "[]".getBytes(StandardCharsets.UTF_8);
     final byte[] invalidBase64Payload =
         ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"!!!!\","
-                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-request-v2+norito\","
                 + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] badPairingObject =
         ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"YQ\","
-                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-request-v2+norito\","
                 + "\"pairingChallenge\":{\"assetName\":1}}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] smuggledPairingObject =
         ("{\"version\":1,\"kind\":\"challenge\",\"payload\":\"YQ\","
-                + "\"contentType\":\"application/vnd.iroha.offline.receive-challenge-v1+octet-stream\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-request-v2+norito\","
                 + "\"pairingChallenge\":{\"assetName\":\"nearby_pairing_bird\",\"extra\":true}}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] ackWithPairing =
         ("{\"version\":1,\"kind\":\"receipt_ack\",\"payload\":\"b2s\","
-                + "\"contentType\":\"application/vnd.iroha.offline.receipt-ack-v1+octet-stream\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receipt-ack-v2+norito\","
                 + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
             .getBytes(StandardCharsets.UTF_8);
     assertThrows(

@@ -62,8 +62,8 @@ impl QrStreamFrameKind {
 pub enum QrPayloadKind {
     /// No specific payload kind.
     Unspecified = 0,
-    /// Offline V2 receive challenge payload.
-    OfflineReceiveChallengeV2 = 1,
+    /// Offline V2 receive request payload.
+    OfflineReceiveRequestV2 = 1,
     /// Offline V2 payment token payload.
     OfflinePaymentTokenV2 = 2,
     /// Offline V2 optional receipt acknowledgement payload.
@@ -73,7 +73,7 @@ pub enum QrPayloadKind {
 impl QrPayloadKind {
     fn from_u16(value: u16) -> Self {
         match value {
-            1 => Self::OfflineReceiveChallengeV2,
+            1 => Self::OfflineReceiveRequestV2,
             2 => Self::OfflinePaymentTokenV2,
             3 => Self::OfflineReceiptAckV2,
             _ => Self::Unspecified,
@@ -890,7 +890,7 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("unspecified");
         let payload_kind = match payload_kind {
-            "offline_receive_challenge_v2" => QrPayloadKind::OfflineReceiveChallengeV2,
+            "offline_receive_request_v2" => QrPayloadKind::OfflineReceiveRequestV2,
             "offline_payment_token_v2" => QrPayloadKind::OfflinePaymentTokenV2,
             "offline_receipt_ack_v2" => QrPayloadKind::OfflineReceiptAckV2,
             _ => QrPayloadKind::Unspecified,

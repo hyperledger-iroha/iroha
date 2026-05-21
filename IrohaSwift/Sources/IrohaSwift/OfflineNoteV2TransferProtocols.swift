@@ -6,10 +6,12 @@ public enum OfflineNoteV2NfcPayloadKind: UInt8, CaseIterable, Sendable {
     case paymentToken = 2
     case receiptAck = 3
 
+    public static let receiveRequest: OfflineNoteV2NfcPayloadKind = .receiveChallenge
+
     public var qrPayloadKind: OfflineQrPayloadKind {
         switch self {
         case .receiveChallenge:
-            return .offlineReceiveChallengeV2
+            return .offlineReceiveRequestV2
         case .paymentToken:
             return .offlinePaymentTokenV2
         case .receiptAck:
@@ -82,7 +84,15 @@ public enum OfflineNoteV2NfcApduProtocol {
     private static let insCommit: UInt8 = 0x22
 
     public static func selectAidAPDUData() -> Data {
+        selectAidAPDUData(aid: aid)
+    }
+
+    public static func selectAidAPDUData(aid: Data) -> Data {
         Data([0x00, 0xA4, 0x04, 0x00, UInt8(aid.count)]) + aid + Data([0x00])
+    }
+
+    public static func aidHex(for aid: Data) -> String {
+        aid.map { String(format: "%02X", $0) }.joined()
     }
 
     public static func getInfoAPDUData() -> Data {
@@ -190,8 +200,12 @@ public enum OfflineNoteV2NfcApduProtocol {
     }
 
     public static func parseCommand(_ apdu: Data?) -> OfflineNoteV2NfcCommand {
+        parseCommand(apdu, aid: aid)
+    }
+
+    public static func parseCommand(_ apdu: Data?, aid: Data) -> OfflineNoteV2NfcCommand {
         guard let apdu, apdu.count >= 4 else { return .invalid }
-        if isSelectAid(apdu) { return .select }
+        if isSelectAid(apdu, aid: aid) { return .select }
         guard apdu[apdu.startIndex] == cla else { return .unsupported }
         let instruction = apdu[apdu.startIndex + 1]
         let offset = (Int(apdu[apdu.startIndex + 2]) << 8) | Int(apdu[apdu.startIndex + 3])
@@ -298,7 +312,15 @@ public enum OfflineNoteV2NfcApduProtocol {
         peerSupportsExtendedChunks ? maxExtendedWriteChunkBytes : androidSafeChunkBytes
     }
 
-    private static func isSelectAid(_ apdu: Data) -> Bool {
+    public static func isSelectAidAPDU(
+        _ apdu: Data?,
+        aid: Data = OfflineNoteV2NfcApduProtocol.aid
+    ) -> Bool {
+        guard let apdu else { return false }
+        return isSelectAid(apdu, aid: aid)
+    }
+
+    private static func isSelectAid(_ apdu: Data, aid: Data) -> Bool {
         guard apdu.count >= 5,
               apdu[apdu.startIndex] == 0x00,
               apdu[apdu.startIndex + 1] == 0xA4,
@@ -666,6 +688,22 @@ public struct OfflineNoteV2NearbyEnvelope: Codable, Equatable, Sendable {
         return try OfflineNoteV2PaymentTokenCodec.decodeNorito(payload)
     }
 
+    public func receiveRequest() throws -> OfflineNoteV2ReceiveRequest {
+        guard kind == .challenge,
+              contentType == OfflineNoteV2TransferHandoff.receiveRequestContentType else {
+            throw OfflineNoteV2NearbyError.invalidMessage
+        }
+        return try OfflineNoteV2ReceiveRequestCodec.decodeNorito(payload)
+    }
+
+    public func receiptAck() throws -> OfflineNoteV2ReceiptAck {
+        guard kind == .receiptAck,
+              contentType == OfflineNoteV2TransferHandoff.receiptAckContentType else {
+            throw OfflineNoteV2NearbyError.invalidMessage
+        }
+        return try OfflineNoteV2ReceiptAckCodec.decodeNorito(payload)
+    }
+
     private func validateForTransport() throws {
         guard !payload.isEmpty,
               payload.count <= OfflineNoteV2NfcApduProtocol.maxIncomingPayloadBytes,
@@ -675,23 +713,72 @@ public struct OfflineNoteV2NearbyEnvelope: Codable, Equatable, Sendable {
         switch kind {
         case .challenge:
             guard pairingChallenge != nil,
-                  contentType == OfflineNoteV2TransferHandoff.receiveChallengeContentType else {
+                  Self.isContentType(
+                    contentType,
+                    oneOf: [
+                        OfflineNoteV2TransferHandoff.receiveRequestContentType,
+                        OfflineNoteV2TransferHandoff.textReceiveRequestContentType,
+                    ]
+                  ) else {
                 throw OfflineNoteV2NearbyError.invalidMessage
+            }
+            if contentType == OfflineNoteV2TransferHandoff.textReceiveRequestContentType {
+                try requireTextPayload(.receiveRequest)
+            } else {
+                guard (try? OfflineNoteV2ReceiveRequestCodec.decodeNorito(payload)) != nil else {
+                    throw OfflineNoteV2NearbyError.invalidMessage
+                }
             }
         case .payment:
             guard pairingChallenge == nil,
-                  contentType == OfflineNoteV2TransferHandoff.paymentTokenContentType,
-                  (try? OfflineNoteV2PaymentTokenCodec.decodeNorito(payload)) != nil else {
+                  Self.isContentType(
+                    contentType,
+                    oneOf: [
+                        OfflineNoteV2TransferHandoff.paymentTokenContentType,
+                        OfflineNoteV2TransferHandoff.textPaymentTokenContentType,
+                    ]
+                  ) else {
                 throw OfflineNoteV2NearbyError.invalidMessage
+            }
+            if contentType == OfflineNoteV2TransferHandoff.paymentTokenContentType {
+                guard (try? OfflineNoteV2PaymentTokenCodec.decodeNorito(payload)) != nil else {
+                    throw OfflineNoteV2NearbyError.invalidMessage
+                }
+            } else {
+                try requireTextPayload(.paymentToken)
             }
         case .receiptAck:
             guard pairingChallenge == nil,
-                  contentType == OfflineNoteV2TransferHandoff.receiptAckContentType else {
+                  Self.isContentType(
+                    contentType,
+                    oneOf: [
+                        OfflineNoteV2TransferHandoff.receiptAckContentType,
+                        OfflineNoteV2TransferHandoff.textReceiptAckContentType,
+                    ]
+                  ) else {
                 throw OfflineNoteV2NearbyError.invalidMessage
+            }
+            if contentType == OfflineNoteV2TransferHandoff.textReceiptAckContentType {
+                try requireTextPayload(.receiptAck)
+            } else {
+                guard (try? OfflineNoteV2ReceiptAckCodec.decodeNorito(payload)) != nil else {
+                    throw OfflineNoteV2NearbyError.invalidMessage
+                }
             }
         case .rejected:
             guard pairingChallenge == nil else { throw OfflineNoteV2NearbyError.invalidMessage }
         }
+    }
+
+    private func requireTextPayload(_ expectedKind: OfflineNoteV2TextPayloadKind) throws {
+        guard let payloadText = String(data: payload, encoding: .utf8),
+              OfflineNoteV2TransferHandoff.isValidTextTransportPayload(payloadText, expectedKind: expectedKind) else {
+            throw OfflineNoteV2NearbyError.invalidMessage
+        }
+    }
+
+    private static func isContentType(_ value: String, oneOf allowedValues: [String]) -> Bool {
+        allowedValues.contains(value)
     }
 
     private enum CodingKeys: String, CodingKey {

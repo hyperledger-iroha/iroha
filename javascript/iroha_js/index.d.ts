@@ -8348,7 +8348,7 @@ export const OfflineQrStreamFrameEncoding: Readonly<{
 
 export const OfflineQrPayloadKind: Readonly<{
   unspecified: number;
-  offlineReceiveChallengeV2: number;
+  offlineReceiveRequestV2: number;
   offlinePaymentTokenV2: number;
   offlineReceiptAckV2: number;
 }>;

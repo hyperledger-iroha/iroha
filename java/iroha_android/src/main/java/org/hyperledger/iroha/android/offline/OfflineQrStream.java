@@ -52,6 +52,7 @@ public final class OfflineQrStream {
 
   public enum PayloadKind {
     UNSPECIFIED(0),
+    OFFLINE_RECEIVE_REQUEST_V2(1),
     OFFLINE_RECEIVE_CHALLENGE_V2(1),
     OFFLINE_PAYMENT_TOKEN_V2(2),
     OFFLINE_RECEIPT_ACK_V2(3);
