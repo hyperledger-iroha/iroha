@@ -1146,6 +1146,12 @@ impl From<crate::isi::oracle::RollbackOracleChange> for InstructionBox {
     }
 }
 
+impl From<crate::isi::oracle::SubmitDefiOracleAttestation> for InstructionBox {
+    fn from(i: crate::isi::oracle::SubmitDefiOracleAttestation) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::oracle::RecordTwitterBinding> for InstructionBox {
     fn from(i: crate::isi::oracle::RecordTwitterBinding) -> Self {
         InstructionBox(Box::new(i))
@@ -2856,6 +2862,8 @@ pub mod confidential;
 pub mod content;
 /// Contract alias binding instructions.
 pub mod contract_alias;
+/// DeFi-native instructions.
+pub mod defi;
 /// Account subject and domain link instructions.
 pub mod domain_link;
 /// Ledger-managed asset escrow instructions.
@@ -2900,8 +2908,6 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instructions.
 pub mod sorafs;
-/// SoraSwap DeFi-native instructions.
-pub mod soraswap;
 /// Space Directory manifest instructions.
 pub mod space_directory;
 /// Public lane staking instructions.
@@ -2922,6 +2928,7 @@ pub use asset_alias::*;
 pub use asset_transfer_control::*;
 pub use confidential::*;
 pub use contract_alias::*;
+pub use defi::*;
 pub use domain_link::*;
 pub use identifier::*;
 pub use kaigi::*;
@@ -2937,7 +2944,6 @@ pub use settlement::*;
 pub use sns::*;
 pub use soradns::*;
 pub use sorafs::*;
-pub use soraswap::*;
 pub use space_directory::*;
 pub use staking::*;
 pub use transfer::*;

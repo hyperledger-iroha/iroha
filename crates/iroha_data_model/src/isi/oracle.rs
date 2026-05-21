@@ -3,9 +3,9 @@ use iroha_primitives::numeric::Numeric;
 use super::*;
 use crate::{
     oracle::{
-        FeedConfig, FeedId, FeedSlot, KeyedHash, Observation, OracleChangeClass, OracleChangeId,
-        OracleChangeStage, OracleDisputeId, OracleDisputeOutcome, OracleId,
-        TwitterBindingAttestation,
+        DefiOracleAttestation, FeedConfig, FeedId, FeedSlot, KeyedHash, Observation,
+        OracleChangeClass, OracleChangeId, OracleChangeStage, OracleDisputeId,
+        OracleDisputeOutcome, OracleId, TwitterBindingAttestation,
     },
     prelude::Hash,
 };
@@ -122,6 +122,14 @@ isi! {
 }
 
 isi! {
+    /// Submit a native Soracles attestation carrying DeFi ABI-compatible oracle bytes.
+    pub struct SubmitDefiOracleAttestation {
+        /// Attestation payload and compatibility signature.
+        pub attestation: DefiOracleAttestation,
+    }
+}
+
+isi! {
     /// Record a twitter follow binding attestation.
     pub struct RecordTwitterBinding {
         /// Attestation payload produced by the oracle committee.
@@ -149,6 +157,7 @@ impl crate::seal::Instruction for ResolveOracleDispute {}
 impl crate::seal::Instruction for ProposeOracleChange {}
 impl crate::seal::Instruction for VoteOracleChangeStage {}
 impl crate::seal::Instruction for RollbackOracleChange {}
+impl crate::seal::Instruction for SubmitDefiOracleAttestation {}
 impl crate::seal::Instruction for RecordTwitterBinding {}
 impl crate::seal::Instruction for RevokeTwitterBinding {}
 
@@ -462,6 +471,26 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RollbackOracleChange {
     }
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for SubmitDefiOracleAttestation {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = oracle_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let attestation = super::decode_aos_canonical_field::<DefiOracleAttestation>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { attestation }, offset))
+    }
+}
+
 impl<'a> norito::core::DecodeFromSlice<'a> for RecordTwitterBinding {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
@@ -529,7 +558,10 @@ mod tests {
     use super::*;
     use crate::{
         nexus::UniversalAccountId,
-        oracle::{FeedConfigVersion, TwitterBindingStatus, kits},
+        oracle::{
+            DefiOracleAttestationKey, DefiOracleAttestationSource, FeedConfigVersion,
+            TwitterBindingStatus, kits,
+        },
     };
 
     fn feed() -> FeedConfig {
@@ -569,6 +601,27 @@ mod tests {
             request_hash: kit.connector_request.request_hash(),
             slot: kit.connector_request.slot,
             feed_config_version: FeedConfigVersion(1),
+        }
+    }
+
+    fn defi_attestation() -> DefiOracleAttestation {
+        DefiOracleAttestation {
+            key: DefiOracleAttestationKey::new(1, 42),
+            provider: observation().body.provider_id,
+            oracle_slot: 11,
+            status_flags: 0,
+            attestation_hash: 17,
+            oracle_payload: br#"{"domain":1,"market_id":42,"mark_price_bps":10000,"index_price_bps":10000,"confidence_bps":5,"oracle_slot":11,"status_flags":0,"attestation_hash":17}"#
+                .to_vec(),
+            oracle_signature: vec![7; 64],
+            signer_public_key: vec![9; 32],
+            oracle_scheme: 1,
+            source_events: vec![DefiOracleAttestationSource {
+                feed_id: feed().feed_id,
+                slot: 11,
+                request_hash: request_hash(),
+                field: "mark_price_bps".to_owned(),
+            }],
         }
     }
 
@@ -625,6 +678,7 @@ mod tests {
         ProposeOracleChange,
         VoteOracleChangeStage,
         RollbackOracleChange,
+        SubmitDefiOracleAttestation,
         RecordTwitterBinding,
         RevokeTwitterBinding,
     ) {
@@ -674,6 +728,9 @@ mod tests {
                 stage: Some(OracleChangeStage::CopReview),
                 reason: "insufficient evidence".to_owned(),
             },
+            SubmitDefiOracleAttestation {
+                attestation: defi_attestation(),
+            },
             RecordTwitterBinding {
                 attestation: attestation.clone(),
                 feed_id: kits::twitter_follow_binding().feed_config.feed_id,
@@ -696,6 +753,7 @@ mod tests {
             propose,
             vote,
             rollback,
+            submit_defi,
             record_binding,
             revoke_binding,
         ) = sample_values();
@@ -708,6 +766,7 @@ mod tests {
         assert_slice_roundtrip(propose);
         assert_slice_roundtrip(vote);
         assert_slice_roundtrip(rollback);
+        assert_slice_roundtrip(submit_defi);
         assert_slice_roundtrip(record_binding);
         assert_slice_roundtrip(revoke_binding);
     }
@@ -723,6 +782,7 @@ mod tests {
             propose,
             vote,
             rollback,
+            submit_defi,
             record_binding,
             revoke_binding,
         ) = sample_values();
@@ -735,6 +795,7 @@ mod tests {
         assert_framed_rejects_truncated(&propose);
         assert_framed_rejects_truncated(&vote);
         assert_framed_rejects_truncated(&rollback);
+        assert_framed_rejects_truncated(&submit_defi);
         assert_framed_rejects_truncated(&record_binding);
         assert_framed_rejects_truncated(&revoke_binding);
     }
@@ -750,6 +811,7 @@ mod tests {
             .register_slice::<ProposeOracleChange>()
             .register_slice::<VoteOracleChangeStage>()
             .register_slice::<RollbackOracleChange>()
+            .register_slice::<SubmitDefiOracleAttestation>()
             .register_slice::<RecordTwitterBinding>()
             .register_slice::<RevokeTwitterBinding>();
         let (
@@ -761,6 +823,7 @@ mod tests {
             propose,
             vote,
             rollback,
+            submit_defi,
             record_binding,
             revoke_binding,
         ) = sample_values();
@@ -773,6 +836,7 @@ mod tests {
         assert_registry_decodes(&registry, propose);
         assert_registry_decodes(&registry, vote);
         assert_registry_decodes(&registry, rollback);
+        assert_registry_decodes(&registry, submit_defi);
         assert_registry_decodes(&registry, record_binding);
         assert_registry_decodes(&registry, revoke_binding);
     }

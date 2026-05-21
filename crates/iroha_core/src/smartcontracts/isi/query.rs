@@ -63,6 +63,7 @@ fn ensure_query_registry_initialized() {
         dm_query::ErasedIterQuery<dm::oracle::OracleDispute>,
         dm_query::ErasedIterQuery<dm::oracle::OracleChangeProposal>,
         dm_query::ErasedIterQuery<dm::oracle::TwitterBindingRecord>,
+        dm_query::ErasedIterQuery<dm::oracle::DefiOracleAttestation>,
         dm_query::ErasedIterQuery<dm::escrow::AssetEscrowRecord>,
         dm_query::ErasedIterQuery<dm::escrow::AnonymousAssetEscrowRecord>,
     ]);
@@ -465,6 +466,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindOracleProviderStatsByKey(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindLatestDefiOracleAttestation(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindDomainEndorsements(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -634,6 +638,8 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
             dm::oracle::OracleChangeProposal => dm::query::oracle::prelude::FindOracleChanges,
             dm::oracle::TwitterBindingRecord =>
                 dm::query::oracle::prelude::FindTwitterBindingsByUaid,
+            dm::oracle::DefiOracleAttestation =>
+                dm::query::oracle::prelude::FindDefiOracleAttestationsByKey,
             dm::query::CommittedTransaction => dm::query::transaction::prelude::FindTransactions,
             dm::escrow::AssetEscrowRecord => dm::query::escrow::prelude::FindAssetEscrows,
             dm::escrow::AnonymousAssetEscrowRecord =>
@@ -755,6 +761,18 @@ impl SortableQueryOutput for iroha_data_model::oracle::TwitterBindingRecord {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         self.binding_digest()
+    }
+}
+
+impl SortableQueryOutput for iroha_data_model::oracle::DefiOracleAttestation {
+    type TiebreakKey = (iroha_data_model::oracle::DefiOracleAttestationKey, u64);
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        (self.key, self.oracle_slot)
     }
 }
 
@@ -2473,6 +2491,9 @@ impl ValidQueryRequest {
                             QueryItemKind::TwitterBindingRecord => {
                                 run_payload_or_default!(require_payload iroha_data_model::oracle::TwitterBindingRecord, iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid)
                             }
+                            QueryItemKind::DefiOracleAttestation => {
+                                run_payload_or_default!(require_payload iroha_data_model::oracle::DefiOracleAttestation, iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey)
+                            }
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
                             }
@@ -2602,7 +2623,8 @@ impl ValidQueryRequest {
                         ),
                         QueryItemKind::OracleFeedEventRecord
                         | QueryItemKind::OracleProviderStatsRecord
-                        | QueryItemKind::TwitterBindingRecord => {
+                        | QueryItemKind::TwitterBindingRecord
+                        | QueryItemKind::DefiOracleAttestation => {
                             return Err(Error::Conversion(
                                 "missing or malformed query payload".into(),
                             ));
@@ -2727,7 +2749,8 @@ impl ValidQueryRequest {
                         ),
                         QueryItemKind::OracleFeedEventRecord
                         | QueryItemKind::OracleProviderStatsRecord
-                        | QueryItemKind::TwitterBindingRecord => {
+                        | QueryItemKind::TwitterBindingRecord
+                        | QueryItemKind::DefiOracleAttestation => {
                             return Err(Error::Conversion(
                                 "missing or malformed query payload".into(),
                             ));
@@ -2862,7 +2885,8 @@ impl ValidQueryRequest {
                         ),
                         QueryItemKind::OracleFeedEventRecord
                         | QueryItemKind::OracleProviderStatsRecord
-                        | QueryItemKind::TwitterBindingRecord => {
+                        | QueryItemKind::TwitterBindingRecord
+                        | QueryItemKind::DefiOracleAttestation => {
                             return Err(Error::Conversion(
                                 "missing or malformed query payload".into(),
                             ));
@@ -3520,6 +3544,27 @@ impl ValidQueryRequest {
                 )? {
                     return Ok(resp);
                 }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::oracle::DefiOracleAttestation,
+                    iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    replay_state.clone(),
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey,
+                        >(e)
+                    },
+                )? {
+                    return Ok(resp);
+                }
 
                 Err(Error::Conversion(
                     "unsupported iterable query type".to_string(),
@@ -3905,6 +3950,9 @@ impl ValidQueryRequest {
                             ),
                             QueryItemKind::TwitterBindingRecord => {
                                 run_payload_or_default!(require_payload iroha_data_model::oracle::TwitterBindingRecord, iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid)
+                            }
+                            QueryItemKind::DefiOracleAttestation => {
+                                run_payload_or_default!(require_payload iroha_data_model::oracle::DefiOracleAttestation, iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey)
                             }
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
@@ -4502,6 +4550,27 @@ impl ValidQueryRequest {
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindTwitterBindingsByUaid,
+                        >(e)
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::oracle::DefiOracleAttestation,
+                    iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::oracle::prelude::FindDefiOracleAttestationsByKey,
                         >(e)
                     },
                 )? {

@@ -70,7 +70,7 @@ Flags of note:
 - `--audit-only` trims the run to the JSON report (no conversion).
 - `--allow-errors` keeps scanning when malformed rows are present; the behaviour
   matches the CLI flags exposed by `iroha tools address audit/normalize`.
-- `IROHA_CLI_BIN=/path/to/iroha scripts/address_local_toolkit.sh …` overrides
+- `IROHA_BIN=/path/to/iroha scripts/address_local_toolkit.sh …` overrides
   the CLI binary (for example inside CI containers).
 
 ### 2.2 JSON report format

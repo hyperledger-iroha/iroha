@@ -84,8 +84,8 @@ use iroha_data_model::{
     },
     nft::{NftEntry, NftValue},
     oracle::{
-        FeedConfig, FeedId, OracleDispute, OracleDisputeId, OracleProviderKey, OracleProviderStats,
-        TwitterBindingRecord,
+        DefiOracleAttestation, DefiOracleAttestationKey, FeedConfig, FeedId, OracleDispute,
+        OracleDisputeId, OracleProviderKey, OracleProviderStats, TwitterBindingRecord,
     },
     parameter::{CustomParameterId, Parameters, system::SumeragiNposParameters},
     peer::PeerId,
@@ -410,6 +410,7 @@ macro_rules! build_world_block {
             oracle_provider_stats: $state.oracle_provider_stats.$method(),
             oracle_disputes: $state.oracle_disputes.$method(),
             oracle_changes: $state.oracle_changes.$method(),
+            defi_oracle_attestations: $state.defi_oracle_attestations.$method(),
             twitter_bindings: $state.twitter_bindings.$method(),
             twitter_bindings_by_uaid: $state.twitter_bindings_by_uaid.$method(),
             viral_reward_budget: $state.viral_reward_budget.$method(),
@@ -610,6 +611,7 @@ macro_rules! build_world_transaction {
             oracle_provider_stats: $state.oracle_provider_stats.transaction(),
             oracle_disputes: $state.oracle_disputes.transaction(),
             oracle_changes: $state.oracle_changes.transaction(),
+            defi_oracle_attestations: $state.defi_oracle_attestations.transaction(),
             twitter_bindings: $state.twitter_bindings.transaction(),
             twitter_bindings_by_uaid: $state.twitter_bindings_by_uaid.transaction(),
             viral_reward_budget: $state.viral_reward_budget.transaction(),
@@ -1714,6 +1716,9 @@ pub struct World {
         iroha_data_model::oracle::OracleChangeId,
         iroha_data_model::oracle::OracleChangeProposal,
     >,
+    /// Retained DeFi oracle attestations keyed by domain and subject id.
+    pub(crate) defi_oracle_attestations:
+        Storage<DefiOracleAttestationKey, Vec<DefiOracleAttestation>>,
     /// Twitter follow binding attestations keyed by binding digest.
     pub(crate) twitter_bindings: Storage<Hash, TwitterBindingRecord>,
     /// Inverted index from UAID to binding digests.
@@ -2185,6 +2190,9 @@ pub struct WorldBlock<'world> {
         iroha_data_model::oracle::OracleChangeId,
         iroha_data_model::oracle::OracleChangeProposal,
     >,
+    /// Retained DeFi oracle attestations.
+    pub(crate) defi_oracle_attestations:
+        StorageBlock<'world, DefiOracleAttestationKey, Vec<DefiOracleAttestation>>,
     /// Twitter follow binding attestations keyed by binding digest.
     pub(crate) twitter_bindings: StorageBlock<'world, Hash, TwitterBindingRecord>,
     /// Inverted index from UAID to binding digests.
@@ -2790,6 +2798,9 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::oracle::OracleChangeId,
         iroha_data_model::oracle::OracleChangeProposal,
     >,
+    /// Retained DeFi oracle attestations.
+    pub(crate) defi_oracle_attestations:
+        StorageTransaction<'block, 'world, DefiOracleAttestationKey, Vec<DefiOracleAttestation>>,
     /// Twitter follow binding attestations keyed by binding digest.
     pub(crate) twitter_bindings: StorageTransaction<'block, 'world, Hash, TwitterBindingRecord>,
     /// Inverted index from UAID to binding digests.
@@ -4235,6 +4246,9 @@ pub struct WorldView<'world> {
         iroha_data_model::oracle::OracleChangeId,
         iroha_data_model::oracle::OracleChangeProposal,
     >,
+    /// Retained DeFi oracle attestations.
+    pub(crate) defi_oracle_attestations:
+        StorageView<'world, DefiOracleAttestationKey, Vec<DefiOracleAttestation>>,
     /// Twitter follow binding attestations keyed by binding digest.
     pub(crate) twitter_bindings: StorageView<'world, Hash, TwitterBindingRecord>,
     /// Inverted index from UAID to binding digests.
@@ -13256,6 +13270,7 @@ impl World {
             oracle_provider_stats: self.oracle_provider_stats.view(),
             oracle_disputes: self.oracle_disputes.view(),
             oracle_changes: self.oracle_changes.view(),
+            defi_oracle_attestations: self.defi_oracle_attestations.view(),
             twitter_bindings: self.twitter_bindings.view(),
             twitter_bindings_by_uaid: self.twitter_bindings_by_uaid.view(),
             viral_reward_budget: self.viral_reward_budget.view(),
@@ -13639,6 +13654,10 @@ pub trait WorldReadOnly {
         iroha_data_model::oracle::OracleChangeId,
         iroha_data_model::oracle::OracleChangeProposal,
     >;
+    /// Retained DeFi oracle attestations keyed by domain and subject id.
+    fn defi_oracle_attestations(
+        &self,
+    ) -> &impl StorageReadOnly<DefiOracleAttestationKey, Vec<DefiOracleAttestation>>;
     /// Twitter follow binding attestations keyed by binding digest.
     fn twitter_bindings(&self) -> &impl StorageReadOnly<Hash, TwitterBindingRecord>;
     /// Inverted index from UAID to binding digests.
@@ -14973,6 +14992,14 @@ macro_rules! impl_world_ro {
             > {
                 &self.oracle_changes
             }
+            fn defi_oracle_attestations(
+                &self,
+            ) -> &impl StorageReadOnly<
+                DefiOracleAttestationKey,
+                Vec<DefiOracleAttestation>,
+            > {
+                &self.defi_oracle_attestations
+            }
             fn twitter_bindings(
                 &self,
             ) -> &impl StorageReadOnly<Hash, TwitterBindingRecord> {
@@ -15687,6 +15714,7 @@ impl<'world> WorldBlock<'world> {
             oracle_provider_stats,
             oracle_disputes,
             oracle_changes,
+            defi_oracle_attestations,
             twitter_bindings,
             twitter_bindings_by_uaid,
             viral_reward_budget,
@@ -15925,6 +15953,7 @@ impl<'world> WorldBlock<'world> {
         oracle_provider_stats.commit();
         oracle_disputes.commit();
         oracle_changes.commit();
+        defi_oracle_attestations.commit();
         oracle_history.commit();
         oracle_observations.commit();
         oracle_feeds.commit();
@@ -16954,6 +16983,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             oracle_provider_stats,
             oracle_disputes,
             oracle_changes,
+            defi_oracle_attestations,
             twitter_bindings,
             twitter_bindings_by_uaid,
             viral_reward_budget,
@@ -17171,6 +17201,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         tx_sequences.apply();
         oracle_disputes.apply();
         oracle_changes.apply();
+        defi_oracle_attestations.apply();
         oracle_provider_stats.apply();
         oracle_history.apply();
         oracle_observations.apply();
@@ -33331,6 +33362,7 @@ pub(crate) mod deserialize {
         let oracle_provider_stats = take_optional_default(&mut map, "oracle_provider_stats")?;
         let oracle_disputes = take_optional_default(&mut map, "oracle_disputes")?;
         let oracle_changes = take_optional_default(&mut map, "oracle_changes")?;
+        let defi_oracle_attestations = take_optional_default(&mut map, "defi_oracle_attestations")?;
         let twitter_bindings = take_optional_default(&mut map, "twitter_bindings")?;
         let twitter_bindings_by_uaid = take_optional_default(&mut map, "twitter_bindings_by_uaid")?;
         let tx_sequences: Storage<AccountId, u64> =
@@ -33503,6 +33535,7 @@ pub(crate) mod deserialize {
             oracle_provider_stats,
             oracle_disputes,
             oracle_changes,
+            defi_oracle_attestations,
             twitter_bindings,
             twitter_bindings_by_uaid,
             viral_reward_budget: Cell::default(),

@@ -6,6 +6,7 @@ use crate::{
     isi::{
         ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,
         RegisterPeerWithPop, RevokeIdentifier,
+        defi::DeFiInstructionBox,
         rwa::RwaInstructionBox,
         soracloud::{
             AcknowledgeSoracloudAgentMessage, AdvanceSoracloudRollout, AdvertiseSoracloudInrouHost,
@@ -28,7 +29,6 @@ use crate::{
             SetSoracloudServiceConfig, SetSoracloudServiceSecret, StartSoracloudTrainingJob,
             UpgradeSoracloudService, WithdrawSoracloudInrouHost, WithdrawSoracloudModelHost,
         },
-        soraswap::SoraSwapInstructionBox,
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
             RegisterPublicLaneValidator,
@@ -129,9 +129,9 @@ pub trait Visit {
     fn visit_rwa_instruction_box(&mut self, operation: &RwaInstructionBox) {
         visit_rwa_instruction_box(self, operation);
     }
-    /// Visit a grouped SoraSwap DeFi instruction.
-    fn visit_soraswap_instruction_box(&mut self, operation: &SoraSwapInstructionBox) {
-        visit_soraswap_instruction_box(self, operation);
+    /// Visit a grouped DeFi instruction.
+    fn visit_defi_instruction_box(&mut self, operation: &DeFiInstructionBox) {
+        visit_defi_instruction_box(self, operation);
     }
 }
 
