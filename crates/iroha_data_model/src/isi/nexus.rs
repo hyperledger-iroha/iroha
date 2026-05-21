@@ -41,6 +41,10 @@ iroha_data_model_derive::model_single! {
         pub envelope: LaneRelayEnvelope,
         /// FASTPQ/AXT proof blob used to verify the relay payload.
         pub proof_blob: ProofBlob,
+        /// Optional FASTPQ/AXT business-effect proof whose binding is persisted for contracts.
+        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(default)]
+        pub effect_proof_blob: Option<ProofBlob>,
     }
 }
 
@@ -153,6 +157,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterVerifiedLaneRelay {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let effect_proof_blob = if offset == bytes.len() {
+            None
+        } else {
+            super::decode_aos_canonical_field::<Option<ProofBlob>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?
+        };
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -161,6 +173,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterVerifiedLaneRelay {
             Self {
                 envelope,
                 proof_blob,
+                effect_proof_blob,
             },
             offset,
         ))
@@ -301,6 +314,7 @@ mod tests {
         RegisterVerifiedLaneRelay {
             envelope: sample_envelope(5),
             proof_blob: sample_proof_blob(0x01),
+            effect_proof_blob: None,
         }
     }
 
@@ -351,6 +365,7 @@ mod tests {
         let right = RegisterVerifiedLaneRelay {
             envelope: sample_envelope(5),
             proof_blob: sample_proof_blob(0x02),
+            effect_proof_blob: None,
         };
 
         assert_eq!(

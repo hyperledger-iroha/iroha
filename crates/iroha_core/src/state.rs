@@ -21507,9 +21507,50 @@ impl State {
             .map_err(|_| LaneRelayError::InvalidFastpqProof)
     }
 
+    fn exact_pointer_abi_tlv_payload(
+        payload: &[u8],
+    ) -> core::result::Result<Option<(ivm::PointerType, &[u8])>, LaneRelayError> {
+        if payload.len() < 7 + Hash::LENGTH {
+            return Ok(None);
+        }
+        let inner_len =
+            u32::from_be_bytes([payload[3], payload[4], payload[5], payload[6]]) as usize;
+        let total_len = 7usize
+            .checked_add(inner_len)
+            .and_then(|len| len.checked_add(Hash::LENGTH))
+            .ok_or(LaneRelayError::InvalidFastpqProof)?;
+        if total_len != payload.len() {
+            return Ok(None);
+        }
+        let tlv =
+            ivm::validate_tlv_bytes(payload).map_err(|_| LaneRelayError::InvalidFastpqProof)?;
+        Ok(Some((tlv.type_id, tlv.payload)))
+    }
+
+    fn verified_lane_relay_record_json_payload(
+        payload: &[u8],
+    ) -> core::result::Result<&[u8], LaneRelayError> {
+        let Some((outer_type, outer_payload)) = Self::exact_pointer_abi_tlv_payload(payload)?
+        else {
+            return Ok(payload);
+        };
+        if outer_type != ivm::PointerType::NoritoBytes {
+            return Err(LaneRelayError::InvalidFastpqProof);
+        }
+        let Some((inner_type, inner_payload)) = Self::exact_pointer_abi_tlv_payload(outer_payload)?
+        else {
+            return Err(LaneRelayError::InvalidFastpqProof);
+        };
+        if inner_type != ivm::PointerType::Blob {
+            return Err(LaneRelayError::InvalidFastpqProof);
+        }
+        Ok(inner_payload)
+    }
+
     fn decode_verified_lane_relay_record_state(
         payload: &[u8],
     ) -> core::result::Result<VerifiedLaneRelayRecord, LaneRelayError> {
+        let payload = Self::verified_lane_relay_record_json_payload(payload)?;
         let json: iroha_primitives::json::Json =
             norito::decode_from_bytes(payload).map_err(|_| LaneRelayError::InvalidFastpqProof)?;
         norito::json::from_slice(json.get().as_bytes())

@@ -523,6 +523,16 @@ impl Actor {
                 })
     }
 
+    pub(super) fn clear_validation_ownership_for_block(&mut self, hash: HashOf<BlockHeader>) {
+        self.subsystems.validation.inflight.remove(&hash);
+        self.subsystems.validation.vnext_inflight.remove(&hash);
+        self.subsystems.validation.superseded_results.remove(&hash);
+        for round in self.vnext_rounds.values_mut() {
+            round.slots.remove(&hash);
+        }
+        self.vnext_rounds.retain(|_, round| !round.slots.is_empty());
+    }
+
     pub(super) fn validation_inflight_inline_reason(
         &self,
         hash: HashOf<BlockHeader>,
