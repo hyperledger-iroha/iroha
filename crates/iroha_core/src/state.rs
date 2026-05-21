@@ -29144,8 +29144,15 @@ mod replay_validation_tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn replay_uses_commit_roster_journal_for_signature_order() {
+        run_replay_validation_test_on_stack(
+            "replay_uses_commit_roster_journal_for_signature_order",
+            replay_uses_commit_roster_journal_for_signature_order_impl,
+        );
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn replay_uses_commit_roster_journal_for_signature_order_impl() {
         use std::{borrow::Cow, collections::BTreeSet};
 
         use iroha_config::{
