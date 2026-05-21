@@ -1242,7 +1242,10 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
         };
 
         let network_dir = network.env_dir().to_path_buf();
-        let http = HttpClient::new();
+        let http = HttpClient::builder()
+            .tls_built_in_root_certs(false)
+            .build()
+            .wrap_err("build local HTTP client for realistic throughput soak")?;
         let mut artifacts = ThroughputArtifacts::default();
 
         let run_result: Result<()> = async {

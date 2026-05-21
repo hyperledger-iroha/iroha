@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-05-20
+Last updated: 2026-05-21
 
 ## 2026-05-20 LFDT governance feedback response
 
@@ -64,11 +64,25 @@ Last updated: 2026-05-20
   - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo test -p iroha_torii --lib sccp -- --test-threads=1 --nocapture`
   - `env -u LOG_FORMAT target/codex-autoscale-params/debug/deps/fixtures-81f97a218bdf7f57 minimal_config_snapshot --nocapture`
   - `rustfmt --edition 2024 integration_tests/tests/queries/proof.rs crates/iroha_torii/src/routing.rs crates/iroha_config/src/parameters/defaults.rs crates/iroha_config/tests/fixtures.rs crates/iroha/src/client.rs`
+  - `cargo fmt --all -- --check`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo clippy -p iroha_config --tests -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo clippy -p iroha --lib -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo clippy -p iroha_torii --lib -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo clippy -p integration_tests --test queries_and_proofs --test network_functional -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo clippy -p integration_tests --test nexus_and_streaming -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo build --workspace`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo test --workspace --no-run`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test nexus_and_streaming routed_submit_response -- --test-threads=1 --nocapture`
   - `git diff --check`
   - `scripts/check_no_scale.sh`
 - The patched proof scenario and the full `queries_and_proofs` binary are now
-  green. The earlier local loader stall was cleared by terminating stuck child
-  test executables; no `cargo` or `rustc` process was killed.
+  green. Full workspace build and full workspace test-target compilation are
+  also green. The broad test compile exposed a missing
+  `RoutedTransactionSubmitResponse` import in the `nexus_and_streaming`
+  integration test module; that narrow compile blocker was fixed and covered
+  with focused clippy plus routed-submit transient tests. The earlier local
+  loader stall was cleared by terminating stuck child test executables; no
+  `cargo` or `rustc` process was killed.
 
 ## 2026-05-20 SCCP audit hardening
 
@@ -94,6 +108,33 @@ Last updated: 2026-05-20
 - Torii no longer has a test-only synthetic SCCP transparent-proof override.
   Message submission with settlement data now follows the same proof gate as
   production and rejects disabled lanes before settlement scaffolding.
+- SCCP transparent proof negative coverage now includes OpenVerify auxiliary
+  data injection, public-input column tampering, backend proof byte tampering,
+  cross-bundle replay, raw OpenVerify envelope recovery, and truncated typed
+  artifact recovery.
+- Additional SCCP adversarial coverage rejects wrong OpenVerify backend tags,
+  wrong circuit ids, schema descriptor tampering, malformed or non-v1 nested
+  OpenProof payloads, message-bundle finality-root mismatches, commitment
+  payload-hash tampering, post-commitment payload substitution, and truncated
+  finality bytes.
+- Further SCCP negative coverage now rejects finality/QC header-field
+  tampering, message bundle version/target/message-id/Merkle-path tampering,
+  burn bundle message-id/payload-hash/Merkle-path tampering, and Torii proof
+  submit requests that provide zero or two SCCP bundle families.
+- Latest SCCP adversarial coverage rejects corrupted runtime envelopes,
+  malformed OpenVerify summary envelope shapes, finality proofs with empty
+  signer bitmaps or malformed version/key/bitmap fields, invalid burn payload
+  domain/version edges, and Torii burn publication of structurally invalid
+  payloads before registry insertion.
+- Additional SCCP cryptographic-negative coverage now exercises real
+  secp256k1 EVM attestation payloads and rejects malformed attestation ABI
+  offsets/lengths, empty or duplicate attestations, signer-address mismatches,
+  native-proof hash replay, public-input hash replay, message-id replay, and
+  noncanonical appended envelope bytes.
+- EVM SCCP submission verification now also binds submission-package metadata
+  to the active manifest. Negative coverage rejects package version, proof
+  family, verifier backend, envelope encoding, submission kind, entrypoint,
+  argument-list, argument-byte, and encoded-envelope tampering.
 - Transfer payload validation now requires sender and recipient codecs to match
   the source and destination domain account codecs. Asset and route codec policy
   remains on the existing supported-codec checks for compatibility with current
@@ -115,8 +156,25 @@ Last updated: 2026-05-20
   race in those tests.
 - Raw-bundle recovery hardening was rechecked with
   `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib transparent -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib runtime_envelope -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib burn_payload_structure -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib transparent_fastpq_open_verify_summary -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib canonical_message_payload_decoder -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_attestation_envelope_decoder -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_submission_package_verifier_rejects_attestation -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_submission_package_verifier_rejects_digest -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_submission_package_verifier_rejects_metadata -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_submission_package_verifier_rejects_argument -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib evm_submission_package -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib message_bundle_structure -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib finality_proof_structure -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_sccp --lib burn_bundle -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_torii --lib bridge_proof_submit_rejects_ -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_torii --lib publish_sccp_burn_bundle_rejects_structurally_invalid_payload -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_torii --lib sccp_lane_disabled -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-sccp-proof cargo test -p iroha_torii --lib bridge_message_submit_rejects_disabled_inbound_transfer_lane -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-sccp-proof cargo check -p iroha_sccp`,
   `CARGO_TARGET_DIR=target/codex-sccp-proof cargo check -p iroha_core`,
   `CARGO_TARGET_DIR=target/codex-sccp-proof cargo check -p iroha_torii`,
   `cargo fmt --all -- --check`, and `git diff --check`.

@@ -46810,6 +46810,32 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn publish_sccp_burn_bundle_rejects_structurally_invalid_payload() {
+        routing::clear_sccp_bundles_for_tests();
+        let app = mk_app_state_for_tests();
+        let payload = iroha_sccp::BurnPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 9,
+            sora_asset_id: [0x11; 32],
+            amount: 42,
+            recipient: [0x22; 32],
+        };
+
+        let err = routing::publish_sccp_burn_bundle(app.state.as_ref(), 1, payload)
+            .expect_err("invalid SCCP burn payload should be rejected before publishing");
+        assert!(
+            query_conversion_message(&err).is_some_and(
+                |message| message.contains("SCCP burn payload failed structural verification")
+            ),
+            "unexpected error: {err:?}"
+        );
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
     async fn sccp_message_bundle_endpoint_roundtrips_json() {
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -47289,6 +47315,134 @@ pub(crate) mod tests_runtime_handlers {
         };
         assert!(
             query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
+        );
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn bridge_proof_submit_rejects_missing_sccp_bundle_selection() {
+        let app = mk_app_state_for_tests();
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+
+        let err = match routing::handle_post_bridge_proof_submit(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            &app.da_receipt_signer,
+            app.telemetry.clone(),
+            crate::utils::extractors::JsonOnly(crate::routing::BridgeProofSubmitDto {
+                authority,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                burn_bundle: None,
+                message_bundle: None,
+                creation_time_ms: Some(85),
+            }),
+        )
+        .await
+        {
+            Err(err) => err,
+            Ok(_) => panic!("missing SCCP bundle selection must be rejected"),
+        };
+        assert!(
+            query_conversion_message(&err)
+                .is_some_and(|message| message.contains("provide exactly one")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_proof_submit_rejects_ambiguous_sccp_bundle_selection() {
+        routing::clear_sccp_bundles_for_tests();
+        let burn_payload = iroha_sccp::BurnPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            nonce: 8,
+            sora_asset_id: [0x22; 32],
+            amount: 17,
+            recipient: [0x33; 32],
+        };
+        let burn_commitment = iroha_sccp::SccpHubCommitmentV1 {
+            version: 1,
+            kind: iroha_sccp::SccpHubMessageKind::Burn,
+            target_domain: burn_payload.dest_domain,
+            message_id: iroha_sccp::burn_message_id(&burn_payload),
+            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_burn_payload_bytes(
+                &burn_payload,
+            )),
+        };
+        let burn_app =
+            app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&burn_commitment));
+        let burn_bundle =
+            routing::publish_sccp_burn_bundle(burn_app.state.as_ref(), 1, burn_payload)
+                .expect("publish burn bundle");
+        let burn_bundle_value = norito::json::from_str::<norito::json::Value>(
+            &serde_json::to_string(&burn_bundle).expect("encode burn bundle json"),
+        )
+        .expect("burn bundle value");
+
+        let message_payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 14,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 88,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let (message_app, message_id) = app_with_recorded_sccp_message_for_test(1, message_payload);
+        let message_response = routing::handle_v1_sccp_message_bundle(
+            message_app.state.as_ref(),
+            hex::encode(message_id),
+            None,
+        )
+        .await
+        .expect("message bundle response");
+        let message_body = axum::body::to_bytes(message_response.into_body(), usize::MAX)
+            .await
+            .expect("message bundle body");
+        let message_bundle_value = norito::json::from_str::<norito::json::Value>(
+            std::str::from_utf8(&message_body).expect("message bundle utf8"),
+        )
+        .expect("message bundle value");
+
+        let submit_app = mk_app_state_for_tests();
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let err = match routing::handle_post_bridge_proof_submit(
+            submit_app.chain_id.clone(),
+            submit_app.queue.clone(),
+            submit_app.state.clone(),
+            &submit_app.da_receipt_signer,
+            submit_app.telemetry.clone(),
+            crate::utils::extractors::JsonOnly(crate::routing::BridgeProofSubmitDto {
+                authority,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                burn_bundle: Some(burn_bundle_value),
+                message_bundle: Some(message_bundle_value),
+                creation_time_ms: Some(86),
+            }),
+        )
+        .await
+        {
+            Err(err) => err,
+            Ok(_) => panic!("ambiguous SCCP bundle selection must be rejected"),
+        };
+        assert!(
+            query_conversion_message(&err)
+                .is_some_and(|message| message.contains("provide exactly one")),
+            "unexpected error: {err:?}"
         );
 
         routing::clear_sccp_bundles_for_tests();

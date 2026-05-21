@@ -100,11 +100,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     let sidecar_txs: Vec<PipelineTxSnapshot> = new_block
         .transactions()
         .iter()
-        .map(|tx| PipelineTxSnapshot {
-            hash: tx.as_ref().hash_as_entrypoint(),
-            reads: Vec::new(),
-            writes: Vec::new(),
-        })
+        .map(|tx| PipelineTxSnapshot::compact(tx.as_ref().hash_as_entrypoint(), 0, 0))
         .collect();
     let sidecar = PipelineRecoverySidecar::new(
         height,
