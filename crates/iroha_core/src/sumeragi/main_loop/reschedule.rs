@@ -241,13 +241,19 @@ impl Actor {
         if self.pending.pending_blocks.is_empty() {
             return false;
         }
-        // Allow pruning aborted payloads even when no active pending blocks remain.
+        let committed_height = self.committed_height_snapshot();
+        // Allow pruning aborted or obsolete payloads even when no active pending blocks remain.
         let has_aborted = self
             .pending
             .pending_blocks
             .values()
             .any(|pending| pending.aborted);
-        if !has_aborted && self.active_pending_blocks_len() == 0 {
+        let has_obsolete_non_aborted = self
+            .pending
+            .pending_blocks
+            .values()
+            .any(|pending| !pending.aborted && pending.height <= committed_height);
+        if !has_aborted && !has_obsolete_non_aborted && self.active_pending_blocks_len() == 0 {
             return false;
         }
 
@@ -271,7 +277,6 @@ impl Actor {
         let aborted_retention = quorum_reschedule_retention.saturating_mul(retention_factor);
         let queue_depths = super::status::worker_queue_depth_snapshot();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
-        let committed_height = self.committed_height_snapshot();
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
         let fast_timeout_permissioned = self.pending_fast_path_timeout_current();
@@ -348,6 +353,17 @@ impl Actor {
                 if pending_age >= aborted_retention {
                     aborted_expired.push((*hash, pending.height, pending.view));
                 }
+                continue;
+            }
+            if pending.height <= committed_height {
+                info!(
+                    height = pending.height,
+                    view = pending.view,
+                    block = %hash,
+                    committed_height,
+                    "dropping obsolete pending block at or below committed height"
+                );
+                stale_pending.push((*hash, pending.height));
                 continue;
             }
             if self.kura.get_block_height_by_hash(*hash).is_some() {
@@ -1168,9 +1184,7 @@ impl Actor {
                 });
             self.block_signer_cache.remove_block(&hash);
             self.pending.pending_blocks.remove(&hash);
-            self.subsystems.validation.inflight.remove(&hash);
-            self.subsystems.validation.vnext_inflight.remove(&hash);
-            self.subsystems.validation.superseded_results.remove(&hash);
+            self.clear_validation_ownership_for_block(hash);
             aborted_removed = aborted_removed.saturating_add(1);
         }
 
@@ -1180,9 +1194,7 @@ impl Actor {
                 break;
             }
             self.pending.pending_blocks.remove(&hash);
-            self.subsystems.validation.inflight.remove(&hash);
-            self.subsystems.validation.vnext_inflight.remove(&hash);
-            self.subsystems.validation.superseded_results.remove(&hash);
+            self.clear_validation_ownership_for_block(hash);
             self.clean_rbc_sessions_for_block(hash, height);
             self.qc_cache
                 .retain(|(_, qc_hash, _, _, _, _, _), _| qc_hash != &hash);
@@ -1192,7 +1204,7 @@ impl Actor {
             stale_removed = stale_removed.saturating_add(1);
         }
 
-        let mut progress = aborted_removed > 0;
+        let mut progress = aborted_removed > 0 || stale_removed > 0;
         for (key, vote_count, min_votes, progress_stall_age, fast_resend_window) in
             preemptive_vote_retransmit_candidates
         {
@@ -1369,6 +1381,7 @@ impl Actor {
             || progress
             || reschedule_backoff_skipped > 0
             || missing_data_backoff_skipped > 0
+            || stale_removed > 0
             || aborted_removed > 0
         {
             iroha_logger::info!(

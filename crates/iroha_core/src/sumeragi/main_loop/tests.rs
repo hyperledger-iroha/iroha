@@ -144807,6 +144807,76 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads_without_active(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn reschedule_stale_pending_blocks_prunes_obsolete_non_aborted_without_active() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(&actor.state);
+    let committed_height = actor.committed_height_snapshot();
+    let view_idx = 1_u64;
+    let block = sample_block(committed_height, view_idx, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, committed_height, view_idx),
+    );
+
+    let ordered_validators = actor.effective_commit_topology();
+    install_stale_zero_rechain_vnext_round(actor, committed_height, view_idx, ordered_validators);
+    let slot = super::vnext::SlotId {
+        height: committed_height,
+        view: view_idx,
+        epoch: actor.epoch_for_height(committed_height),
+        block_hash,
+    };
+    actor
+        .vnext_rounds
+        .get_mut(&(committed_height, view_idx))
+        .expect("vNext round installed")
+        .slot_mut(slot)
+        .validation = crate::sumeragi::vnext::ValidationState::Backpressured { since_ms: 0 };
+    actor.subsystems.validation.vnext_inflight.insert(
+        block_hash,
+        VNextValidationInFlight {
+            slot,
+            generation: 1,
+        },
+    );
+
+    assert_eq!(
+        actor.active_pending_blocks_len(),
+        0,
+        "test setup should have no active frontier pending block"
+    );
+    assert!(
+        actor.reschedule_stale_pending_blocks(None),
+        "obsolete non-aborted pending blocks should be pruned even without active pending work"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "obsolete pending block should be removed"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "obsolete pending prune should clear vNext worker ownership"
+    );
+    assert!(
+        actor
+            .vnext_rounds
+            .get(&(committed_height, view_idx))
+            .and_then(|round| round.slot(block_hash))
+            .is_none(),
+        "obsolete pending prune should clear the vNext slot"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;

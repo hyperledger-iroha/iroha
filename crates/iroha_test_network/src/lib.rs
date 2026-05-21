@@ -183,11 +183,23 @@ fn domain_registration_lease_visible_to_client(client: &Client, domain: &DomainI
 }
 
 fn domain_registration_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
-    let domain_exists = client
-        .query(FindDomains::new())
-        .execute_all()?
-        .into_iter()
-        .any(|existing| existing.id() == domain);
+    let domain_exists = match client.query(FindDomains::new()).execute_all() {
+        Ok(domains) => domains.into_iter().any(|existing| existing.id() == domain),
+        Err(err) => {
+            let report = Report::from(err);
+            if torii_request_error_is_transient(&report) {
+                debug!(
+                    err = %report,
+                    %domain,
+                    torii_url = %client.torii_url,
+                    "transient domain visibility query failed while checking SNS lease readiness"
+                );
+                false
+            } else {
+                return Err(report);
+            }
+        }
+    };
     if domain_exists {
         return Ok(true);
     }
@@ -207,16 +219,7 @@ fn wait_for_domain_registration_lease(client: &Client, domain: &DomainId) -> Res
 
 /// Ensure a runtime domain registration has the SNS lease required by the executor.
 pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> Result<()> {
-    let domain_exists = client
-        .query(FindDomains::new())
-        .execute_all()?
-        .into_iter()
-        .any(|existing| existing.id() == domain);
-    if domain_exists {
-        return Ok(());
-    }
-
-    if domain_registration_lease_visible_to_client(client, domain)? {
+    if domain_registration_ready_to_client(client, domain)? {
         return Ok(());
     }
 
@@ -505,6 +508,30 @@ fn status_error_is_torii_query_backpressure(err: &Report) -> bool {
         message.contains("429 Too Many Requests")
             && message.contains("Reached the limit of parallel queries")
     })
+}
+
+fn torii_request_error_is_transient(err: &Report) -> bool {
+    if status_error_is_connection_refused(err) || status_error_is_torii_query_backpressure(err) {
+        return true;
+    }
+
+    let mut saw_http_transport = false;
+    let mut saw_transient_transport = false;
+    for cause in err.chain() {
+        let message = cause.to_string();
+        saw_http_transport |= message.contains("Failed to send http")
+            || message.contains("error sending request for url")
+            || message.contains("client error (Connect)")
+            || message.contains("tcp connect error");
+        saw_transient_transport |= message.contains("operation timed out")
+            || message.contains("request timed out")
+            || message.contains("Connection refused")
+            || message.contains("connection refused")
+            || message.contains("connection reset")
+            || message.contains("connection closed");
+    }
+
+    saw_http_transport && saw_transient_transport
 }
 
 /// Try binding to all provided addresses to detect missing socket permissions early.
@@ -9084,6 +9111,22 @@ mod tests {
         let report = eyre!("Unexpected status response; status: 429 Too Many Requests");
 
         assert!(!status_error_is_torii_query_backpressure(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_detects_query_timeout() {
+        let report = eyre!(
+            "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: error sending request for url\n   1: operation timed out"
+        );
+
+        assert!(torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_ignores_validation_errors() {
+        let report = eyre!("Validation failed: domain already exists");
+
+        assert!(!torii_request_error_is_transient(&report));
     }
 
     #[test]
