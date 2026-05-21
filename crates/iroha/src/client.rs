@@ -6345,6 +6345,80 @@ mod evidence_http_tests {
     }
 
     #[test]
+    fn wait_for_transaction_terminal_status_returns_configured_rejection() {
+        let hash =
+            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                Hash::prehashed([0x31; Hash::LENGTH]),
+            );
+        let expected_hash = hash.to_string();
+        let payload = norito::json!({
+            "hash": expected_hash,
+            "status": { "kind": "Rejected" },
+            "scope": "local",
+            "resolved_from": "state",
+        });
+        let body = norito::json::to_string(&payload).expect("status payload");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let outcome = with_mock_http(
+            respond_with(&store, json_response(StatusCode::OK, &body)),
+            || {
+                let client = client_with_base_url(base_url());
+                client.wait_for_transaction_terminal_status(
+                    hash,
+                    TransactionWaitOptions {
+                        timeout: Duration::from_millis(50),
+                        poll_interval: Duration::from_millis(1),
+                        terminal_statuses: vec![TransactionWaitTerminalStatus::Rejected],
+                    },
+                )
+            },
+        )
+        .expect("configured rejection should be returned");
+
+        assert_eq!(outcome.hash, expected_hash);
+        assert_eq!(outcome.terminal_kind, "Rejected");
+        assert_eq!(outcome.attempts, 1);
+    }
+
+    #[test]
+    fn wait_for_transaction_terminal_status_returns_configured_expiry() {
+        let hash =
+            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                Hash::prehashed([0x32; Hash::LENGTH]),
+            );
+        let expected_hash = hash.to_string();
+        let payload = norito::json!({
+            "hash": expected_hash,
+            "status": { "kind": "Expired" },
+            "scope": "local",
+            "resolved_from": "state",
+        });
+        let body = norito::json::to_string(&payload).expect("status payload");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let outcome = with_mock_http(
+            respond_with(&store, json_response(StatusCode::OK, &body)),
+            || {
+                let client = client_with_base_url(base_url());
+                client.wait_for_transaction_terminal_status(
+                    hash,
+                    TransactionWaitOptions {
+                        timeout: Duration::from_millis(50),
+                        poll_interval: Duration::from_millis(1),
+                        terminal_statuses: vec![TransactionWaitTerminalStatus::Expired],
+                    },
+                )
+            },
+        )
+        .expect("configured expiry should be returned");
+
+        assert_eq!(outcome.hash, expected_hash);
+        assert_eq!(outcome.terminal_kind, "Expired");
+        assert_eq!(outcome.attempts, 1);
+    }
+
+    #[test]
     fn get_transaction_status_response_requests_json_and_decodes_typed_payload() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
 
@@ -8623,12 +8697,6 @@ impl Client {
                         response.hash
                     ));
                 }
-                if matches!(kind, "Rejected" | "Expired") {
-                    return Err(eyre!(
-                        "transaction {} reached terminal failure status `{kind}` before {target_description}; last_status={kind}",
-                        response.hash
-                    ));
-                }
                 if should_stop_waiting_on_pipeline_kind(kind, &stop_statuses) {
                     return Ok(TransactionWaitOutcome {
                         hash: response.hash.clone(),
@@ -8637,6 +8705,12 @@ impl Client {
                         elapsed_ms: elapsed_ms_u64(start.elapsed()),
                         r#final: response,
                     });
+                }
+                if should_error_on_unrequested_transaction_failure(kind, &stop_statuses) {
+                    return Err(eyre!(
+                        "transaction {} reached terminal failure status `{kind}` before {target_description}; last_status={kind}",
+                        response.hash
+                    ));
                 }
             }
 
@@ -12751,8 +12825,18 @@ fn should_stop_waiting_on_pipeline_kind(
     kind: &str,
     terminal_statuses: &[TransactionWaitTerminalStatus],
 ) -> bool {
-    matches!(kind, "Applied" | "Rejected" | "Expired")
+    matches!(kind, "Applied")
         || terminal_statuses
+            .iter()
+            .any(|status| status.as_str().eq_ignore_ascii_case(kind))
+}
+
+fn should_error_on_unrequested_transaction_failure(
+    kind: &str,
+    terminal_statuses: &[TransactionWaitTerminalStatus],
+) -> bool {
+    matches!(kind, "Rejected" | "Expired")
+        && !terminal_statuses
             .iter()
             .any(|status| status.as_str().eq_ignore_ascii_case(kind))
 }

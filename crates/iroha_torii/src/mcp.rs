@@ -7149,11 +7149,6 @@ async fn wait_for_terminal_transaction_status(
                     "unsupported transaction status kind `{kind}` for `{tx_hash}`; last_status={kind}"
                 ));
             }
-            if matches!(kind, "Rejected" | "Expired") {
-                return Err(format!(
-                    "transaction `{tx_hash}` reached terminal failure status `{kind}`; expected Applied; last_status={kind}"
-                ));
-            }
             if is_terminal_pipeline_status(kind, &terminal_statuses) {
                 let mut out = Map::new();
                 out.insert("status".into(), Value::from(status_code));
@@ -7188,6 +7183,12 @@ async fn wait_for_terminal_transaction_status(
                 out.insert("final_status".into(), status_result.clone());
                 out.insert("final".into(), status_result);
                 return Ok(Value::Object(out));
+            }
+            if should_error_on_unrequested_terminal_failure(kind, &terminal_statuses) {
+                return Err(format!(
+                    "transaction `{tx_hash}` reached terminal failure status `{kind}` before requested terminal statuses ({}); last_status={kind}",
+                    format_submit_wait_terminal_statuses(&terminal_statuses)
+                ));
             }
         } else {
             let retryable_http = status_code == 404 || status_code == 429 || status_code >= 500;
@@ -7484,12 +7485,26 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
         .and_then(Value::as_str)
         .or_else(|| body.get("tx_hash").and_then(Value::as_str))
         .or_else(|| body.get("transaction_hash").and_then(Value::as_str))
+        .or_else(|| {
+            body.get("payload")
+                .and_then(|payload| payload.get("tx_hash"))
+                .and_then(Value::as_str)
+        })
         .filter(|hash| !hash.is_empty())
     {
         return Ok(hash.to_owned());
     }
 
-    Err("submission response missing canonical top-level transaction hash field (`tx_hash_hex`, `tx_hash`, or `transaction_hash`)".to_owned())
+    if let Some(encoded) = body.as_str().filter(|body| !body.is_empty()) {
+        let bytes = decode_base64_any(encoded)
+            .ok_or_else(|| "submission response body is not valid base64/base64url".to_owned())?;
+        let receipt: iroha_data_model::transaction::TransactionSubmissionReceipt =
+            norito::decode_from_bytes(&bytes)
+                .map_err(|err| format!("decode submission receipt: {err}"))?;
+        return Ok(receipt.payload.tx_hash.to_string());
+    }
+
+    Err("submission response missing transaction hash field (`tx_hash_hex`, `tx_hash`, `transaction_hash`, `payload.tx_hash`, or base64 Norito receipt body)".to_owned())
 }
 
 fn extract_pipeline_status_kind(status_result: &Value) -> Option<&str> {
@@ -7504,6 +7519,18 @@ fn is_terminal_pipeline_status(status: &str, terminal_statuses: &[String]) -> bo
     terminal_statuses
         .iter()
         .any(|terminal| terminal.eq_ignore_ascii_case(status))
+}
+
+fn should_error_on_unrequested_terminal_failure(
+    status: &str,
+    terminal_statuses: &[String],
+) -> bool {
+    matches!(status, "Rejected" | "Expired")
+        && !is_terminal_pipeline_status(status, terminal_statuses)
+}
+
+fn format_submit_wait_terminal_statuses(terminal_statuses: &[String]) -> String {
+    terminal_statuses.join(", ")
 }
 
 fn extract_account_id_argument(arguments: &Map) -> Result<String, String> {
@@ -14111,7 +14138,7 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.submit_and_wait".to_owned(),
         effect: manual_tool_effect_from_name("iroha.transactions.submit_and_wait"),
-        description: "Submit a versioned SignedTransaction from canonical `body_base64` bytes and poll pipeline status until a terminal state (`Committed`/`Applied`/`Rejected`/`Expired` by default).".to_owned(),
+        description: "Submit a versioned SignedTransaction from canonical `body_base64` bytes and poll pipeline status until a configured terminal status (`Applied` by default).".to_owned(),
         method: Method::POST,
         path_template: iroha_torii_shared::uri::TRANSACTION.to_owned(),
         input_schema: norito::json!({
@@ -14142,7 +14169,7 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
                 "terminal_statuses": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Optional terminal status override (default: Committed, Applied, Rejected, Expired)."
+                    "description": "Optional terminal status override (default: Applied). Include Rejected or Expired to inspect those failure outcomes."
                 },
                 "status_accept": {
                     "type": "string",
@@ -14201,7 +14228,7 @@ fn iroha_transactions_wait_tool() -> ToolSpec {
                 "terminal_statuses": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Optional terminal status override (default: Committed, Applied, Rejected, Expired)."
+                    "description": "Optional terminal status override (default: Applied). Include Rejected or Expired to inspect those failure outcomes."
                 },
                 "status_accept": {
                     "type": "string",
@@ -16300,7 +16327,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_transaction_hash_from_submit_result_rejects_encoded_submission_receipt() {
+    fn extract_transaction_hash_from_submit_result_accepts_encoded_submission_receipt() {
         let key_pair = iroha_crypto::KeyPair::random();
         let tx_hash =
             iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xAB; 32]));
@@ -16324,9 +16351,8 @@ mod tests {
             "body": encoded
         });
 
-        let err = extract_transaction_hash_from_submit_result(&submit_result)
-            .expect_err("encoded receipt fallback must not be accepted");
-        assert!(err.contains("canonical top-level transaction hash field"));
+        let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
+        assert_eq!(hash, tx_hash.to_string());
     }
 
     #[test]
@@ -16340,6 +16366,22 @@ mod tests {
         });
         let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
         assert_eq!(hash, "deadbeef");
+    }
+
+    #[test]
+    fn extract_transaction_hash_from_submit_result_accepts_json_receipt_payload() {
+        let submit_result = norito::json!({
+            "status": 202,
+            "body": {
+                "payload": {
+                    "tx_hash": "feedface"
+                },
+                "signature": "ignored"
+            }
+        });
+
+        let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
+        assert_eq!(hash, "feedface");
     }
 
     #[test]
@@ -16385,6 +16427,31 @@ mod tests {
         let err = resolve_submit_wait_terminal_statuses(args.as_object().expect("object"))
             .expect_err("unsupported terminal status should fail");
         assert!(err.contains("unsupported terminal status"));
+    }
+
+    #[test]
+    fn unrequested_terminal_failure_errors_only_when_not_configured() {
+        let default_terminal = vec!["Applied".to_owned()];
+        assert!(should_error_on_unrequested_terminal_failure(
+            "Rejected",
+            &default_terminal
+        ));
+        assert!(should_error_on_unrequested_terminal_failure(
+            "Expired",
+            &default_terminal
+        ));
+
+        let rejected_terminal = vec!["Rejected".to_owned()];
+        assert!(!should_error_on_unrequested_terminal_failure(
+            "Rejected",
+            &rejected_terminal
+        ));
+
+        let expired_terminal = vec!["Expired".to_owned()];
+        assert!(!should_error_on_unrequested_terminal_failure(
+            "Expired",
+            &expired_terminal
+        ));
     }
 
     #[test]

@@ -254,7 +254,7 @@ fn binary_supports_training_job_commands_rejects_help_without_subcommand() {
 
     let temp = tempfile::tempdir().expect("tempdir");
     let script = temp.path().join("fake_iroha.sh");
-    std::fs::write(&script, "#!/bin/sh\necho 'app soracloud help output'\n").expect("write script");
+    std::fs::write(&script, "#!/bin/sh\necho 'soracloud help output'\n").expect("write script");
     let mut perms = std::fs::metadata(&script).expect("metadata").permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&script, perms).expect("set permissions");
@@ -270,7 +270,7 @@ fn binary_supports_training_job_commands_accepts_help_with_subcommand() {
     let script = temp.path().join("fake_iroha.sh");
     std::fs::write(
         &script,
-        "#!/bin/sh\necho 'Commands:\\n  training-job-start\\n  hf-deploy\\n  model-weight-register'\n",
+        "#!/bin/sh\necho 'Commands:\\n  training-job-start\\n  artifact-register\\n  weight-register'\n",
     )
     .expect("write script");
     let mut perms = std::fs::metadata(&script).expect("metadata").permissions();
@@ -424,7 +424,6 @@ async fn run_soracloud_command(
     let effective_args = soracloud_command_args(args);
     Ok(tokio::process::Command::new(program())
         .current_dir(cwd)
-        .arg("app")
         .arg("soracloud")
         .args(&effective_args)
         .envs(config.envs())
@@ -456,7 +455,7 @@ async fn wait_for_soracloud_json_command(
             }
         } else {
             format!(
-                "command `iroha app soracloud {}` exited with {} and stderr: {}",
+                "command `iroha soracloud {}` exited with {} and stderr: {}",
                 args.join(" "),
                 output.status,
                 String::from_utf8_lossy(&output.stderr)
@@ -522,7 +521,7 @@ async fn wait_for_soracloud_hf_status_payload(
 }
 
 fn soracloud_command_args(args: &[&str]) -> Vec<String> {
-    let mut effective_args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+    let mut effective_args = namespaced_soracloud_command_args(args);
     if !args.contains(&"--timeout-secs") {
         effective_args.push("--timeout-secs".to_owned());
         effective_args.push(SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS.to_owned());
@@ -530,12 +529,67 @@ fn soracloud_command_args(args: &[&str]) -> Vec<String> {
     effective_args
 }
 
+fn namespaced_soracloud_command_args(args: &[&str]) -> Vec<String> {
+    let Some((command, tail)) = args.split_first() else {
+        return Vec::new();
+    };
+    let namespace = match *command {
+        "init" | "plan" | "dev" | "build" | "sync-manifests" | "deploy" | "upgrade" | "status"
+        | "config-set" | "config-delete" | "config-status" | "secret-set" | "secret-delete"
+        | "secret-status" | "rollback" | "rollout" => Some(("service", *command)),
+        "training-job-start"
+        | "training-job-checkpoint"
+        | "training-job-retry"
+        | "training-job-status" => Some(("model", *command)),
+        "model-artifact-register" => Some(("model", "artifact-register")),
+        "model-artifact-status" => Some(("model", "artifact-status")),
+        "model-weight-register" => Some(("model", "weight-register")),
+        "model-weight-promote" => Some(("model", "weight-promote")),
+        "model-weight-rollback" => Some(("model", "weight-rollback")),
+        "model-weight-status" => Some(("model", "weight-status")),
+        "model-upload-encryption-recipient" => Some(("model", "upload-encryption-recipient")),
+        "model-upload-register" => Some(("model", "upload-register")),
+        "model-upload-status" => Some(("model", "upload-status")),
+        "model-host-advertise" => Some(("model", "host-advertise")),
+        "model-host-heartbeat" => Some(("model", "host-heartbeat")),
+        "model-host-withdraw" => Some(("model", "host-withdraw")),
+        "model-host-status" => Some(("model", "host-status")),
+        "hf-deploy" => Some(("hf", "deploy")),
+        "hf-status" => Some(("hf", "status")),
+        "hf-lease-leave" => Some(("hf", "lease-leave")),
+        "hf-lease-renew" => Some(("hf", "lease-renew")),
+        "agent-deploy" => Some(("agent", "deploy")),
+        "agent-lease-renew" => Some(("agent", "lease-renew")),
+        "agent-restart" => Some(("agent", "restart")),
+        "agent-status" => Some(("agent", "status")),
+        "agent-wallet-spend" => Some(("agent", "wallet-spend")),
+        "agent-wallet-approve" => Some(("agent", "wallet-approve")),
+        "agent-policy-revoke" => Some(("agent", "policy-revoke")),
+        "agent-message-send" => Some(("agent", "message-send")),
+        "agent-message-ack" => Some(("agent", "message-ack")),
+        "agent-mailbox-status" => Some(("agent", "mailbox-status")),
+        "agent-artifact-allow" => Some(("agent", "artifact-allow")),
+        "agent-autonomy-run" => Some(("agent", "autonomy-run")),
+        "agent-autonomy-status" => Some(("agent", "autonomy-status")),
+        _ => None,
+    };
+    match namespace {
+        Some((group, command)) => std::iter::once(group)
+            .chain(std::iter::once(command))
+            .chain(tail.iter().copied())
+            .map(ToOwned::to_owned)
+            .collect(),
+        None => args.iter().map(|arg| (*arg).to_owned()).collect(),
+    }
+}
+
 #[test]
 fn soracloud_command_args_append_timeout_once() {
     assert_eq!(
         soracloud_command_args(&["hf-deploy", "--repo-id", "openai/gpt-oss"]),
         vec![
-            "hf-deploy".to_owned(),
+            "hf".to_owned(),
+            "deploy".to_owned(),
             "--repo-id".to_owned(),
             "openai/gpt-oss".to_owned(),
             "--timeout-secs".to_owned(),
@@ -551,7 +605,8 @@ fn soracloud_command_args_append_timeout_once() {
             "15",
         ]),
         vec![
-            "hf-status".to_owned(),
+            "hf".to_owned(),
+            "status".to_owned(),
             "--repo-id".to_owned(),
             "openai/gpt-oss".to_owned(),
             "--timeout-secs".to_owned(),
@@ -1102,8 +1157,8 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
 
     let output = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("status")
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
@@ -1476,8 +1531,8 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
 
     let over_cap_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("deploy")
         .arg("--container")
         .arg(over_cap_container_path.to_string_lossy().into_owned())
@@ -1533,8 +1588,8 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
 
     let no_write_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("deploy")
         .arg("--container")
         .arg(no_write_container_path.to_string_lossy().into_owned())
@@ -1632,8 +1687,8 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("deploy")
         .arg("--container")
         .arg(container_path.to_string_lossy().into_owned())
@@ -1657,8 +1712,8 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let training_start_1 = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("model")
         .arg("training-job-start")
         .arg("--service-name")
         .arg(&service_name)
@@ -1694,8 +1749,8 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let checkpoint_1a = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("model")
         .arg("training-job-checkpoint")
         .arg("--service-name")
         .arg(&service_name)
@@ -1721,8 +1776,8 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let checkpoint_1b = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("model")
         .arg("training-job-checkpoint")
         .arg("--service-name")
         .arg(&service_name)
@@ -1748,8 +1803,8 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let training_status_1 = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("model")
         .arg("training-job-status")
         .arg("--service-name")
         .arg(&service_name)
@@ -1780,9 +1835,9 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let artifact_register_1 = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("model-artifact-register")
+        .arg("model")
+        .arg("artifact-register")
         .arg("--service-name")
         .arg(&service_name)
         .arg("--model-name")
@@ -1813,9 +1868,9 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let weight_register_1 = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("model-weight-register")
+        .arg("model")
+        .arg("weight-register")
         .arg("--service-name")
         .arg(&service_name)
         .arg("--model-name")
@@ -1848,8 +1903,8 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let training_start_2 = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("model")
         .arg("training-job-start")
         .arg("--service-name")
         .arg(&service_name)
@@ -1885,8 +1940,8 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let checkpoint_2a = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("model")
         .arg("training-job-checkpoint")
         .arg("--service-name")
         .arg(&service_name)
@@ -1912,8 +1967,8 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let checkpoint_2b = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("model")
         .arg("training-job-checkpoint")
         .arg("--service-name")
         .arg(&service_name)
@@ -1939,9 +1994,9 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let artifact_register_2 = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("model-artifact-register")
+        .arg("model")
+        .arg("artifact-register")
         .arg("--service-name")
         .arg(&service_name)
         .arg("--model-name")
@@ -1972,9 +2027,9 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let weight_register_2 = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("model-weight-register")
+        .arg("model")
+        .arg("weight-register")
         .arg("--service-name")
         .arg(&service_name)
         .arg("--model-name")
@@ -2009,9 +2064,9 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let promote_v2 = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("model-weight-promote")
+        .arg("model")
+        .arg("weight-promote")
         .arg("--service-name")
         .arg(&service_name)
         .arg("--model-name")
@@ -2035,9 +2090,9 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let status_after_promote = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("model-weight-status")
+        .arg("model")
+        .arg("weight-status")
         .arg("--service-name")
         .arg(&service_name)
         .arg("--model-name")
@@ -2074,9 +2129,9 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let rollback = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("model-weight-rollback")
+        .arg("model")
+        .arg("weight-rollback")
         .arg("--service-name")
         .arg(&service_name)
         .arg("--model-name")
@@ -2099,9 +2154,9 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let status_after_rollback = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("model-weight-status")
+        .arg("model")
+        .arg("weight-status")
         .arg("--service-name")
         .arg(&service_name)
         .arg("--model-name")
@@ -2132,9 +2187,9 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
     let artifact_status_2 = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("model-artifact-status")
+        .arg("model")
+        .arg("artifact-status")
         .arg("--service-name")
         .arg(&service_name)
         .arg("--training-job-id")
@@ -3494,8 +3549,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
 
     let site_init = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("init")
         .arg("--template")
         .arg("site")
@@ -3517,8 +3572,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
 
     let webapp_init = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("init")
         .arg("--template")
         .arg("webapp")
@@ -3572,8 +3627,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
 
     let site_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("deploy")
         .arg("--container")
         .arg(
@@ -3606,8 +3661,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
 
     let webapp_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("deploy")
         .arg("--container")
         .arg(
@@ -3649,8 +3704,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
 
     let site_upgrade = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("upgrade")
         .arg("--container")
         .arg(
@@ -3687,8 +3742,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
 
     let site_rollout = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("rollout")
         .arg("--service-name")
         .arg("docs_portal")
@@ -3722,8 +3777,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
 
     let site_rollback = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("rollback")
         .arg("--service-name")
         .arg("docs_portal")
@@ -3749,8 +3804,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
 
     let status = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
+        .arg("service")
         .arg("status")
         .arg("--torii-url")
         .arg(network.client().torii_url.to_string())
@@ -3875,9 +3930,9 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
 
     let deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-deploy")
+        .arg("agent")
+        .arg("deploy")
         .arg("--manifest")
         .arg(manifest_path.to_string_lossy().into_owned())
         .arg("--lease-ticks")
@@ -3914,9 +3969,9 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
 
     let allow = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-artifact-allow")
+        .arg("agent")
+        .arg("artifact-allow")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--artifact-hash")
@@ -3948,9 +4003,9 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
 
     let run = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-autonomy-run")
+        .arg("agent")
+        .arg("autonomy-run")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--artifact-hash")
@@ -3992,9 +4047,9 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
 
     let status = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-autonomy-status")
+        .arg("agent")
+        .arg("autonomy-status")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--torii-url")
@@ -4029,9 +4084,9 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
 
     let revoke = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-policy-revoke")
+        .arg("agent")
+        .arg("policy-revoke")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--capability")
@@ -4060,9 +4115,9 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
 
     let revoked_run = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-autonomy-run")
+        .arg("agent")
+        .arg("autonomy-run")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--artifact-hash")
@@ -4158,9 +4213,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let sender_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-deploy")
+        .arg("agent")
+        .arg("deploy")
         .arg("--manifest")
         .arg(sender_manifest_path.to_string_lossy().into_owned())
         .arg("--lease-ticks")
@@ -4179,9 +4234,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let recipient_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-deploy")
+        .arg("agent")
+        .arg("deploy")
         .arg("--manifest")
         .arg(recipient_manifest_path.to_string_lossy().into_owned())
         .arg("--lease-ticks")
@@ -4200,9 +4255,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let expired_wallet = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-wallet-spend")
+        .arg("agent")
+        .arg("wallet-spend")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--asset-definition")
@@ -4228,9 +4283,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let renew = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-lease-renew")
+        .arg("agent")
+        .arg("lease-renew")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--lease-ticks")
@@ -4249,9 +4304,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-restart")
+        .arg("agent")
+        .arg("restart")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--reason")
@@ -4275,9 +4330,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let status = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-status")
+        .arg("agent")
+        .arg("status")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--torii-url")
@@ -4314,9 +4369,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let wallet_request = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-wallet-spend")
+        .arg("agent")
+        .arg("wallet-spend")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--asset-definition")
@@ -4350,9 +4405,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let wallet_approve = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-wallet-approve")
+        .arg("agent")
+        .arg("wallet-approve")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--request-id")
@@ -4379,9 +4434,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let message_send = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-message-send")
+        .arg("agent")
+        .arg("message-send")
         .arg("--from-apartment")
         .arg("ops_agent")
         .arg("--to-apartment")
@@ -4417,9 +4472,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let mailbox_status_queued = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-mailbox-status")
+        .arg("agent")
+        .arg("mailbox-status")
         .arg("--apartment-name")
         .arg("worker_agent")
         .arg("--torii-url")
@@ -4453,9 +4508,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let message_ack = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-message-ack")
+        .arg("agent")
+        .arg("message-ack")
         .arg("--apartment-name")
         .arg("worker_agent")
         .arg("--message-id")
@@ -4482,9 +4537,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 
     let mailbox_status_empty = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-mailbox-status")
+        .arg("agent")
+        .arg("mailbox-status")
         .arg("--apartment-name")
         .arg("worker_agent")
         .arg("--torii-url")
@@ -4588,9 +4643,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let sender_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-deploy")
+        .arg("agent")
+        .arg("deploy")
         .arg("--manifest")
         .arg(sender_manifest_path.to_string_lossy().into_owned())
         .arg("--lease-ticks")
@@ -4611,9 +4666,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let recipient_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-deploy")
+        .arg("agent")
+        .arg("deploy")
         .arg("--manifest")
         .arg(recipient_manifest_path.to_string_lossy().into_owned())
         .arg("--lease-ticks")
@@ -4634,9 +4689,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let allow = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-artifact-allow")
+        .arg("agent")
+        .arg("artifact-allow")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--artifact-hash")
@@ -4657,9 +4712,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let run_before_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-autonomy-run")
+        .arg("agent")
+        .arg("autonomy-run")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--artifact-hash")
@@ -4712,9 +4767,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let wallet_request = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-wallet-spend")
+        .arg("agent")
+        .arg("wallet-spend")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--asset-definition")
@@ -4748,9 +4803,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let message_send = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-message-send")
+        .arg("agent")
+        .arg("message-send")
         .arg("--from-apartment")
         .arg("ops_agent")
         .arg("--to-apartment")
@@ -4795,9 +4850,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let status_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-status")
+        .arg("agent")
+        .arg("status")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--torii-url")
@@ -4870,9 +4925,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let manual_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-restart")
+        .arg("agent")
+        .arg("restart")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--reason")
@@ -4901,9 +4956,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let autonomy_status_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-autonomy-status")
+        .arg("agent")
+        .arg("autonomy-status")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--torii-url")
@@ -4958,9 +5013,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let mailbox_status_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-mailbox-status")
+        .arg("agent")
+        .arg("mailbox-status")
         .arg("--apartment-name")
         .arg("worker_agent")
         .arg("--torii-url")
@@ -4994,9 +5049,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let wallet_approve_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-wallet-approve")
+        .arg("agent")
+        .arg("wallet-approve")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--request-id")
@@ -5023,9 +5078,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let message_ack_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-message-ack")
+        .arg("agent")
+        .arg("message-ack")
         .arg("--apartment-name")
         .arg("worker_agent")
         .arg("--message-id")
@@ -5052,9 +5107,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let run_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-autonomy-run")
+        .arg("agent")
+        .arg("autonomy-run")
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--artifact-hash")
@@ -5117,9 +5172,9 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
 
     let mailbox_status_empty = tokio::process::Command::new(program())
         .current_dir(dir.path())
-        .arg("app")
         .arg("soracloud")
-        .arg("agent-mailbox-status")
+        .arg("agent")
+        .arg("mailbox-status")
         .arg("--apartment-name")
         .arg("worker_agent")
         .arg("--torii-url")

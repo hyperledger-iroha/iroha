@@ -335,17 +335,7 @@ impl Root {
                     chain_discriminant
                 }
             }
-            None => match chain_discriminant.origin() {
-                ParameterOrigin::Default { .. } => {
-                    emitter.emit(
-                        Report::new(ParseError::MissingAccountNetworkContext).attach(
-                            "set [account].profile to a known public profile or set [account].chain_discriminant explicitly",
-                        ),
-                    );
-                    chain_discriminant
-                }
-                _ => chain_discriminant,
-            },
+            None => chain_discriminant,
         };
 
         let (public_key, public_key_origin) = public_key.into_tuple();
@@ -693,23 +683,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_missing_account_network_context() {
+    fn parse_uses_default_account_chain_discriminant_without_profile() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         root.account.profile = None;
 
-        let err = root
-            .parse()
-            .expect_err("default discriminant without profile should be rejected");
+        let config = root.parse().expect("configuration should be valid");
 
-        let parse_errors: Vec<_> = err
-            .frames()
-            .filter_map(|frame| frame.downcast_ref::<ParseError>())
-            .collect();
-        assert!(
-            parse_errors
-                .iter()
-                .any(|error| matches!(error, ParseError::MissingAccountNetworkContext)),
-            "expected missing network context error, found {parse_errors:?}"
+        assert_eq!(
+            config.account_chain_discriminant,
+            defaults::common::chain_discriminant()
         );
     }
 
