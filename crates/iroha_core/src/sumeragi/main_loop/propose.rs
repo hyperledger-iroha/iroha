@@ -901,11 +901,7 @@ impl Actor {
             self.pending
                 .pending_block_body_requests
                 .remove(&pending_hash);
-            self.subsystems.validation.inflight.remove(&pending_hash);
-            self.subsystems
-                .validation
-                .superseded_results
-                .remove(&pending_hash);
+            self.clear_validation_ownership_for_block(pending_hash);
             self.subsystems
                 .propose
                 .proposal_cache
@@ -936,6 +932,7 @@ impl Actor {
                 self.state.as_ref(),
             )?;
 
+        self.clear_validation_ownership_for_block(pending_hash);
         self.clean_rbc_sessions_for_block(pending_hash, height);
         self.qc_cache
             .retain(|(_, hash, _, _, _, _, _), _| hash != &pending_hash);

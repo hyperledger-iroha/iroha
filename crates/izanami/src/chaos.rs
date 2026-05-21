@@ -27,6 +27,7 @@ use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     isi::{
+        RegisterBox,
         register::RegisterPeerWithPop,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
@@ -2278,6 +2279,20 @@ fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> u64 {
         .min_self_bond()
 }
 
+fn instruction_registers_peer_with_pop(instruction: &InstructionBox) -> bool {
+    if instruction
+        .as_any()
+        .downcast_ref::<RegisterPeerWithPop>()
+        .is_some()
+    {
+        return true;
+    }
+    matches!(
+        instruction.as_any().downcast_ref::<RegisterBox>(),
+        Some(RegisterBox::Peer(_))
+    )
+}
+
 #[allow(single_use_lifetimes)]
 fn audit_npos_preflight_instructions<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
@@ -2295,11 +2310,7 @@ fn audit_npos_preflight_instructions<'a>(
     let mut activated_validators = BTreeSet::<(LaneId, AccountId)>::new();
 
     for instruction in instructions {
-        if instruction
-            .as_any()
-            .downcast_ref::<RegisterPeerWithPop>()
-            .is_some()
-        {
+        if instruction_registers_peer_with_pop(instruction) {
             peer_with_pop_count = peer_with_pop_count.saturating_add(1);
         }
         if let Some(register) = instruction
@@ -8794,14 +8805,10 @@ mod tests {
             let validator = AccountId::new(key_pair.public_key().clone());
             let stake = stake_values.get(idx).copied().unwrap_or(fallback_stake);
             if include_pop {
-                instructions.push(
-                    <RegisterPeerWithPop as iroha_data_model::isi::Instruction>::into_instruction_box(
-                        Box::new(RegisterPeerWithPop::new(
-                            PeerId::new(key_pair.public_key().clone()),
-                            vec![u8::try_from(idx).unwrap_or(u8::MAX)],
-                        )),
-                    ),
-                );
+                instructions.push(InstructionBox::from(RegisterPeerWithPop::new(
+                    PeerId::new(key_pair.public_key().clone()),
+                    vec![u8::try_from(idx).unwrap_or(u8::MAX)],
+                )));
             }
             for &lane_id in bootstrap_public_lanes {
                 instructions.push(

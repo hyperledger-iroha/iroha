@@ -2776,11 +2776,7 @@ impl Actor {
                 .collect();
             for (stale_hash, stale_height) in stale {
                 self.pending.pending_blocks.remove(&stale_hash);
-                self.subsystems.validation.inflight.remove(&stale_hash);
-                self.subsystems
-                    .validation
-                    .superseded_results
-                    .remove(&stale_hash);
+                self.clear_validation_ownership_for_block(stale_hash);
                 self.clean_rbc_sessions_for_block(stale_hash, stale_height);
                 self.qc_cache
                     .retain(|(_, hash, _, _, _, _, _), _| hash != &stale_hash);
