@@ -153,8 +153,8 @@ pub const fn irohad_binary_name() -> &'static str {
 /// Check whether an existing CLI binary exposes the training-job command surface.
 pub fn binary_supports_training_job_commands(path: &Path) -> bool {
     let output = ProcessCommand::new(path)
-        .arg("app")
         .arg("soracloud")
+        .arg("model")
         .arg("--help")
         .output();
     let Ok(output) = output else {
@@ -164,7 +164,7 @@ pub fn binary_supports_training_job_commands(path: &Path) -> bool {
         return false;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.contains("training-job-start") && stdout.contains("hf-deploy")
+    stdout.contains("training-job-start")
 }
 
 /// Return the workspace root derived from the integration-tests manifest path.

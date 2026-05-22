@@ -388,7 +388,12 @@ const LOCALNET_PACING_GOVERNOR_MIN_FACTOR_BPS: u32 = 10_000;
 const LOCALNET_PACING_GOVERNOR_MAX_FACTOR_BPS: u32 = 10_000;
 /// Baseline NPoS timeouts for localnet (keep in sync with config defaults).
 /// Default DA commit-quorum timeout multiplier for localnet configs.
-const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 1;
+///
+/// Localnets run a fast one-second pipeline while also serving as the primary
+/// development path for large IVM/Kotodama contract validation. Give local DA
+/// enough liveness slack so a valid, CPU-heavy proposal is not replaced by a
+/// recovery heartbeat before validation can vote.
+const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 32;
 /// Default DA availability timeout multiplier for localnet configs.
 /// Extra slack keeps advisory availability warnings from firing on fast pipelines.
 const LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 1;
@@ -429,9 +434,9 @@ const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// Multiplier applied to block+commit time for localnet commit inflight timeout.
 const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MULTIPLIER: u64 = 6;
 /// Lower bound for localnet commit inflight timeout to avoid overly aggressive aborts.
-const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MIN_MS: u64 = 4_000;
+const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MIN_MS: u64 = 20_000;
 /// Upper bound for localnet commit inflight timeout to prevent long stalls.
-const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS: u64 = 10_000;
+const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS: u64 = 60_000;
 /// Default localnet telemetry toggle (mirrors config defaults).
 const LOCALNET_TELEMETRY_ENABLED: bool = true;
 /// Default localnet telemetry profile (mirrors config defaults).
@@ -543,6 +548,7 @@ const LOCALNET_FEE_ZK_VK_TRANSFER_NAME: &str = "vk_transfer";
 const LOCALNET_FEE_ZK_VK_UNSHIELD_NAME: &str = "vk_unshield";
 const LOCALNET_OFFLINE_NOTE_V2_VK_BACKEND: &str = "halo2/ipa";
 const LOCALNET_OFFLINE_NOTE_V2_VK_NAME: &str = "offline-note-v2-recursive-v1";
+const LOCALNET_FEE_ASSET_SCALE: u32 = 9;
 const LOCALNET_OFFLINE_NOTE_V2_VK_NAMESPACE: &str = "offline_note_v2";
 
 fn localnet_fee_vk_transfer_id() -> VerifyingKeyId {
@@ -2860,12 +2866,15 @@ fn append_localnet_npos_bootstrap(
         registrations.asset_defs.insert(stake_asset_id.clone());
     }
     if !registrations.asset_defs.contains(&fee_asset_id) {
-        let definition = AssetDefinition::new(fee_asset_id.clone(), NumericSpec::default())
-            .with_name("XOR".to_owned())
-            .with_metadata(Metadata::default())
-            .confidential_policy(
-                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-            );
+        let definition = AssetDefinition::new(
+            fee_asset_id.clone(),
+            NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
+        )
+        .with_name("XOR".to_owned())
+        .with_metadata(Metadata::default())
+        .confidential_policy(
+            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+        );
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(fee_asset_id.clone());
     }
@@ -6231,6 +6240,14 @@ mod tests {
             fee_asset.get("name").and_then(json::Value::as_str),
             Some("XOR"),
             "generated fee asset should surface as XOR in TAIRA UIs"
+        );
+        assert_eq!(
+            fee_asset
+                .get("spec")
+                .and_then(|spec| spec.get("scale"))
+                .and_then(json::Value::as_u64),
+            Some(u64::from(LOCALNET_FEE_ASSET_SCALE)),
+            "generated fee asset must use nano-XOR scale for fees and SNS charges"
         );
         assert_eq!(
             fee_asset

@@ -12322,6 +12322,7 @@ mod tests {
                 access_hints_skipped: Vec::new(),
                 triggers: Vec::new(),
             }]),
+            states: None,
             kotoba: Some(vec![KotobaTranslationEntry {
                 msg_id: "contract.title".to_owned(),
                 translations: vec![KotobaTranslation {

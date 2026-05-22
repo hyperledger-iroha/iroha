@@ -135,6 +135,14 @@ fn test_domain_register_request(
     domain: &DomainId,
     owner: &AccountId,
 ) -> Result<RegisterNameRequestV1> {
+    test_domain_register_request_for_owner_payer(domain, owner, owner)
+}
+
+fn test_domain_register_request_for_owner_payer(
+    domain: &DomainId,
+    owner: &AccountId,
+    payer: &AccountId,
+) -> Result<RegisterNameRequestV1> {
     let domain_label = domain.to_string();
     Ok(RegisterNameRequestV1 {
         selector: iroha_data_model::sns::NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_label)
@@ -148,12 +156,34 @@ fn test_domain_register_request(
             gross_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
             net_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
             settlement_tx: Json::from("mock-settlement"),
-            payer: owner.clone(),
+            payer: payer.clone(),
             signature: Json::from("mock-signature"),
         },
         governance: None,
         metadata: Metadata::default(),
     })
+}
+
+/// Build the SNS lease instruction required before a runtime domain registration.
+pub fn domain_registration_lease_instruction_for_owner_payer(
+    domain: &DomainId,
+    owner: &AccountId,
+    payer: &AccountId,
+) -> Result<InstructionBox> {
+    Ok(
+        RegisterSnsName::new(test_domain_register_request_for_owner_payer(
+            domain, owner, payer,
+        )?)
+        .into(),
+    )
+}
+
+/// Build the SNS lease instruction required before a runtime domain registration.
+pub fn domain_registration_lease_instruction(
+    domain: &DomainId,
+    owner: &AccountId,
+) -> Result<InstructionBox> {
+    domain_registration_lease_instruction_for_owner_payer(domain, owner, owner)
 }
 
 fn is_duplicate_sns_selector_error(err: &Report) -> bool {
@@ -183,11 +213,23 @@ fn domain_registration_lease_visible_to_client(client: &Client, domain: &DomainI
 }
 
 fn domain_registration_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
-    let domain_exists = client
-        .query(FindDomains::new())
-        .execute_all()?
-        .into_iter()
-        .any(|existing| existing.id() == domain);
+    let domain_exists = match client.query(FindDomains::new()).execute_all() {
+        Ok(domains) => domains.into_iter().any(|existing| existing.id() == domain),
+        Err(err) => {
+            let report = Report::from(err);
+            if torii_request_error_is_transient(&report) {
+                debug!(
+                    err = %report,
+                    %domain,
+                    torii_url = %client.torii_url,
+                    "transient domain visibility query failed while checking SNS lease readiness"
+                );
+                false
+            } else {
+                return Err(report);
+            }
+        }
+    };
     if domain_exists {
         return Ok(true);
     }
@@ -207,23 +249,12 @@ fn wait_for_domain_registration_lease(client: &Client, domain: &DomainId) -> Res
 
 /// Ensure a runtime domain registration has the SNS lease required by the executor.
 pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> Result<()> {
-    let domain_exists = client
-        .query(FindDomains::new())
-        .execute_all()?
-        .into_iter()
-        .any(|existing| existing.id() == domain);
-    if domain_exists {
-        return Ok(());
-    }
-
-    if domain_registration_lease_visible_to_client(client, domain)? {
+    if domain_registration_ready_to_client(client, domain)? {
         return Ok(());
     }
 
     let request = test_domain_register_request(domain, &client.account)?;
-    let transaction =
-        client.build_transaction_from_items([RegisterSnsName::new(request)], Metadata::default());
-    match client.submit_transaction(&transaction) {
+    match client.submit_blocking(RegisterSnsName::new(request)) {
         Ok(_) => {
             if wait_for_domain_registration_lease(client, domain)? {
                 Ok(())
@@ -274,6 +305,41 @@ pub fn ensure_domain_registration_lease_for_network(
     Ok(())
 }
 
+fn ensure_domain_registration_leases(client: &Client, domains: &BTreeSet<DomainId>) -> Result<()> {
+    let mut registrations = Vec::new();
+    for domain in domains {
+        if domain_registration_ready_to_client(client, domain)? {
+            continue;
+        }
+        let request = test_domain_register_request(domain, &client.account)?;
+        registrations.push(RegisterSnsName::new(request));
+    }
+
+    if !registrations.is_empty() {
+        match client.submit_all_blocking(registrations) {
+            Ok(_) => {}
+            Err(err) if is_duplicate_sns_selector_error(&err) => {
+                for domain in domains {
+                    ensure_domain_registration_lease(client, domain)?;
+                }
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    for domain in domains {
+        if !wait_for_domain_registration_lease(client, domain)? {
+            return Err(eyre!(
+                "domain `{domain}` SNS lease was not visible within {:?}",
+                TEST_SNS_LEASE_VISIBILITY_TIMEOUT
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Ensure SNS leases exist for every runtime `Register<Domain>` instruction in an executable.
 pub fn ensure_domain_registration_leases_for_executable(
     client: &Client,
@@ -291,31 +357,7 @@ pub fn ensure_domain_registration_leases_for_executable(
             domains.insert(register_domain.object.id.clone());
         }
     }
-    let mut registrations = Vec::new();
-    for domain in &domains {
-        if domain_registration_ready_to_client(client, domain)? {
-            continue;
-        }
-        let request = test_domain_register_request(domain, &client.account)?;
-        registrations.push(RegisterSnsName::new(request));
-    }
-    if !registrations.is_empty() {
-        let transaction = client.build_transaction_from_items(registrations, Metadata::default());
-        match client.submit_transaction(&transaction) {
-            Ok(_) => {}
-            Err(err) if is_duplicate_sns_selector_error(&err) => {}
-            Err(err) => return Err(err),
-        }
-    }
-    for domain in domains {
-        if !wait_for_domain_registration_lease(client, &domain)? {
-            return Err(eyre!(
-                "domain `{domain}` SNS lease was not visible within {:?}",
-                TEST_SNS_LEASE_VISIBILITY_TIMEOUT
-            ));
-        }
-    }
-    Ok(())
+    ensure_domain_registration_leases(client, &domains)
 }
 
 /// Ensure SNS leases exist on every peer for every runtime `Register<Domain>` instruction in an
@@ -336,8 +378,28 @@ pub fn ensure_domain_registration_leases_for_network_executable(
             domains.insert(register_domain.object.id.clone());
         }
     }
-    for domain in domains {
-        ensure_domain_registration_lease_for_network(network, &domain)?;
+
+    let mut peers = network.peers().iter().collect::<Vec<_>>();
+    peers.sort_by(|left, right| left.id().cmp(&right.id()));
+    let clients = peers
+        .into_iter()
+        .map(NetworkPeer::client)
+        .collect::<Vec<_>>();
+    let Some((primary, replicas)) = clients.split_first() else {
+        return Ok(());
+    };
+
+    ensure_domain_registration_leases(primary, &domains)?;
+    for client in replicas {
+        for domain in &domains {
+            if !wait_for_domain_registration_lease(client, domain)? {
+                return Err(eyre!(
+                    "domain `{domain}` SNS lease was not visible to peer `{}` within {:?}",
+                    client.torii_url,
+                    TEST_SNS_LEASE_VISIBILITY_TIMEOUT
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -505,6 +567,30 @@ fn status_error_is_torii_query_backpressure(err: &Report) -> bool {
         message.contains("429 Too Many Requests")
             && message.contains("Reached the limit of parallel queries")
     })
+}
+
+fn torii_request_error_is_transient(err: &Report) -> bool {
+    if status_error_is_connection_refused(err) || status_error_is_torii_query_backpressure(err) {
+        return true;
+    }
+
+    let mut saw_http_transport = false;
+    let mut saw_transient_transport = false;
+    for cause in err.chain() {
+        let message = cause.to_string();
+        saw_http_transport |= message.contains("Failed to send http")
+            || message.contains("error sending request for url")
+            || message.contains("client error (Connect)")
+            || message.contains("tcp connect error");
+        saw_transient_transport |= message.contains("operation timed out")
+            || message.contains("request timed out")
+            || message.contains("Connection refused")
+            || message.contains("connection refused")
+            || message.contains("connection reset")
+            || message.contains("connection closed");
+    }
+
+    saw_http_transport && saw_transient_transport
 }
 
 /// Try binding to all provided addresses to detect missing socket permissions early.
@@ -9084,6 +9170,54 @@ mod tests {
         let report = eyre!("Unexpected status response; status: 429 Too Many Requests");
 
         assert!(!status_error_is_torii_query_backpressure(&report));
+    }
+
+    #[test]
+    fn duplicate_sns_selector_error_detects_nested_registration_conflict() {
+        let report = Err::<(), Report>(eyre!("selector `domain:bridge` is already registered"))
+            .wrap_err("SNS lease batch failed")
+            .unwrap_err();
+
+        assert!(is_duplicate_sns_selector_error(&report));
+    }
+
+    #[test]
+    fn duplicate_sns_selector_error_ignores_unrelated_selector_failures() {
+        let report = eyre!("selector `domain:bridge` failed policy validation");
+
+        assert!(!is_duplicate_sns_selector_error(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_detects_query_timeout() {
+        let report = eyre!(
+            "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: error sending request for url\n   1: operation timed out"
+        );
+
+        assert!(torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_detects_connection_reset_transport() {
+        let report = eyre!(
+            "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: error sending request for url\n   1: connection reset"
+        );
+
+        assert!(torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_requires_http_transport_context() {
+        let report = eyre!("connection reset while applying local validation");
+
+        assert!(!torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_ignores_validation_errors() {
+        let report = eyre!("Validation failed: domain already exists");
+
+        assert!(!torii_request_error_is_transient(&report));
     }
 
     #[test]

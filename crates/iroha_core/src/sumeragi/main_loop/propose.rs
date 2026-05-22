@@ -912,11 +912,7 @@ impl Actor {
             self.pending
                 .pending_block_body_requests
                 .remove(&pending_hash);
-            self.subsystems.validation.inflight.remove(&pending_hash);
-            self.subsystems
-                .validation
-                .superseded_results
-                .remove(&pending_hash);
+            self.clear_validation_ownership_for_block(pending_hash);
             self.subsystems
                 .propose
                 .proposal_cache
@@ -947,6 +943,7 @@ impl Actor {
                 self.state.as_ref(),
             )?;
 
+        self.clear_validation_ownership_for_block(pending_hash);
         self.clean_rbc_sessions_for_block(pending_hash, height);
         self.qc_cache
             .retain(|(_, hash, _, _, _, _, _), _| hash != &pending_hash);
@@ -1541,6 +1538,21 @@ impl Actor {
         view_gap >= min_view_gap
     }
 
+    pub(super) fn same_height_vote_recovery_escalation_view_gap_exhausted(
+        &self,
+        subject_view: u64,
+        proposal_view: u64,
+        total_validators: usize,
+    ) -> bool {
+        let view_gap = proposal_view.saturating_sub(subject_view);
+        // Escalating exact recovery only re-requests the vote-backed branch; it does not let
+        // a fresh conflicting branch bypass the longer rotation/supersession gate.
+        let min_view_gap = u64::try_from(total_validators.saturating_mul(2))
+            .unwrap_or(u64::MAX)
+            .max(8);
+        view_gap >= min_view_gap
+    }
+
     fn local_same_height_vote_has_live_proposal_material(
         &self,
         proposal_height: u64,
@@ -1756,6 +1768,12 @@ impl Actor {
                         view,
                         lock.total_validators,
                     );
+                let recovery_escalation_due = recovery_exhausted
+                    || self.same_height_vote_recovery_escalation_view_gap_exhausted(
+                        lock.view,
+                        view,
+                        lock.total_validators,
+                    );
                 let qc_observed = self.same_height_block_has_observed_qc(
                     lock.block_hash,
                     proposal_height,
@@ -1768,7 +1786,7 @@ impl Actor {
                     "vote_locked_same_height",
                     false,
                 );
-                let stale_vote_locked_recovery_requested = recovery_exhausted
+                let stale_vote_locked_recovery_requested = recovery_escalation_due
                     && !qc_observed
                     && self.escalate_stale_vote_locked_frontier_owner_recovery(
                         lock.block_hash,
@@ -1789,6 +1807,7 @@ impl Actor {
                     required = lock.required,
                     total_validators = lock.total_validators,
                     recovery_exhausted,
+                    recovery_escalation_due,
                     qc_observed,
                     stale_vote_locked_recovery_requested,
                     "deferring proposal assembly: same-height vote history makes a fresh branch non-viable"

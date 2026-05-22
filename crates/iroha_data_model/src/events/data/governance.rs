@@ -8,7 +8,10 @@ use super::*;
 #[model]
 mod model {
     use super::*;
-    use crate::governance::types::{ParliamentBodies, ParliamentBody};
+    use crate::{
+        governance::types::{ParliamentBodies, ParliamentBody},
+        isi::governance::ParliamentDecision,
+    };
 
     /// Governance lifecycle events.
     #[derive(
@@ -53,6 +56,8 @@ mod model {
         ParliamentSelected(GovernanceParliamentSelected),
         /// A parliament body approval was recorded for a proposal.
         ParliamentApprovalRecorded(GovernanceParliamentApprovalRecorded),
+        /// A parliament body ballot was recorded for a proposal.
+        ParliamentBallotRecorded(GovernanceParliamentBallotRecorded),
         /// A governance lock was slashed (partial or full) for a referendum.
         LockSlashed(GovernanceLockSlashed),
         /// A governance lock received restitution after appeal.
@@ -355,6 +360,30 @@ mod model {
         pub required: u32,
     }
 
+    /// Parliament ballot recorded payload.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+    )]
+    pub struct GovernanceParliamentBallotRecorded {
+        /// Proposal id receiving a ballot.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub proposal_id: [u8; 32],
+        /// Epoch of the Parliament roster.
+        pub epoch: u64,
+        /// Parliament body receiving the ballot.
+        pub body: ParliamentBody,
+        /// Decision recorded for the signer.
+        pub decision: ParliamentDecision,
+        /// Number of approvals recorded so far.
+        pub approvals: u32,
+        /// Number of rejections recorded so far.
+        pub rejections: u32,
+        /// Number of abstentions recorded so far.
+        pub abstentions: u32,
+        /// Quorum required for an approve or reject decision.
+        pub required: u32,
+    }
+
     /// Citizen service discipline event payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -394,6 +423,7 @@ impl_json_via_norito_bytes!(
     GovernanceCouncilPersisted,
     GovernanceParliamentSelected,
     GovernanceParliamentApprovalRecorded,
+    GovernanceParliamentBallotRecorded,
     GovernanceSlashReason,
     GovernanceLockSlashed,
     GovernanceLockRestituted,
@@ -409,9 +439,9 @@ pub mod prelude {
         GovernanceCitizenRegistered, GovernanceCitizenRevoked, GovernanceCitizenServiceRecorded,
         GovernanceCouncilPersisted, GovernanceEvent, GovernanceLockCreated, GovernanceLockExtended,
         GovernanceLockRestituted, GovernanceLockSlashed, GovernanceLockUnlocked,
-        GovernanceParliamentApprovalRecorded, GovernanceParliamentSelected,
-        GovernanceProposalApproved, GovernanceProposalEnacted, GovernanceProposalRejected,
-        GovernanceProposalSubmitted, GovernanceReferendumClosed, GovernanceReferendumOpened,
-        GovernanceSlashReason,
+        GovernanceParliamentApprovalRecorded, GovernanceParliamentBallotRecorded,
+        GovernanceParliamentSelected, GovernanceProposalApproved, GovernanceProposalEnacted,
+        GovernanceProposalRejected, GovernanceProposalSubmitted, GovernanceReferendumClosed,
+        GovernanceReferendumOpened, GovernanceSlashReason,
     };
 }

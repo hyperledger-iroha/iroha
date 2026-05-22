@@ -654,9 +654,7 @@ mod tests {
             burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
             runtime_proof_family: Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1.to_owned()),
-            runtime_verifier_backend: Some(
-                iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1.to_owned(),
-            ),
+            runtime_verifier_backend: Some(iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1.to_owned()),
             message_runtime_bundle_path: Some(
                 "/v1/sccp/proofs/message/{message_id}/runtime-scale".to_owned(),
             ),
@@ -936,8 +934,7 @@ mod tests {
             source_tx: "11".repeat(32),
             amount: 5,
             asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_string(),
-            recipient: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-                .to_string(),
+            recipient: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".to_string(),
             dest_tx: Some("22".repeat(32)),
             proof_hash: Some("33".repeat(32)),
         };
@@ -992,9 +989,9 @@ mod tests {
         assert!(rendered.contains("proof_family=stark-fri-v1"));
         assert!(rendered.contains("runtime_family=runtime-scale-v1"));
         assert!(rendered.contains("runtime_backend=sora-nexus-runtime-v1"));
-        assert!(rendered.contains(
-            "runtime_message=/v1/sccp/proofs/message/{message_id}/runtime-scale"
-        ));
+        assert!(
+            rendered.contains("runtime_message=/v1/sccp/proofs/message/{message_id}/runtime-scale")
+        );
         assert!(rendered.contains(
             "ton(4:ton_raw:ton-contract-v1:TonContractNativeRecursive/verifier_live=false/anchors_live=false:disabled)"
         ));

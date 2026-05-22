@@ -2041,6 +2041,7 @@ impl Executor {
         tx_hash: iroha_crypto::HashOf<SignedTransaction>,
         gas_limit_md: Option<u64>,
         require_gas_limit: bool,
+        sccp_recording_proof_verified: bool,
         gas_asset_opt: Option<String>,
         fee_sponsor: Option<AccountId>,
         skip_nexus_fee: bool,
@@ -2070,9 +2071,16 @@ impl Executor {
             .sum::<u64>();
 
         // 3) Execute ISIs in order.
-        for isi in instructions {
-            self.execute_instruction(state_transaction, authority, isi)?;
-        }
+        let prior_sccp_recording_proof_verified = state_transaction.sccp_recording_proof_verified;
+        state_transaction.sccp_recording_proof_verified = sccp_recording_proof_verified;
+        let execution_result = (|| -> Result<(), ValidationFail> {
+            for isi in instructions {
+                self.execute_instruction(state_transaction, authority, isi)?;
+            }
+            Ok(())
+        })();
+        state_transaction.sccp_recording_proof_verified = prior_sccp_recording_proof_verified;
+        execution_result?;
 
         // Track confidential gas after successful execution.
         if confidential_delta > 0 {
@@ -2600,6 +2608,7 @@ impl Executor {
                     tx_hash,
                     gas_limit_md,
                     false,
+                    false,
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
@@ -2618,6 +2627,7 @@ impl Executor {
                     settlement_source_id,
                     tx_hash,
                     gas_limit_md,
+                    true,
                     true,
                     gas_asset_opt,
                     fee_sponsor,

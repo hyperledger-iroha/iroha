@@ -579,8 +579,11 @@ function normalizeServiceSpec(service, index) {
 /**
  * Build an unsigned Soracloud decentralized app-infra draft.
  *
- * This helper normalizes a multi-service topology that future apps can submit
- * through Iroha/Soracloud tooling without hand-expanding worker shards.
+ * This helper mirrors the request shape produced by
+ * `iroha soracloud app simulate` and `iroha soracloud app release`: app
+ * topology first, then external provenance, then app-infra deploy/upgrade
+ * submission through Torii. It keeps low-level Torii clients usable without
+ * hand-expanding worker shards.
  *
  * @param {{ appName: string, appVersion?: string, publicUrl: string, staticSite?: Record<string, unknown>, services: Array<Record<string, unknown>> }} input
  * @returns {{ payload: Record<string, unknown>, provenancePayloads: { deploy: Record<string, unknown>, services: Record<string, unknown>[] } }}

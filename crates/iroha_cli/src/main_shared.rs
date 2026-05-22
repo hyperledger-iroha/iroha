@@ -41,12 +41,12 @@ use std::{
 use error_stack::{IntoReportCompat, Report, ResultExt, fmt::ColorMode};
 use eyre::{Result, WrapErr, eyre};
 use futures::{TryStreamExt, stream::TryStream};
+use iroha::data_model::account::address::ChainDiscriminantGuard;
 use iroha::{
     client::Client,
     config::{Config, LoadPath},
     data_model::{prelude::*, transaction::IvmBytecode},
 };
-use iroha::data_model::account::address::ChainDiscriminantGuard;
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_crypto::{Algorithm, KeyPair};
 use std::num::NonZeroU64;
@@ -151,28 +151,30 @@ impl From<TransactionWaitTerminalStatusArg> for iroha::client::TransactionWaitTe
 
 #[derive(clap::Args, Debug, Clone)]
 pub(crate) struct TransactionWaitArgs {
-    /// Poll `/v1/pipeline/transactions/status` until the transaction reaches a stop state.
+    /// Poll `/v1/pipeline/transactions/status` until the transaction reaches Applied finality.
     #[arg(long)]
     pub wait: bool,
+    /// Submit the transaction without waiting for finality.
+    #[arg(long, conflicts_with = "wait")]
+    pub submit_only: bool,
     /// Maximum time to wait before failing.
-    #[arg(long, default_value_t = 30_000, requires = "wait")]
+    #[arg(long, default_value_t = 30_000)]
     pub timeout_ms: u64,
     /// Poll interval used while waiting.
-    #[arg(long, default_value_t = 500, requires = "wait")]
+    #[arg(long, default_value_t = 500)]
     pub poll_interval_ms: u64,
-    /// Stop when the pipeline reaches any of these statuses. Applied, rejected, and expired always stop.
+    /// Stop when the pipeline reaches any of these statuses instead of the default Applied finality.
     #[arg(
         long = "terminal-status",
         value_enum,
-        action = ArgAction::Append,
-        requires = "wait"
+        action = ArgAction::Append
     )]
     pub terminal_statuses: Vec<TransactionWaitTerminalStatusArg>,
 }
 
 impl TransactionWaitArgs {
     pub(crate) fn is_enabled(&self) -> bool {
-        self.wait
+        !self.submit_only
     }
 
     pub(crate) fn to_options(&self) -> Result<iroha::client::TransactionWaitOptions> {
@@ -207,7 +209,7 @@ pub(crate) fn wait_for_transaction_status(
 struct Args {
     /// Path to the configuration file.
     ///
-    /// By default, `iroha` will try to read `client.toml` file, but would proceed if it is not found.
+    /// By default, `iroha` reads `client.toml`; runtime commands require it to be present and readable.
     #[arg(short, long, value_name("PATH"))]
     config: Option<PathBuf>,
     /// Print configuration details to stderr
@@ -270,6 +272,9 @@ enum Command {
     /// SORA Taira public testnet diagnostics and canaries
     #[command(subcommand)]
     Taira(taira::Command),
+    /// Soracloud app platform helpers
+    #[command(subcommand)]
+    Soracloud(crate::soracloud::Command),
 }
 
 /// Context inside which commands run
@@ -536,6 +541,23 @@ impl Run for Command {
             Contract(variant) => Run::run(variant, context),
             Tools(variant) => Run::run(variant, context),
             Taira(variant) => Run::run(variant, context),
+            Soracloud(variant) => Run::run(variant, context),
+        }
+    }
+}
+
+impl Command {
+    fn allows_fallback_config(&self) -> bool {
+        match self {
+            Self::App(command) => command.allows_fallback_config(),
+            Self::Tools(command) => command.allows_fallback_config(),
+            Self::Account(_)
+            | Self::Tx(_)
+            | Self::Ledger(_)
+            | Self::Ops(_)
+            | Self::Contract(_)
+            | Self::Taira(_) => false,
+            Self::Soracloud(command) => command.allows_fallback_config(),
         }
     }
 }
@@ -699,9 +721,6 @@ mod app {
         /// Compute lane simulation helpers
         #[command(subcommand)]
         Compute(crate::compute::Command),
-        /// Soracloud deployment/control-plane helpers
-        #[command(subcommand)]
-        Soracloud(crate::soracloud::Command),
         /// Social incentive helpers (viral follow rewards and escrows)
         #[command(subcommand)]
         Social(crate::commands::social::Command),
@@ -749,7 +768,6 @@ mod app {
                 Endorsement(variant) => Run::run(variant, context),
                 Jurisdiction(variant) => Run::run(variant, context),
                 Compute(variant) => Run::run(variant, context),
-                Soracloud(variant) => Run::run(variant, context),
                 Social(variant) => Run::run(variant, context),
                 SpaceDirectory(variant) => Run::run(variant, context),
                 Kaigi(variant) => Run::run(variant, context),
@@ -760,6 +778,95 @@ mod app {
                 Repo(variant) => Run::run(variant, context),
                 Settlement(variant) => Run::run(variant, context),
             }
+        }
+    }
+
+    impl Command {
+        pub(super) fn allows_fallback_config(&self) -> bool {
+            match self {
+                Self::Da(
+                    crate::commands::da::Command::RentQuote(_)
+                    | crate::commands::da::Command::RentLedger(_),
+                ) => true,
+                Self::Taikai(command) => taikai_allows_fallback_config(command),
+                Self::Sorafs(command) => sorafs_allows_fallback_config(command),
+                Self::SpaceDirectory(crate::space_directory::Command::Manifest(
+                    crate::space_directory::ManifestCommand::Encode(_)
+                    | crate::space_directory::ManifestCommand::AuditBundle(_)
+                    | crate::space_directory::ManifestCommand::Scaffold(_),
+                )) => true,
+                Self::Gov(_)
+                | Self::Contracts(_)
+                | Self::Zk(_)
+                | Self::Confidential(_)
+                | Self::Content(_)
+                | Self::Da(_)
+                | Self::Streaming(_)
+                | Self::Nexus(_)
+                | Self::Staking(_)
+                | Self::Subscriptions(_)
+                | Self::Endorsement(_)
+                | Self::Jurisdiction(_)
+                | Self::Compute(_)
+                | Self::Social(_)
+                | Self::SpaceDirectory(_)
+                | Self::Kaigi(_)
+                | Self::Soracles(_)
+                | Self::Sns(_)
+                | Self::Alias(_)
+                | Self::Repo(_)
+                | Self::Settlement(_) => false,
+            }
+        }
+    }
+
+    fn taikai_allows_fallback_config(command: &crate::commands::taikai::Command) -> bool {
+        use crate::commands::taikai::{Command as TaikaiCommand, IngestCommand};
+
+        match command {
+            TaikaiCommand::Bundle(_)
+            | TaikaiCommand::CekRotate(_)
+            | TaikaiCommand::RptAttest(_)
+            | TaikaiCommand::Ingest(IngestCommand::Edge(_)) => true,
+            TaikaiCommand::Ingest(IngestCommand::Watch(args)) => !args.publish_da,
+        }
+    }
+
+    fn sorafs_allows_fallback_config(command: &crate::commands::sorafs::Command) -> bool {
+        use crate::commands::sorafs::{
+            Command as SorafsCommand, IncentivesCommand, IncentivesServiceCommand, ReserveCommand,
+        };
+
+        match command {
+            SorafsCommand::Reserve(ReserveCommand::Quote(_) | ReserveCommand::Ledger(_)) => true,
+            SorafsCommand::Incentives(
+                IncentivesCommand::Compute(_)
+                | IncentivesCommand::OpenDispute(_)
+                | IncentivesCommand::Dashboard(_),
+            ) => true,
+            SorafsCommand::Incentives(IncentivesCommand::Service(command)) => match command {
+                IncentivesServiceCommand::Process(args) => !args.submit_transfer,
+                IncentivesServiceCommand::Init(_)
+                | IncentivesServiceCommand::Record(_)
+                | IncentivesServiceCommand::Dispute(_)
+                | IncentivesServiceCommand::Dashboard(_)
+                | IncentivesServiceCommand::Audit(_)
+                | IncentivesServiceCommand::ShadowRun(_)
+                | IncentivesServiceCommand::Reconcile(_)
+                | IncentivesServiceCommand::Daemon(_) => true,
+            },
+            SorafsCommand::Pin(_)
+            | SorafsCommand::Alias(_)
+            | SorafsCommand::Replication(_)
+            | SorafsCommand::Storage(_)
+            | SorafsCommand::Gateway(_)
+            | SorafsCommand::Handshake(_)
+            | SorafsCommand::Toolkit(_)
+            | SorafsCommand::GuardDirectory(_)
+            | SorafsCommand::Gar(_)
+            | SorafsCommand::Repair(_)
+            | SorafsCommand::Gc(_)
+            | SorafsCommand::Fetch(_) => false,
         }
     }
 }
@@ -794,6 +901,12 @@ mod tools {
                 MarkdownHelp(variant) => Run::run(variant, context),
                 Version(variant) => Run::run(variant, context),
             }
+        }
+    }
+
+    impl Command {
+        pub(super) fn allows_fallback_config(&self) -> bool {
+            matches!(self, Self::Address(_))
         }
     }
 }
@@ -964,21 +1077,21 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
 
     let mut config = match Config::load(load_path) {
         Ok(cfg) => cfg,
+        Err(_)
+            if !config_was_explicit && !args.machine && args.command.allows_fallback_config() =>
+        {
+            fallback_config()
+        }
         Err(report) => {
-            if config_was_explicit {
-                return Err(report
-                    .change_context(MainError::Config)
-                    .attach(i18n.t("error.config_path")));
+            let mut report = report
+                .change_context(MainError::Config)
+                .attach(i18n.t("error.config_path"));
+            if !config_was_explicit {
+                report = report.attach(
+                    "runtime commands require a readable `client.toml`; use command-specific offline tooling explicitly",
+                );
             }
-            if args.machine {
-                return Err(report
-                    .change_context(MainError::Config)
-                    .attach(i18n.t("error.config_path"))
-                    .attach("machine mode requires an explicit readable config"));
-            } else {
-                eprintln!("{}", i18n.t("warning.config_missing_offline"));
-                fallback_config()
-            }
+            return Err(report);
         }
     };
     if let Some(path) = config_path
@@ -1168,6 +1281,7 @@ fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn fallback_config() -> Config {
     let chain = ChainId::from("offline-cli");
     let seed = vec![0u8; 32];
@@ -2690,7 +2804,8 @@ mod asset {
 
             fn base_register_args() -> Register {
                 Register {
-                    id: AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").expect("domain"),
+                    id: AssetDefinitionId::new(
+                        DomainId::try_new("wonderland", "universal").expect("domain"),
                         "rose".parse().expect("asset name"),
                     ),
                     name: "Rose".to_owned(),
@@ -2954,7 +3069,8 @@ mod asset {
             let dest = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
             let owner = AccountId::new(src.public_key().clone());
             let to = AccountId::new(dest.public_key().clone());
-            let asset_def_id = AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").expect("domain id"),
+            let asset_def_id = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("domain id"),
                 "rose".parse().expect("asset name"),
             );
             let asset_id = AssetId::new(asset_def_id, owner.clone().into());
@@ -4087,7 +4203,8 @@ mod multisig {
         ) -> Result<iroha::client::MultisigApprovalsListResponse>,
     {
         let mut cursor = None;
-        let mut skip_remaining = usize::try_from(offset).wrap_err("multisig offset exceeds usize")?;
+        let mut skip_remaining =
+            usize::try_from(offset).wrap_err("multisig offset exceeds usize")?;
         let mut remaining_limit = limit
             .map(|value| usize::try_from(value).wrap_err("multisig limit exceeds usize"))
             .transpose()?;
@@ -4305,10 +4422,7 @@ mod multisig {
             );
             assert_eq!(
                 requests,
-                vec![
-                    (None, Some(2)),
-                    (Some("cursor-1".to_owned()), Some(2)),
-                ]
+                vec![(None, Some(2)), (Some("cursor-1".to_owned()), Some(2)),]
             );
         }
 
@@ -4490,7 +4604,7 @@ mod transaction {
     impl Run for Status {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
-            if self.wait.is_enabled() {
+            if self.wait.wait {
                 let status = crate::wait_for_transaction_status(&client, self.hash, &self.wait)?;
                 context.print_data(&status)
             } else {
@@ -6997,7 +7111,8 @@ mod settlement {
                 let receiver = account_with_seed(&domain, 0x44);
 
                 let delivery_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(
+                        DomainId::try_new("wonderland", "universal").unwrap(),
                         "bond".parse().unwrap(),
                     ),
                     Numeric::new(100, 0),
@@ -7005,7 +7120,8 @@ mod settlement {
                     buyer,
                 );
                 let payment_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(
+                        DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
                     Numeric::new(1000, 0),
@@ -7033,7 +7149,8 @@ mod settlement {
                 let counter_receiver = account_with_seed(&domain, 0x88);
 
                 let primary_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(
+                        DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
                     Numeric::new(1000, 0),
@@ -7041,7 +7158,8 @@ mod settlement {
                     receiver,
                 );
                 let counter_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(
+                        DomainId::try_new("wonderland", "universal").unwrap(),
                         "eur".parse().unwrap(),
                     ),
                     Numeric::new(900, 0),
@@ -7123,7 +7241,8 @@ mod settlement {
                 let dvp = DvpIsi {
                     settlement_id: "dvp_settlement".parse().unwrap(),
                     delivery_leg: SettlementLeg::new(
-                        iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
+                        iroha_data_model::asset::AssetDefinitionId::new(
+                            DomainId::try_new("wonderland", "universal").unwrap(),
                             "bond".parse().unwrap(),
                         ),
                         Numeric::new(100, 0),
@@ -7131,7 +7250,8 @@ mod settlement {
                         account_with_seed(&domain, 0x66),
                     ),
                     payment_leg: SettlementLeg::new(
-                        iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
+                        iroha_data_model::asset::AssetDefinitionId::new(
+                            DomainId::try_new("wonderland", "universal").unwrap(),
                             "doge".parse().unwrap(),
                         ),
                         Numeric::new(1000, 0),
@@ -7166,7 +7286,8 @@ mod settlement {
                 let buyer = account_with_seed(&domain, 0x22);
                 let payer = account_with_seed(&domain, 0x33);
                 let receiver = account_with_seed(&domain, 0x44);
-                let named_payment_asset = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
+                let named_payment_asset = iroha_data_model::asset::AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 );
                 let opaque_payment_asset: AssetDefinitionId = named_payment_asset
@@ -7178,7 +7299,8 @@ mod settlement {
                 let dvp = DvpIsi {
                     settlement_id: "dvp_settlement".parse().unwrap(),
                     delivery_leg: SettlementLeg::new(
-                        iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
+                        iroha_data_model::asset::AssetDefinitionId::new(
+                            DomainId::try_new("wonderland", "universal").unwrap(),
                             "bond".parse().unwrap(),
                         ),
                         Numeric::new(100, 0),
@@ -7596,9 +7718,8 @@ mod tests {
     }
 
     fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
-        let _domain =
-            iroha::data_model::domain::DomainId::try_new(domain_literal, "universal")
-                .expect("domain");
+        let _domain = iroha::data_model::domain::DomainId::try_new(domain_literal, "universal")
+            .expect("domain");
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         AccountId::new(key_pair.public_key().clone())
     }
@@ -7637,6 +7758,112 @@ mod tests {
         let args = Args::try_parse_from(["iroha", "--output-format", "json", "tools", "version"])
             .expect("parse args");
         assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
+    }
+
+    #[test]
+    fn fallback_config_is_limited_to_offline_commands() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "da",
+            "rent-quote",
+            "--gib",
+            "1",
+            "--months",
+            "1",
+        ])
+        .expect("parse offline rent quote");
+        assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "taikai",
+            "cek-rotate",
+            "--event-id",
+            "demo-event",
+            "--stream-id",
+            "stream-1",
+            "--kms-profile",
+            "kms-demo",
+            "--new-wrap-key-label",
+            "wrap-v2",
+            "--effective-segment",
+            "42",
+            "--out",
+            "receipt.to",
+        ])
+        .expect("parse offline taikai cek rotation");
+        assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "taikai",
+            "ingest",
+            "watch",
+            "--source-dir",
+            ".",
+            "--event-id",
+            "demo-event",
+            "--stream-id",
+            "stream-1",
+            "--rendition-id",
+            "1080p-main",
+        ])
+        .expect("parse offline taikai watcher");
+        assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "taikai",
+            "ingest",
+            "watch",
+            "--source-dir",
+            ".",
+            "--event-id",
+            "demo-event",
+            "--stream-id",
+            "stream-1",
+            "--rendition-id",
+            "1080p-main",
+            "--publish-da",
+        ])
+        .expect("parse publishing taikai watcher");
+        assert!(!args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from(["iroha", "tools", "address", "convert", "sora1"])
+            .expect("parse address conversion");
+        assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ])
+        .expect("parse runtime tx status");
+        assert!(!args.command.allows_fallback_config());
+    }
+
+    #[test]
+    fn tx_status_wait_is_explicit() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ])
+        .expect("parse tx status");
+        let Command::Tx(transaction::Command::Status(status)) = args.command else {
+            panic!("expected tx status command");
+        };
+
+        assert!(!status.wait.wait);
+        assert!(status.wait.is_enabled());
     }
 
     #[test]
@@ -7769,6 +7996,99 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_top_level_app_parser_replaces_nested_app_path() {
+        Args::try_parse_from([
+            "iroha",
+            "soracloud",
+            "app",
+            "doctor",
+            "--manifest",
+            "app_manifest.json",
+        ])
+        .expect("top-level soracloud app doctor should parse");
+
+        let err = Args::try_parse_from([
+            "iroha",
+            "app",
+            "soracloud",
+            "app",
+            "doctor",
+            "--manifest",
+            "app_manifest.json",
+        ])
+        .expect_err("old nested Soracloud path must be removed");
+        assert_eq!(err.kind(), ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn soracloud_offline_app_commands_allow_fallback_config() {
+        let init = Args::try_parse_from(["iroha", "soracloud", "app", "init"])
+            .expect("app init should parse");
+        assert!(init.command.allows_fallback_config());
+
+        let simulate = Args::try_parse_from([
+            "iroha",
+            "soracloud",
+            "app",
+            "simulate",
+            "--manifest",
+            "app_manifest.json",
+        ])
+        .expect("app simulate should parse");
+        assert!(simulate.command.allows_fallback_config());
+
+        let release = Args::try_parse_from(["iroha", "soracloud", "app", "release"])
+            .expect("app release should parse");
+        assert!(!release.command.allows_fallback_config());
+    }
+
+    #[test]
+    fn soracloud_service_model_hf_and_agent_parsers_are_namespaced() {
+        Args::try_parse_from([
+            "iroha",
+            "soracloud",
+            "service",
+            "plan",
+            "--container",
+            "container_manifest.json",
+            "--service",
+            "service_manifest.json",
+        ])
+        .expect("top-level soracloud service plan should parse");
+        Args::try_parse_from([
+            "iroha",
+            "soracloud",
+            "model",
+            "training-job-status",
+            "--service-name",
+            "trainer",
+            "--job-id",
+            "job1",
+        ])
+        .expect("top-level soracloud model training status should parse");
+        Args::try_parse_from([
+            "iroha",
+            "soracloud",
+            "hf",
+            "status",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--lease-term-ms",
+            "60000",
+        ])
+        .expect("top-level soracloud hf status should parse");
+        Args::try_parse_from([
+            "iroha",
+            "soracloud",
+            "agent",
+            "status",
+            "--apartment-name",
+            "agent_a",
+        ])
+        .expect("top-level soracloud agent status should parse");
+    }
+
+    #[test]
     fn resolve_account_id_with_rejects_public_key_domain() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let key_pair = KeyPair::from_seed(vec![7_u8; 32], Algorithm::Ed25519);
@@ -7882,7 +8202,8 @@ mod tests {
 
     #[test]
     fn parse_asset_definition_literal_accepts_base58() {
-        let expected = AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").expect("domain"),
+        let expected = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
         let parsed = parse_asset_definition_literal(&expected.to_string())
@@ -7967,7 +8288,10 @@ mod tests {
         );
         let err = validate_executable_metadata(&executable, &metadata)
             .expect_err("non-numeric gas_limit must fail");
-        assert!(err.to_string().contains("invalid transaction metadata `gas_limit`"));
+        assert!(
+            err.to_string()
+                .contains("invalid transaction metadata `gas_limit`")
+        );
     }
 
     #[test]
@@ -8002,17 +8326,19 @@ mod tests {
     fn validate_executable_metadata_rejects_missing_contract_call_gas_limit() {
         let executable = Executable::ContractCall(
             iroha::data_model::transaction::executable::ContractInvocation {
-                contract_address:
-                    "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
-                        .parse()
-                        .expect("contract address"),
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
                 entrypoint: "call".to_owned(),
                 payload: None,
             },
         );
         let err = validate_executable_metadata(&executable, &Metadata::default())
             .expect_err("missing gas_limit must fail");
-        assert!(err.to_string().contains("contract-call transactions require"));
+        assert!(
+            err.to_string()
+                .contains("contract-call transactions require")
+        );
         assert!(!err.to_string().contains("--gas-limit <u64>"));
     }
 
@@ -8370,9 +8696,8 @@ transaction_status_timeout = "77s"
             .to_owned();
         let instruction: iroha::executor_data_model::isi::multisig::MultisigInstructionBox =
             norito::json::from_str(&payload).expect("multisig instruction payload should parse");
-        let iroha::executor_data_model::isi::multisig::MultisigInstructionBox::Register(
-            register,
-        ) = instruction
+        let iroha::executor_data_model::isi::multisig::MultisigInstructionBox::Register(register) =
+            instruction
         else {
             panic!("expected multisig register instruction");
         };
@@ -8712,7 +9037,6 @@ mod multisig_json_tests {
             "serialized payload missing account field: {payload}"
         );
     }
-
 }
 
 #[cfg(all(test, feature = "cli_integration_harness"))]
@@ -8748,7 +9072,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             _query: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             // Return an empty Domain batch to satisfy type expectations
             Ok((
                 QueryOutputBatchBoxTuple {
@@ -8761,7 +9086,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             unreachable!("no continuation in this test")
         }
     }
@@ -8876,11 +9202,15 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             // Build three domains with metadata key `rank`: 2, 1, and None
-            let domain_id1: iroha::data_model::domain::DomainId = DomainId::try_new("d1", "universal").unwrap();
-            let domain_id2: iroha::data_model::domain::DomainId = DomainId::try_new("d2", "universal").unwrap();
-            let domain_id3: iroha::data_model::domain::DomainId = DomainId::try_new("d3", "universal").unwrap();
+            let domain_id1: iroha::data_model::domain::DomainId =
+                DomainId::try_new("d1", "universal").unwrap();
+            let domain_id2: iroha::data_model::domain::DomainId =
+                DomainId::try_new("d2", "universal").unwrap();
+            let domain_id3: iroha::data_model::domain::DomainId =
+                DomainId::try_new("d3", "universal").unwrap();
             let kp = KeyPair::random();
             let owner1 = iroha::data_model::account::AccountId::new(
                 domain_id1.clone(),
@@ -8936,7 +9266,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             unreachable!("single batch only")
         }
     }
@@ -8996,7 +9327,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
@@ -9052,7 +9384,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             unreachable!("single batch only")
         }
     }
@@ -9141,7 +9474,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
@@ -9150,13 +9484,16 @@ mod cli_integration_harness_tests {
             let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let kp = KeyPair::random();
             let owner = AccountId::new(kp.public_key().clone());
-            let id1: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("land", "universal").unwrap(),
+            let id1: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("land", "universal").unwrap(),
                 "gold".parse().unwrap(),
             );
-            let id2: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("land", "universal").unwrap(),
+            let id2: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("land", "universal").unwrap(),
                 "silver".parse().unwrap(),
             );
-            let id3: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("land", "universal").unwrap(),
+            let id3: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("land", "universal").unwrap(),
                 "bronze".parse().unwrap(),
             );
 
@@ -9217,7 +9554,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             unreachable!("single batch only")
         }
     }
@@ -9299,7 +9637,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             PAGED_DOMAINS_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
@@ -9352,7 +9691,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             match cursor {
                 DomCursor::Domains {
                     items,
@@ -9440,7 +9780,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             PSD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
@@ -9510,7 +9851,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             match cursor {
                 PSDCursor::Domains {
                     items,
@@ -9561,7 +9903,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             PSD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
@@ -9638,7 +9981,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             match cursor {
                 PSDCursor::Domains {
                     items,
@@ -9761,7 +10105,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             PSA_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
@@ -9837,7 +10182,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             match cursor {
                 PSACursor::Accounts {
                     items,
@@ -9888,7 +10234,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             PSA_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
@@ -9969,7 +10316,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             match cursor {
                 PSACursor::Accounts {
                     items,
@@ -10102,7 +10450,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             PSAD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
@@ -10188,7 +10537,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             match cursor {
                 PSADCursor::Ads {
                     items,
@@ -10460,7 +10810,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
@@ -10514,7 +10865,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             _cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             unreachable!("single batch only")
         }
     }
@@ -10593,7 +10945,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             PSN_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
@@ -10679,7 +11032,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             match cursor {
                 PSNCursor::Nfts {
                     items,
@@ -10937,7 +11291,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             PAGED_ACCOUNTS_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
@@ -10993,7 +11348,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             let AccCursor::Accounts {
                 items,
                 idx,
@@ -11085,7 +11441,8 @@ mod cli_integration_harness_tests {
         fn start_query(
             &self,
             q: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             PAGED_ADS_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
@@ -11149,7 +11506,8 @@ mod cli_integration_harness_tests {
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             match cursor {
                 AdCursor::Ads {
                     items,
@@ -11491,7 +11849,8 @@ mod cli_integration_harness {
         fn start_query(
             &self,
             query: QueryWithParams,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             // Apply simple sorting by metadata key for known item types
             let sort_by = query.params.sorting.sort_by_metadata_key.clone();
             let desc = matches!(
@@ -11708,7 +12067,8 @@ mod cli_integration_harness {
 
         fn continue_query(
             cursor: Self::Cursor,
-        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
             match cursor {
                 MockCursor::Domains { items, idx, fetch } => {
                     let end = (idx + fetch).min(items.len());
@@ -11877,9 +12237,12 @@ mod cli_integration_harness {
         let owner_w2 = sample_account_id("w2", 12);
         let owner_w3 = sample_account_id("w3", 13);
         let mut server = MockQueryServer::default();
-        let mut w1 = Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account());
-        let mut w2 = Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account());
-        let w3 = Domain::new(DomainId::try_new("w3", "universal").unwrap()).build(owner_w3.account()); // no rank
+        let mut w1 =
+            Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account());
+        let mut w2 =
+            Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account());
+        let w3 =
+            Domain::new(DomainId::try_new("w3", "universal").unwrap()).build(owner_w3.account()); // no rank
         w1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         w2.metadata_mut()
@@ -11927,14 +12290,8 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids.len(), 2);
-        assert_eq!(
-            ids[0],
-            DomainId::try_new("w1", "universal").unwrap()
-        );
-        assert_eq!(
-            ids[1],
-            DomainId::try_new("w2", "universal").unwrap()
-        );
+        assert_eq!(ids[0], DomainId::try_new("w1", "universal").unwrap());
+        assert_eq!(ids[1], DomainId::try_new("w2", "universal").unwrap());
     }
 
     #[cfg(feature = "ids_projection")]
@@ -11983,7 +12340,8 @@ mod cli_integration_harness {
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    DomainId::try_new("w", "universal").unwrap(),
                     "rose".parse().unwrap(),
                 );
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
@@ -11991,7 +12349,8 @@ mod cli_integration_harness {
             }
             .build(owner_w.account()),
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    DomainId::try_new("w", "universal").unwrap(),
                     "tulip".parse().unwrap(),
                 );
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
@@ -12013,14 +12372,16 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids.len(), 2);
-        assert!(
-            ids.iter()
-                .any(|id| id
-                    == &AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(), "rose".parse().unwrap()))
-        );
-        assert!(ids.iter().any(
-            |id| id == &AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(), "tulip".parse().unwrap())
-        ));
+        assert!(ids.iter().any(|id| id
+            == &AssetDefinitionId::new(
+                DomainId::try_new("w", "universal").unwrap(),
+                "rose".parse().unwrap()
+            )));
+        assert!(ids.iter().any(|id| id
+            == &AssetDefinitionId::new(
+                DomainId::try_new("w", "universal").unwrap(),
+                "tulip".parse().unwrap()
+            )));
     }
 
     #[cfg(feature = "ids_projection")]
@@ -12037,7 +12398,8 @@ mod cli_integration_harness {
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    DomainId::try_new("w", "universal").unwrap(),
                     "rose".parse().unwrap(),
                 );
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
@@ -12045,7 +12407,8 @@ mod cli_integration_harness {
             }
             .build(owner_w.account()),
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    DomainId::try_new("w", "universal").unwrap(),
                     "tulip".parse().unwrap(),
                 );
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
@@ -12053,7 +12416,8 @@ mod cli_integration_harness {
             }
             .build(owner_w.account()),
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    DomainId::try_new("w", "universal").unwrap(),
                     "peony".parse().unwrap(),
                 );
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
@@ -12077,10 +12441,12 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
+        assert!(ids1.contains(&AssetDefinitionId::new(
+            DomainId::try_new("w", "universal").unwrap(),
             "rose".parse().unwrap()
         )));
-        assert!(ids1.contains(&AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
+        assert!(ids1.contains(&AssetDefinitionId::new(
+            DomainId::try_new("w", "universal").unwrap(),
             "tulip".parse().unwrap()
         )));
         assert_eq!(rem, 1);
@@ -12094,7 +12460,8 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
+        assert!(ids2.contains(&AssetDefinitionId::new(
+            DomainId::try_new("w", "universal").unwrap(),
             "peony".parse().unwrap()
         )));
         assert_eq!(rem2, 0);
@@ -12218,9 +12585,12 @@ mod cli_integration_harness {
         let owner_w1 = sample_account_id("w1", 6);
         let owner_w2 = sample_account_id("w2", 7);
         let owner_w3 = sample_account_id("w3", 8);
-        let mut w1 = Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account());
-        let mut w2 = Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account());
-        let mut w3 = Domain::new(DomainId::try_new("w3", "universal").unwrap()).build(owner_w3.account());
+        let mut w1 =
+            Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account());
+        let mut w2 =
+            Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account());
+        let mut w3 =
+            Domain::new(DomainId::try_new("w3", "universal").unwrap()).build(owner_w3.account());
         w1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         w2.metadata_mut()
@@ -12256,8 +12626,10 @@ mod cli_integration_harness {
         };
 
         let mut server = MockQueryServer::default();
-        let asset_def_id =
-            AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(), "coin".parse().unwrap());
+        let asset_def_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
         let account_id = sample_account_id("wonderland", 14);
         let asset_id = AssetId::new(asset_def_id, account_id.account().clone());
         let asset = Asset::new(asset_id.clone(), 77_u32);

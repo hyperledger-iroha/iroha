@@ -4,9 +4,9 @@ use crate::{
     isi::{
         InstructionRegistry, account_alias_lease, account_recovery, asset_alias,
         asset_transfer_control, bridge, confidential, consensus_keys, content, contract_alias,
-        domain_link, endorsement, escrow, identifier, kaigi, ministry, musubi, nexus, offline,
-        oracle, ram_lfe, repo, runtime_upgrade, rwa, settlement, smart_contract_code, sns, social,
-        soracloud, soradns, sorafs, space_directory,
+        defi, domain_link, endorsement, escrow, identifier, kaigi, ministry, musubi, nexus,
+        offline, oracle, ram_lfe, repo, runtime_upgrade, rwa, settlement, smart_contract_code, sns,
+        social, soracloud, soradns, sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -31,6 +31,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferBlacklist>,
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferControl>,
     InstructionRegistry::register_slice::<rwa::RwaInstructionBox>,
+    |registry| {
+        registry.register_with_id::<defi::DeFiInstructionBox>(defi::DeFiInstructionBox::WIRE_ID)
+    },
     InstructionRegistry::register_slice::<repo::RepoInstructionBox>,
     InstructionRegistry::register_slice::<settlement::SettlementInstructionBox>,
     InstructionRegistry::register_slice::<SetParameter>,
@@ -69,6 +72,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<oracle::ProposeOracleChange>,
     InstructionRegistry::register_slice::<oracle::VoteOracleChangeStage>,
     InstructionRegistry::register_slice::<oracle::RollbackOracleChange>,
+    InstructionRegistry::register_slice::<oracle::SubmitDefiOracleAttestation>,
     InstructionRegistry::register_slice::<oracle::RecordTwitterBinding>,
     InstructionRegistry::register_slice::<oracle::RevokeTwitterBinding>,
     InstructionRegistry::register_slice::<social::ClaimTwitterFollowReward>,
@@ -262,6 +266,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<governance::FinalizeReferendum>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::ApproveGovernanceProposal>,
+    #[cfg(feature = "governance")]
+    InstructionRegistry::register_slice::<governance::CastParliamentBallot>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::PersistCouncilForEpoch>,
     #[cfg(feature = "governance")]

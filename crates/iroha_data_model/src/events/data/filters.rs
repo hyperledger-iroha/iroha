@@ -861,24 +861,33 @@ impl super::EventFilter for OracleEventFilter {
     type Event = super::oracle::OracleEvent;
 
     fn matches(&self, event: &Self::Event) -> bool {
-        let event_feed = match event {
-            super::oracle::OracleEvent::FeedProcessed(record) => Some(&record.event.feed_id),
-            super::oracle::OracleEvent::PenaltyApplied(penalty) => Some(&penalty.feed_id),
-            super::oracle::OracleEvent::RewardApplied(reward) => Some(&reward.feed_id),
-            super::oracle::OracleEvent::DisputeOpened(dispute)
-            | super::oracle::OracleEvent::DisputeResolved(dispute) => Some(&dispute.feed_id),
-            super::oracle::OracleEvent::ChangeProposed(change) => Some(&change.feed_id),
-            super::oracle::OracleEvent::ChangeStageUpdated(_)
-            | super::oracle::OracleEvent::TwitterBindingRevoked(_) => None,
-            super::oracle::OracleEvent::TwitterBindingRecorded(record) => {
-                Some(&record.record.feed_id)
-            }
-        };
+        if let Some(feed_id) = self.feed_matcher.as_ref() {
+            let feed_matches = match event {
+                super::oracle::OracleEvent::FeedProcessed(record) => {
+                    &record.event.feed_id == feed_id
+                }
+                super::oracle::OracleEvent::PenaltyApplied(penalty) => &penalty.feed_id == feed_id,
+                super::oracle::OracleEvent::RewardApplied(reward) => &reward.feed_id == feed_id,
+                super::oracle::OracleEvent::DisputeOpened(dispute)
+                | super::oracle::OracleEvent::DisputeResolved(dispute) => {
+                    &dispute.feed_id == feed_id
+                }
+                super::oracle::OracleEvent::ChangeProposed(change) => &change.feed_id == feed_id,
+                super::oracle::OracleEvent::TwitterBindingRecorded(record) => {
+                    &record.record.feed_id == feed_id
+                }
+                super::oracle::OracleEvent::DefiAttestationRecorded(record) => record
+                    .attestation
+                    .source_events
+                    .iter()
+                    .any(|source| &source.feed_id == feed_id),
+                super::oracle::OracleEvent::ChangeStageUpdated(_)
+                | super::oracle::OracleEvent::TwitterBindingRevoked(_) => false,
+            };
 
-        if let Some(feed_id) = self.feed_matcher.as_ref()
-            && event_feed != Some(feed_id)
-        {
-            return false;
+            if !feed_matches {
+                return false;
+            }
         }
 
         self.event_set.matches(event)
@@ -1750,6 +1759,7 @@ fn governance_matches(
         | GovernanceEvent::CouncilPersisted(_)
         | GovernanceEvent::ParliamentSelected(_) => true,
         GovernanceEvent::ParliamentApprovalRecorded(ev) => proposal_matches(&ev.proposal_id),
+        GovernanceEvent::ParliamentBallotRecorded(ev) => proposal_matches(&ev.proposal_id),
         GovernanceEvent::LockSlashed(ev) => referendum_matches(&ev.referendum_id),
         GovernanceEvent::LockRestituted(ev) => referendum_matches(&ev.referendum_id),
     }

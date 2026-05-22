@@ -290,32 +290,24 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         .get(&0)
         .cloned()
         .expect("parliament bodies for epoch 0");
-    let rules_signer = stage_bodies
-        .rosters
-        .get(&ParliamentBody::RulesCommittee)
-        .and_then(|roster| roster.members.first())
-        .cloned()
-        .expect("rules committee signer");
-    let agenda_signer = stage_bodies
-        .rosters
-        .get(&ParliamentBody::AgendaCouncil)
-        .and_then(|roster| roster.members.first())
-        .cloned()
-        .expect("agenda council signer");
-
-    ApproveGovernanceProposal {
-        body: ParliamentBody::RulesCommittee,
-        proposal_id,
+    for body in [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::PolicyJury,
+        ParliamentBody::OversightCommittee,
+    ] {
+        let signer = stage_bodies
+            .rosters
+            .get(&body)
+            .and_then(|roster| roster.members.first())
+            .cloned()
+            .expect("parliament body signer");
+        ApproveGovernanceProposal { body, proposal_id }
+            .execute(&signer, &mut stx_1)
+            .expect("parliament body approval");
     }
-    .execute(&rules_signer, &mut stx_1)
-    .expect("rules approval");
-
-    ApproveGovernanceProposal {
-        body: ParliamentBody::AgendaCouncil,
-        proposal_id,
-    }
-    .execute(&agenda_signer, &mut stx_1)
-    .expect("agenda approval");
 
     let root_hint = hex::encode(bundle_ballot_1.root_bytes());
 

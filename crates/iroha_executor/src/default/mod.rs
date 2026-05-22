@@ -38,6 +38,7 @@ use iroha_smart_contract::data_model::{
         SetLaneRelayEmergencyValidators, SetPricingSchedule, UnregisterProviderOwner,
         UpsertProviderCredit,
         bridge::RecordBridgeReceipt,
+        defi::DeFiInstructionBox,
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     },
     prelude::*,
@@ -296,6 +297,9 @@ impl InstructionDispatch for InstructionBox {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<RepoMarginCallIsi>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<DeFiInstructionBox>() {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<RegisterPinManifest>() {

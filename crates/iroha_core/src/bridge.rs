@@ -161,12 +161,7 @@ fn collect_sccp_messages_from_executable(
     };
 
     match executable {
-        Executable::Instructions(instructions) => {
-            for (instruction_index, instruction) in instructions.iter().enumerate() {
-                push_instruction(instruction_index, instruction);
-            }
-        }
-        Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::Instructions(_) | Executable::ContractCall(_) | Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for (instruction_index, instruction) in proved.overlay.iter().enumerate() {
                 push_instruction(instruction_index, instruction);
@@ -940,6 +935,15 @@ mod tests {
             .sign(keypair.private_key())
     }
 
+    fn ivm_proved_with_overlay(instructions: Vec<InstructionBox>) -> Executable {
+        Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            overlay: instructions.into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        })
+    }
+
     fn signed_block_with_transactions(
         transactions: Vec<SignedTransaction>,
         height: u64,
@@ -990,7 +994,7 @@ mod tests {
             .map(InstructionBox::from)
             .collect();
         let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions(instructions)
+            .with_executable(ivm_proved_with_overlay(instructions))
             .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(
@@ -1050,6 +1054,23 @@ mod tests {
     #[test]
     fn collect_sccp_messages_from_empty_accepted_transactions_is_empty() {
         assert!(collect_sccp_messages_from_accepted_transactions(&[]).is_empty());
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_plain_instruction_executable_is_empty() {
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            12,
+            b"0x0000000000000000000000000000000000000012",
+        ));
+        let tx = signed_transaction_with_executable(Executable::Instructions(
+            vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload),
+            )]
+            .into(),
+        ));
+        let block = signed_block_with_transactions(vec![tx], 1);
+
+        assert!(collect_sccp_messages_from_signed_block(&block).is_empty());
     }
 
     #[test]
@@ -1206,18 +1227,16 @@ mod tests {
             signed_transaction_with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![
                 0xAA,
             ])));
-        let first_tx = signed_transaction_with_executable(Executable::Instructions(
-            vec![InstructionBox::from(
-                iroha_data_model::isi::bridge::RecordSccpMessage::new(first_payload),
-            )]
-            .into(),
-        ));
-        let second_tx = signed_transaction_with_executable(Executable::Instructions(
-            vec![InstructionBox::from(
-                iroha_data_model::isi::bridge::RecordSccpMessage::new(second_payload),
-            )]
-            .into(),
-        ));
+        let first_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                first_payload,
+            )),
+        ]));
+        let second_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                second_payload,
+            )),
+        ]));
         let block = signed_block_with_transactions(vec![ignored_tx, first_tx, second_tx], 5);
 
         let messages = collect_sccp_messages_from_signed_block(&block);
@@ -1247,12 +1266,11 @@ mod tests {
             6,
             b"0x0000000000000000000000000000000000000008",
         ));
-        let external_tx = signed_transaction_with_executable(Executable::Instructions(
-            vec![InstructionBox::from(
-                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload.clone()),
-            )]
-            .into(),
-        ));
+        let external_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload.clone(),
+            )),
+        ]));
         let external_tx = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
             TransactionEntrypoint::External(external_tx),
         ));

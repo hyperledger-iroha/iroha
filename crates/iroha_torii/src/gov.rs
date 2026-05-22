@@ -23,8 +23,8 @@ use iroha_core::{
 };
 use iroha_crypto::blake2::{Blake2b512, digest::Digest};
 use iroha_data_model::{
-    governance::types::AtWindow,
-    isi::governance::CouncilDerivationKind,
+    governance::types::{AtWindow, ParliamentBody},
+    isi::governance::{CouncilDerivationKind, ParliamentDecision},
     ministry::{AgendaProposalRecordV1, AgendaProposalV1},
     smart_contract::manifest::ManifestProvenance,
 };
@@ -60,6 +60,7 @@ const CONTEXT_GOV_COUNCIL_DERIVE_CANDIDATE_ACCOUNT: &str =
 const CONTEXT_GOV_COUNCIL_PERSIST_AUTHORITY: &str = "/v1/gov/council/persist#authority";
 const CONTEXT_GOV_COUNCIL_REPLACE_MISSING: &str = "/v1/gov/council/replace#missing";
 const CONTEXT_GOV_COUNCIL_REPLACE_AUTHORITY: &str = "/v1/gov/council/replace#authority";
+const CONTEXT_GOV_PARLIAMENT_BALLOT_AUTHORITY: &str = "/v1/gov/parliament/ballots#authority";
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, crate::Error> {
     let s = s.trim_start_matches("0x");
@@ -317,6 +318,49 @@ pub struct PlainBallotDto {
     /// Optional private key to submit the ballot directly.
     #[norito(default)]
     pub private_key: Option<String>,
+}
+
+#[derive(Debug, JsonDeserialize, JsonSerialize)]
+/// Request body for drafting an equal signed Parliament body ballot.
+pub struct ParliamentBallotDto {
+    /// Authority as canonical I105 or on-chain account alias.
+    pub authority: String,
+    /// Chain id to build the transaction skeleton for.
+    pub chain_id: String,
+    /// Proposal id as 32-byte hex, optionally prefixed with `0x` or `blake2b32:`.
+    pub proposal_id: String,
+    /// Parliament body casting the stage ballot.
+    pub body: ParliamentBody,
+    /// Equal citizen decision.
+    pub decision: ParliamentDecision,
+    /// Optional private key is rejected; clients must sign locally.
+    #[norito(default)]
+    pub private_key: Option<String>,
+}
+
+impl norito::core::NoritoSerialize for ParliamentBallotDto {
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        let value = norito::json::to_value(self)
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
+        let json = norito::json::to_string(&value)
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
+        <String as norito::core::NoritoSerialize>::serialize(&json, writer)
+    }
+}
+
+impl<'de> norito::core::NoritoDeserialize<'de> for ParliamentBallotDto {
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<ParliamentBallotDto>,
+    ) -> Result<Self, norito::core::Error> {
+        let archived_json: &norito::core::Archived<String> = archived.cast();
+        let json = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_json)?;
+        norito::json::from_str(&json).map_err(|err| norito::core::Error::Message(err.to_string()))
+    }
+
+    fn deserialize(archived: &'de norito::core::Archived<ParliamentBallotDto>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("ParliamentBallotDto should deserialize from JSON string")
+    }
 }
 
 impl norito::core::NoritoSerialize for PlainBallotDto {
@@ -2341,6 +2385,45 @@ pub async fn handle_gov_ballot_plain_with_policy(
     }))
 }
 
+/// POST /v1/gov/parliament/ballots — draft an equal Parliament stage ballot.
+///
+/// # Errors
+/// Returns `crate::Error::Query` when the authority, chain id, or proposal id is invalid.
+pub async fn handle_gov_parliament_ballot(
+    chain_id: Arc<iroha_data_model::ChainId>,
+    state: Arc<iroha_core::state::State>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(body): NoritoJson<ParliamentBallotDto>,
+) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
+    ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
+    let authority_id = parse_account_literal_from_state(
+        state.as_ref(),
+        body.authority.as_str(),
+        &telemetry,
+        CONTEXT_GOV_PARLIAMENT_BALLOT_AUTHORITY,
+    )
+    .map_err(|err| {
+        crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
+    })?;
+    if body.private_key.is_some() {
+        return Err(reject_server_side_signing("/v1/gov/parliament/ballots"));
+    }
+    let (_proposal_hex, proposal_id) = canonical_hex32(&body.proposal_id, "proposal_id")?;
+    let instr = iroha_data_model::isi::governance::CastParliamentBallot {
+        body: body.body,
+        proposal_id,
+        decision: body.decision,
+    };
+    let tx_instructions = vec![tx_instr_from_box(instr.into())];
+    let _ = authority_id;
+    Ok(JsonBody(BallotSubmitResponse {
+        ok: true,
+        accepted: true,
+        reason: Some("build transaction skeleton".to_string()),
+        tx_instructions,
+    }))
+}
+
 /// GET /v1/gov/council/current — derive or fetch the current council membership.
 ///
 /// # Errors
@@ -2397,29 +2480,18 @@ pub async fn handle_gov_council_current(
     hasher.update(&beacon_bytes);
     let seed = hasher.finalize();
 
-    // Eligibility: accounts with balance >= min_stake of the configured stake asset
-    let stake_def = gov_cfg.parliament_eligibility_asset_id.clone();
-    let min_stake = gov_cfg.parliament_min_stake;
-    let min_stake_numeric = if min_stake == 0 {
-        iroha_primitives::numeric::Numeric::zero()
-    } else {
-        iroha_primitives::numeric::Numeric::from_str(&min_stake.to_string())
-            .unwrap_or_else(|_| iroha_primitives::numeric::Numeric::zero())
-    };
-    use std::collections::HashSet;
-    let mut elig: HashSet<iroha_data_model::account::AccountId> = HashSet::new();
-    for (asset_id, value) in world.assets().iter() {
-        if asset_id.definition() == &stake_def {
-            // Non-zero balance qualifies
-            if **value >= min_stake_numeric {
-                elig.insert(asset_id.account().clone());
-            }
+    // Eligibility: bonded citizens only. The bond is an anti-Sybil floor, not a vote weight.
+    let required_bond = gov_cfg.citizenship_bond_amount;
+    let mut elig: Vec<iroha_data_model::account::AccountId> = Vec::new();
+    for (account_id, record) in world.citizens().iter() {
+        if record.amount >= required_bond && record.cooldown_until <= height {
+            elig.push(account_id.clone());
         }
     }
     // Score eligible accounts by hash(tag|seed|account_id_bytes)
     let mut scored: Vec<(Vec<u8>, iroha_data_model::account::AccountId)> = Vec::new();
     let mut encode_buf = Vec::new();
-    for acct in elig.into_iter() {
+    for acct in elig {
         let mut h = Blake2b512::new();
         h.update(b"iroha:vrf:v1:parliament|");
         h.update(&seed);
@@ -2466,7 +2538,7 @@ pub async fn handle_gov_council_current(
         alternates,
         candidate_count: total_candidates,
         verified: 0,
-        derived_by: CouncilDerivationKind::Vrf,
+        derived_by: CouncilDerivationKind::Fallback,
     }))
 }
 
@@ -2503,6 +2575,7 @@ pub struct CouncilPersistResponse {
     pub total_candidates: usize,
     pub verified: usize,
     pub derived_by: CouncilDerivationKind,
+    pub tx_instructions: Vec<TxInstr>,
 }
 
 #[cfg(feature = "gov_vrf")]
@@ -2530,6 +2603,7 @@ pub struct CouncilReplaceResponse {
     pub members: Vec<CouncilMemberDto>,
     pub alternates: Vec<CouncilMemberDto>,
     pub replaced: bool,
+    pub tx_instructions: Vec<TxInstr>,
 }
 
 /// Persist a VRF-derived council for the current epoch.
@@ -2592,7 +2666,7 @@ pub async fn handle_gov_council_persist(
         CouncilDerivationKind::Fallback
     };
 
-    let _instr = iroha_data_model::isi::governance::PersistCouncilForEpoch {
+    let instr = iroha_data_model::isi::governance::PersistCouncilForEpoch {
         epoch,
         members: members.clone(),
         alternates: alternates.clone(),
@@ -2600,10 +2674,25 @@ pub async fn handle_gov_council_persist(
         candidates_count: u32::try_from(parsed.len()).unwrap_or(u32::MAX),
         derived_by,
     };
+    let tx_instructions = vec![tx_instr_from_box(instr.into())];
 
-    if let (Some(authority), Some(private_key)) =
-        (body.authority.as_deref(), body.private_key.as_deref())
-    {
+    if let Some(private_key) = body.private_key.as_deref() {
+        let _ = private_key;
+        if let Some(authority) = body.authority.as_deref() {
+            let _authority: iroha_data_model::account::AccountId =
+                parse_account_literal_from_state(
+                    state.as_ref(),
+                    authority,
+                    &telemetry,
+                    CONTEXT_GOV_COUNCIL_PERSIST_AUTHORITY,
+                )
+                .map_err(|err| {
+                    crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
+                })?;
+        }
+        return Err(reject_server_side_signing("/v1/gov/council/persist"));
+    }
+    if let Some(authority) = body.authority.as_deref() {
         let _authority: iroha_data_model::account::AccountId = parse_account_literal_from_state(
             state.as_ref(),
             authority,
@@ -2613,17 +2702,26 @@ pub async fn handle_gov_council_persist(
         .map_err(|err| {
             crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
         })?;
-        let _ = private_key;
-        Err(reject_server_side_signing("/v1/gov/council/persist"))
-    } else {
-        Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "direct council persistence unavailable; submit a locally signed transaction instead".into(),
-                ),
-            ),
-        ))
     }
+    Ok(JsonBody(CouncilPersistResponse {
+        epoch,
+        members: members
+            .into_iter()
+            .map(|account_id| CouncilMemberDto {
+                account_id: account_id.to_string(),
+            })
+            .collect(),
+        alternates: alternates
+            .into_iter()
+            .map(|account_id| CouncilMemberDto {
+                account_id: account_id.to_string(),
+            })
+            .collect(),
+        total_candidates: parsed.len(),
+        verified: draw.verified,
+        derived_by,
+        tx_instructions,
+    }))
 }
 
 /// Replace a council member using the next available alternate and persist the updated roster.
@@ -2672,7 +2770,7 @@ pub async fn handle_gov_council_replace(
         ));
     }
 
-    let _instr = iroha_data_model::isi::governance::PersistCouncilForEpoch {
+    let instr = iroha_data_model::isi::governance::PersistCouncilForEpoch {
         epoch: term.epoch,
         members: term.members.clone(),
         alternates: term.alternates.clone(),
@@ -2680,10 +2778,25 @@ pub async fn handle_gov_council_replace(
         candidates_count: term.candidate_count,
         derived_by: term.derived_by,
     };
+    let tx_instructions = vec![tx_instr_from_box(instr.into())];
 
-    if let (Some(authority), Some(private_key)) =
-        (body.authority.as_deref(), body.private_key.as_deref())
-    {
+    if let Some(private_key) = body.private_key.as_deref() {
+        let _ = private_key;
+        if let Some(authority) = body.authority.as_deref() {
+            let _authority: iroha_data_model::account::AccountId =
+                parse_account_literal_from_state(
+                    state.as_ref(),
+                    authority,
+                    &telemetry,
+                    CONTEXT_GOV_COUNCIL_REPLACE_AUTHORITY,
+                )
+                .map_err(|err| {
+                    crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
+                })?;
+        }
+        return Err(reject_server_side_signing("/v1/gov/council/replace"));
+    }
+    if let Some(authority) = body.authority.as_deref() {
         let _authority: iroha_data_model::account::AccountId = parse_account_literal_from_state(
             state.as_ref(),
             authority,
@@ -2693,17 +2806,26 @@ pub async fn handle_gov_council_replace(
         .map_err(|err| {
             crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
         })?;
-        let _ = private_key;
-        Err(reject_server_side_signing("/v1/gov/council/replace"))
-    } else {
-        Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "direct council persistence unavailable; submit a locally signed transaction instead".into(),
-                ),
-            ),
-        ))
     }
+    Ok(JsonBody(CouncilReplaceResponse {
+        epoch: term.epoch,
+        members: term
+            .members
+            .into_iter()
+            .map(|account_id| CouncilMemberDto {
+                account_id: account_id.to_string(),
+            })
+            .collect(),
+        alternates: term
+            .alternates
+            .into_iter()
+            .map(|account_id| CouncilMemberDto {
+                account_id: account_id.to_string(),
+            })
+            .collect(),
+        replaced: true,
+        tx_instructions,
+    }))
 }
 
 #[derive(Debug, Default, JsonDeserialize)]
@@ -2931,7 +3053,7 @@ mod tests {
 
     #[cfg(feature = "gov_vrf")]
     #[tokio::test]
-    async fn council_persist_rejects_direct_persistence() {
+    async fn council_persist_returns_unsigned_instruction_skeleton() {
         let (state, queue, chain_id) = mk_basic_context();
 
         let result = handle_gov_council_persist(
@@ -2950,20 +3072,15 @@ mod tests {
         )
         .await;
 
-        let err = match result {
-            Ok(_) => panic!("direct persistence must fail"),
-            Err(err) => err,
-        };
-        let message = conversion_message(err);
-        assert!(
-            message.contains("direct council persistence unavailable"),
-            "unexpected message: {message}"
-        );
+        let body = result.expect("persist draft succeeds").0;
+        assert_eq!(body.epoch, 0);
+        assert_eq!(body.tx_instructions.len(), 1);
+        assert_eq!(body.derived_by, CouncilDerivationKind::Fallback);
     }
 
     #[cfg(feature = "gov_vrf")]
     #[tokio::test]
-    async fn council_replace_rejects_direct_persistence() {
+    async fn council_replace_returns_unsigned_instruction_skeleton() {
         let (state, queue, chain_id) = mk_basic_context();
         let member = AccountId::parse_encoded(ACCOUNT_AUTHORITY)
             .expect("member account id")
@@ -3004,15 +3121,10 @@ mod tests {
         )
         .await;
 
-        let err = match result {
-            Ok(_) => panic!("direct persistence must fail"),
-            Err(err) => err,
-        };
-        let message = conversion_message(err);
-        assert!(
-            message.contains("direct council persistence unavailable"),
-            "unexpected message: {message}"
-        );
+        let body = result.expect("replace draft succeeds").0;
+        assert!(body.replaced);
+        assert_eq!(body.tx_instructions.len(), 1);
+        assert_eq!(body.members.len(), 1);
     }
 
     fn bind_account_alias_for_test(state: &Arc<State>, account_id: &AccountId, alias: &str) {

@@ -136,8 +136,10 @@ use iroha_sccp::{
     SccpCounterpartyProofJobV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
     SccpNormalizedCodecValueV1, SccpOpenVerifyEnvelopeSummaryV1, SccpPayloadProjectionV1,
     SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof,
+    build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer,
     build_nexus_sccp_message_transparent_proof_with_signer,
     build_sccp_counterparty_proof_job_from_bundle,
+    build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer,
     build_sccp_counterparty_proof_job_from_bundle_with_signer,
     build_sccp_message_transparent_inner_proof_from_artifact,
     build_sccp_message_transparent_open_verify_summary_from_bundle, burn_message_id,
@@ -5510,6 +5512,82 @@ fn parse_sccp_message_id_hex(value: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+/// Optional EVM deployment destination fields for SCCP artifact and job requests.
+pub struct SccpEvmDestinationQuery {
+    /// Hex-encoded 32-byte EVM network id.
+    #[serde(default)]
+    pub network_id_hex: Option<String>,
+    /// Hex-encoded 20-byte verifier contract address.
+    #[serde(default)]
+    pub verifier_address_hex: Option<String>,
+    /// Hex-encoded 20-byte bridge contract address.
+    #[serde(default)]
+    pub bridge_address_hex: Option<String>,
+}
+
+fn sccp_evm_destination_fields_present(fields: &SccpEvmDestinationQuery) -> bool {
+    fields.network_id_hex.is_some()
+        || fields.verifier_address_hex.is_some()
+        || fields.bridge_address_hex.is_some()
+}
+
+fn parse_sccp_fixed_hex<const N: usize>(label: &str, value: &str) -> Result<[u8; N]> {
+    let value = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    let decoded =
+        hex::decode(value).map_err(|err| sccp_bad_request(format!("invalid {label}: {err}")))?;
+    if decoded.len() != N {
+        return Err(sccp_bad_request(format!(
+            "{label} must decode to {N} bytes, got {}",
+            decoded.len()
+        )));
+    }
+    let mut out = [0u8; N];
+    out.copy_from_slice(&decoded);
+    Ok(out)
+}
+
+fn sccp_evm_destination_binding_for_bundle(
+    bundle: &NexusSccpMessageProofV1,
+    fields: &SccpEvmDestinationQuery,
+) -> Result<Option<iroha_sccp::SccpDestinationBindingV1>> {
+    let manifest = sccp_message_manifest_for_bundle(bundle)?;
+    let has_any = sccp_evm_destination_fields_present(fields);
+    let is_evm = matches!(
+        manifest.verifier_target,
+        iroha_sccp::SccpProofVerifierTargetV1::EvmContract
+    );
+    if !is_evm {
+        if has_any {
+            return Err(sccp_bad_request(
+                "EVM SCCP destination fields are only valid for EVM/BSC lanes",
+            ));
+        }
+        return Ok(None);
+    }
+    if !manifest.production_ready {
+        return Ok(None);
+    }
+    let (Some(network_id_hex), Some(verifier_address_hex), Some(bridge_address_hex)) = (
+        fields.network_id_hex.as_deref(),
+        fields.verifier_address_hex.as_deref(),
+        fields.bridge_address_hex.as_deref(),
+    ) else {
+        return Err(sccp_bad_request(
+            "EVM SCCP lanes require network_id_hex, verifier_address_hex, and bridge_address_hex",
+        ));
+    };
+    Ok(Some(iroha_sccp::build_sccp_evm_destination_binding(
+        &manifest,
+        parse_sccp_fixed_hex("network_id_hex", network_id_hex)?,
+        parse_sccp_fixed_hex("verifier_address_hex", verifier_address_hex)?,
+        parse_sccp_fixed_hex("bridge_address_hex", bridge_address_hex)?,
+    )))
+}
+
 fn sccp_bundle_response<T>(bundle: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
 where
     T: norito::core::NoritoSerialize + serde::Serialize,
@@ -6173,6 +6251,7 @@ fn sccp_message_proof_build_error_message(
 fn bridge_proof_from_sccp_message_bundle(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
+    evm_destination: Option<&iroha_sccp::SccpDestinationBindingV1>,
 ) -> Result<iroha_data_model::bridge::BridgeProof> {
     if !verify_message_bundle_structure(bundle) {
         return Err(conversion_error(
@@ -6188,15 +6267,23 @@ fn bridge_proof_from_sccp_message_bundle(
         conversion_error("SCCP message bundle finality proof could not be decoded".to_owned())
     })?;
     let (backend, manifest_hash, _) = sccp_message_backend_descriptor(&bundle.payload)?;
-    let artifact = build_nexus_sccp_message_transparent_proof_with_signer(bundle, signer)
-        .or_else(|| build_nexus_sccp_message_transparent_proof(bundle))
-        .ok_or_else(|| {
-            conversion_error(sccp_message_proof_build_error_message(
-                bundle,
-                signer,
-                "transparent proof artifact",
-            ))
-        })?;
+    let artifact = if let Some(destination_binding) = evm_destination {
+        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer(
+            bundle,
+            destination_binding,
+            signer,
+        )
+    } else {
+        build_nexus_sccp_message_transparent_proof_with_signer(bundle, signer)
+            .or_else(|| build_nexus_sccp_message_transparent_proof(bundle))
+    }
+    .ok_or_else(|| {
+        conversion_error(sccp_message_proof_build_error_message(
+            bundle,
+            signer,
+            "transparent proof artifact",
+        ))
+    })?;
     let proof_bytes = to_bytes(&artifact).map_err(|err| {
         conversion_error(format!(
             "failed to encode SCCP transparent proof artifact: {err}"
@@ -6492,6 +6579,81 @@ mod sccp_message_backend_tests {
             submission_package: artifact.submission_package.clone(),
             bundle: artifact.bundle,
         }
+    }
+
+    #[test]
+    fn evm_destination_query_detects_partial_field_sets() {
+        assert!(!sccp_evm_destination_fields_present(
+            &SccpEvmDestinationQuery::default()
+        ));
+        assert!(sccp_evm_destination_fields_present(
+            &SccpEvmDestinationQuery {
+                network_id_hex: Some(format!("0x{}", "11".repeat(32))),
+                verifier_address_hex: None,
+                bridge_address_hex: None,
+            }
+        ));
+        assert!(sccp_evm_destination_fields_present(
+            &SccpEvmDestinationQuery {
+                network_id_hex: None,
+                verifier_address_hex: Some(format!("0x{}", "22".repeat(20))),
+                bridge_address_hex: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn evm_destination_hex_parser_rejects_malformed_lengths_and_bytes() {
+        assert_eq!(
+            parse_sccp_fixed_hex::<32>("network_id_hex", &format!("0x{}", "11".repeat(32)))
+                .expect("network id"),
+            [0x11; 32]
+        );
+        assert_eq!(
+            parse_sccp_fixed_hex::<20>("verifier_address_hex", &"33".repeat(20))
+                .expect("verifier address"),
+            [0x33; 20]
+        );
+
+        let err =
+            parse_sccp_fixed_hex::<32>("network_id_hex", "0x11").expect_err("short network id");
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| message.contains("network_id_hex must decode to 32 bytes"))
+        );
+
+        let err = parse_sccp_fixed_hex::<20>("bridge_address_hex", "0xzzzz")
+            .expect_err("invalid bridge address");
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| message.contains("invalid bridge_address_hex"))
+        );
+
+        let err =
+            parse_sccp_fixed_hex::<20>("verifier_address_hex", &format!("0x{}", "44".repeat(21)))
+                .expect_err("oversized verifier address");
+        assert!(conversion_message(&err).is_some_and(|message| {
+            message.contains("verifier_address_hex must decode to 20 bytes")
+        }));
+    }
+
+    #[test]
+    fn evm_destination_binding_query_rejects_evm_fields_on_non_evm_lanes() {
+        let bundle = sample_ton_artifact_with_proof_bytes(vec![0xAA, 0xBB]).bundle;
+        let err = sccp_evm_destination_binding_for_bundle(
+            &bundle,
+            &SccpEvmDestinationQuery {
+                network_id_hex: Some(format!("0x{}", "11".repeat(32))),
+                verifier_address_hex: Some(format!("0x{}", "22".repeat(20))),
+                bridge_address_hex: Some(format!("0x{}", "33".repeat(20))),
+            },
+        )
+        .expect_err("non-EVM lane must reject EVM deployment fields");
+
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| message.contains("only valid for EVM/BSC lanes"))
+        );
     }
 
     #[test]
@@ -6925,7 +7087,7 @@ mod sccp_message_backend_tests {
             b"iroha:torii:routing:test:evm-attestor".to_vec(),
             Algorithm::Secp256k1,
         );
-        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer)
+        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None)
             .expect_err("disabled lane should reject bridge proof generation");
         assert!(conversion_message(&err).is_some_and(|message| message.contains("is disabled")));
     }
@@ -7465,6 +7627,7 @@ pub async fn handle_v1_sccp_message_proof_artifact(
     state: &CoreState,
     signer: &KeyPair,
     message_id_hex: String,
+    evm_destination: SccpEvmDestinationQuery,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
@@ -7477,19 +7640,28 @@ pub async fn handle_v1_sccp_message_proof_artifact(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
+    let evm_destination = sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination)?;
     if let Some(message) = sccp_message_lane_disabled_message(&bundle, "proof artifact generation")
     {
         return Err(sccp_bad_request(message));
     }
-    let artifact = build_nexus_sccp_message_transparent_proof_with_signer(&bundle, signer)
-        .or_else(|| build_nexus_sccp_message_transparent_proof(&bundle))
-        .ok_or_else(|| {
-            sccp_internal_error(sccp_message_proof_build_error_message(
-                &bundle,
-                signer,
-                "proof artifact",
-            ))
-        })?;
+    let artifact = if let Some(destination_binding) = evm_destination.as_ref() {
+        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer(
+            &bundle,
+            destination_binding,
+            signer,
+        )
+    } else {
+        build_nexus_sccp_message_transparent_proof_with_signer(&bundle, signer)
+            .or_else(|| build_nexus_sccp_message_transparent_proof(&bundle))
+    }
+    .ok_or_else(|| {
+        sccp_internal_error(sccp_message_proof_build_error_message(
+            &bundle,
+            signer,
+            "proof artifact",
+        ))
+    })?;
     let artifact_json = sccp_artifact_json_value(&artifact)?;
     sccp_bundle_response_with_json_value(&artifact, artifact_json, accept.as_ref())
 }
@@ -7500,6 +7672,7 @@ pub async fn handle_v1_sccp_message_proof_job(
     state: &CoreState,
     signer: &KeyPair,
     message_id_hex: String,
+    evm_destination: SccpEvmDestinationQuery,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
@@ -7512,18 +7685,27 @@ pub async fn handle_v1_sccp_message_proof_job(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
+    let evm_destination = sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination)?;
     if let Some(message) = sccp_message_lane_disabled_message(&bundle, "proof job generation") {
         return Err(sccp_bad_request(message));
     }
-    let job = build_sccp_counterparty_proof_job_from_bundle_with_signer(&bundle, signer)
-        .or_else(|| build_sccp_counterparty_proof_job_from_bundle(&bundle))
-        .ok_or_else(|| {
-            sccp_internal_error(sccp_message_proof_build_error_message(
-                &bundle,
-                signer,
-                "normalized proof job",
-            ))
-        })?;
+    let job = if let Some(destination_binding) = evm_destination.as_ref() {
+        build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer(
+            &bundle,
+            destination_binding,
+            signer,
+        )
+    } else {
+        build_sccp_counterparty_proof_job_from_bundle_with_signer(&bundle, signer)
+            .or_else(|| build_sccp_counterparty_proof_job_from_bundle(&bundle))
+    }
+    .ok_or_else(|| {
+        sccp_internal_error(sccp_message_proof_build_error_message(
+            &bundle,
+            signer,
+            "normalized proof job",
+        ))
+    })?;
     let job_json = sccp_job_json_value(&job)?;
     sccp_bundle_response_with_json_value(&job, job_json, accept.as_ref())
 }
@@ -11375,8 +11557,6 @@ pub struct ContractStateEntry {
     pub value_len: Option<u64>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub value_json: Option<norito::json::Value>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub decode_error: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -11966,6 +12146,13 @@ pub async fn handle_get_contract_state(
         ))
     }
 
+    fn contract_state_decode_failed(path: &str, error: String) -> Error {
+        Error::AppQueryValidation {
+            code: "contract_state_decode_failed",
+            message: format!("failed to decode contract state `{path}` as json: {error}"),
+        }
+    }
+
     fn parse_name(value: &str, label: &str) -> Result<Name> {
         Name::from_str(value)
             .map_err(|err| conversion_error(format!("invalid {label} name `{value}`: {err}")))
@@ -12075,8 +12262,7 @@ pub async fn handle_get_contract_state(
     let encode_entry = |path: &str,
                         value: Option<&Vec<u8>>,
                         found: bool,
-                        value_json: Option<norito::json::Value>,
-                        decode_error: Option<String>| {
+                        value_json: Option<norito::json::Value>| {
         if !include_value {
             return ContractStateEntry {
                 path: path.to_string(),
@@ -12084,7 +12270,6 @@ pub async fn handle_get_contract_state(
                 value_b64: None,
                 value_len: None,
                 value_json,
-                decode_error,
             };
         }
         let (value_b64, value_len) = if let Some(bytes) = value {
@@ -12101,7 +12286,6 @@ pub async fn handle_get_contract_state(
             value_b64,
             value_len,
             value_json,
-            decode_error,
         }
     };
 
@@ -12117,15 +12301,17 @@ pub async fn handle_get_contract_state(
             .as_ref()
             .is_some_and(|registry| contract_state_logical_path_exists(registry, path, &has_value));
 
-        let (value_json, decode_error) = match (decode_mode, schema_registry.as_ref()) {
+        let value_json = match (decode_mode, schema_registry.as_ref()) {
             (Some(ContractStateDecodeMode::Json), Some(registry)) => {
                 match decode_contract_state_path_json(registry, path, &get_value) {
-                    Ok(value) => (Some(value), None),
-                    Err(err) if stored.is_some() || logical_found => (None, Some(err)),
-                    Err(_) => (None, None),
+                    Ok(value) => Some(value),
+                    Err(err) if stored.is_some() || logical_found => {
+                        return Err(contract_state_decode_failed(path, err));
+                    }
+                    Err(_) => None,
                 }
             }
-            _ => (None, None),
+            _ => None,
         };
 
         if stored.is_none() && !logical_found {
@@ -12134,7 +12320,7 @@ pub async fn handle_get_contract_state(
             )));
         }
 
-        let entry = encode_entry(path, stored.as_ref(), true, value_json, decode_error);
+        let entry = encode_entry(path, stored.as_ref(), true, value_json);
         return Ok(JsonBody(ContractStateResponse {
             contract_address: contract_address_response.clone(),
             contract_alias: contract_alias_response.clone(),
@@ -12174,23 +12360,19 @@ pub async fn handle_get_contract_state(
                 contract_state_logical_path_exists(registry, path, &has_value)
             });
             let found = stored.is_some() || logical_found;
-            let (value_json, decode_error) = match (decode_mode, schema_registry.as_ref()) {
+            let value_json = match (decode_mode, schema_registry.as_ref()) {
                 (Some(ContractStateDecodeMode::Json), Some(registry)) => {
                     match decode_contract_state_path_json(registry, path, &get_value) {
-                        Ok(value) => (Some(value), None),
-                        Err(err) if found => (None, Some(err)),
-                        Err(_) => (None, None),
+                        Ok(value) => Some(value),
+                        Err(err) if found => {
+                            return Err(contract_state_decode_failed(path, err));
+                        }
+                        Err(_) => None,
                     }
                 }
-                _ => (None, None),
+                _ => None,
             };
-            entries.push(encode_entry(
-                path,
-                stored.as_ref(),
-                found,
-                value_json,
-                decode_error,
-            ));
+            entries.push(encode_entry(path, stored.as_ref(), found, value_json));
             paths.push(path.to_string());
         }
         let limit = entries.len() as u64;
@@ -12248,22 +12430,16 @@ pub async fn handle_get_contract_state(
                     break;
                 }
                 let logical_path = format!("{prefix_str}/{key_suffix}");
-                let (value_json, decode_error) = match decode_contract_state_map_value_json(
+                let value_json = match decode_contract_state_map_value_json(
                     prefix_str,
                     value,
                     &key_suffix,
                     &get_value,
                 ) {
-                    Ok(value_json) => (Some(value_json), None),
-                    Err(err) => (None, Some(err)),
+                    Ok(value_json) => Some(value_json),
+                    Err(err) => return Err(contract_state_decode_failed(&logical_path, err)),
                 };
-                entries.push(encode_entry(
-                    &logical_path,
-                    None,
-                    true,
-                    value_json,
-                    decode_error,
-                ));
+                entries.push(encode_entry(&logical_path, None, true, value_json));
             }
 
             let next_offset = if has_more {
@@ -12301,23 +12477,24 @@ pub async fn handle_get_contract_state(
             has_more = true;
             break;
         }
-        let (value_json, decode_error) = match (decode_mode, schema_registry.as_ref()) {
+        let value_json = match (decode_mode, schema_registry.as_ref()) {
             (Some(ContractStateDecodeMode::Json), Some(registry))
                 if registry.contains_key(logical_key.as_str()) =>
             {
                 match decode_contract_state_path_json(registry, logical_key.as_str(), &get_value) {
-                    Ok(value_json) => (Some(value_json), None),
-                    Err(err) => (None, Some(err)),
+                    Ok(value_json) => Some(value_json),
+                    Err(err) => {
+                        return Err(contract_state_decode_failed(logical_key.as_str(), err));
+                    }
                 }
             }
-            _ => (None, None),
+            _ => None,
         };
         entries.push(encode_entry(
             logical_key.as_str(),
             Some(value),
             true,
             value_json,
-            decode_error,
         ));
     }
     let next_offset = if has_more {
@@ -12752,6 +12929,7 @@ async fn submit_contract_call_request(
     if let Some(private_key) = private_key {
         let tx = builder.sign(&private_key.0);
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
         handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
         return Ok(ContractCallResponseDto {
             ok: true,
@@ -12762,6 +12940,7 @@ async fn submit_contract_call_request(
             abi_hash_hex,
             creation_time_ms,
             tx_hash_hex: Some(tx_hash_hex),
+            entrypoint_hash_hex: Some(entrypoint_hash_hex),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
             signing_message_b64: None,
@@ -12816,6 +12995,7 @@ async fn submit_contract_call_request(
             ))
         })?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
         handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
         return Ok(ContractCallResponseDto {
             ok: true,
@@ -12826,6 +13006,7 @@ async fn submit_contract_call_request(
             abi_hash_hex,
             creation_time_ms,
             tx_hash_hex: Some(tx_hash_hex),
+            entrypoint_hash_hex: Some(entrypoint_hash_hex),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
             signing_message_b64: None,
@@ -12838,6 +13019,7 @@ async fn submit_contract_call_request(
     let tx = builder
         .sign(scaffold_key.private_key())
         .with_authority(authority.into());
+    let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
     let signed_transaction_b64 =
         base64::engine::general_purpose::STANDARD.encode(norito::codec::Encode::encode(&tx));
     let signing_message_b64 = base64::engine::general_purpose::STANDARD
@@ -12851,6 +13033,7 @@ async fn submit_contract_call_request(
         abi_hash_hex,
         creation_time_ms,
         tx_hash_hex: None,
+        entrypoint_hash_hex: Some(entrypoint_hash_hex),
         transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
         signed_transaction_b64: Some(signed_transaction_b64),
         signing_message_b64: Some(signing_message_b64),
@@ -13088,6 +13271,9 @@ pub async fn handle_post_bridge_proof_submit(
         signature_b64,
         burn_bundle,
         message_bundle,
+        network_id_hex,
+        verifier_address_hex,
+        bridge_address_hex,
         creation_time_ms,
     } = req;
 
@@ -13114,6 +13300,16 @@ pub async fn handle_post_bridge_proof_submit(
             "provide exactly one of burn_bundle or message_bundle".to_owned(),
         ));
     }
+    let evm_destination_fields = SccpEvmDestinationQuery {
+        network_id_hex,
+        verifier_address_hex,
+        bridge_address_hex,
+    };
+    if burn_bundle.is_some() && sccp_evm_destination_fields_present(&evm_destination_fields) {
+        return Err(conversion_error(
+            "EVM SCCP destination fields are only valid for message_bundle submissions".to_owned(),
+        ));
+    }
 
     let (proof_kind, bridge_proof, counterparty_domain, counterparty_chain) =
         match (burn_bundle.as_ref(), message_bundle.as_ref()) {
@@ -13130,9 +13326,15 @@ pub async fn handle_post_bridge_proof_submit(
             (None, Some(bundle)) => {
                 let (counterparty_domain, counterparty_chain) =
                     sccp_counterparty_for_message_payload(&bundle.payload)?;
+                let evm_destination =
+                    sccp_evm_destination_binding_for_bundle(bundle, &evm_destination_fields)?;
                 (
                     "message",
-                    bridge_proof_from_sccp_message_bundle(bundle, signer)?,
+                    bridge_proof_from_sccp_message_bundle(
+                        bundle,
+                        signer,
+                        evm_destination.as_ref(),
+                    )?,
                     counterparty_domain,
                     counterparty_chain.to_owned(),
                 )
@@ -13337,7 +13539,7 @@ pub async fn handle_post_bridge_message_submit(
     let (counterparty_domain, counterparty_chain) =
         sccp_counterparty_for_message_payload(&message_bundle.payload)?;
     let message_id_hex = hex::encode(message_bundle.commitment.message_id);
-    let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle, signer)?;
+    let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle, signer, None)?;
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;
     let manifest_hash_hex = hex::encode(bridge_proof.manifest_hash);
@@ -23072,6 +23274,9 @@ pub struct ContractCallResponseDto {
     /// Hex-encoded transaction hash submitted to the queue.
     #[norito(default)]
     pub tx_hash_hex: Option<String>,
+    /// Hex-encoded transaction entrypoint hash used by committed transaction queries.
+    #[norito(default)]
+    pub entrypoint_hash_hex: Option<String>,
     /// Base64-encoded transaction scaffold for wallet `SIGN_REQUEST_TX` flows.
     #[norito(default)]
     pub transaction_scaffold_b64: Option<String>,
@@ -23144,6 +23349,15 @@ pub struct BridgeProofSubmitDto {
     /// Optional live generic message bundle fetched from `/v1/sccp/proofs/message/{message_id}`.
     #[norito(default)]
     pub message_bundle: Option<Value>,
+    /// Optional EVM network id for production-ready EVM SCCP message artifacts.
+    #[norito(default)]
+    pub network_id_hex: Option<String>,
+    /// Optional EVM verifier contract address for production-ready EVM SCCP message artifacts.
+    #[norito(default)]
+    pub verifier_address_hex: Option<String>,
+    /// Optional EVM bridge contract address for production-ready EVM SCCP message artifacts.
+    #[norito(default)]
+    pub bridge_address_hex: Option<String>,
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
@@ -30600,6 +30814,24 @@ fn trader_contract_module(
     if source.contains("policy_manager") || source.contains("fixturecover") {
         return Some("cover");
     }
+    if source.contains("settlement_router") || source.contains("intents.") {
+        return Some("intents");
+    }
+    if source.contains("vaults.manager") || source.contains("manager::vaults") {
+        return Some("vaults");
+    }
+    if source.contains("operators.registry") || source.contains("registry::operators") {
+        return Some("operators");
+    }
+    if source.contains("portfolio_margin") || source.contains("margin.") {
+        return Some("margin");
+    }
+    if source.contains("rwa.market") || source.contains("market::rwa") {
+        return Some("rwa");
+    }
+    if source.contains("hook_manager") || source.contains("dlmm_hooks") {
+        return Some("dlmmHooks");
+    }
     None
 }
 
@@ -30638,6 +30870,31 @@ fn canonical_contract_event_kind(module: &str, entrypoint: &str) -> Option<&'sta
         ("cover", "record_observation") => Some("cover_observation_recorded"),
         ("cover", "route_claim") => Some("cover_claim_routed"),
         ("cover", "expire_policy") => Some("cover_policy_expired"),
+        ("intents", "open_intent") => Some("intent_opened"),
+        ("intents", "cancel_intent") => Some("intent_cancelled"),
+        ("intents", "fill_intent") => Some("intent_filled"),
+        ("vaults", "register_vault") => Some("vault_registered"),
+        ("vaults", "deposit") => Some("vault_deposited"),
+        ("vaults", "request_redeem") => Some("vault_redeem_requested"),
+        ("vaults", "claim_redeem") => Some("vault_redeem_claimed"),
+        ("operators", "register_operator") => Some("operator_registered"),
+        ("operators", "bond") => Some("operator_bonded"),
+        ("operators", "heartbeat") => Some("operator_heartbeat"),
+        ("operators", "claim_fees") => Some("operator_fees_claimed"),
+        ("margin", "register_market") => Some("margin_market_registered"),
+        ("margin", "deposit_collateral") => Some("margin_collateral_deposited"),
+        ("margin", "withdraw_collateral") => Some("margin_collateral_withdrawn"),
+        ("margin", "lock_exposure") => Some("margin_exposure_locked"),
+        ("margin", "liquidate_account") => Some("margin_account_liquidated"),
+        ("rwa", "issue_lot") => Some("rwa_lot_issued"),
+        ("rwa", "bind_share_asset") => Some("rwa_share_asset_bound"),
+        ("rwa", "report_nav") => Some("rwa_nav_reported"),
+        ("rwa", "request_redemption") => Some("rwa_redemption_requested"),
+        ("rwa", "settle_redemption") => Some("rwa_redemption_settled"),
+        ("dlmmHooks", "configure_hook_policy") => Some("dlmm_hook_configured"),
+        ("dlmmHooks", "place_limit_order") => Some("dlmm_hook_limit_order_placed"),
+        ("dlmmHooks", "schedule_twamm") => Some("dlmm_hook_twamm_scheduled"),
+        ("dlmmHooks", "record_execution") => Some("dlmm_hook_execution_recorded"),
         _ => None,
     }
 }
@@ -33552,6 +33809,20 @@ pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY: &str =
     "/v1/contracts/rollups/trader/activity";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACCOUNT: &str = "/v1/contracts/rollups/trader/account";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_INTENTS: &str = "/v1/contracts/rollups/intents";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_VAULT_POSITIONS: &str =
+    "/v1/contracts/rollups/vaults/positions";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_OPERATORS_STATUS: &str =
+    "/v1/contracts/rollups/operators/status";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_MARGIN_HEALTH: &str = "/v1/contracts/rollups/margin/health";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_RWA_LOTS: &str = "/v1/contracts/rollups/rwa/lots";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_DLMM_HOOKS: &str = "/v1/contracts/rollups/dlmm/hooks";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
 #[cfg(feature = "app_api")]
@@ -43697,6 +43968,11 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
             proposal_id = Some(id.clone());
             referendum_id = Some(id);
         }
+        GovernanceEvent::ParliamentBallotRecorded(payload) => {
+            let id = hex::encode(payload.proposal_id);
+            proposal_id = Some(id.clone());
+            referendum_id = Some(id);
+        }
         GovernanceEvent::CouncilPersisted(_) | GovernanceEvent::ParliamentSelected(_) => {
             council_updated = true;
         }
@@ -52036,6 +52312,12 @@ const TRADER_MODULE_ORDER: &[&str] = &[
     "launchpad",
     "options",
     "cover",
+    "intents",
+    "vaults",
+    "operators",
+    "margin",
+    "rwa",
+    "dlmmHooks",
 ];
 
 #[cfg(feature = "app_api")]
@@ -52106,6 +52388,12 @@ fn trader_module_label(module: &str) -> &'static str {
         "launchpad" => "Launchpad",
         "options" => "Options",
         "cover" => "Cover",
+        "intents" => "Intents",
+        "vaults" => "Vaults",
+        "operators" => "Operators",
+        "margin" => "Portfolio Margin",
+        "rwa" => "RWA Markets",
+        "dlmmHooks" => "DLMM Hooks",
         _ => "Contract",
     }
 }
@@ -52120,6 +52408,12 @@ fn trader_module_contract_key(module: &str) -> &'static str {
         "launchpad" => "launchpad.sale_factory",
         "options" => "options.factory",
         "cover" => "cover.policy_manager",
+        "intents" => "intents.settlement_router",
+        "vaults" => "vaults.manager",
+        "operators" => "operators.registry",
+        "margin" => "margin.portfolio_margin",
+        "rwa" => "rwa.market",
+        "dlmmHooks" => "dlmm_hooks.hook_manager",
         _ => "unknown",
     }
 }
@@ -52134,6 +52428,12 @@ fn trader_module_alias_candidates(module: &str) -> &'static [&'static str] {
         "launchpad" => &["launchpad.sale_factory"],
         "options" => &["options.factory", "options.manager"],
         "cover" => &["cover.policy_manager"],
+        "intents" => &["intents.settlement_router"],
+        "vaults" => &["vaults.manager"],
+        "operators" => &["operators.registry"],
+        "margin" => &["margin.portfolio_margin"],
+        "rwa" => &["rwa.market"],
+        "dlmmHooks" => &["dlmm_hooks.hook_manager"],
         _ => &[],
     }
 }
@@ -52260,40 +52560,93 @@ fn parse_contract_view_int(value: &Value) -> Option<i64> {
 }
 
 #[cfg(feature = "app_api")]
-fn parse_router_assets_from_value(value: &Value) -> (String, String) {
+fn parse_router_assets_from_value(value: &Value) -> Result<(String, String)> {
     match value {
-        Value::Array(values) if values.len() >= 2 => (
-            values[0].as_str().unwrap_or("xor#universal").to_owned(),
-            values[1].as_str().unwrap_or("quote").to_owned(),
-        ),
-        Value::Object(object) => (
-            object_lookup_string(object, &["base_asset", "baseAsset"])
-                .unwrap_or_else(|| "xor#universal".to_owned()),
-            object_lookup_string(object, &["quote_asset", "quoteAsset"])
-                .unwrap_or_else(|| "quote".to_owned()),
-        ),
-        _ => ("xor#universal".to_owned(), "quote".to_owned()),
+        Value::Array(values) if values.len() >= 2 => {
+            let base = values
+                .first()
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    conversion_error("router_assets returned malformed base asset".to_owned())
+                })?;
+            let quote = values
+                .get(1)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    conversion_error("router_assets returned malformed quote asset".to_owned())
+                })?;
+            Ok((base.to_owned(), quote.to_owned()))
+        }
+        Value::Object(object) => {
+            let base = object_lookup_string(object, &["base_asset", "baseAsset"])
+                .ok_or_else(|| conversion_error("router_assets missing base asset".to_owned()))?;
+            let quote = object_lookup_string(object, &["quote_asset", "quoteAsset"])
+                .ok_or_else(|| conversion_error("router_assets missing quote asset".to_owned()))?;
+            Ok((base, quote))
+        }
+        _ => Err(conversion_error(
+            "router_assets returned malformed value".to_owned(),
+        )),
     }
 }
 
 #[cfg(feature = "app_api")]
-fn parse_swap_history_record(record_id: u64, value: &Value) -> Option<SwapFillRollupItem> {
+fn parse_swap_history_record(record_id: u64, value: &Value) -> Result<SwapFillRollupItem> {
     let (trader, input_is_base, amount_in, amount_out, min_out) = match value {
         Value::Array(values) if values.len() >= 5 => (
-            values[0].as_str()?.to_owned(),
-            value_as_i64(values.get(1)?)?,
-            value_as_i64(values.get(2)?)?,
-            value_as_i64(values.get(3)?)?,
-            value_as_i64(values.get(4)?)?,
+            values
+                .first()
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    conversion_error(format!("swap history record {record_id} missing trader"))
+                })?
+                .to_owned(),
+            values.get(1).and_then(value_as_i64).ok_or_else(|| {
+                conversion_error(format!(
+                    "swap history record {record_id} missing input_is_base"
+                ))
+            })?,
+            values.get(2).and_then(value_as_i64).ok_or_else(|| {
+                conversion_error(format!("swap history record {record_id} missing amount_in"))
+            })?,
+            values.get(3).and_then(value_as_i64).ok_or_else(|| {
+                conversion_error(format!(
+                    "swap history record {record_id} missing amount_out"
+                ))
+            })?,
+            values.get(4).and_then(value_as_i64).ok_or_else(|| {
+                conversion_error(format!("swap history record {record_id} missing min_out"))
+            })?,
         ),
         Value::Object(object) => (
-            object_lookup_string(object, &["trader", "authority"])?,
-            object_lookup_i64(object, &["input_is_base", "inputIsBase"])?,
-            object_lookup_i64(object, &["amount_in", "amountIn"])?,
-            object_lookup_i64(object, &["amount_out", "amountOut"])?,
-            object_lookup_i64(object, &["min_out", "minOut"])?,
+            object_lookup_string(object, &["trader", "authority"]).ok_or_else(|| {
+                conversion_error(format!("swap history record {record_id} missing trader"))
+            })?,
+            object_lookup_i64(object, &["input_is_base", "inputIsBase"]).ok_or_else(|| {
+                conversion_error(format!(
+                    "swap history record {record_id} missing input_is_base"
+                ))
+            })?,
+            object_lookup_i64(object, &["amount_in", "amountIn"]).ok_or_else(|| {
+                conversion_error(format!("swap history record {record_id} missing amount_in"))
+            })?,
+            object_lookup_i64(object, &["amount_out", "amountOut"]).ok_or_else(|| {
+                conversion_error(format!(
+                    "swap history record {record_id} missing amount_out"
+                ))
+            })?,
+            object_lookup_i64(object, &["min_out", "minOut"]).ok_or_else(|| {
+                conversion_error(format!("swap history record {record_id} missing min_out"))
+            })?,
         ),
-        _ => return None,
+        _ => {
+            return Err(conversion_error(format!(
+                "swap history record {record_id} malformed"
+            )));
+        }
     };
     let side = if input_is_base == 1 { "buy" } else { "sell" }.to_owned();
     let price = if input_is_base == 1 {
@@ -52302,7 +52655,7 @@ fn parse_swap_history_record(record_id: u64, value: &Value) -> Option<SwapFillRo
         amount_out as f64 / (amount_in.max(1) as f64)
     };
     let protection_ratio = (min_out > 0).then_some((amount_out - min_out) as f64 / min_out as f64);
-    Some(SwapFillRollupItem {
+    Ok(SwapFillRollupItem {
         record_id,
         trader,
         input_is_base,
@@ -52446,7 +52799,7 @@ fn load_swap_fill_rollup(
         None,
         gas_limit,
     )?;
-    let (base_asset_id, quote_asset_id) = parse_router_assets_from_value(&assets_value);
+    let (base_asset_id, quote_asset_id) = parse_router_assets_from_value(&assets_value)?;
     let history_head_value = call_contract_view_value(
         Arc::clone(&state),
         &authority_id,
@@ -52483,10 +52836,9 @@ fn load_swap_fill_rollup(
             gas_limit,
         )?;
         scanned = scanned.saturating_add(1);
-        if let Some(record) = parse_swap_history_record(cursor, &record_value) {
-            if record.trader == authority {
-                records.push(record);
-            }
+        let record = parse_swap_history_record(cursor, &record_value)?;
+        if record.trader == authority {
+            records.push(record);
         }
         cursor = cursor.saturating_sub(1);
     }
@@ -52899,6 +53251,182 @@ fn trader_activity_item_from_projection(
             context = policy_id
                 .map(|value| format!("Policy #{value}"))
                 .unwrap_or_else(|| "Cover".to_owned());
+        }
+        event
+            if projection.module == "intents"
+                && matches!(
+                    event,
+                    "intent_opened" | "intent_cancelled" | "intent_filled"
+                ) =>
+        {
+            let intent_id = object_lookup_string(&payload, &["intent_id"]);
+            let amount_in = object_lookup_i64(&payload, &["amount_in"]);
+            let min_out = object_lookup_i64(&payload, &["min_out"]);
+            let amount_out = object_lookup_i64(&payload, &["amount_out"]);
+            exposure = [
+                amount_in.map(|value| format!("{} in", compact_number(value as f64, 0))),
+                amount_out.map(|value| format!("{} out", compact_number(value as f64, 0))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if exposure.is_empty() {
+                exposure = min_out
+                    .map(|value| format!("{} min out", compact_number(value as f64, 0)))
+                    .unwrap_or_else(|| "Intent action".to_owned());
+            }
+            context = intent_id
+                .map(|value| format!("Intent {value}"))
+                .unwrap_or_else(|| "Intents".to_owned());
+        }
+        event
+            if projection.module == "vaults"
+                && matches!(
+                    event,
+                    "vault_registered"
+                        | "vault_deposited"
+                        | "vault_redeem_requested"
+                        | "vault_redeem_claimed"
+                ) =>
+        {
+            let vault_id = object_lookup_string(&payload, &["vault_id"]);
+            let position_id = object_lookup_string(&payload, &["position_id"]);
+            let amount = object_lookup_i64(&payload, &["amount", "shares"]);
+            exposure = amount
+                .map(|value| compact_number(value as f64, 0))
+                .unwrap_or_else(|| "Vault action".to_owned());
+            context = [vault_id, position_id]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if context.is_empty() {
+                context = "Vaults".to_owned();
+            }
+        }
+        event
+            if projection.module == "operators"
+                && matches!(
+                    event,
+                    "operator_registered"
+                        | "operator_bonded"
+                        | "operator_heartbeat"
+                        | "operator_fees_claimed"
+                ) =>
+        {
+            let service = object_lookup_string(&payload, &["service"]);
+            let amount = object_lookup_i64(&payload, &["amount", "min_bond", "fees_accrued"]);
+            let health = object_lookup_i64(&payload, &["health_bps"]);
+            exposure = [
+                amount.map(|value| compact_number(value as f64, 0)),
+                health.map(|value| format!("{} bps health", compact_number(value as f64, 0))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if exposure.is_empty() {
+                exposure = "Operator action".to_owned();
+            }
+            context = service
+                .map(|value| format!("Service {value}"))
+                .unwrap_or_else(|| "Operators".to_owned());
+        }
+        event
+            if projection.module == "margin"
+                && matches!(
+                    event,
+                    "margin_market_registered"
+                        | "margin_collateral_deposited"
+                        | "margin_collateral_withdrawn"
+                        | "margin_exposure_locked"
+                        | "margin_account_liquidated"
+                ) =>
+        {
+            let market_id = object_lookup_string(&payload, &["market_id"]);
+            let account_key = object_lookup_string(&payload, &["account_key"]);
+            let amount = object_lookup_i64(&payload, &["amount", "exposure_delta"]);
+            exposure = amount
+                .map(|value| compact_number(value as f64, 0))
+                .unwrap_or_else(|| "Margin action".to_owned());
+            context = [market_id, account_key]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if context.is_empty() {
+                context = "Portfolio Margin".to_owned();
+            }
+        }
+        event
+            if projection.module == "rwa"
+                && matches!(
+                    event,
+                    "rwa_lot_issued"
+                        | "rwa_share_asset_bound"
+                        | "rwa_nav_reported"
+                        | "rwa_redemption_requested"
+                        | "rwa_redemption_settled"
+                ) =>
+        {
+            let market_id = object_lookup_string(&payload, &["market_id"]);
+            let redemption_id = object_lookup_string(&payload, &["redemption_id"]);
+            let shares = object_lookup_i64(&payload, &["shares", "total_shares"]);
+            let nav = object_lookup_i64(&payload, &["nav_per_share", "initial_nav_per_share"]);
+            exposure = [
+                shares.map(|value| format!("{} shares", compact_number(value as f64, 0))),
+                nav.map(|value| format!("{} NAV", compact_number(value as f64, 0))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if exposure.is_empty() {
+                exposure = "RWA action".to_owned();
+            }
+            context = [market_id, redemption_id]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if context.is_empty() {
+                context = "RWA Markets".to_owned();
+            }
+        }
+        event
+            if projection.module == "dlmmHooks"
+                && matches!(
+                    event,
+                    "dlmm_hook_configured"
+                        | "dlmm_hook_limit_order_placed"
+                        | "dlmm_hook_twamm_scheduled"
+                        | "dlmm_hook_execution_recorded"
+                ) =>
+        {
+            let hook_id = object_lookup_string(&payload, &["hook_id"]);
+            let order_id = object_lookup_string(&payload, &["order_id"]);
+            let amount_in = object_lookup_i64(&payload, &["amount_in"]);
+            let min_out = object_lookup_i64(&payload, &["min_out", "amount_out"]);
+            exposure = [
+                amount_in.map(|value| format!("{} in", compact_number(value as f64, 0))),
+                min_out.map(|value| format!("{} out", compact_number(value as f64, 0))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if exposure.is_empty() {
+                exposure = "Hook action".to_owned();
+            }
+            context = [hook_id, order_id]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if context.is_empty() {
+                context = "DLMM Hooks".to_owned();
+            }
         }
         _ => {
             if !payload.is_empty() {
@@ -53436,6 +53964,149 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
         axum::http::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+async fn handle_v1_contracts_rollups_module_get(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(mut params): crate::NoritoQuery<ContractEventGetParams>,
+    module: &'static str,
+    endpoint: &'static str,
+    rollup_kind: &'static str,
+) -> Result<axum::response::Response> {
+    params.module = Some(module.to_owned());
+    params.result_ok = Some(params.result_ok.unwrap_or(true));
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(params.limit, params.offset, cap, endpoint)?;
+    let count_mode = app_count_mode(params.count_mode.as_deref(), endpoint);
+    let index = contract_event_index_snapshot(state.as_ref());
+    let (items, total) = collect_trader_activity_page(index.as_ref(), &params, pagination);
+    let page = page_result_from_counted_items(items, total, params.offset, count_mode);
+    let activity_items = page
+        .items
+        .iter()
+        .map(trader_activity_item_from_projection)
+        .collect::<Vec<_>>();
+    let mut top = Map::new();
+    top.insert("ok".into(), Value::Bool(true));
+    top.insert("module".into(), Value::from(module));
+    top.insert(
+        "moduleLabel".into(),
+        Value::from(trader_module_label(module)),
+    );
+    top.insert("rollupKind".into(), Value::from(rollup_kind));
+    top.insert(
+        "contractKey".into(),
+        Value::from(trader_module_contract_key(module)),
+    );
+    top.insert(
+        "items".into(),
+        Value::Array(trader_activity_items_to_json(&activity_items)),
+    );
+    insert_page_metadata(&mut top, &page, count_mode);
+    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_intents_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "intents",
+        ENDPOINT_CONTRACTS_ROLLUPS_INTENTS,
+        "intent_lifecycle",
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_vault_positions_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "vaults",
+        ENDPOINT_CONTRACTS_ROLLUPS_VAULT_POSITIONS,
+        "vault_positions",
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_operators_status_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "operators",
+        ENDPOINT_CONTRACTS_ROLLUPS_OPERATORS_STATUS,
+        "operator_status",
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_margin_health_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "margin",
+        ENDPOINT_CONTRACTS_ROLLUPS_MARGIN_HEALTH,
+        "margin_health",
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_rwa_lots_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "rwa",
+        ENDPOINT_CONTRACTS_ROLLUPS_RWA_LOTS,
+        "rwa_lots",
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_dlmm_hooks_get(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_rollups_module_get(
+        state,
+        query,
+        "dlmmHooks",
+        ENDPOINT_CONTRACTS_ROLLUPS_DLMM_HOOKS,
+        "dlmm_hooks",
+    )
+    .await
 }
 
 #[cfg(all(test, feature = "app_api"))]

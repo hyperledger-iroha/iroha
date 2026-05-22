@@ -255,6 +255,75 @@ pub struct ApproveGovernanceProposal {
 
 impl crate::seal::Instruction for ApproveGovernanceProposal {}
 
+/// Equal citizen decision recorded by a seated Parliament member.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
+pub enum ParliamentDecision {
+    /// Support the proposal at this Parliament stage.
+    Approve,
+    /// Reject the proposal at this Parliament stage.
+    Reject,
+    /// Record presence without supporting or rejecting the proposal.
+    Abstain,
+}
+
+impl ParliamentDecision {
+    /// Stable lowercase label used by JSON clients.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Approve => "approve",
+            Self::Reject => "reject",
+            Self::Abstain => "abstain",
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonSerialize for ParliamentDecision {
+    fn json_serialize(&self, out: &mut String) {
+        norito::json::write_json_string(self.as_str(), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for ParliamentDecision {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        match value.as_str() {
+            "approve" | "Approve" => Ok(Self::Approve),
+            "reject" | "Reject" => Ok(Self::Reject),
+            "abstain" | "Abstain" => Ok(Self::Abstain),
+            other => Err(norito::json::Error::UnknownField {
+                field: other.to_owned(),
+            }),
+        }
+    }
+}
+
+/// Cast an equal signed Parliament ballot for a proposal stage.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CastParliamentBallot {
+    /// Parliament body receiving the ballot.
+    pub body: ParliamentBody,
+    /// Deterministic proposal id (Blake2b-32) being decided by the body.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub proposal_id: [u8; 32],
+    /// Equal citizen decision signed by the transaction authority.
+    pub decision: ParliamentDecision,
+}
+
+impl crate::seal::Instruction for CastParliamentBallot {}
+
 /// Persist a council membership for an epoch.
 ///
 /// This instruction records `members` for `epoch` in the WSV. It includes a
@@ -468,6 +537,12 @@ impl_governance_decode_from_slice!(ApproveGovernanceProposal {
     proposal_id: [u8; 32],
 });
 
+impl_governance_decode_from_slice!(CastParliamentBallot {
+    body: ParliamentBody,
+    proposal_id: [u8; 32],
+    decision: ParliamentDecision,
+});
+
 impl_governance_decode_from_slice!(PersistCouncilForEpoch {
     epoch: u64,
     members: Vec<crate::account::AccountId>,
@@ -679,6 +754,11 @@ mod tests {
             body: ParliamentBody::AgendaCouncil,
             proposal_id: [0x44; 32],
         });
+        assert_slice_roundtrip(CastParliamentBallot {
+            body: ParliamentBody::PolicyJury,
+            proposal_id: [0x45; 32],
+            decision: ParliamentDecision::Reject,
+        });
         assert_slice_roundtrip(PersistCouncilForEpoch {
             epoch: 7,
             members: vec![account(1), account(2)],
@@ -732,6 +812,14 @@ mod tests {
                 amount: 1_000,
                 duration_blocks: 100,
                 direction: 0,
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            CastParliamentBallot {
+                body: ParliamentBody::PolicyJury,
+                proposal_id: [0x45; 32],
+                decision: ParliamentDecision::Approve,
             },
         );
         assert_registry_decodes(

@@ -137,6 +137,11 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         .downcast_ref::<crate::isi::rwa::RwaInstructionBox>()
     {
         visitor.visit_rwa_instruction_box(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::defi::DeFiInstructionBox>()
+    {
+        visitor.visit_defi_instruction_box(v);
     } else {
         return false;
     }
@@ -433,6 +438,13 @@ pub fn visit_remove_key_value<V: Visit + ?Sized>(visitor: &mut V, isi: &RemoveKe
 pub fn visit_rwa_instruction_box<V: Visit + ?Sized>(
     _visitor: &mut V,
     _isi: &crate::isi::rwa::RwaInstructionBox,
+) {
+}
+
+/// Dispatch grouped DeFi instructions.
+pub fn visit_defi_instruction_box<V: Visit + ?Sized>(
+    _visitor: &mut V,
+    _isi: &crate::isi::defi::DeFiInstructionBox,
 ) {
 }
 

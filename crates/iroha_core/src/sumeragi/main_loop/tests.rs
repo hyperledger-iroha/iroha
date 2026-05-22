@@ -87697,18 +87697,17 @@ async fn maybe_force_view_change_for_stalled_pending_defers_frontier_advance_whi
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let now = Instant::now();
     let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
-    let widened_timeout = super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 4)
-        .max(actor.backlog_extended_view_change_timeout(base_timeout, false));
-    let repair_exhaustion_window = widened_timeout
-        .saturating_add(
-            actor
-                .frontier_slot_lag_window()
-                .max(actor.rebroadcast_cooldown())
-                .max(Duration::from_millis(1)),
-        )
-        .max(widened_timeout);
+    let active_ceiling = actor.active_block_production_gap_ceiling();
+    let frontier_pending_timeout =
+        super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 2)
+            .max(actor.backlog_extended_view_change_timeout(base_timeout, false))
+            .min(active_ceiling);
+    assert!(
+        frontier_pending_timeout < active_ceiling,
+        "test setup needs room between pending timeout and active repair exhaustion"
+    );
     let stalled_at = now
-        .checked_sub(repair_exhaustion_window.saturating_add(Duration::from_millis(1)))
+        .checked_sub(frontier_pending_timeout.saturating_add(Duration::from_millis(1)))
         .unwrap_or(now);
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
     pending.touch_progress(stalled_at);
@@ -87733,19 +87732,13 @@ async fn maybe_force_view_change_for_stalled_pending_defers_frontier_advance_whi
         )
         .expect("push tx");
 
-    let vote_queue_backlog_threshold = usize::try_from(
-        super::Actor::near_quorum_queue_depth_threshold(actor.config.queues.votes),
-    )
-    .expect("queue threshold fits usize");
-    for _ in 0..vote_queue_backlog_threshold {
-        record_test_worker_slot_ingress(
-            super::status::WorkerQueueKind::Votes,
-            height,
-            view_idx,
-            super::status::ConsensusMessageKind::QcVote,
-            Some(block_hash),
-        );
-    }
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::Votes,
+        height,
+        view_idx,
+        super::status::ConsensusMessageKind::QcVote,
+        Some(block_hash),
+    );
 
     assert!(
         !actor.maybe_force_view_change_for_stalled_pending(now),
@@ -88119,6 +88112,121 @@ async fn stalled_pending_timeout_decision_caps_recovery_window_under_active_tx_b
     assert_eq!(
         decision.timeout, capped_frontier_timeout,
         "active transaction backlog must cap recovery damping at the block production SLA"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_force_view_change_for_stalled_pending_bounds_shallow_ingress_drain_under_active_tx_backlog()
+ {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 0_u64;
+    let block = sample_block(height, view_idx, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let now = Instant::now();
+    let active_ceiling = actor.active_block_production_gap_ceiling();
+    let stalled_age = active_ceiling.saturating_add(Duration::from_millis(2));
+    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view_idx,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 31,
+            started_at: now,
+            frontier_generation: None,
+        },
+    );
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+
+    let backlog_signals =
+        actor.idle_backlog_signals_for_height(height, super::status::worker_queue_depth_snapshot());
+    assert!(
+        backlog_signals.queue_active_backlog,
+        "test setup should expose active transaction backlog"
+    );
+    assert!(
+        super::Actor::frontier_consensus_ingress_queued(
+            super::status::worker_queue_depth_snapshot()
+        ),
+        "test setup should expose shallow consensus ingress"
+    );
+    assert!(
+        !backlog_signals.consensus_queue_backlog,
+        "single ingress item should stay below the material backlog threshold"
+    );
+    let decision = actor.stalled_pending_timeout_decision(
+        block_hash,
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("pending retained"),
+        backlog_signals,
+        now,
+    );
+    assert_eq!(
+        decision.class,
+        super::StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout,
+        "frontier validation recovery should use the active-recovery timeout class"
+    );
+    assert!(
+        decision.timeout <= active_ceiling,
+        "active transaction backlog should not let pending timeout exceed the production SLA"
+    );
+
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(now),
+        "active transaction backlog must bound shallow ingress drain before the external progress watchdog can fire"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view_idx.saturating_add(1))
     );
 
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -89026,11 +89134,14 @@ async fn maybe_force_view_change_for_stalled_pending_forces_frontier_advance_aft
     let backlog_timeout = actor.backlog_extended_view_change_timeout(base_timeout, true);
     let frontier_pending_timeout =
         super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
-    let repair_exhaustion_window = frontier_pending_timeout.saturating_add(
-        actor
-            .frontier_slot_lag_window()
-            .max(actor.rebroadcast_cooldown())
-            .max(Duration::from_millis(1)),
+    let repair_exhaustion_window = actor.cap_active_block_production_gap(
+        frontier_pending_timeout.saturating_add(
+            actor
+                .frontier_slot_lag_window()
+                .max(actor.rebroadcast_cooldown())
+                .max(Duration::from_millis(1)),
+        ),
+        true,
     );
 
     let now = Instant::now();
@@ -89099,7 +89210,7 @@ async fn maybe_force_view_change_for_stalled_pending_forces_frontier_advance_aft
         "resilience should force a frontier view advance after active-pending repair is exhausted under tx backlog"
     );
     assert_eq!(
-        actor.phase_tracker.current_view(height),
+        actor.frontier_slot.as_ref().map(|slot| slot.active_view),
         Some(view_idx.saturating_add(1))
     );
     assert_eq!(
@@ -89112,7 +89223,7 @@ async fn maybe_force_view_change_for_stalled_pending_forces_frontier_advance_aft
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn maybe_force_view_change_for_stalled_pending_defers_repair_exhaustion_while_rbc_sender_active()
+async fn maybe_force_view_change_for_stalled_pending_does_not_let_rbc_sender_activity_mask_repair_exhaustion()
  {
     use std::borrow::Cow;
 
@@ -89140,11 +89251,14 @@ async fn maybe_force_view_change_for_stalled_pending_defers_repair_exhaustion_wh
     let backlog_timeout = actor.backlog_extended_view_change_timeout(base_timeout, true);
     let frontier_pending_timeout =
         super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
-    let repair_exhaustion_window = frontier_pending_timeout.saturating_add(
-        actor
-            .frontier_slot_lag_window()
-            .max(actor.rebroadcast_cooldown())
-            .max(Duration::from_millis(1)),
+    let repair_exhaustion_window = actor.cap_active_block_production_gap(
+        frontier_pending_timeout.saturating_add(
+            actor
+                .frontier_slot_lag_window()
+                .max(actor.rebroadcast_cooldown())
+                .max(Duration::from_millis(1)),
+        ),
+        true,
     );
 
     let now = Instant::now();
@@ -89198,27 +89312,105 @@ async fn maybe_force_view_change_for_stalled_pending_defers_repair_exhaustion_wh
         "test setup should expose recent same-height RBC sender activity"
     );
     assert!(
-        !actor.maybe_force_view_change_for_stalled_pending(now),
-        "recent same-height RBC sender activity should defer active-pending repair exhaustion"
+        actor.maybe_force_view_change_for_stalled_pending(now),
+        "recent same-height RBC sender activity must not mask exhausted active-pending repair"
     );
-    assert!(
-        actor.subsystems.propose.forced_view_after_timeout.is_none(),
-        "forced-view marker should stay clear while RBC sender activity owns recovery"
+    assert_eq!(
+        actor.frontier_slot.as_ref().map(|slot| slot.active_view),
+        Some(view_idx.saturating_add(1))
+    );
+    assert_eq!(
+        actor.subsystems.propose.forced_view_after_timeout,
+        Some((height, view_idx.saturating_add(1)))
     );
 
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_force_view_change_for_stalled_pending_defers_repair_exhaustion_while_rbc_sender_active()
+ {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 0_u64;
+    let block = sample_block(height, view_idx, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
+    let backlog_timeout = actor.backlog_extended_view_change_timeout(base_timeout, true);
+    let frontier_pending_timeout =
+        super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
+    let pre_timeout_age = frontier_pending_timeout.saturating_sub(Duration::from_millis(1));
+
+    let now = Instant::now();
+    let stalled_at = now.checked_sub(pre_timeout_age).unwrap_or(now);
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view_idx, payload_hash);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view_idx,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 23,
+            started_at: now,
+            frontier_generation: None,
+        },
+    );
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
     actor
         .subsystems
         .da_rbc
         .rbc
         .ready_rebroadcast_last_sent
-        .clear();
+        .insert((block_hash, height, view_idx), now);
+
     assert!(
-        actor.maybe_force_view_change_for_stalled_pending(now),
-        "once RBC sender activity clears, exhausted active-pending repair should force a view advance"
+        actor.frontier_recovery_same_height_rbc_sender_activity_active(height, now),
+        "test setup should expose recent same-height RBC sender activity"
     );
-    assert_eq!(
-        actor.subsystems.propose.forced_view_after_timeout,
-        Some((height, view_idx.saturating_add(1)))
+    assert!(
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "recent same-height RBC sender activity should not force before the pending timeout"
     );
 
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -111386,6 +111578,90 @@ async fn fresh_proposal_defers_after_exhausted_same_height_vote_lock_without_qc(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn fresh_proposal_escalates_vote_locked_recovery_before_rotation_escape_window() {
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 1_u64;
+    let topology_len = actor.effective_commit_topology().len();
+    let escalation_gap = u64::try_from(topology_len.saturating_mul(2))
+        .unwrap_or(u64::MAX)
+        .max(8);
+    let fresh_view = owner_view.saturating_add(escalation_gap);
+    assert!(
+        actor.same_height_vote_recovery_escalation_view_gap_exhausted(
+            owner_view,
+            fresh_view,
+            topology_len,
+        ),
+        "test setup should cross the exact-recovery escalation threshold"
+    );
+    assert!(
+        !actor.same_height_vote_recovery_view_gap_exhausted(owner_view, fresh_view, topology_len),
+        "test setup should stay below the longer branch-rotation escape threshold"
+    );
+
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    let required = seed_near_quorum_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        owner_hash,
+        height,
+        owner_view,
+    );
+    let vote_status =
+        actor.commit_vote_quorum_status_for_block_detail(owner_hash, height, owner_view);
+    assert_eq!(
+        vote_status.vote_count,
+        required.saturating_sub(1),
+        "test setup requires a same-height vote lock without a full QC"
+    );
+    actor.frontier_slot = None;
+
+    let mut proposal_topology =
+        super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&proposal_topology, height, fresh_view, mode_tag, prf_seed);
+    let local_idx = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local validator index");
+    let proposed = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            fresh_view,
+            sample_qc_ref(height.saturating_sub(1), 0),
+            &mut proposal_topology,
+            0,
+            local_idx,
+            None,
+            Instant::now(),
+        )
+        .expect("proposal assembly should not fail");
+    assert!(
+        !proposed,
+        "same-height vote locks must still prevent a fresh uncommittable proposal"
+    );
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("proposal deferral should seed exact recovery");
+    assert_eq!(slot.height, height);
+    assert_eq!(slot.view, owner_view);
+    assert_eq!(slot.block_hash, owner_hash);
+    assert!(
+        matches!(slot.mode, super::FrontierSlotMode::DeepCatchup),
+        "bounded escalation should start exact catch-up for the vote-backed branch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn fresh_proposal_allows_new_view_qc_to_supersede_raw_same_height_vote_lock() {
     use std::borrow::Cow;
 
@@ -116800,6 +117076,131 @@ async fn precommit_vote_rejects_newer_view_after_conflict() {
             .any(|vote| vote.block_hash == block_a_hash && vote.view == 0),
         "precommit vote for view 0 should be recorded"
     );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn precommit_vote_allows_newer_conflict_when_local_vote_completes_quorum() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    actor.locked_qc = None;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let height = actor.state.view().height() as u64 + 1;
+    let epoch = actor.current_epoch();
+    let block_a = sample_block(height, 0, None);
+    let block_b = sample_block(height, 1, None);
+    let block_a_hash = block_a.hash();
+    let block_b_hash = block_b.hash();
+    insert_validated_pending(actor, block_a);
+    insert_validated_pending(actor, block_b);
+    let roots = Some((zero_state_root(), zero_state_root()));
+
+    assert!(
+        actor.emit_precommit_vote(
+            block_a_hash,
+            height,
+            0,
+            epoch,
+            ValidationStatus::Valid,
+            &topology,
+            None,
+            roots,
+        ),
+        "first precommit vote should be accepted"
+    );
+
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let live_roster = actor.roster_for_live_vote_with_mode(height, consensus_mode);
+    let vote_topology = if live_roster.is_empty() {
+        topology.clone()
+    } else {
+        super::network_topology::Topology::new(live_roster)
+    };
+    let signature_topology =
+        super::topology_for_view(&vote_topology, height, 1, mode_tag, prf_seed);
+    let local_idx = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local validator in view topology");
+    let local_idx = usize::try_from(local_idx).expect("local index fits usize");
+    let required = signature_topology.min_votes_for_commit().max(1);
+    assert!(
+        signature_topology.as_ref().len().saturating_sub(1) >= required.saturating_sub(1),
+        "test requires enough remote validators to form a near-quorum"
+    );
+
+    let mut seeded = 0usize;
+    for (signer_idx, peer) in signature_topology.as_ref().iter().enumerate() {
+        if signer_idx == local_idx {
+            continue;
+        }
+        let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
+        let keypair = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("matching signer keypair");
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: block_b_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: 1,
+            epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+        let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
+        let signature = Signature::new(keypair.private_key(), &preimage);
+        vote.bls_sig = signature.payload().to_vec();
+        actor.handle_vote(vote);
+        seeded = seeded.saturating_add(1);
+        if seeded >= required.saturating_sub(1) {
+            break;
+        }
+    }
+    assert_eq!(
+        seeded,
+        required.saturating_sub(1),
+        "test setup should seed a remote near-quorum"
+    );
+    let before = actor.commit_vote_quorum_status_for_block_detail(block_b_hash, height, 1);
+    assert_eq!(
+        before.vote_count,
+        required.saturating_sub(1),
+        "candidate should be one local vote short of quorum"
+    );
+    assert!(
+        !before.quorum_reached,
+        "candidate must not already have quorum"
+    );
+
+    assert!(
+        actor.emit_precommit_vote(
+            block_b_hash,
+            height,
+            1,
+            epoch,
+            ValidationStatus::Valid,
+            &topology,
+            None,
+            roots,
+        ),
+        "newer view precommit should be allowed when it completes the candidate quorum"
+    );
+    let after = actor.commit_vote_quorum_status_for_block_detail(block_b_hash, height, 1);
+    assert!(
+        after.quorum_reached,
+        "local vote should complete the newer-view commit quorum"
+    );
+
     harness.shutdown.send();
 }
 
@@ -144801,6 +145202,76 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads_without_active(
     assert!(
         !actor.pending.pending_blocks.contains_key(&block_hash),
         "aborted payload should be evicted after retention"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_stale_pending_blocks_prunes_obsolete_non_aborted_without_active() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(&actor.state);
+    let committed_height = actor.committed_height_snapshot();
+    let view_idx = 1_u64;
+    let block = sample_block(committed_height, view_idx, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, committed_height, view_idx),
+    );
+
+    let ordered_validators = actor.effective_commit_topology();
+    install_stale_zero_rechain_vnext_round(actor, committed_height, view_idx, ordered_validators);
+    let slot = super::vnext::SlotId {
+        height: committed_height,
+        view: view_idx,
+        epoch: actor.epoch_for_height(committed_height),
+        block_hash,
+    };
+    actor
+        .vnext_rounds
+        .get_mut(&(committed_height, view_idx))
+        .expect("vNext round installed")
+        .slot_mut(slot)
+        .validation = crate::sumeragi::vnext::ValidationState::Backpressured { since_ms: 0 };
+    actor.subsystems.validation.vnext_inflight.insert(
+        block_hash,
+        VNextValidationInFlight {
+            slot,
+            generation: 1,
+        },
+    );
+
+    assert_eq!(
+        actor.active_pending_blocks_len(),
+        0,
+        "test setup should have no active frontier pending block"
+    );
+    assert!(
+        actor.reschedule_stale_pending_blocks(None),
+        "obsolete non-aborted pending blocks should be pruned even without active pending work"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "obsolete pending block should be removed"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .vnext_inflight
+            .contains_key(&block_hash),
+        "obsolete pending prune should clear vNext worker ownership"
+    );
+    assert!(
+        actor
+            .vnext_rounds
+            .get(&(committed_height, view_idx))
+            .and_then(|round| round.slot(block_hash))
+            .is_none(),
+        "obsolete pending prune should clear the vNext slot"
     );
 
     harness.shutdown.send();

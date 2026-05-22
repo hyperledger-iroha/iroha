@@ -1,6 +1,121 @@
 # Status
 
-Last updated: 2026-05-21
+Last updated: 2026-05-22
+
+## 2026-05-22 Governance referendum height transition fix
+
+- Stage rejection quorum now requires a positive threshold, so test fixtures
+  and zero-threshold approval gates no longer treat zero rejections as an
+  automatic rejection quorum.
+- Height-triggered governance referenda can open at their scheduled start
+  height when all required parliament approval gates are satisfied.
+- Focused validation passed:
+  - `cargo test -p iroha_core --test gov_referendum_open_close referendum_open_and_close_by_height -- --nocapture`
+  - `cargo test -p iroha_core --lib governance_stage_rejection_quorum_requires_positive_threshold -- --nocapture`
+
+## 2026-05-21 CLI smoke offline-command config recovery
+
+- CLI startup now falls back to an in-memory offline config only for explicitly
+  classified offline helpers when no `--config` is supplied and `--machine` is
+  not active. Runtime commands and explicit config paths keep strict config
+  loading.
+- Address conversion/audit/normalize commands now default to the active client
+  account chain discriminant when `--profile`/`--network-prefix` are omitted.
+- `tx status` now performs a single pipeline status read by default and only
+  polls for terminal status when `--wait` is supplied.
+- Focused validation passed:
+  - `cargo test -p iroha_cli fallback_config_is_limited_to_offline_commands -- --nocapture`
+  - `cargo test -p iroha_cli tx_status_wait_is_explicit -- --nocapture`
+  - `cargo test -p iroha_cli address_network_context_uses_config_default_prefix -- --nocapture`
+  - `cargo test -p iroha_cli --test cli_smoke -- --nocapture`
+  - `cargo clippy -p iroha_cli --bins --tests --no-deps -- -D warnings`
+
+## 2026-05-21 WSV/Kura memory-only stabilization closure
+
+- WSV recovery remains memory-only and rebuilds process-local query state from
+  canonical Kura block data; no durable WSV snapshot path was added.
+- Test-network SNS domain lease setup now uses blocking applied-status
+  submission, batches leases for multi-peer executables, and treats transient
+  Torii query transport/timeout failures as normal visibility delay while
+  polling.
+- The trigger permission integration path now waits for the registered trigger
+  to become query-visible before asserting on it, matching the same
+  applied-then-visible contract used by the query corridor.
+- Focused validation passed:
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo test -p iroha_test_network torii_request_error_is_transient -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo clippy -p iroha_test_network --lib -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 cargo test -p integration_tests --test events_and_triggers triggers::by_call_trigger::only_account_with_permission_can_register_trigger -- --test-threads=1 --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 cargo test -p integration_tests --test events_and_triggers -- --test-threads=1 --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `scripts/check_no_scale.sh`
+
+## 2026-05-21 SCCP audit proof gate and EVM binding hardening
+
+- `RecordSccpMessage` remains permissionless for valid bridge flows, but record
+  execution now requires a verified `Executable::IvmProved` overlay source.
+  Bare records fail during overlay execution and are excluded from SCCP
+  commitment-root collection.
+- SCCP root collection now ignores plain instruction batches, raw IVM overlays,
+  and contract-call overlays, so recomputation only commits records carried by
+  verified proved overlays.
+- SCCP burn and token-control payload validation now rejects zero asset ids,
+  zero amounts, zero recipients, empty token names/symbols, and unsupported
+  token target domains.
+- EVM SCCP submission packaging now keeps the transparent proof bound to the
+  manifest destination binding while threading explicit deployment bindings
+  only into the EVM submission package. Torii SCCP artifact, job, and proof
+  submit paths now accept `network_id_hex`, `verifier_address_hex`, and
+  `bridge_address_hex` for production-ready EVM lanes.
+- `iroha_sccp` now follows the repository std-only policy in source: historical
+  no-std fallback branches and `std` implementation gates were removed, Norito
+  and proof helpers are compiled on the single first-release path, and Torii no
+  longer requests the compatibility `std` feature.
+- Focused validation passed:
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-sccp-std-only CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p iroha_sccp --no-default-features --features serde`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-sccp-std-only CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p iroha_torii --lib`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-sccp-std-only CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 cargo test -p iroha_sccp --features serde -- --test-threads=1 --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-sccp-std-only CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 cargo test -p iroha_torii --lib sccp -- --test-threads=1 --nocapture`
+
+## 2026-05-21 SORA Parliament equal-citizen alignment
+
+- SORA Parliament now treats the citizenship bond as an anti-Sybil/collateral
+  floor only: deterministic citizen and body draws no longer grant extra
+  tickets for larger bonds.
+- Added signed Parliament stage ballots with equal approve/reject/abstain
+  decisions, seated-member-only voting, body rejection quorum handling, and
+  full multi-body gates before Parliament proposals can advance.
+- Torii governance council helpers now return unsigned instruction skeletons
+  for local signing, reject private-key payloads, and derive fallback council
+  views from the bonded citizen registry instead of stake balances.
+- Documentation now describes bond-based citizenship, equal Parliament votes,
+  and policy-jury commit/reveal as a remaining hardening layer over the signed
+  clear-ballot path.
+
+## 2026-05-21 Soracloud first-release CLI cleanup
+
+- Promoted Soracloud to the top-level `iroha soracloud ...` namespace, with
+  app commands under `iroha soracloud app ...`, service commands under
+  `iroha soracloud service ...`, and model/HF/agent helpers under their own
+  namespaces. The previous nested parser path is now rejected.
+- Added app-level `simulate` and standardized app reports across doctor,
+  simulate, release, deploy, upgrade, and status outputs using the
+  `SoracloudAppReportV1` phase shape.
+- Made app release run manifest sync and doctor gates even with `--skip-build`,
+  repairing manifest hash drift from existing artifacts before app-infra
+  submission.
+- Updated generated app scripts and docs to prefer packaged `IROHA_BIN`, then
+  `PATH` `iroha`, with source checkout fallback only through explicit
+  `IROHA_SOURCE_DIR`/`IROHA_MANIFEST_PATH`.
+- Added JS SDK TypeScript declarations for the app report shape and updated the
+  lifecycle docs around `iroha soracloud app release` and `simulate`.
+- Focused validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/main_shared.rs crates/iroha_cli/src/soracloud.rs crates/iroha/src/config/user.rs`
+  - `cargo check -p iroha_cli --bin iroha`
+  - `cargo test -p iroha_cli soracloud_top_level_app_parser_replaces_nested_app_path -- --nocapture`
+  - `cargo test -p iroha_cli soracloud_service_model_hf_and_agent_parsers_are_namespaced -- --nocapture`
+  - `cargo test -p iroha_cli --bin iroha soracloud -- --nocapture`
+  - `node --test javascript/iroha_js/test/soracloud.test.js javascript/iroha_js/test/toriiClient.test.js`
 
 ## 2026-05-21 Swift Offline V2 transport validation hardening
 

@@ -15,12 +15,7 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
-def test_faucet_registration_fallback_record_preserves_errors() -> None:
-    record = MODULE.faucet_registration_fallback_record(
-        RuntimeError("onboard failed"),
-        RuntimeError("alias missing"),
-    )
-    assert record["status"] == "faucet_registration_fallback"
-    assert record["response_status"] == 400
-    assert "onboard failed" in record["response"]
-    assert "alias missing" in record["alias_resolve_error"]
+def test_faucet_claim_requires_applied_status() -> None:
+    assert MODULE.faucet_claim_status_kind({"status": "Applied"}) == "Applied"
+    assert MODULE.faucet_claim_status_kind({"status": {"kind": "Rejected"}}) == "Rejected"
+    assert MODULE.faucet_claim_status_kind({}) is None

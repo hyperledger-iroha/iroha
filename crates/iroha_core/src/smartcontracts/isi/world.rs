@@ -52,7 +52,9 @@ pub mod isi {
                 ConfidentialUnshielded,
             },
             governance::{
-                GovernanceEvent, GovernanceParliamentApprovalRecorded, GovernanceSlashReason,
+                GovernanceEvent, GovernanceParliamentApprovalRecorded,
+                GovernanceParliamentBallotRecorded, GovernanceReferendumClosed,
+                GovernanceSlashReason,
             },
             prelude::TriggerEvent,
             smart_contract::{
@@ -4676,6 +4678,22 @@ pub mod isi {
             let mut approve: u128 = 0;
             let mut reject: u128 = 0;
             let now_h = state_transaction._curr_block.height().get();
+            if state_transaction
+                .world
+                .governance_proposals
+                .get(&self.proposal_id)
+                .is_some_and(|proposal| {
+                    matches!(
+                        proposal.status,
+                        crate::state::GovernanceProposalStatus::Approved
+                            | crate::state::GovernanceProposalStatus::Rejected
+                            | crate::state::GovernanceProposalStatus::Enacted
+                    )
+                })
+            {
+                close_referendum_if_open(state_transaction, &self.referendum_id);
+                return Ok(());
+            }
             if let Some(locks) = state_transaction
                 .world
                 .governance_locks
@@ -4769,35 +4787,34 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let ctx = load_approval_context(&self, state_transaction)?;
-            ensure_parliament_member(authority, &ctx.roster)?;
-            if ctx.persist_epoch_bodies {
-                persist_parliament_bodies_if_missing(&ctx, state_transaction);
-            }
+            record_parliament_stage_decision(
+                self.body,
+                self.proposal_id,
+                gov::ParliamentDecision::Approve,
+                authority,
+                state_transaction,
+            )
+        }
+    }
 
-            let Some((approvals_count, required, approvals)) =
-                record_parliament_approval(&self, authority, &ctx, state_transaction)
-            else {
-                return Ok(());
-            };
-
-            state_transaction
-                .world
-                .emit_events(Some(GovernanceEvent::ParliamentApprovalRecorded(
-                    GovernanceParliamentApprovalRecorded {
-                        proposal_id: self.proposal_id,
-                        epoch: ctx.epoch,
-                        body: self.body,
-                        approvals: approvals_count,
-                        required,
-                    },
-                )));
-            maybe_open_referendum(&ctx, &approvals, state_transaction);
-            Ok(())
+    impl Execute for gov::CastParliamentBallot {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            record_parliament_stage_decision(
+                self.body,
+                self.proposal_id,
+                self.decision,
+                authority,
+                state_transaction,
+            )
         }
     }
 
     struct ApprovalContext {
+        proposal_id: [u8; 32],
         rid: String,
         referendum: crate::state::GovernanceReferendumRecord,
         proposal_kind: ProposalKind,
@@ -4809,21 +4826,82 @@ pub mod isi {
         quorum_bps: u16,
     }
 
+    fn record_parliament_stage_decision(
+        body: ParliamentBody,
+        proposal_id: [u8; 32],
+        decision: gov::ParliamentDecision,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let ctx = load_approval_context(body, proposal_id, state_transaction)?;
+        ensure_parliament_member(authority, &ctx.roster)?;
+        if ctx.persist_epoch_bodies {
+            persist_parliament_bodies_if_missing(&ctx, state_transaction);
+        }
+
+        let Some(record) =
+            record_parliament_decision(body, decision, authority, &ctx, state_transaction)
+        else {
+            return Ok(());
+        };
+
+        state_transaction
+            .world
+            .emit_events(Some(GovernanceEvent::ParliamentBallotRecorded(
+                GovernanceParliamentBallotRecorded {
+                    proposal_id,
+                    epoch: ctx.epoch,
+                    body,
+                    decision,
+                    approvals: record.approvals,
+                    rejections: record.rejections,
+                    abstentions: record.abstentions,
+                    required: record.required,
+                },
+            )));
+        if matches!(decision, gov::ParliamentDecision::Approve) {
+            state_transaction
+                .world
+                .emit_events(Some(GovernanceEvent::ParliamentApprovalRecorded(
+                    GovernanceParliamentApprovalRecorded {
+                        proposal_id,
+                        epoch: ctx.epoch,
+                        body,
+                        approvals: record.approvals,
+                        required: record.required,
+                    },
+                )));
+        }
+        maybe_apply_parliament_decision(body, &ctx, &record.approvals_snapshot, state_transaction);
+        Ok(())
+    }
+
     fn load_approval_context(
-        req: &gov::ApproveGovernanceProposal,
+        body: ParliamentBody,
+        proposal_id: [u8; 32],
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<ApprovalContext, Error> {
         let proposal = state_transaction
             .world
             .governance_proposals
-            .get(&req.proposal_id)
+            .get(&proposal_id)
             .cloned()
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     "governance proposal not found".into(),
                 )
             })?;
-        let rid = hex::encode(req.proposal_id);
+        if matches!(
+            proposal.status,
+            crate::state::GovernanceProposalStatus::Approved
+                | crate::state::GovernanceProposalStatus::Rejected
+                | crate::state::GovernanceProposalStatus::Enacted
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance proposal is no longer open for parliament ballots".into(),
+            ));
+        }
+        let rid = hex::encode(proposal_id);
         let referendum = state_transaction
             .world
             .governance_referenda
@@ -4923,7 +5001,7 @@ pub mod isi {
                 "parliament roster epoch mismatch".into(),
             ));
         }
-        let Some(roster) = bodies.rosters.get(&req.body).cloned() else {
+        let Some(roster) = bodies.rosters.get(&body).cloned() else {
             return Err(InstructionExecutionError::InvariantViolation(
                 "parliament roster missing for requested body".into(),
             ));
@@ -4935,6 +5013,7 @@ pub mod isi {
         }
 
         Ok(ApprovalContext {
+            proposal_id,
             rid,
             referendum,
             proposal_kind: proposal.kind,
@@ -4951,16 +5030,12 @@ pub mod isi {
         authority: &AccountId,
         roster: &iroha_data_model::governance::types::ParliamentRoster,
     ) -> Result<(), Error> {
-        let eligible = roster
-            .members
-            .iter()
-            .chain(roster.alternates.iter())
-            .any(|member| member == authority);
+        let eligible = roster.members.iter().any(|member| member == authority);
         if eligible {
             Ok(())
         } else {
             Err(InstructionExecutionError::InvariantViolation(
-                "only seated members or alternates may approve proposals for this body".into(),
+                "only seated parliament members may vote for this body".into(),
             ))
         }
     }
@@ -4982,12 +5057,21 @@ pub mod isi {
         }
     }
 
-    fn record_parliament_approval(
-        req: &gov::ApproveGovernanceProposal,
+    struct ParliamentDecisionRecord {
+        approvals: u32,
+        rejections: u32,
+        abstentions: u32,
+        required: u32,
+        approvals_snapshot: crate::state::GovernanceStageApprovals,
+    }
+
+    fn record_parliament_decision(
+        body: ParliamentBody,
+        decision: gov::ParliamentDecision,
         authority: &AccountId,
         ctx: &ApprovalContext,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Option<(u32, u32, crate::state::GovernanceStageApprovals)> {
+    ) -> Option<ParliamentDecisionRecord> {
         let committee_size = ctx.roster.members.len();
         let required = crate::state::council_quorum_threshold(committee_size, ctx.quorum_bps);
         let mut approvals = state_transaction
@@ -4996,13 +5080,21 @@ pub mod isi {
             .get(&ctx.rid)
             .cloned()
             .unwrap_or_default();
-        let (inserted, approvals_count, required) = {
-            let stage_record =
-                approvals.ensure_stage(req.body, ctx.epoch, required, ctx.quorum_bps);
-            let inserted = stage_record.record(authority.clone());
+        let (inserted, approvals_count, rejections_count, abstentions_count, required) = {
+            let stage_record = approvals.ensure_stage(body, ctx.epoch, required, ctx.quorum_bps);
+            let inserted = stage_record.record_decision(authority.clone(), decision);
             let approvals_count = u32::try_from(stage_record.approvers.len()).unwrap_or(u32::MAX);
+            let rejections_count = u32::try_from(stage_record.rejections.len()).unwrap_or(u32::MAX);
+            let abstentions_count =
+                u32::try_from(stage_record.abstentions.len()).unwrap_or(u32::MAX);
             let required = stage_record.required;
-            (inserted, approvals_count, required)
+            (
+                inserted,
+                approvals_count,
+                rejections_count,
+                abstentions_count,
+                required,
+            )
         };
         if !inserted {
             return None;
@@ -5012,40 +5104,130 @@ pub mod isi {
             .world
             .governance_stage_approvals
             .insert(ctx.rid.clone(), approvals_snapshot);
-        Some((approvals_count, required, approvals))
+        Some(ParliamentDecisionRecord {
+            approvals: approvals_count,
+            rejections: rejections_count,
+            abstentions: abstentions_count,
+            required,
+            approvals_snapshot: approvals,
+        })
     }
 
-    fn runtime_upgrade_open_gate_met(
+    fn required_parliament_bodies(proposal_kind: &ProposalKind) -> &'static [ParliamentBody] {
+        match proposal_kind {
+            ProposalKind::DeployContract(_) => &[
+                ParliamentBody::RulesCommittee,
+                ParliamentBody::AgendaCouncil,
+                ParliamentBody::InterestPanel,
+                ParliamentBody::ReviewPanel,
+                ParliamentBody::PolicyJury,
+                ParliamentBody::OversightCommittee,
+            ],
+            ProposalKind::RuntimeUpgrade(_) => &[
+                ParliamentBody::RulesCommittee,
+                ParliamentBody::AgendaCouncil,
+                ParliamentBody::InterestPanel,
+                ParliamentBody::ReviewPanel,
+                ParliamentBody::PolicyJury,
+                ParliamentBody::OversightCommittee,
+                ParliamentBody::FmaCommittee,
+            ],
+        }
+    }
+
+    fn parliament_approval_gate_met(
+        proposal_kind: &ProposalKind,
         approvals: &crate::state::GovernanceStageApprovals,
         epoch: u64,
     ) -> bool {
-        [
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::PolicyJury,
-            ParliamentBody::OversightCommittee,
-            ParliamentBody::FmaCommittee,
-        ]
-        .into_iter()
-        .all(|body| approvals.quorum_met(body, epoch))
+        required_parliament_bodies(proposal_kind)
+            .iter()
+            .copied()
+            .all(|body| approvals.quorum_met(body, epoch))
     }
 
-    fn maybe_open_referendum(
+    fn reject_proposal_by_parliament(
         ctx: &ApprovalContext,
-        approvals: &crate::state::GovernanceStageApprovals,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) {
-        let open_gate_met = match &ctx.proposal_kind {
-            ProposalKind::DeployContract(_) => {
-                approvals.quorum_met(ParliamentBody::RulesCommittee, ctx.epoch)
-                    && approvals.quorum_met(ParliamentBody::AgendaCouncil, ctx.epoch)
+        if let Some(mut proposal) = state_transaction
+            .world
+            .governance_proposals
+            .get(&ctx.proposal_id)
+            .cloned()
+        {
+            if !matches!(
+                proposal.status,
+                crate::state::GovernanceProposalStatus::Rejected
+                    | crate::state::GovernanceProposalStatus::Enacted
+            ) {
+                proposal.status = crate::state::GovernanceProposalStatus::Rejected;
+                state_transaction
+                    .world
+                    .governance_proposals
+                    .insert(ctx.proposal_id, proposal);
+                state_transaction
+                    .world
+                    .emit_events(Some(GovernanceEvent::ProposalRejected(
+                        iroha_data_model::events::data::governance::GovernanceProposalRejected {
+                            id: ctx.proposal_id,
+                        },
+                    )));
             }
-            ProposalKind::RuntimeUpgrade(_) => runtime_upgrade_open_gate_met(approvals, ctx.epoch),
-        };
-        if open_gate_met
-            && ctx.referendum.status == crate::state::GovernanceReferendumStatus::Proposed
+        }
+        if let Some(mut rec) = state_transaction
+            .world
+            .governance_referenda
+            .get(&ctx.rid)
+            .copied()
+        {
+            if rec.status != crate::state::GovernanceReferendumStatus::Closed {
+                rec.status = crate::state::GovernanceReferendumStatus::Closed;
+                state_transaction
+                    .world
+                    .governance_referenda
+                    .insert(ctx.rid.clone(), rec);
+                state_transaction
+                    .world
+                    .emit_events(Some(GovernanceEvent::ReferendumClosed(
+                        GovernanceReferendumClosed {
+                            id: ctx.rid.clone(),
+                            at_height: ctx.now_h,
+                        },
+                    )));
+            }
+        }
+    }
+
+    fn approve_proposal_by_parliament(
+        ctx: &ApprovalContext,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        if let Some(mut proposal) = state_transaction
+            .world
+            .governance_proposals
+            .get(&ctx.proposal_id)
+            .cloned()
+        {
+            if matches!(
+                proposal.status,
+                crate::state::GovernanceProposalStatus::Proposed
+            ) {
+                proposal.status = crate::state::GovernanceProposalStatus::Approved;
+                state_transaction
+                    .world
+                    .governance_proposals
+                    .insert(ctx.proposal_id, proposal);
+                state_transaction
+                    .world
+                    .emit_events(Some(GovernanceEvent::ProposalApproved(
+                        iroha_data_model::events::data::governance::GovernanceProposalApproved {
+                            id: ctx.proposal_id,
+                        },
+                    )));
+            }
+        }
+        if ctx.referendum.status == crate::state::GovernanceReferendumStatus::Proposed
             && ctx.now_h >= ctx.referendum.h_start
             && ctx.now_h <= ctx.referendum.h_end
         {
@@ -5067,13 +5249,31 @@ pub mod isi {
         }
     }
 
+    fn maybe_apply_parliament_decision(
+        body: ParliamentBody,
+        ctx: &ApprovalContext,
+        approvals: &crate::state::GovernanceStageApprovals,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        if approvals.rejection_quorum_met(body, ctx.epoch) {
+            reject_proposal_by_parliament(ctx, state_transaction);
+        } else if parliament_approval_gate_met(&ctx.proposal_kind, approvals, ctx.epoch) {
+            approve_proposal_by_parliament(ctx, state_transaction);
+        }
+    }
+
     // Persist council membership for an epoch.
     impl Execute for gov::PersistCouncilForEpoch {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            if !has_permission(&state_transaction.world, authority, "CanManageParliament") {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: CanManageParliament".into(),
+                ));
+            }
             let required_bond =
                 required_citizenship_bond_for_role(&state_transaction.gov, "council");
             let mut updated_citizens: BTreeMap<AccountId, crate::state::CitizenshipRecord> =
@@ -7227,8 +7427,13 @@ pub mod isi {
         fn execute(
             self,
             _authority: &AccountId,
-            _state_transaction: &mut StateTransaction<'_, '_>,
+            state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            if !state_transaction.sccp_recording_proof_verified {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP message recording requires verified IVM proof".into(),
+                ));
+            }
             let Some(payload) =
                 iroha_sccp::decode_canonical_sccp_payload_bytes(&self.payload_bytes)
             else {
@@ -10989,7 +11194,7 @@ pub mod isi {
                     )
                 })?;
             let (record_statement_digest, record_proof_digest, record_binding) = match self
-                .effect_proof_blob()
+                .effect_proof_blob
                 .as_ref()
             {
                 Some(effect_proof_blob) => {

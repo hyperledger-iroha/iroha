@@ -11166,6 +11166,10 @@ fn error_details_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "properties": {
+            "layer": {
+                "type": "string",
+                "description": "Public surface layer that produced the error."
+            },
             "reject_code": {
                 "type": "string",
                 "description": "ISO-20022-style or Torii-local rejection code when available."
@@ -11181,6 +11185,40 @@ fn error_details_schema() -> Value {
             "endpoint": {
                 "type": "string",
                 "description": "Endpoint associated with throttling or version failures."
+            },
+            "field": {
+                "type": "string",
+                "description": "Field associated with validation or decode failures."
+            },
+            "expected": {
+                "type": "string",
+                "description": "Expected field value, status, profile, or discriminant."
+            },
+            "actual": {
+                "type": "string",
+                "description": "Actual field value, status, profile, or discriminant."
+            },
+            "profile": {
+                "type": "string",
+                "description": "Network profile involved in the error."
+            },
+            "chain_discriminant": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535,
+                "description": "I105 chain discriminant involved in the error."
+            },
+            "tx_hash": {
+                "type": "string",
+                "description": "Signed transaction hash involved in finality/status failures."
+            },
+            "last_status": {
+                "type": "string",
+                "description": "Last observed transaction status when a finality wait failed."
+            },
+            "hint": {
+                "type": "string",
+                "description": "Actionable debugging hint for callers."
             },
             "axt": {
                 "$ref": "#/components/schemas/AxtErrorDetails"
@@ -11518,6 +11556,16 @@ mod tests {
         assert!(error_details.contains_key("reject_code"));
         assert!(error_details.contains_key("retry_after_seconds"));
         assert!(error_details.contains_key("queue"));
+        assert!(error_details.contains_key("layer"));
+        assert!(error_details.contains_key("endpoint"));
+        assert!(error_details.contains_key("field"));
+        assert!(error_details.contains_key("expected"));
+        assert!(error_details.contains_key("actual"));
+        assert!(error_details.contains_key("profile"));
+        assert!(error_details.contains_key("chain_discriminant"));
+        assert!(error_details.contains_key("tx_hash"));
+        assert!(error_details.contains_key("last_status"));
+        assert!(error_details.contains_key("hint"));
         assert!(error_details.contains_key("axt"));
         assert!(schemas.contains_key("QueueErrorSnapshot"));
         assert!(schemas.contains_key("AxtErrorDetails"));

@@ -26,6 +26,12 @@ const ADAPTER_SWAPS_FILLS_V1: &str = "contract.rollups.swaps_fills.v1";
 const ADAPTER_SWAPS_CANDLES_V1: &str = "contract.rollups.swaps_candles.v1";
 const ADAPTER_TRADER_ACTIVITY_V1: &str = "contract.rollups.trader_activity.v1";
 const ADAPTER_TRADER_ACCOUNT_V1: &str = "contract.rollups.trader_account.v1";
+const ADAPTER_INTENTS_V1: &str = "contract.rollups.intents.v1";
+const ADAPTER_VAULT_POSITIONS_V1: &str = "contract.rollups.vault_positions.v1";
+const ADAPTER_OPERATORS_STATUS_V1: &str = "contract.rollups.operators_status.v1";
+const ADAPTER_MARGIN_HEALTH_V1: &str = "contract.rollups.margin_health.v1";
+const ADAPTER_RWA_LOTS_V1: &str = "contract.rollups.rwa_lots.v1";
+const ADAPTER_DLMM_HOOKS_V1: &str = "contract.rollups.dlmm_hooks.v1";
 const API_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 const API_MANIFEST_FILE_NAMES: &[&str] = &[
     "app-api.json",
@@ -133,6 +139,12 @@ fn adapter_is_supported(adapter: &str) -> bool {
             | ADAPTER_SWAPS_CANDLES_V1
             | ADAPTER_TRADER_ACTIVITY_V1
             | ADAPTER_TRADER_ACCOUNT_V1
+            | ADAPTER_INTENTS_V1
+            | ADAPTER_VAULT_POSITIONS_V1
+            | ADAPTER_OPERATORS_STATUS_V1
+            | ADAPTER_MARGIN_HEALTH_V1
+            | ADAPTER_RWA_LOTS_V1
+            | ADAPTER_DLMM_HOOKS_V1
     )
 }
 
@@ -605,6 +617,126 @@ async fn dispatch_app_api_route(
                 Err(response) => return response,
             };
             match super::handler_contracts_rollups_trader_account_get(
+                State(app),
+                headers,
+                ConnectInfo(remote),
+                crate::NoritoQuery(params),
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(err) => err.into_response(),
+            }
+        }
+        ADAPTER_INTENTS_V1 => {
+            if method != Method::GET {
+                return StatusCode::METHOD_NOT_ALLOWED.into_response();
+            }
+            let params = match decode_query::<crate::routing::ContractEventGetParams>(&uri).await {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match super::handler_contracts_rollups_intents_get(
+                State(app),
+                headers,
+                ConnectInfo(remote),
+                crate::NoritoQuery(params),
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(err) => err.into_response(),
+            }
+        }
+        ADAPTER_VAULT_POSITIONS_V1 => {
+            if method != Method::GET {
+                return StatusCode::METHOD_NOT_ALLOWED.into_response();
+            }
+            let params = match decode_query::<crate::routing::ContractEventGetParams>(&uri).await {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match super::handler_contracts_rollups_vault_positions_get(
+                State(app),
+                headers,
+                ConnectInfo(remote),
+                crate::NoritoQuery(params),
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(err) => err.into_response(),
+            }
+        }
+        ADAPTER_OPERATORS_STATUS_V1 => {
+            if method != Method::GET {
+                return StatusCode::METHOD_NOT_ALLOWED.into_response();
+            }
+            let params = match decode_query::<crate::routing::ContractEventGetParams>(&uri).await {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match super::handler_contracts_rollups_operators_status_get(
+                State(app),
+                headers,
+                ConnectInfo(remote),
+                crate::NoritoQuery(params),
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(err) => err.into_response(),
+            }
+        }
+        ADAPTER_MARGIN_HEALTH_V1 => {
+            if method != Method::GET {
+                return StatusCode::METHOD_NOT_ALLOWED.into_response();
+            }
+            let params = match decode_query::<crate::routing::ContractEventGetParams>(&uri).await {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match super::handler_contracts_rollups_margin_health_get(
+                State(app),
+                headers,
+                ConnectInfo(remote),
+                crate::NoritoQuery(params),
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(err) => err.into_response(),
+            }
+        }
+        ADAPTER_RWA_LOTS_V1 => {
+            if method != Method::GET {
+                return StatusCode::METHOD_NOT_ALLOWED.into_response();
+            }
+            let params = match decode_query::<crate::routing::ContractEventGetParams>(&uri).await {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match super::handler_contracts_rollups_rwa_lots_get(
+                State(app),
+                headers,
+                ConnectInfo(remote),
+                crate::NoritoQuery(params),
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(err) => err.into_response(),
+            }
+        }
+        ADAPTER_DLMM_HOOKS_V1 => {
+            if method != Method::GET {
+                return StatusCode::METHOD_NOT_ALLOWED.into_response();
+            }
+            let params = match decode_query::<crate::routing::ContractEventGetParams>(&uri).await {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match super::handler_contracts_rollups_dlmm_hooks_get(
                 State(app),
                 headers,
                 ConnectInfo(remote),

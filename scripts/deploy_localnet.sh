@@ -8,7 +8,7 @@ set -euo pipefail
 #   CARGO_TARGET_DIR Cargo target directory override (default: <IROHA_DIR>/target).
 #   KAGAMI_BIN       Path to the `kagami` binary (default: <target-dir>/<profile>/kagami).
 #   IROHAD_BIN       Path to the `irohad` binary (default: <target-dir>/<profile>/irohad).
-#   IROHA_CLI_BIN    Path to the `iroha` CLI binary (default: <target-dir>/<profile>/iroha).
+#   IROHA_BIN        Path to the `iroha` CLI binary (default: <target-dir>/<profile>/iroha).
 #   SKIP_TOOL_BUILD  Skip cargo build and reuse existing binaries (default: false).
 #   IROHA_LOCALNET_NOFILE_MIN Minimum RLIMIT_NOFILE for localnet peers (default: 4096).
 #   IROHA_LOCALNET_GUEST_STACK_BYTES Override [concurrency].guest_stack_bytes in generated peer configs.
@@ -289,12 +289,6 @@ case "$BUILD_LINE_LOWER" in
     ;;
 esac
 
-if [[ -z "$BLOCK_TIME_MS" && -z "$COMMIT_TIME_MS" && "$PROFILE" == "debug" ]]; then
-  BLOCK_TIME_MS=1000
-  COMMIT_TIME_MS=1000
-  echo "Debug build: defaulting block/commit time to 1000ms for localnet stability."
-fi
-
 for cmd in cargo curl; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Missing prerequisite: $cmd" >&2
@@ -434,7 +428,7 @@ fi
 
 KAGAMI_BIN="${KAGAMI_BIN:-"$TARGET_DIR/$PROFILE/kagami"}"
 IROHAD_BIN="${IROHAD_BIN:-"$TARGET_DIR/$PROFILE/irohad"}"
-CLI_BIN="${IROHA_CLI_BIN:-"$TARGET_DIR/$PROFILE/iroha"}"
+CLI_BIN="${IROHA_BIN:-"$TARGET_DIR/$PROFILE/iroha"}"
 for bin_path in "$KAGAMI_BIN" "$IROHAD_BIN" "$CLI_BIN"; do
   if [[ ! -x "$bin_path" ]]; then
     echo "Required binary is missing or not executable: $bin_path" >&2
@@ -716,6 +710,8 @@ echo "Applying localnet faucet gas admission in peer configs..."
 for cfg in "$OUT_DIR"/peer*.toml; do
   [[ -f "$cfg" ]] || continue
   "$PYTHON_BIN" - "$cfg" <<'PY'
+import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -748,6 +744,21 @@ asset = (
 if not asset:
     sys.exit("could not find localnet faucet or Nexus fee asset id")
 
+assets = []
+
+
+def add_asset(value):
+    if not value:
+        return
+    value = value.strip().strip('"').strip("'")
+    if value and value not in assets:
+        assets.append(value)
+
+
+for extra in re.split(r"[,\s]+", os.environ.get("IROHA_LOCALNET_EXTRA_GAS_ASSETS", "")):
+    add_asset(extra)
+add_asset(asset)
+
 pipeline_start = None
 for index, line in enumerate(lines):
     if line.strip() == "[pipeline.gas]":
@@ -755,7 +766,7 @@ for index, line in enumerate(lines):
         break
 
 if pipeline_start is None:
-    lines.extend(["", "[pipeline.gas]", f'accepted_assets = ["{asset}"]'])
+    lines.extend(["", "[pipeline.gas]", f"accepted_assets = {json.dumps(assets)}"])
 else:
     pipeline_end = len(lines)
     for index in range(pipeline_start + 1, len(lines)):
@@ -771,43 +782,46 @@ else:
             break
 
     if accepted_index is None:
-        lines.insert(pipeline_start + 1, f'accepted_assets = ["{asset}"]')
-    elif asset not in lines[accepted_index]:
-        match = re.search(r"\[(.*)\]", lines[accepted_index])
-        if match:
-            prefix = lines[accepted_index].split("[", 1)[0]
-            current = match.group(1).strip()
-            next_items = f'{current}, "{asset}"' if current else f'"{asset}"'
-            lines[accepted_index] = f"{prefix}[{next_items}]"
-        else:
-            lines[accepted_index] = f'accepted_assets = ["{asset}"]'
+        lines.insert(pipeline_start + 1, f"accepted_assets = {json.dumps(assets)}")
+    else:
+        for existing in re.findall(r'"([^"]+)"', lines[accepted_index]):
+            add_asset(existing)
+        prefix = lines[accepted_index].split("[", 1)[0]
+        lines[accepted_index] = f"{prefix}{json.dumps(assets)}"
 
-unit_table_has_asset = False
-in_unit_table = False
-current_unit_has_asset = False
-for line in lines + ["[end]"]:
-    stripped = line.strip()
-    if stripped == "[[pipeline.gas.units_per_gas]]":
-        if in_unit_table and current_unit_has_asset:
-            unit_table_has_asset = True
-        in_unit_table = True
-        current_unit_has_asset = False
-        continue
-    if stripped.startswith("[") and stripped.endswith("]"):
-        if in_unit_table and current_unit_has_asset:
-            unit_table_has_asset = True
-        in_unit_table = False
-        current_unit_has_asset = False
-        continue
-    if in_unit_table and stripped.startswith("asset ") and asset in stripped:
-        current_unit_has_asset = True
 
-if not unit_table_has_asset:
+def has_unit_table_for(candidate: str) -> bool:
+    in_unit_table = False
+    current_unit_has_asset = False
+    for line in lines + ["[end]"]:
+        stripped = line.strip()
+        if stripped == "[[pipeline.gas.units_per_gas]]":
+            if in_unit_table and current_unit_has_asset:
+                return True
+            in_unit_table = True
+            current_unit_has_asset = False
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if in_unit_table and current_unit_has_asset:
+                return True
+            in_unit_table = False
+            current_unit_has_asset = False
+            continue
+        if in_unit_table:
+            match = re.match(r'asset\s*=\s*"([^"]+)"', stripped)
+            if match and match.group(1) == candidate:
+                current_unit_has_asset = True
+    return False
+
+
+for candidate in assets:
+    if has_unit_table_for(candidate):
+        continue
     lines.extend(
         [
             "",
             "[[pipeline.gas.units_per_gas]]",
-            f'asset = "{asset}"',
+            f"asset = {json.dumps(candidate)}",
             "units_per_gas = 0",
             'twap_local_per_xor = "1"',
             'liquidity_profile = "tier1"',

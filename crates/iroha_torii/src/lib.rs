@@ -4741,6 +4741,204 @@ async fn handler_contracts_rollups_trader_account_get(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_contracts_rollups_intents_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .authority
+            .as_deref()
+            .unwrap_or("contracts-rollups-intents");
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_rollups_intents_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_contracts_rollups_vault_positions_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .authority
+            .as_deref()
+            .unwrap_or("contracts-rollups-vaults");
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_rollups_vault_positions_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_contracts_rollups_operators_status_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .authority
+            .as_deref()
+            .unwrap_or("contracts-rollups-operators");
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_rollups_operators_status_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_contracts_rollups_margin_health_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .authority
+            .as_deref()
+            .unwrap_or("contracts-rollups-margin");
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_rollups_margin_health_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_contracts_rollups_rwa_lots_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .authority
+            .as_deref()
+            .unwrap_or("contracts-rollups-rwa");
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_rollups_rwa_lots_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_contracts_rollups_dlmm_hooks_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .authority
+            .as_deref()
+            .unwrap_or("contracts-rollups-dlmm-hooks");
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_rollups_dlmm_hooks_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_proofs_query(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
@@ -5836,6 +6034,15 @@ struct ExplorerDomainsQuery {
 struct ExplorerPaginationOnly {
     #[norito(flatten)]
     pagination: explorer::ExplorerPaginationQuery,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(JsonDeserialize)]
+struct DefiOracleAttestationLatestQuery {
+    domain: u32,
+    subject_id: u64,
+    #[norito(default)]
+    status: Option<u32>,
 }
 
 #[cfg(feature = "app_api")]
@@ -6951,6 +7158,114 @@ async fn handler_explorer_metrics(
     }
     routing::handle_v1_explorer_metrics(app.state.clone(), app.kura.clone(), app.telemetry.clone())
         .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_defi_oracle_attestation_latest(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(query): AxQuery<DefiOracleAttestationLatestQuery>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/soracles/defi/attestations/latest",
+        )
+        .await?;
+    }
+    let key =
+        iroha_data_model::oracle::DefiOracleAttestationKey::new(query.domain, query.subject_id);
+    let state_view = app.state.view();
+    let Some(attestation) = state_view
+        .world()
+        .defi_oracle_attestations()
+        .get(&key)
+        .and_then(|items| {
+            items.iter().rev().find(|item| {
+                query
+                    .status
+                    .map_or(true, |status| item.status_flags == status)
+            })
+        })
+        .cloned()
+    else {
+        let mut payload = Map::new();
+        payload.insert(
+            "error_code".to_owned(),
+            Value::String("defi_oracle_attestation_not_found".to_owned()),
+        );
+        payload.insert(
+            "message".to_owned(),
+            Value::String(format!(
+                "DeFi oracle attestation not found for domain {} subject_id {}",
+                query.domain, query.subject_id
+            )),
+        );
+        return Ok((StatusCode::NOT_FOUND, JsonBody(Value::Object(payload))).into_response());
+    };
+    Ok(JsonBody(attestation).into_response())
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_oracle_feeds(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, Some(remote_ip), "v1/soracles/feeds").await?;
+    }
+    let feeds = app
+        .state
+        .view()
+        .world()
+        .oracle_feeds()
+        .iter()
+        .map(|(_, feed)| feed.clone())
+        .collect::<Vec<_>>();
+    Ok(JsonBody(feeds).into_response())
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_oracle_feed_history(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(feed_id_raw): AxPath<String>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, Some(remote_ip), "v1/soracles/feeds/history").await?;
+    }
+    let feed_id = feed_id_raw
+        .parse::<iroha_data_model::oracle::FeedId>()
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "failed to parse oracle feed id `{feed_id_raw}`: {err}"
+                )),
+            ))
+        })?;
+    let history = app
+        .state
+        .view()
+        .world()
+        .oracle_history()
+        .get(&feed_id)
+        .cloned()
+        .unwrap_or_default();
+    Ok(JsonBody(history).into_response())
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -8394,6 +8709,31 @@ async fn handler_gov_ballot_plain(
         app.state.clone(),
         body,
         app.telemetry.clone(),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_parliament_ballot(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: crate::utils::extractors::NoritoJson<crate::gov::ParliamentBallotDto>,
+) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/gov/parliament/ballots",
+        true,
+    )
+    .await?;
+    crate::gov::handle_gov_parliament_ballot(
+        app.chain_id.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        body,
     )
     .await
 }
@@ -13922,6 +14262,9 @@ fn canonicalize_query_batch_box(
         QueryOutputBatchBox::TwitterBindingRecord(items) => {
             canonicalize_variant!(items, TwitterBindingRecord)
         }
+        QueryOutputBatchBox::DefiOracleAttestation(items) => {
+            canonicalize_variant!(items, DefiOracleAttestation)
+        }
         QueryOutputBatchBox::AssetEscrowRecord(items) => {
             canonicalize_variant!(items, AssetEscrowRecord)
         }
@@ -17457,13 +17800,13 @@ mod torii_routed_read_tests {
                 norito::json!({
                     "hash": "abc",
                     "status": {"kind": "Committed", "block_height": 7},
-                    "scope": "auto",
+                    "scope": "global",
                     "resolved_from": "cache"
                 }),
                 norito::json!({
                     "hash": "abc",
                     "status": {"kind": "Applied", "block_height": 7},
-                    "scope": "auto",
+                    "scope": "global",
                     "resolved_from": "state"
                 }),
             ],
@@ -25365,6 +25708,7 @@ async fn handler_sccp_message_runtime_envelope(
 async fn handler_sccp_message_artifact(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
+    axum::extract::Query(evm_destination): axum::extract::Query<routing::SccpEvmDestinationQuery>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
@@ -25403,6 +25747,7 @@ async fn handler_sccp_message_artifact(
         app.state.as_ref(),
         &app.da_receipt_signer,
         message_id,
+        evm_destination,
         accept,
     )
     .await?
@@ -25412,6 +25757,7 @@ async fn handler_sccp_message_artifact(
 async fn handler_sccp_message_job(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
+    axum::extract::Query(evm_destination): axum::extract::Query<routing::SccpEvmDestinationQuery>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
@@ -25446,6 +25792,7 @@ async fn handler_sccp_message_job(
         app.state.as_ref(),
         &app.da_receipt_signer,
         message_id,
+        evm_destination,
         accept,
     )
     .await?
@@ -30434,7 +30781,6 @@ struct PipelineStatusQuery {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelineStatusReadScope {
     Local,
-    Auto,
     Global,
 }
 
@@ -30442,7 +30788,6 @@ impl PipelineStatusReadScope {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Local => "local",
-            Self::Auto => "auto",
             Self::Global => "global",
         }
     }
@@ -30452,14 +30797,13 @@ fn parse_pipeline_status_scope(raw: Option<&str>) -> Result<PipelineStatusReadSc
     let normalized = raw
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("auto")
+        .unwrap_or("local")
         .to_ascii_lowercase();
     match normalized.as_str() {
         "local" => Ok(PipelineStatusReadScope::Local),
-        "auto" => Ok(PipelineStatusReadScope::Auto),
         "global" => Ok(PipelineStatusReadScope::Global),
         _ => Err(conversion_error(format!(
-            "invalid scope query parameter \"{normalized}\" (expected local|auto|global)"
+            "invalid scope query parameter \"{normalized}\" (expected local|global)"
         ))),
     }
 }
@@ -34385,6 +34729,30 @@ impl Torii {
                     get(handler_contracts_rollups_trader_account_get),
                 )
                 .route(
+                    "/v1/contracts/rollups/intents",
+                    get(handler_contracts_rollups_intents_get),
+                )
+                .route(
+                    "/v1/contracts/rollups/vaults/positions",
+                    get(handler_contracts_rollups_vault_positions_get),
+                )
+                .route(
+                    "/v1/contracts/rollups/operators/status",
+                    get(handler_contracts_rollups_operators_status_get),
+                )
+                .route(
+                    "/v1/contracts/rollups/margin/health",
+                    get(handler_contracts_rollups_margin_health_get),
+                )
+                .route(
+                    "/v1/contracts/rollups/rwa/lots",
+                    get(handler_contracts_rollups_rwa_lots_get),
+                )
+                .route(
+                    "/v1/contracts/rollups/dlmm/hooks",
+                    get(handler_contracts_rollups_dlmm_hooks_get),
+                )
+                .route(
                     "/v1/accounts/{account_id}/assets",
                     get(handler_account_assets),
                 )
@@ -34872,6 +35240,15 @@ impl Torii {
                 .route(
                     "/v1/explorer/instructions/latest",
                     get(handler_explorer_instructions_latest),
+                )
+                .route(
+                    "/v1/soracles/defi/attestations/latest",
+                    get(handler_defi_oracle_attestation_latest),
+                )
+                .route("/v1/soracles/feeds", get(handler_oracle_feeds))
+                .route(
+                    "/v1/soracles/feeds/{feed_id}/history",
+                    get(handler_oracle_feed_history),
                 )
                 .merge({
                     #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -35392,6 +35769,10 @@ impl Torii {
                 .route(
                     iroha_torii_shared::uri::GOV_BALLOT_PLAIN,
                     post(handler_gov_ballot_plain),
+                )
+                .route(
+                    iroha_torii_shared::uri::GOV_PARLIAMENT_BALLOT,
+                    post(handler_gov_parliament_ballot),
                 )
                 .route(
                     iroha_torii_shared::uri::GOV_FINALIZE,
@@ -38788,6 +39169,7 @@ pub(crate) mod tests_runtime_handlers {
             SoranetPrivacyEventV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
         },
         transaction::{
+            Executable, IvmBytecode, IvmProved,
             error::TransactionRejectionReason,
             signed::{
                 SealedTransactionReveal, SignedTransaction, TransactionBuilder,
@@ -45578,7 +45960,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[test]
-    fn pipeline_status_auto_read_skips_non_terminal_local_cache() {
+    fn pipeline_status_global_read_skips_non_terminal_local_cache() {
         let app = mk_app_state_for_tests();
         let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
             [0x74; Hash::LENGTH],
@@ -45592,12 +45974,12 @@ pub(crate) mod tests_runtime_handlers {
             &app,
             &PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
-                scope: Some("auto".to_owned()),
+                scope: Some("global".to_owned()),
             },
             ResponseFormat::Json,
             None,
         )
-        .expect_err("auto reads must route/fan out before accepting local queued cache");
+        .expect_err("global reads must route/fan out before accepting local queued cache");
 
         assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
     }
@@ -46715,10 +47097,19 @@ pub(crate) mod tests_runtime_handlers {
         let keypair = KeyPair::random();
         let chain: ChainId = "sccp-message-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([iroha_data_model::isi::bridge::RecordSccpMessage::new(
+        let overlay = vec![
+            iroha_data_model::isi::bridge::RecordSccpMessage::new(
                 iroha_sccp::canonical_sccp_payload_bytes(&payload),
-            )])
+            )
+            .into(),
+        ];
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+                overlay: overlay.into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            }))
             .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(
@@ -47100,6 +47491,7 @@ pub(crate) mod tests_runtime_handlers {
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
+            routing::SccpEvmDestinationQuery::default(),
             None,
         )
         .await
@@ -47137,6 +47529,7 @@ pub(crate) mod tests_runtime_handlers {
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
+            routing::SccpEvmDestinationQuery::default(),
             None,
         )
         .await
@@ -47174,6 +47567,7 @@ pub(crate) mod tests_runtime_handlers {
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
+            routing::SccpEvmDestinationQuery::default(),
             None,
         )
         .await
@@ -47416,6 +47810,9 @@ pub(crate) mod tests_runtime_handlers {
                 signature_b64: None,
                 burn_bundle: None,
                 message_bundle: Some(bundle_value),
+                network_id_hex: None,
+                verifier_address_hex: None,
+                bridge_address_hex: None,
                 creation_time_ms: Some(84),
             }),
         )
@@ -47449,6 +47846,9 @@ pub(crate) mod tests_runtime_handlers {
                 signature_b64: None,
                 burn_bundle: None,
                 message_bundle: None,
+                network_id_hex: None,
+                verifier_address_hex: None,
+                bridge_address_hex: None,
                 creation_time_ms: Some(85),
             }),
         )
@@ -47542,6 +47942,9 @@ pub(crate) mod tests_runtime_handlers {
                 signature_b64: None,
                 burn_bundle: Some(burn_bundle_value),
                 message_bundle: Some(message_bundle_value),
+                network_id_hex: None,
+                verifier_address_hex: None,
+                bridge_address_hex: None,
                 creation_time_ms: Some(86),
             }),
         )

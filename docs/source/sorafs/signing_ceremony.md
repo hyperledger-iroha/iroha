@@ -28,8 +28,8 @@ offline process and how developers interact with it.
 2. **Review & Voting**
    - The Infrastructure Panel receives the proposal assignment via the
      Parliament task queue.
-   - Panel members inspect CI artifacts, run parity tests, and cast weighted
-     votes on-chain.
+   - Panel members inspect CI artifacts, run parity tests, and cast equal
+     signed votes on-chain.
 3. **Finalisation**
    - Once the on-chain threshold is met, the Nexus runtime emits an approval
      event containing the canonical manifest digest and the Merkle commitment to
@@ -98,8 +98,9 @@ the vote back to the signed Norito artefact.【docs/source/governance_playbook.m
 
 ## Governance Notes
 
-- The Parliament constitution governs quorum, rotation, and escalation; no
-  crate-level configuration is needed.
+- The Parliament constitution governs quorum, rotation, and escalation; node
+  configuration provides the deterministic sizes, bond floors, and SLA defaults
+  used to enforce those rules.
 - Emergency rollbacks are triggered via the Parliament "moderation" panel. The
   infrastructure panel submits a revert proposal referencing the previous
   manifest digest, which replaces the release once approved.

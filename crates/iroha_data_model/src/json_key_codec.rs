@@ -207,6 +207,19 @@ impl JsonKeyCodec for crate::oracle::OracleProviderKey {
     }
 }
 
+impl JsonKeyCodec for crate::oracle::DefiOracleAttestationKey {
+    fn encode_json_key(&self, out: &mut String) {
+        let mut buf = String::new();
+        norito::json::JsonSerialize::json_serialize(self, &mut buf);
+        json::write_json_string(&buf, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parser = json::Parser::new(encoded);
+        norito::json::JsonDeserialize::json_deserialize(&mut parser)
+    }
+}
+
 impl JsonKeyCodec for crate::oracle::OracleChangeId {
     fn encode_json_key(&self, out: &mut String) {
         self.0.encode_json_key(out);

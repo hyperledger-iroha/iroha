@@ -91,6 +91,8 @@ pub mod uri {
     pub const GOV_BALLOT_ZK: &str = "/v1/gov/ballots/zk";
     /// Governance: submit a non-ZK quadratic ballot (optional mode)
     pub const GOV_BALLOT_PLAIN: &str = "/v1/gov/ballots/plain";
+    /// Governance: draft an equal signed Parliament stage ballot
+    pub const GOV_PARLIAMENT_BALLOT: &str = "/v1/gov/parliament/ballots";
     /// Governance: finalize a referendum (compute tally and emit Approved/Rejected)
     pub const GOV_FINALIZE: &str = "/v1/gov/finalize";
     /// Governance: enact an approved referendum (build `EnactReferendum` instruction)
@@ -204,6 +206,10 @@ pub struct AxtErrorDetails {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
 )]
 pub struct ErrorDetails {
+    /// Public surface layer that produced the error (for example `cli`, `torii`, or `mcp`).
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
     /// ISO-20022-style or Torii-local rejection code when available.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -220,6 +226,38 @@ pub struct ErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+    /// Field associated with validation or decode failures.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// Expected field value, status, profile, or discriminant.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    /// Actual field value, status, profile, or discriminant.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+    /// Network profile involved in the error.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// I105 chain discriminant involved in the error.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub chain_discriminant: Option<u16>,
+    /// Signed transaction hash involved in finality/status failures.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    /// Last observed transaction status when a finality wait failed.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_status: Option<String>,
+    /// Actionable debugging hint for callers.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
     /// AXT rejection metadata when validation failed under AXT policy.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -230,12 +268,77 @@ impl ErrorDetails {
     /// Return whether this details payload carries any structured fields.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.reject_code.is_none()
+        self.layer.is_none()
+            && self.reject_code.is_none()
             && self.queue.is_none()
             && self.retry_after_seconds.is_none()
             && self.endpoint.is_none()
+            && self.field.is_none()
+            && self.expected.is_none()
+            && self.actual.is_none()
+            && self.profile.is_none()
+            && self.chain_discriminant.is_none()
+            && self.tx_hash.is_none()
+            && self.last_status.is_none()
+            && self.hint.is_none()
             && self.axt.is_none()
     }
+}
+
+/// Stable public network profile metadata used by clients and Torii helpers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetworkProfile {
+    /// Profile name accepted by public tooling.
+    pub name: &'static str,
+    /// I105 chain discriminant assigned to this public network.
+    pub chain_discriminant: u16,
+}
+
+/// Taira public testnet profile name.
+pub const NETWORK_PROFILE_TAIRA: &str = "taira";
+/// Minamoto public network profile name.
+pub const NETWORK_PROFILE_MINAMOTO: &str = "minamoto";
+/// Taira public testnet I105 chain discriminant.
+pub const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
+/// Minamoto public network I105 chain discriminant.
+pub const MINAMOTO_CHAIN_DISCRIMINANT: u16 = 753;
+
+/// Public network profiles accepted by developer-facing tools.
+pub const NETWORK_PROFILES: &[NetworkProfile] = &[
+    NetworkProfile {
+        name: NETWORK_PROFILE_TAIRA,
+        chain_discriminant: TAIRA_CHAIN_DISCRIMINANT,
+    },
+    NetworkProfile {
+        name: NETWORK_PROFILE_MINAMOTO,
+        chain_discriminant: MINAMOTO_CHAIN_DISCRIMINANT,
+    },
+];
+
+/// Resolve a public network profile by name.
+#[must_use]
+pub fn network_profile(name: &str) -> Option<&'static NetworkProfile> {
+    NETWORK_PROFILES
+        .iter()
+        .find(|profile| profile.name.eq_ignore_ascii_case(name.trim()))
+}
+
+/// Resolve a public network profile by I105 chain discriminant.
+#[must_use]
+pub fn network_profile_for_discriminant(discriminant: u16) -> Option<&'static NetworkProfile> {
+    NETWORK_PROFILES
+        .iter()
+        .find(|profile| profile.chain_discriminant == discriminant)
+}
+
+/// Return a comma-separated list of supported public network profile names.
+#[must_use]
+pub fn network_profile_names() -> String {
+    NETWORK_PROFILES
+        .iter()
+        .map(|profile| profile.name)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Canonical Torii error envelope returned for HTTP API failures.
@@ -391,8 +494,10 @@ mod tests {
     };
 
     use super::{
-        AccountReadResponse, ErrorDetails, ErrorEnvelope, PipelineTransactionStatus,
-        PipelineTransactionStatusResponse, QueueErrorSnapshot,
+        AccountReadResponse, ErrorDetails, ErrorEnvelope, MINAMOTO_CHAIN_DISCRIMINANT,
+        NETWORK_PROFILE_MINAMOTO, NETWORK_PROFILE_TAIRA, PipelineTransactionStatus,
+        PipelineTransactionStatusResponse, QueueErrorSnapshot, TAIRA_CHAIN_DISCRIMINANT,
+        network_profile, network_profile_for_discriminant,
     };
 
     #[test]
@@ -432,6 +537,42 @@ mod tests {
     }
 
     #[test]
+    fn error_envelope_roundtrip_preserves_public_debug_details() {
+        let envelope = ErrorEnvelope::new("transaction_finality_failed", "finality failed")
+            .with_details(ErrorDetails {
+                layer: Some("mcp".to_owned()),
+                endpoint: Some("/v1/pipeline/transactions/status".to_owned()),
+                field: Some("status.kind".to_owned()),
+                expected: Some("Applied".to_owned()),
+                actual: Some("Rejected".to_owned()),
+                profile: Some(NETWORK_PROFILE_TAIRA.to_owned()),
+                chain_discriminant: Some(TAIRA_CHAIN_DISCRIMINANT),
+                tx_hash: Some("ab".repeat(32)),
+                last_status: Some("Rejected".to_owned()),
+                hint: Some("inspect transaction rejection reason".to_owned()),
+                ..Default::default()
+            });
+        let bytes = norito::to_bytes(&envelope).expect("encode error envelope");
+        let decoded: ErrorEnvelope =
+            norito::decode_from_bytes(&bytes).expect("decode error envelope");
+        let details = decoded.details.expect("error details");
+        assert_eq!(details.layer.as_deref(), Some("mcp"));
+        assert_eq!(
+            details.endpoint.as_deref(),
+            Some("/v1/pipeline/transactions/status")
+        );
+        assert_eq!(details.expected.as_deref(), Some("Applied"));
+        assert_eq!(details.actual.as_deref(), Some("Rejected"));
+        assert_eq!(details.profile.as_deref(), Some(NETWORK_PROFILE_TAIRA));
+        assert_eq!(details.chain_discriminant, Some(TAIRA_CHAIN_DISCRIMINANT));
+        assert_eq!(details.last_status.as_deref(), Some("Rejected"));
+        assert_eq!(
+            details.hint.as_deref(),
+            Some("inspect transaction rejection reason")
+        );
+    }
+
+    #[test]
     fn error_details_is_empty_tracks_optional_fields() {
         let mut details = ErrorDetails::default();
         assert!(details.is_empty());
@@ -442,6 +583,25 @@ mod tests {
             saturated: true,
         });
         assert!(!details.is_empty());
+        details = ErrorDetails::default();
+        details.last_status = Some("Expired".to_owned());
+        assert!(!details.is_empty());
+    }
+
+    #[test]
+    fn network_profile_registry_resolves_public_discriminants() {
+        assert_eq!(
+            network_profile(NETWORK_PROFILE_TAIRA).map(|profile| profile.chain_discriminant),
+            Some(TAIRA_CHAIN_DISCRIMINANT)
+        );
+        assert_eq!(
+            network_profile(NETWORK_PROFILE_MINAMOTO).map(|profile| profile.chain_discriminant),
+            Some(MINAMOTO_CHAIN_DISCRIMINANT)
+        );
+        assert_eq!(
+            network_profile_for_discriminant(TAIRA_CHAIN_DISCRIMINANT).map(|profile| profile.name),
+            Some(NETWORK_PROFILE_TAIRA)
+        );
     }
 
     #[test]

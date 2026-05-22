@@ -5,21 +5,27 @@ use std::collections::BTreeSet;
 use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
 use integration_tests::{sandbox, sync::get_status_with_retry_async};
-use iroha::data_model::{
-    events::{
-        EventBox,
-        data::prelude::{
-            AccountEventFilter, AccountEventSet, DomainEventSet, RoleEventFilter, RoleEventSet,
+use iroha::{
+    client::Client,
+    data_model::{
+        asset::{AssetDefinitionId, AssetId},
+        events::{
+            EventBox,
+            data::prelude::{
+                AccountEventFilter, AccountEventSet, DomainEventSet, RoleEventFilter, RoleEventSet,
+            },
         },
+        prelude::*,
     },
-    prelude::*,
 };
 use iroha_executor_data_model::permission::{
     account::CanModifyAccountMetadata, domain::CanModifyDomainMetadata,
 };
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, BOB_ID};
+use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use tokio::{task::spawn_blocking, time::Instant};
+
+const SNS_LEASE_PAYMENT_ASSET_DEFINITION: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 
 fn produce_instructions(prefix: &str) -> (Vec<InstructionBox>, BTreeSet<DomainId>) {
     let domains = (0..4)
@@ -50,34 +56,70 @@ fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
     })
 }
 
+fn genesis_account_id() -> AccountId {
+    AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone())
+}
+
+fn genesis_client(network: &Network) -> Client {
+    network
+        .peers()
+        .first()
+        .expect("test network has at least one peer")
+        .client_for(
+            &genesis_account_id(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
+        )
+}
+
+fn genesis_domain_lease_bootstrap(domains: &BTreeSet<DomainId>) -> Result<Vec<InstructionBox>> {
+    let genesis_id = genesis_account_id();
+    let payment_asset_definition =
+        AssetDefinitionId::parse_address_literal(SNS_LEASE_PAYMENT_ASSET_DEFINITION)
+            .wrap_err("parse SNS lease payment asset definition")?;
+    let mut instructions = vec![
+        Mint::asset_numeric(
+            500_000_u32,
+            AssetId::new(payment_asset_definition, genesis_id.clone()),
+        )
+        .into(),
+    ];
+    for domain in domains {
+        instructions.push(domain_registration_lease_instruction_for_owner_payer(
+            domain,
+            &genesis_id,
+            &genesis_id,
+        )?);
+    }
+    Ok(instructions)
+}
+
 async fn transaction_execution_should_produce_events(
     context: &'static str,
     network: &Network,
+    client: &Client,
     executable: impl Into<Executable> + Send,
     mut expected_domains: BTreeSet<DomainId>,
 ) -> Result<()> {
     let executable = executable.into();
-    ensure_domain_registration_leases_for_network_executable(network, &executable)?;
+    ensure_domain_registration_leases_for_executable(client, &executable)?;
 
     // Wait for Torii to come up before subscribing to events.
-    let status = get_status_with_retry_async(&network.client())
+    let status = get_status_with_retry_async(client)
         .await
         .map_err(|err| err.wrap_err(format!("{context}: wait for status")))?;
     let baseline_non_empty = status.blocks_non_empty;
     let mut events_stream = tokio::time::timeout(
         network.sync_timeout(),
-        network
-            .client()
-            .listen_for_events_async([DataEventFilter::Domain(
-                DomainEventFilter::new().for_events(DomainEventSet::Created),
-            )]),
+        client.listen_for_events_async([DataEventFilter::Domain(
+            DomainEventFilter::new().for_events(DomainEventSet::Created),
+        )]),
     )
     .await
     .wrap_err_with(|| format!("{context}: timed out opening domain event stream"))??;
 
     let result = async {
         {
-            let client = network.client();
+            let client = client.clone();
             let tx = client.build_transaction(executable, <_>::default());
             let submit_result = spawn_blocking(move || client.submit_transaction(&tx)).await?;
             if let Err(err) = submit_result {
@@ -347,20 +389,31 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
 #[tokio::test]
 #[allow(clippy::large_futures, clippy::too_many_lines)]
 async fn data_event_scenarios() -> Result<()> {
-    let Some(network) =
-        sandbox::start_network_async_or_skip(NetworkBuilder::new().with_peers(4), "data_events")
-            .await?
+    let (instruction_instructions, instruction_expected) = produce_instructions("instr");
+    let (ivm_instructions, ivm_expected) = produce_instructions("ivm");
+    let mut lease_domains = instruction_expected.clone();
+    lease_domains.extend(ivm_expected.iter().cloned());
+    let lease_bootstrap = genesis_domain_lease_bootstrap(&lease_domains)?;
+
+    let Some(network) = sandbox::start_network_async_or_skip(
+        NetworkBuilder::new()
+            .with_peers(4)
+            .with_genesis_post_topology_isi(lease_bootstrap),
+        "data_events",
+    )
+    .await?
     else {
         return Ok(());
     };
+    let submit_client = genesis_client(&network);
 
-    let (instructions, expected) = produce_instructions("instr");
     if sandbox::handle_result(
         transaction_execution_should_produce_events(
             stringify!(instruction_execution_should_produce_events),
             &network,
-            instructions,
-            expected,
+            &submit_client,
+            instruction_instructions,
+            instruction_expected,
         )
         .await,
         stringify!(instruction_execution_should_produce_events),
@@ -370,13 +423,13 @@ async fn data_event_scenarios() -> Result<()> {
         return Ok(());
     }
 
-    let (instructions, expected) = produce_instructions("ivm");
     if sandbox::handle_result(
         transaction_execution_should_produce_events(
             stringify!(ivm_execution_should_produce_events),
             &network,
-            instructions,
-            expected,
+            &submit_client,
+            ivm_instructions,
+            ivm_expected,
         )
         .await,
         stringify!(ivm_execution_should_produce_events),

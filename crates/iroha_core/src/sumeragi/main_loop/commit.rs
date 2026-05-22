@@ -2776,11 +2776,7 @@ impl Actor {
                 .collect();
             for (stale_hash, stale_height) in stale {
                 self.pending.pending_blocks.remove(&stale_hash);
-                self.subsystems.validation.inflight.remove(&stale_hash);
-                self.subsystems
-                    .validation
-                    .superseded_results
-                    .remove(&stale_hash);
+                self.clear_validation_ownership_for_block(stale_hash);
                 self.clean_rbc_sessions_for_block(stale_hash, stale_height);
                 self.qc_cache
                     .retain(|(_, hash, _, _, _, _, _), _| hash != &stale_hash);
@@ -5326,6 +5322,84 @@ impl Actor {
                 .contains_key(&verify_key)
     }
 
+    pub(super) fn candidate_commit_quorum_completes_with_local_vote(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        topology: &super::network_topology::Topology,
+        signature_topology: &super::network_topology::Topology,
+        local_idx: ValidatorIndex,
+        pending_roots: Option<(Hash, Hash)>,
+    ) -> bool {
+        let Some((parent_state_root, post_state_root)) = pending_roots else {
+            return false;
+        };
+        let epoch = self.epoch_for_height(height);
+        let mut signers = self
+            .accepted_votes_for_qc_slot(
+                crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                height,
+                view,
+                epoch,
+                signature_topology,
+            )
+            .into_iter()
+            .filter_map(|(signer, vote)| {
+                (vote.parent_state_root == parent_state_root
+                    && vote.post_state_root == post_state_root)
+                    .then_some(signer)
+            })
+            .collect::<BTreeSet<_>>();
+        if signers.is_empty() || signers.contains(&local_idx) {
+            return false;
+        }
+
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        match consensus_mode {
+            ConsensusMode::Permissioned => {
+                let min_votes = topology.min_votes_for_commit().max(1);
+                let before = signers.len();
+                signers.insert(local_idx);
+                before < min_votes && signers.len() >= min_votes
+            }
+            ConsensusMode::Npos => {
+                let stake_roster =
+                    self.npos_stake_roster_for_qc(topology, topology, signature_topology, height);
+                if stake_roster.is_empty() {
+                    return false;
+                }
+                let reaches_stake_quorum = |signers: &BTreeSet<ValidatorIndex>| {
+                    let roster_set: BTreeSet<_> = stake_roster.iter().cloned().collect();
+                    let mut signer_peers = BTreeSet::new();
+                    for signer in signers {
+                        let Ok(idx) = usize::try_from(*signer) else {
+                            return false;
+                        };
+                        let Some(peer) = signature_topology.as_ref().get(idx) else {
+                            return false;
+                        };
+                        if !roster_set.contains(peer) {
+                            return false;
+                        }
+                        signer_peers.insert(peer.clone());
+                    }
+                    let world = self.state.world_view();
+                    super::stake_snapshot::stake_quorum_reached_for_world(
+                        &world,
+                        &stake_roster,
+                        &signer_peers,
+                    )
+                    .unwrap_or(false)
+                };
+                let before = reaches_stake_quorum(&signers);
+                signers.insert(local_idx);
+                !before && reaches_stake_quorum(&signers)
+            }
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_precommit_vote(
@@ -5409,6 +5483,17 @@ impl Actor {
         }
         let conflicting_vote = self.local_conflicting_slot_vote(height, epoch, block_hash);
         if let Some(conflict) = conflicting_vote {
+            let roots = pending_roots.or_else(|| {
+                self.pending
+                    .pending_blocks
+                    .get(&block_hash)
+                    .and_then(|pending| {
+                        match (pending.parent_state_root, pending.post_state_root) {
+                            (Some(parent), Some(post)) => Some((parent, post)),
+                            _ => None,
+                        }
+                    })
+            });
             let new_view_qc_supersedes = self
                 .proposal_or_new_view_highest_qc_for_slot(height, view)
                 .is_some_and(|highest_qc| {
@@ -5427,7 +5512,19 @@ impl Actor {
                 Instant::now(),
                 true,
             );
-            if new_view_qc_supersedes || stale_vote_can_rotate {
+            let candidate_completes_quorum = conflict.view < view
+                && !new_view_qc_supersedes
+                && !stale_vote_can_rotate
+                && self.candidate_commit_quorum_completes_with_local_vote(
+                    block_hash,
+                    height,
+                    view,
+                    &topology,
+                    &signature_topology,
+                    local_idx,
+                    roots,
+                );
+            if new_view_qc_supersedes || stale_vote_can_rotate || candidate_completes_quorum {
                 info!(
                     height,
                     view,
@@ -5439,6 +5536,7 @@ impl Actor {
                     signer = local_idx,
                     new_view_qc_supersedes,
                     stale_vote_can_rotate,
+                    candidate_completes_quorum,
                     "allowing precommit: same-height local vote is superseded"
                 );
             } else {

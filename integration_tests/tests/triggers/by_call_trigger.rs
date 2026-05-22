@@ -103,6 +103,48 @@ async fn wait_for_asset_value(
     }
 }
 
+async fn wait_for_trigger(
+    client: &iroha::client::Client,
+    trigger_id: &TriggerId,
+    timeout_after: Duration,
+    context: &str,
+) -> Result<Trigger> {
+    let deadline = Instant::now() + timeout_after;
+    let mut last_observed = String::from("trigger was not queried");
+
+    loop {
+        if Instant::now() >= deadline {
+            return Err(eyre::eyre!(
+                "timed out waiting for trigger {trigger_id} after {context}; last_observed={last_observed}"
+            ));
+        }
+
+        match spawn_blocking({
+            let client = client.clone();
+            let trigger_id = trigger_id.clone();
+            move || -> Result<Option<Trigger>> {
+                Ok(client
+                    .query(FindTriggers::new())
+                    .execute_all()?
+                    .into_iter()
+                    .find(|trigger| trigger.id() == &trigger_id))
+            }
+        })
+        .await?
+        {
+            Ok(Some(trigger)) => return Ok(trigger),
+            Ok(None) => {
+                last_observed = "trigger not found".to_string();
+            }
+            Err(error) => {
+                last_observed = format!("query failed: {error}");
+            }
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
+}
+
 fn is_trigger_register_collision(err: &eyre::Report, trigger_id: &TriggerId) -> bool {
     err.chain().any(|cause| {
         if let Some(InstructionExecutionError::Repetition(repetition)) =
@@ -787,19 +829,12 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
             )
             .await?;
 
-            let found_trigger = spawn_blocking({
-                let client = test_client.clone();
-                let trigger_id = trigger_id.clone();
-                move || {
-                    client
-                        .query(FindTriggers::new())
-                        .execute_all()
-                        .unwrap()
-                        .into_iter()
-                        .find(|trigger| trigger.id() == &trigger_id)
-                        .expect("trigger not found")
-                }
-            })
+            let found_trigger = wait_for_trigger(
+                &test_client,
+                &trigger_id,
+                network.sync_timeout(),
+                stringify!(only_account_with_permission_can_register_trigger),
+            )
             .await?;
 
             assert_eq!(*found_trigger.id(), trigger_id);
