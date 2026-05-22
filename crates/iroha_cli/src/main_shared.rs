@@ -788,6 +788,7 @@ mod app {
                     crate::commands::da::Command::RentQuote(_)
                     | crate::commands::da::Command::RentLedger(_),
                 ) => true,
+                Self::Taikai(command) => taikai_allows_fallback_config(command),
                 Self::Sorafs(command) => sorafs_allows_fallback_config(command),
                 Self::SpaceDirectory(crate::space_directory::Command::Manifest(
                     crate::space_directory::ManifestCommand::Encode(_)
@@ -798,7 +799,6 @@ mod app {
                 | Self::Contracts(_)
                 | Self::Zk(_)
                 | Self::Confidential(_)
-                | Self::Taikai(_)
                 | Self::Content(_)
                 | Self::Da(_)
                 | Self::Streaming(_)
@@ -817,6 +817,18 @@ mod app {
                 | Self::Repo(_)
                 | Self::Settlement(_) => false,
             }
+        }
+    }
+
+    fn taikai_allows_fallback_config(command: &crate::commands::taikai::Command) -> bool {
+        use crate::commands::taikai::{Command as TaikaiCommand, IngestCommand};
+
+        match command {
+            TaikaiCommand::Bundle(_)
+            | TaikaiCommand::CekRotate(_)
+            | TaikaiCommand::RptAttest(_)
+            | TaikaiCommand::Ingest(IngestCommand::Edge(_)) => true,
+            TaikaiCommand::Ingest(IngestCommand::Watch(args)) => !args.publish_da,
         }
     }
 
@@ -7761,6 +7773,64 @@ mod tests {
         ])
         .expect("parse offline rent quote");
         assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "taikai",
+            "cek-rotate",
+            "--event-id",
+            "demo-event",
+            "--stream-id",
+            "stream-1",
+            "--kms-profile",
+            "kms-demo",
+            "--new-wrap-key-label",
+            "wrap-v2",
+            "--effective-segment",
+            "42",
+            "--out",
+            "receipt.to",
+        ])
+        .expect("parse offline taikai cek rotation");
+        assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "taikai",
+            "ingest",
+            "watch",
+            "--source-dir",
+            ".",
+            "--event-id",
+            "demo-event",
+            "--stream-id",
+            "stream-1",
+            "--rendition-id",
+            "1080p-main",
+        ])
+        .expect("parse offline taikai watcher");
+        assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "taikai",
+            "ingest",
+            "watch",
+            "--source-dir",
+            ".",
+            "--event-id",
+            "demo-event",
+            "--stream-id",
+            "stream-1",
+            "--rendition-id",
+            "1080p-main",
+            "--publish-da",
+        ])
+        .expect("parse publishing taikai watcher");
+        assert!(!args.command.allows_fallback_config());
 
         let args = Args::try_parse_from(["iroha", "tools", "address", "convert", "sora1"])
             .expect("parse address conversion");
