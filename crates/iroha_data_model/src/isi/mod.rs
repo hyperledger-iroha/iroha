@@ -2547,7 +2547,7 @@ where
     for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
 {
     let _ = header_flags;
-    let instruction = norito::core::decode_from_bytes::<T>(input)?;
+    let instruction = norito::core::from_bytes_view(input)?.decode::<T>()?;
     Ok(InstructionBox(Box::new(instruction)))
 }
 

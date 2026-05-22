@@ -2,6 +2,18 @@
 
 Last updated: 2026-05-22
 
+## 2026-05-22 Confidential wallet fixture refresh
+
+- Confidential wallet fixtures now use the current registry-only
+  `ProofAttachment` layout for transfer and unshield flows instead of the
+  retired optional `vk_ref` slot.
+- `VerifyingKeyId` now has an exact field-by-field Norito slice decoder, and
+  registered slice-based instruction payload decoding now forces the
+  `ArchiveView::decode` path.
+- Focused validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_data_model --test confidential_wallet_fixtures confidential_wallet_fixtures_are_stable -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential cargo test -p iroha_data_model proof::tests::verifying_key_id_decode_from_slice_roundtrip -- --nocapture`
+
 ## 2026-05-22 Governance referendum height transition fix
 
 - Stage rejection quorum now requires a positive threshold, so test fixtures

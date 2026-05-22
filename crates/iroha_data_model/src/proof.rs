@@ -223,6 +223,30 @@ impl VerifyingKeyId {
     }
 }
 
+impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyId {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let mut offset = 0usize;
+
+        let backend_bytes = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
+        let (backend, used) = <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
+        if used != backend_bytes.len() {
+            return Err(ncore::Error::LengthMismatch);
+        }
+
+        let name_bytes = take_len_prefixed_slice(bytes, &mut offset, MAX_REF_FIELD_BYTES)?;
+        let (name, used) = <String as ncore::DecodeFromSlice>::decode_from_slice(name_bytes)?;
+        if used != name_bytes.len() {
+            return Err(ncore::Error::LengthMismatch);
+        }
+
+        if offset != bytes.len() {
+            return Err(ncore::Error::LengthMismatch);
+        }
+
+        Ok((Self { backend, name }, offset))
+    }
+}
+
 /// Registry record for a verifying key with governance versioning.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -1015,6 +1039,18 @@ mod tests {
         let dec: VerifyingKeyBox = norito::core::NoritoDeserialize::deserialize(arch);
         assert_eq!(dec.backend, "halo2/ipa".to_owned());
         assert_eq!(dec.bytes, vec![7, 7, 7]);
+    }
+
+    #[test]
+    fn verifying_key_id_decode_from_slice_roundtrip() {
+        let id = VerifyingKeyId::new("halo2/ipa", "vk_transfer");
+        let encoded = id.encode();
+        let (decoded, used) =
+            <VerifyingKeyId as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
+                .expect("decode verifying key id from exact slice");
+
+        assert_eq!(used, encoded.len());
+        assert_eq!(decoded, id);
     }
 
     #[test]
