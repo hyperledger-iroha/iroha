@@ -16,6 +16,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
@@ -57,6 +62,7 @@ public final class OfflineNoteV2Test {
     walletAcceptsCanonicalSdkInteropPaymentToken();
     walletNoteJsonCodecRoundTripsFixtureNote();
     walletLoadDerivesCommitmentBeforeIssuerSubmission();
+    walletLoadDoesNotBlockIssuerCompletionThread();
     toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment();
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
     walletSyncReconcilesPendingSpendChangeAndRedeemStates();
@@ -1996,6 +2002,7 @@ public final class OfflineNoteV2Test {
     final String offlinePublicKey = "a5".repeat(32);
     final Map<String, Object> bindingJson = new LinkedHashMap<>();
     bindingJson.put("device_id", "device-1");
+    bindingJson.put("attestation_key_id", "attestation-key-1");
     bindingJson.put("offline_public_key", offlinePublicKey);
     bindingJson.put("signature_base64", "nested-device-signature-is-not-body-auth");
     final OfflineNoteV2IssuerDeviceBinding binding =
@@ -2053,6 +2060,9 @@ public final class OfflineNoteV2Test {
     final Map<String, Object> refillBody = executor.requestBody(0);
     assertEquals(accountId, string(refillBody, "account_id"), "refill account id");
     assertEquals("operation-refill-1", string(refillBody, "operation_id"), "refill operation");
+    assertEquals(0L, longValue(refillBody, "local_revision"), "refill local revision");
+    assertEquals("", string(refillBody, "local_state_hash"), "refill local state hash");
+    assertEquals("attestation-key-1", string(refillBody, "attestation_key_id"), "refill attestation key");
     assertEquals("auth-refill-1", string(refillBody, "nonce"), "refill nonce");
     assertTrue(!string(refillBody, "signature_base64").isBlank(), "refill body signature");
     assertEquals(
@@ -2066,6 +2076,80 @@ public final class OfflineNoteV2Test {
     assertEquals("0", string(issueBody, "local_balance"), "pre-issue balance");
     assertEquals("auth-issue-1", string(issueBody, "nonce"), "issue nonce");
     obj(issueBody, "lineage_state");
+  }
+
+  private static void walletLoadDoesNotBlockIssuerCompletionThread() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> token = obj(fixture, "payment_token");
+    final Map<String, Object> derivation = obj(obj(fixture, "chain_vectors"), "derivation");
+    final Map<String, Object> issue = obj(obj(fixture, "chain_vectors"), "issue");
+    final OfflineNoteV2.KeyCertificateV2 senderCertificate =
+        certificate(obj(token, "sender_key_certificate"));
+    final String accountId = accountFromAssetId(string(issue, "asset_id"));
+    final OfflineNoteV2LoadContext loadContext =
+        new OfflineNoteV2LoadContext(
+            string(derivation, "issuer_load_operation_id"),
+            string(derivation, "issuer_load_lineage_id"),
+            longValue(derivation, "issuer_load_local_revision"),
+            senderCertificate);
+    final CompletionControlledIssuerClient issuerClient =
+        new CompletionControlledIssuerClient(loadContext);
+    final BlockingOfflineNoteV2Store store = new BlockingOfflineNoteV2Store();
+    final OfflineNoteV2Wallet wallet =
+        new OfflineNoteV2Wallet(
+            string(derivation, "chain_id"),
+            accountId,
+            new StaticAttestationProvider(senderCertificate),
+            store,
+            issuerClient,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            certificateVerifier(fixture),
+            new QueueRandomSource(
+                Collections.singletonList(hexBytes(string(derivation, "source_note_secret_hex")))),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_001_000L);
+
+    final CompletableFuture<OfflineNoteV2WalletNote> load =
+        wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount"));
+    assertTrue(
+        issuerClient.issueRequested.await(5, TimeUnit.SECONDS),
+        "wallet load did not submit issue request");
+
+    final OfflineNoteV2IssueRequest request = issuerClient.lastIssueRequest;
+    final OfflineNoteV2IssueResponse response =
+        new OfflineNoteV2IssueResponse(
+            request.noteCommitment(),
+            request.loadContext().operationId(),
+            request.loadContext().lineageId(),
+            request.loadContext().localRevision(),
+            request.loadContext().keyCertificate(),
+            "settlement-entry-hash");
+    final AtomicBoolean completeReturned = new AtomicBoolean(false);
+    final ExecutorService issuerCompleter =
+        Executors.newSingleThreadExecutor(r -> new Thread(r, "offline-note-v2-issuer-completer"));
+    try {
+      issuerCompleter.submit(
+          () -> {
+            issuerClient.issueFuture.complete(response);
+            completeReturned.set(true);
+          });
+      assertTrue(
+          store.entered.await(5, TimeUnit.SECONDS),
+          "wallet load did not enter note persistence after issuer response");
+      assertTrue(
+          completeReturned.get(),
+          "wallet load must not block the issuer completion thread while persisting notes");
+      store.release.countDown();
+      assertEquals(
+          string(derivation, "source_note_commitment"),
+          load.get(5, TimeUnit.SECONDS).noteCommitmentHex(),
+          "wallet load note commitment after asynchronous issue completion");
+    } finally {
+      store.release.countDown();
+      issuerCompleter.shutdownNow();
+    }
   }
 
   private static void walletLifecycleBuildsAuditAcceptAndRedeemTransactions() throws Exception {
@@ -3462,6 +3546,55 @@ public final class OfflineNoteV2Test {
               request.loadContext().localRevision(),
               request.loadContext().keyCertificate(),
               "settlement-entry-hash"));
+    }
+  }
+
+  private static final class CompletionControlledIssuerClient implements OfflineNoteV2IssuerClient {
+    private final OfflineNoteV2LoadContext loadContext;
+    private final CountDownLatch issueRequested = new CountDownLatch(1);
+    private final CompletableFuture<OfflineNoteV2IssueResponse> issueFuture =
+        new CompletableFuture<>();
+    private volatile OfflineNoteV2IssueRequest lastIssueRequest;
+
+    private CompletionControlledIssuerClient(final OfflineNoteV2LoadContext loadContext) {
+      this.loadContext = loadContext;
+    }
+
+    @Override
+    public CompletableFuture<OfflineNoteV2LoadContext> prepareLoad(
+        final String chainId,
+        final String accountId,
+        final String assetDefinitionId,
+        final String amount) {
+      return CompletableFuture.completedFuture(loadContext);
+    }
+
+    @Override
+    public CompletableFuture<OfflineNoteV2IssueResponse> issueNote(
+        final OfflineNoteV2IssueRequest request) {
+      lastIssueRequest = request;
+      issueRequested.countDown();
+      return issueFuture;
+    }
+  }
+
+  private static final class BlockingOfflineNoteV2Store implements OfflineNoteV2Store {
+    private final Map<String, OfflineNoteV2WalletNote> notes = new LinkedHashMap<>();
+    private final CountDownLatch entered = new CountDownLatch(1);
+    private final CountDownLatch release = new CountDownLatch(1);
+
+    @Override
+    public synchronized <T> T mutateNotes(final Mutation<T> mutation) {
+      entered.countDown();
+      try {
+        if (!release.await(5, TimeUnit.SECONDS)) {
+          throw new IllegalStateException("timed out waiting to release blocked note store");
+        }
+      } catch (final InterruptedException ex) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("interrupted while waiting to release blocked note store", ex);
+      }
+      return mutation.apply(notes);
     }
   }
 

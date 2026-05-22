@@ -10,6 +10,9 @@ import java.util.Base64
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.LongSupplier
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
@@ -1082,6 +1085,15 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
     private val idGenerator: OfflineNoteV2IdGenerator = UuidOfflineNoteV2IdGenerator(),
     private val clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
 ) {
+    private companion object {
+        private val loadThreadIds = AtomicInteger()
+        private val loadExecutor = Executors.newCachedThreadPool { task ->
+            Thread(task, "iroha-offline-note-v2-wallet-${loadThreadIds.incrementAndGet()}").apply {
+                isDaemon = true
+            }
+        }
+    }
+
     init {
         require(chainId.trim().isNotEmpty()) { "chainId must not be blank" }
         require(accountId.trim().isNotEmpty()) { "accountId must not be blank" }
@@ -1094,54 +1106,94 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
             IllegalStateException("Offline Note V2 issuer client is required for load")
         )
         val assetId = walletAssetId(assetDefinitionId, accountId)
-        return issuer.prepareLoad(chainId, accountId, assetDefinition(assetId), amount)
-            .thenCompose { context ->
-                requireTrustedCertificate(context.keyCertificate, accountId)
-                val noteSecret = random32()
-                val origin = OfflineNoteV2.CommitmentOriginV2.IssuerLoad(
-                    operationId = context.operationId,
-                    lineageId = context.lineageId,
-                    localRevision = context.localRevision,
-                )
-                val noteCommitment = deriveNoteCommitment(
-                    keyCertificate = context.keyCertificate,
-                    assetId = assetId,
-                    amount = amount,
-                    noteSecret = noteSecret,
-                    origin = origin,
-                )
-                val request = OfflineNoteV2IssueRequest(
-                    chainId = chainId,
-                    accountId = accountId,
-                    assetDefinitionId = assetDefinition(assetId),
-                    assetId = assetId,
-                    amount = amount,
-                    loadContext = context,
-                    noteCommitment = noteCommitment,
-                )
-                issuer.issueNote(request).thenApply { response ->
-                    require(response.noteCommitment().contentEquals(noteCommitment)) {
-                        "issuer returned a different Offline Note V2 commitment"
+        val result = CompletableFuture<OfflineNoteV2WalletNote>()
+        issuer.prepareLoad(chainId, accountId, assetDefinition(assetId), amount)
+            .whenComplete { context, prepareError ->
+                loadExecutor.execute(prepareComplete@{
+                    if (prepareError != null) {
+                        result.completeExceptionally(unwrapCompletion(prepareError))
+                        return@prepareComplete
                     }
-                    val issuedCertificate = response.keyCertificate ?: context.keyCertificate
-                    requireTrustedCertificate(issuedCertificate, accountId)
-                    val issued = OfflineNoteV2WalletNote(
-                        chainId = chainId,
-                        accountId = accountId,
-                        assetId = assetId,
-                        amount = amount,
-                        keyCertificate = issuedCertificate,
-                        noteCommitment = noteCommitment,
-                        noteSecret = noteSecret,
-                        origin = origin,
-                        state = OfflineNoteV2WalletNoteState.SPENDABLE,
-                        createdAtMs = clock.getAsLong(),
-                        updatedAtMs = clock.getAsLong(),
-                    )
-                    store.upsert(issued)
-                    issued
-                }
+                    if (context == null) {
+                        result.completeExceptionally(
+                            IllegalStateException("Offline Note V2 issuer returned no load context")
+                        )
+                        return@prepareComplete
+                    }
+                    val noteSecret: ByteArray
+                    val origin: OfflineNoteV2.CommitmentOriginV2.IssuerLoad
+                    val noteCommitment: ByteArray
+                    val request: OfflineNoteV2IssueRequest
+                    try {
+                        requireTrustedCertificate(context.keyCertificate, accountId)
+                        noteSecret = random32()
+                        origin = OfflineNoteV2.CommitmentOriginV2.IssuerLoad(
+                            operationId = context.operationId,
+                            lineageId = context.lineageId,
+                            localRevision = context.localRevision,
+                        )
+                        noteCommitment = deriveNoteCommitment(
+                            keyCertificate = context.keyCertificate,
+                            assetId = assetId,
+                            amount = amount,
+                            noteSecret = noteSecret,
+                            origin = origin,
+                        )
+                        request = OfflineNoteV2IssueRequest(
+                            chainId = chainId,
+                            accountId = accountId,
+                            assetDefinitionId = assetDefinition(assetId),
+                            assetId = assetId,
+                            amount = amount,
+                            loadContext = context,
+                            noteCommitment = noteCommitment,
+                        )
+                    } catch (error: Throwable) {
+                        result.completeExceptionally(error)
+                        return@prepareComplete
+                    }
+                    issuer.issueNote(request).whenComplete { response, issueError ->
+                        loadExecutor.execute(issueComplete@{
+                            if (issueError != null) {
+                                result.completeExceptionally(unwrapCompletion(issueError))
+                                return@issueComplete
+                            }
+                            if (response == null) {
+                                result.completeExceptionally(
+                                    IllegalStateException("Offline Note V2 issuer returned no issue response")
+                                )
+                                return@issueComplete
+                            }
+                            try {
+                                require(response.noteCommitment().contentEquals(noteCommitment)) {
+                                    "issuer returned a different Offline Note V2 commitment"
+                                }
+                                val issuedCertificate = response.keyCertificate ?: context.keyCertificate
+                                requireTrustedCertificate(issuedCertificate, accountId)
+                                val now = clock.getAsLong()
+                                val issued = OfflineNoteV2WalletNote(
+                                    chainId = chainId,
+                                    accountId = accountId,
+                                    assetId = assetId,
+                                    amount = amount,
+                                    keyCertificate = issuedCertificate,
+                                    noteCommitment = noteCommitment,
+                                    noteSecret = noteSecret,
+                                    origin = origin,
+                                    state = OfflineNoteV2WalletNoteState.SPENDABLE,
+                                    createdAtMs = now,
+                                    updatedAtMs = now,
+                                )
+                                store.upsert(issued)
+                                result.complete(issued)
+                            } catch (error: Throwable) {
+                                result.completeExceptionally(error)
+                            }
+                        })
+                    }
+                })
             }
+        return result
     }
 
     fun prepareReceive(assetDefinitionId: String, amount: String): OfflineNoteV2ReceiveRequest {
@@ -1582,6 +1634,9 @@ private fun <T> failedFuture(error: Throwable): CompletableFuture<T> {
     future.completeExceptionally(error)
     return future
 }
+
+private fun unwrapCompletion(error: Throwable): Throwable =
+    if (error is CompletionException && error.cause != null) error.cause!! else error
 
 @Suppress("UNCHECKED_CAST")
 private fun requireObject(value: Any?, path: String): Map<String, Any?> {

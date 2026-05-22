@@ -326,7 +326,7 @@ struct FieldAttr {
     skip_serializing_if: Option<syn::Path>,
     /// Optional helper module providing `serialize`/`deserialize` functions for the field.
     with: Option<syn::Path>,
-    /// Whether the field should be flattened into the surrounding map (unsupported).
+    /// Whether the field should be flattened into the surrounding struct payload.
     flatten: bool,
     /// Force packed-struct layout to emit an explicit size header for this field.
     needs_size: bool,
@@ -795,6 +795,13 @@ fn derive_struct_serialize(
     container_attrs: &[Attribute],
 ) -> TokenStream2 {
     let mut r#gen = generics.clone();
+    let has_flatten_fields = match fields {
+        Fields::Named(named) => named
+            .named
+            .iter()
+            .any(|f| FieldAttr::parse(&f.attrs).flatten),
+        _ => false,
+    };
     let serialize_calls: Vec<_> = match fields {
         Fields::Named(named) => named
             .named
@@ -808,7 +815,12 @@ fn derive_struct_serialize(
                 add_bound(&mut r#gen, &f.ty, quote!(norito::core::NoritoSerialize));
                 // AoS fast path for [u8; N]: write raw N bytes inside an outer field length
                 let is_u8_arr = matches!(&f.ty, syn::Type::Array(arr) if matches!(&*arr.elem, syn::Type::Path(tp) if tp.path.is_ident("u8")));
-                if is_u8_arr {
+                if attrs.flatten {
+                    Some(quote! {
+                        let _flatten_guard = norito::core::SequentialOverrideGuard::enter();
+                        norito::core::NoritoSerialize::serialize(&self.#name, &mut writer)?;
+                    })
+                } else if is_u8_arr {
                     Some(quote! {
                         let __len_bytes = core::mem::size_of_val(&self.#name);
                         norito::core::write_len(&mut writer, __len_bytes as u64)?;
@@ -1064,10 +1076,17 @@ fn derive_struct_serialize(
                     continue;
                 }
                 let name = f.ident.as_ref().unwrap();
-                parts.push(quote! {
-                    let __h = norito::core::NoritoSerialize::encoded_len_hint(&self.#name)?;
-                    __sum = __sum.saturating_add(8 + __h);
-                });
+                if attrs.flatten {
+                    parts.push(quote! {
+                        let __h = norito::core::NoritoSerialize::encoded_len_hint(&self.#name)?;
+                        __sum = __sum.saturating_add(__h);
+                    });
+                } else {
+                    parts.push(quote! {
+                        let __h = norito::core::NoritoSerialize::encoded_len_hint(&self.#name)?;
+                        __sum = __sum.saturating_add(8 + __h);
+                    });
+                }
             }
             quote! { #(#parts)* }
         }
@@ -1105,7 +1124,17 @@ fn derive_struct_serialize(
                 count += 1;
                 let name = f.ident.as_ref().unwrap();
                 let needs_size = !(is_self_delimiting(&f.ty) || is_fixed_size(&f.ty).is_some());
-                let part = if needs_size {
+                let part = if attrs.flatten {
+                    quote! {
+                        let __e = norito::core::NoritoSerialize::encoded_len_exact(&self.#name)?;
+                        __sum = __sum.saturating_add(__e);
+                    }
+                } else if has_flatten_fields {
+                    quote! {
+                        let __e = norito::core::NoritoSerialize::encoded_len_exact(&self.#name)?;
+                        __sum = __sum.saturating_add(norito::core::len_prefix_len(__e) + __e);
+                    }
+                } else if needs_size {
                     quote! {
                         let __e = norito::core::NoritoSerialize::encoded_len_exact(&self.#name)?;
                         let __prefix_len = norito::core::len_prefix_len(__e);
@@ -1123,10 +1152,14 @@ fn derive_struct_serialize(
                 parts.push(part);
             }
             let bitset_len: usize = count.div_ceil(8).max(1);
-            quote! {
-                #[cfg(feature = "packed-struct")]
-                { __sum = __sum.saturating_add(#bitset_len); }
-                #(#parts)*
+            if has_flatten_fields {
+                quote! { #(#parts)* }
+            } else {
+                quote! {
+                    #[cfg(feature = "packed-struct")]
+                    { __sum = __sum.saturating_add(#bitset_len); }
+                    #(#parts)*
+                }
             }
         }
         Fields::Unnamed(unnamed) => {
@@ -1352,7 +1385,7 @@ fn derive_struct_serialize(
             }
             fn serialize<W: std::io::Write>(&self, mut writer: W) -> ::core::result::Result<(), norito::core::Error> {
                 use norito::core::WriteBytesExt;
-                if norito::core::use_packed_struct() {
+                if !#has_flatten_fields && norito::core::use_packed_struct() {
                     if #field_bitset_enabled_encode {
                         norito::core::mark_field_bitset_used_if_encoding();
                         // Hybrid packed-struct: write bitset + optional staged sizes before payload.
@@ -1412,6 +1445,13 @@ fn derive_struct_deserialize(
     container_attrs: &[Attribute],
 ) -> TokenStream2 {
     let mut r#gen = generics.clone();
+    let has_flatten_fields = match fields {
+        Fields::Named(named) => named
+            .named
+            .iter()
+            .any(|f| FieldAttr::parse(&f.attrs).flatten),
+        _ => false,
+    };
     // Helper: detect [u8; N] arrays for a fast path
     fn u8_array_len(ty: &syn::Type) -> Option<syn::Expr> {
         if let syn::Type::Array(arr) = ty
@@ -1444,7 +1484,47 @@ fn derive_struct_deserialize(
                     None
                 };
 
-                if let Some(len_expr) = u8_array_len(ty) {
+                if attrs.flatten {
+                    add_bound(
+                        &mut r#gen,
+                        ty,
+                        quote!(for<'__d> norito::core::DecodeFromSlice<'__d>),
+                    );
+                    let decode_expr = quote! {
+                        (|| -> ::core::result::Result<#ty, norito::core::Error> {
+                            let (base, total) = norito::core::payload_ctx().ok_or(norito::core::Error::MissingPayloadContext)?;
+                            let start = (ptr as usize).saturating_sub(base);
+                            let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
+                            let field_data = payload
+                                .get(start + offset..)
+                                .ok_or(norito::core::Error::LengthMismatch)?;
+                            let _flatten_guard = norito::core::SequentialOverrideGuard::enter();
+                            let (value, consumed) = <#ty as norito::core::DecodeFromSlice>::decode_from_slice(field_data)?;
+                            offset += consumed;
+                            Ok(value)
+                        })()
+                    };
+                    if let Some(fallback) = fallback_expr {
+                        quote! {
+                            #name: {
+                                match #decode_expr {
+                                    Ok(value) => value,
+                                    Err(norito::core::Error::LengthMismatch) => { #fallback }
+                                    Err(err) => return Err(err),
+                                }
+                            }
+                        }
+                    } else {
+                        quote! {
+                            #name: {
+                                match #decode_expr {
+                                    Ok(value) => value,
+                                    Err(err) => return Err(err),
+                                }
+                            }
+                        }
+                    }
+                } else if let Some(len_expr) = u8_array_len(ty) {
                     let decode_expr = quote! {
                         (|| -> ::core::result::Result<_, norito::core::Error> {
                             let (base, total) = norito::core::payload_ctx().ok_or(norito::core::Error::MissingPayloadContext)?;
@@ -2152,8 +2232,10 @@ fn derive_struct_deserialize(
                             let __archived = norito::core::archived_from_slice::<Self>(__decode_bytes.as_ref())?;
                             let __archived_bytes = __archived.bytes();
                             let _pg = norito::core::PayloadCtxGuard::enter_with_len(__archived_bytes, __logical_len);
-                            let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
-                            Ok((value, __logical_len))
+                            let ptr = __archived.archived() as *const _ as *const u8;
+                            let mut offset = 0usize;
+                            let value = Self { #(#deserialize_fields),* };
+                            Ok((value, offset))
                         }
                     }
                 }
@@ -2210,7 +2292,7 @@ fn derive_struct_deserialize(
                                 );
                             }
                         }
-                        let __value = if norito::core::use_packed_struct() {
+                        let __value = if !#has_flatten_fields && norito::core::use_packed_struct() {
                             let mut __o = 0usize;
                             let __count: usize = #packed_named_count;
                             // Hybrid packed-struct is indicated by the field-bitset flag.

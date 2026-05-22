@@ -3385,6 +3385,17 @@ fn rate_limit_key(
     limits::key_from_headers(headers, remote, Some(hint), use_api_token)
 }
 
+#[cfg(feature = "app_api")]
+fn route_scoped_rate_limit_key(
+    headers: &axum::http::HeaderMap,
+    remote: Option<IpAddr>,
+    endpoint: &str,
+    use_api_token: bool,
+) -> String {
+    let caller = limits::key_from_headers(headers, remote, None, use_api_token);
+    format!("app-read:{endpoint}:{caller}")
+}
+
 async fn rate_limit_requests(app: &SharedAppState, key: &str) -> Result<(), Error> {
     if !limits::allow_conditionally(&app.rate_limiter, key, true).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -23872,12 +23883,13 @@ async fn handler_get_contract_state(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::routing::ContractStateQuery>,
 ) -> Result<AxResponse, Error> {
-    check_public_contract_route_rate_limit(
+    check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote.ip(),
         "v1/contracts/state",
         "state",
+        false,
     )
     .await?;
     let contract_address = q
@@ -24029,12 +24041,13 @@ async fn handler_get_mint_requests(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<MintRequestsQuery>,
 ) -> Result<AxResponse, Error> {
-    check_public_contract_route_rate_limit(
+    check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote.ip(),
         "v1/mint-requests",
         "state",
+        false,
     )
     .await?;
     let state_query = mint_requests_contract_state_query(query, None);
@@ -24049,12 +24062,13 @@ async fn handler_get_mint_request(
     AxPath(request_id): AxPath<String>,
     AxQuery(query): AxQuery<MintRequestsQuery>,
 ) -> Result<AxResponse, Error> {
-    check_public_contract_route_rate_limit(
+    check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote.ip(),
         "v1/mint-requests/{request_id}",
         "state",
+        false,
     )
     .await?;
     let state_query = mint_requests_contract_state_query(query, Some(request_id));
@@ -25788,6 +25802,26 @@ async fn check_public_contract_route_rate_limit(
 }
 
 #[cfg(feature = "app_api")]
+async fn check_public_contract_read_route_rate_limit(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    remote_ip: std::net::IpAddr,
+    endpoint: &str,
+    metric_label: &'static str,
+    use_api_token_key: bool,
+) -> Result<(), Error> {
+    let key = route_scoped_rate_limit_key(headers, Some(remote_ip), endpoint, use_api_token_key);
+    if !app.rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle(metric_label));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 fn deploy_bundle_dry_run_from_uri(uri: &axum::http::Uri) -> bool {
     uri.query()
         .and_then(|query| {
@@ -26547,19 +26581,15 @@ async fn handler_post_multisig_spec(
             )));
         }
     }
-    let key = rate_limit_key(
+    check_public_contract_read_route_rate_limit(
+        &app,
         &headers,
-        Some(remote_ip),
+        remote_ip,
         "v1/multisig/spec",
+        "multisig_spec",
         app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_spec"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    )
+    .await?;
     let request: crate::routing::MultisigSpecRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -26767,19 +26797,15 @@ async fn handler_post_multisig_proposals_list(
             )));
         }
     }
-    let key = rate_limit_key(
+    check_public_contract_read_route_rate_limit(
+        &app,
         &headers,
-        Some(remote_ip),
+        remote_ip,
         "v1/multisig/proposals/list",
+        "multisig_proposals_list",
         app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_proposals_list"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    )
+    .await?;
     let request: crate::routing::MultisigProposalsListRequestDto =
         norito::json::from_slice(body.as_ref()).map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -26823,19 +26849,15 @@ async fn handler_post_multisig_proposals_get(
             )));
         }
     }
-    let key = rate_limit_key(
+    check_public_contract_read_route_rate_limit(
+        &app,
         &headers,
-        Some(remote_ip),
+        remote_ip,
         "v1/multisig/proposals/get",
+        "multisig_proposals_get",
         app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_proposals_get"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    )
+    .await?;
     let request: crate::routing::MultisigProposalsGetRequestDto =
         norito::json::from_slice(body.as_ref()).map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -26868,19 +26890,15 @@ async fn handler_post_multisig_approvals_list(
         Ok(viewer) => viewer,
         Err(response) => return Ok(response),
     };
-    let key = rate_limit_key(
+    check_public_contract_read_route_rate_limit(
+        &app,
         &headers,
-        Some(remote_ip),
+        remote_ip,
         &format!("v1/multisig/approvals/list:{}", viewer.subject),
+        "multisig_approvals_list",
         app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_approvals_list"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    )
+    .await?;
     match crate::routing::handle_post_multisig_approvals_list(
         app.state.clone(),
         crate::routing::MultisigApprovalsViewerScope {
@@ -26912,19 +26930,15 @@ async fn handler_post_multisig_approvals_get(
         Ok(viewer) => viewer,
         Err(response) => return Ok(response),
     };
-    let key = rate_limit_key(
+    check_public_contract_read_route_rate_limit(
+        &app,
         &headers,
-        Some(remote_ip),
+        remote_ip,
         &format!("v1/multisig/approvals/get:{}", viewer.subject),
+        "multisig_approvals_get",
         app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_approvals_get"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    )
+    .await?;
     match crate::routing::handle_post_multisig_approvals_get(
         app.state.clone(),
         crate::routing::MultisigApprovalsViewerScope {
@@ -26955,20 +26969,15 @@ async fn handler_post_multisig_approvals_list_for_authority(
     let remote_ip = remote.ip();
     validate_api_token(&app, &headers)?;
     let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
-    let key = rate_limit_key(
+    check_public_contract_read_route_rate_limit(
+        &app,
         &headers,
-        Some(remote_ip),
+        remote_ip,
         &format!("v1/multisig/approvals/list_for_authority:{authority}"),
+        "multisig_approvals_list_for_authority",
         app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry.with_metrics(|tel| {
-            tel.inc_torii_contract_throttle("multisig_approvals_list_for_authority")
-        });
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    )
+    .await?;
     let request: crate::routing::MultisigApprovalsListRequestDto =
         norito::json::from_slice(body.as_ref()).map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -27004,20 +27013,15 @@ async fn handler_post_multisig_approvals_get_for_authority(
     let remote_ip = remote.ip();
     validate_api_token(&app, &headers)?;
     let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
-    let key = rate_limit_key(
+    check_public_contract_read_route_rate_limit(
+        &app,
         &headers,
-        Some(remote_ip),
+        remote_ip,
         &format!("v1/multisig/approvals/get_for_authority:{authority}"),
+        "multisig_approvals_get_for_authority",
         app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry.with_metrics(|tel| {
-            tel.inc_torii_contract_throttle("multisig_approvals_get_for_authority")
-        });
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    )
+    .await?;
     let request: crate::routing::MultisigApprovalsGetRequestDto =
         norito::json::from_slice(body.as_ref()).map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -30292,7 +30296,7 @@ async fn handler_pipeline_recovery_fastpq_proofs(
             sidecar
                 .fastpq_proofs
                 .iter()
-                .map(iroha_core::kura::FastpqProofSnapshot::to_json_value)
+                .map(|snapshot| fastpq_proof_snapshot_recovery_json(&app.kura, height, snapshot))
                 .collect(),
         ),
     );
@@ -30309,6 +30313,113 @@ async fn handler_pipeline_recovery_fastpq_proofs(
             context: "pipeline_recovery_fastpq_proofs",
             source: err,
         }),
+    }
+}
+
+fn fastpq_proof_snapshot_recovery_json(
+    kura: &Kura,
+    height: u64,
+    snapshot: &iroha_core::kura::FastpqProofSnapshot,
+) -> norito::json::Value {
+    let mut entry = snapshot.to_json_value();
+    let norito::json::Value::Object(ref mut object) = entry else {
+        return entry;
+    };
+
+    match fastpq_committed_batch_base64(kura, height, snapshot) {
+        Some((batch, reconstructed)) => {
+            object.insert(
+                "batch".to_string(),
+                norito::json::to_value(&batch).expect("serialize FASTPQ batch"),
+            );
+            object.insert(
+                "batch_compact".to_string(),
+                norito::json::to_value(&false).expect("serialize FASTPQ batch compact flag"),
+            );
+            object.insert(
+                "batch_reconstructed_from_block".to_string(),
+                norito::json::to_value(&reconstructed)
+                    .expect("serialize FASTPQ batch reconstruction flag"),
+            );
+        }
+        None => {
+            object.insert(
+                "batch_compact".to_string(),
+                norito::json::to_value(&snapshot.batch.transitions.is_empty())
+                    .expect("serialize FASTPQ batch compact flag"),
+            );
+            if snapshot.transition_count > 0 && snapshot.batch.transitions.is_empty() {
+                object.insert(
+                    "batch_reconstruction_error".to_string(),
+                    norito::json::to_value(
+                        "committed block transcripts were not available for this FASTPQ proof",
+                    )
+                    .expect("serialize FASTPQ batch reconstruction error"),
+                );
+            }
+        }
+    }
+
+    entry
+}
+
+fn fastpq_committed_batch_base64(
+    kura: &Kura,
+    height: u64,
+    snapshot: &iroha_core::kura::FastpqProofSnapshot,
+) -> Option<(String, bool)> {
+    if snapshot.transition_count == 0 {
+        return None;
+    }
+    if !snapshot.batch.transitions.is_empty() {
+        let batch = base64::engine::general_purpose::STANDARD
+            .encode(norito::to_bytes(&snapshot.batch).expect("encode FASTPQ recovery batch"));
+        return Some((batch, false));
+    }
+
+    let Some(height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
+        iroha_logger::warn!(
+            height,
+            "cannot reconstruct FASTPQ batch for invalid block height"
+        );
+        return None;
+    };
+    let Some(block) = kura.get_block(height) else {
+        iroha_logger::warn!(
+            height = height.get(),
+            entry_hash = %snapshot.entry_hash,
+            "cannot reconstruct FASTPQ batch because committed block is unavailable"
+        );
+        return None;
+    };
+    let Some(transcripts) = block.fastpq_transcripts().get(&snapshot.entry_hash) else {
+        iroha_logger::warn!(
+            height = height.get(),
+            entry_hash = %snapshot.entry_hash,
+            "cannot reconstruct FASTPQ batch because committed block has no matching transcript"
+        );
+        return None;
+    };
+    match iroha_core::fastpq::batch_from_transcript_bundle(
+        snapshot.parameter.clone(),
+        snapshot.batch.public_inputs,
+        snapshot.entry_hash,
+        transcripts,
+    ) {
+        Ok(batch) => Some((
+            base64::engine::general_purpose::STANDARD
+                .encode(norito::to_bytes(&batch).expect("encode reconstructed FASTPQ batch")),
+            true,
+        )),
+        Err(err) => {
+            iroha_logger::warn!(
+                height = height.get(),
+                entry_hash = %snapshot.entry_hash,
+                ?err,
+                "failed to reconstruct FASTPQ batch from committed transcripts"
+            );
+            None
+        }
     }
 }
 
@@ -61671,6 +61782,150 @@ mod tests {
         .into_response();
 
         assert_ne!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn browser_read_endpoints_are_not_throttled_by_deploy_limiter() {
+        let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
+        let headers = HeaderMap::new();
+        let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
+
+        let key = super::rate_limit_key(
+            &headers,
+            Some(remote_ip),
+            "v1/contracts/state",
+            app.api_token_enforced(),
+        );
+        assert!(app.deploy_rate_limiter.allow(&key).await);
+        assert!(!app.deploy_rate_limiter.allow(&key).await);
+
+        let contract_state_response = match handler_get_contract_state(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+            AxQuery(routing::ContractStateQuery {
+                prefix: Some("missing".to_owned()),
+                ..Default::default()
+            }),
+        )
+        .await
+        {
+            Ok(response) => response.into_response(),
+            Err(error) => error.into_response(),
+        };
+        assert_ne!(
+            contract_state_response.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+
+        let selector = || routing::MultisigAccountSelectorDto {
+            multisig_account_id: None,
+            multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
+        };
+
+        let spec_body = norito::json::to_vec(&routing::MultisigSpecRequestDto {
+            selector: selector(),
+        })
+        .expect("encode spec request");
+        let spec_response = handler_post_multisig_spec(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(spec_body),
+        )
+        .await
+        .expect_err("missing alias should still fail lookup")
+        .into_response();
+        assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let list_body = norito::json::to_vec(&routing::MultisigProposalsListRequestDto {
+            selector: selector(),
+            status: Vec::new(),
+        })
+        .expect("encode proposals list request");
+        let list_response = handler_post_multisig_proposals_list(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(list_body),
+        )
+        .await
+        .expect_err("missing alias should still fail lookup")
+        .into_response();
+        assert_ne!(list_response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let get_body = norito::json::to_vec(&routing::MultisigProposalsGetRequestDto {
+            selector: selector(),
+            proposal_id: Some("deadbeef".to_owned()),
+            instructions_hash: None,
+        })
+        .expect("encode proposals get request");
+        let get_response = handler_post_multisig_proposals_get(
+            State(app),
+            headers,
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(get_body),
+        )
+        .await
+        .expect_err("missing alias should still fail lookup")
+        .into_response();
+        assert_ne!(get_response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn browser_read_endpoints_use_route_scoped_query_rate_keys() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        }
+        let headers = HeaderMap::new();
+        let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
+
+        let shared_key = super::rate_limit_key(
+            &headers,
+            Some(remote_ip),
+            "v1/contracts/state",
+            app.api_token_enforced(),
+        );
+        assert!(app.rate_limiter.allow(&shared_key).await);
+        assert!(!app.rate_limiter.allow(&shared_key).await);
+
+        let selector = || routing::MultisigAccountSelectorDto {
+            multisig_account_id: None,
+            multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
+        };
+
+        let spec_body = norito::json::to_vec(&routing::MultisigSpecRequestDto {
+            selector: selector(),
+        })
+        .expect("encode spec request");
+        let spec_response = handler_post_multisig_spec(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(spec_body),
+        )
+        .await
+        .expect_err("missing alias should still fail lookup")
+        .into_response();
+        assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let list_body = norito::json::to_vec(&routing::MultisigProposalsListRequestDto {
+            selector: selector(),
+            status: Vec::new(),
+        })
+        .expect("encode proposals list request");
+        let list_response = handler_post_multisig_proposals_list(
+            State(app),
+            headers,
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(list_body),
+        )
+        .await
+        .expect_err("missing alias should still fail lookup")
+        .into_response();
+        assert_ne!(list_response.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

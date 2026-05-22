@@ -26,7 +26,9 @@ use crossbeam_queue::ArrayQueue;
 use dashmap::{DashMap, mapref::entry::Entry};
 use eyre::Result;
 use indexmap::IndexSet;
-use iroha_config::parameters::actual::{GovernanceCatalog, LaneRegistry, Nexus, Queue as Config};
+use iroha_config::parameters::actual::{
+    GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Queue as Config,
+};
 use iroha_crypto::HashOf;
 #[allow(unused_imports)]
 use iroha_data_model::nexus::{
@@ -217,6 +219,10 @@ pub struct Queue {
     lane_catalog: RwLock<Arc<LaneCatalog>>,
     /// Cached dataspace catalog for routing/telemetry.
     dataspace_catalog: RwLock<Arc<DataSpaceCatalog>>,
+    /// Cached routing policy used by the active router.
+    routing_policy: RwLock<LaneRoutingPolicy>,
+    /// Whether the active router is the Nexus config router.
+    routing_uses_config_router: RwLock<bool>,
     /// The queue for transactions
     tx_hashes: ArrayQueue<SignedTxHash>,
     /// Accepted transactions addressed by `Hash`.
@@ -1592,6 +1598,8 @@ impl Queue {
                 lane_compliance: RwLock::new(lane_compliance),
                 lane_catalog: RwLock::new(Arc::clone(lane_catalog)),
                 dataspace_catalog: RwLock::new(Arc::clone(dataspace_catalog)),
+                routing_policy: RwLock::new(LaneRoutingPolicy::default()),
+                routing_uses_config_router: RwLock::new(false),
                 tx_hashes: ArrayQueue::new(capacity.get()),
                 txs: DashMap::new(),
                 active_count: AtomicUsize::new(0),
@@ -4934,6 +4942,57 @@ impl Queue {
         Self::compute_teu_weight(tx)
     }
 
+    fn nexus_uses_config_router(nexus: &Nexus) -> bool {
+        nexus.enabled && nexus.uses_multilane_catalogs()
+    }
+
+    fn router_for_nexus(
+        nexus: &Nexus,
+        lane_catalog: &LaneCatalog,
+        dataspace_catalog: &DataSpaceCatalog,
+    ) -> (Arc<dyn LaneRouter>, bool) {
+        if Self::nexus_uses_config_router(nexus) {
+            (
+                Arc::new(ConfigLaneRouter::new(
+                    nexus.routing_policy.clone(),
+                    dataspace_catalog.clone(),
+                    lane_catalog.clone(),
+                )),
+                true,
+            )
+        } else {
+            (Arc::new(SingleLaneRouter::new()), false)
+        }
+    }
+
+    fn nexus_routing_matches(&self, nexus: &Nexus) -> bool {
+        let expected_limits = QueueLimits::from_nexus(nexus);
+        *self.routing_uses_config_router.read() == Self::nexus_uses_config_router(nexus)
+            && *self.routing_policy.read() == nexus.routing_policy
+            && self.lane_catalog.read().as_ref() == &nexus.lane_catalog
+            && self.dataspace_catalog.read().as_ref() == &nexus.dataspace_catalog
+            && *self.nexus_limits.read() == expected_limits
+    }
+
+    /// Ensure the queue router and cached catalogs match the committed Nexus state.
+    ///
+    /// Proposal leaders use cached queue routing to build block execution contexts, while
+    /// validators recompute those contexts from committed state. This guard keeps those two
+    /// surfaces aligned even after startup replay or runtime Nexus updates.
+    pub fn reconfigure_nexus_with_state_if_needed(
+        &self,
+        nexus: &Nexus,
+        state: &State,
+        lane_compliance: Option<Arc<LaneComplianceEngine>>,
+    ) -> bool {
+        if self.nexus_routing_matches(nexus) {
+            return false;
+        }
+
+        self.reconfigure_nexus_with_state(nexus, state, lane_compliance);
+        true
+    }
+
     /// Returns the queue capacity limits enforced when admitting transactions.
     #[must_use]
     pub fn queue_limits(&self) -> QueueLimits {
@@ -4955,15 +5014,14 @@ impl Queue {
     ) {
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
-        let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
-            nexus.routing_policy.clone(),
-            (*dataspace_catalog).clone(),
-            (*lane_catalog).clone(),
-        ));
+        let (router, uses_config_router) =
+            Self::router_for_nexus(nexus, &lane_catalog, &dataspace_catalog);
         *self.router.write() = Arc::clone(&router);
         *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
         *self.lane_catalog.write() = Arc::clone(&lane_catalog);
         *self.dataspace_catalog.write() = Arc::clone(&dataspace_catalog);
+        *self.routing_policy.write() = nexus.routing_policy.clone();
+        *self.routing_uses_config_router.write() = uses_config_router;
         *self.lane_compliance.write() = lane_compliance;
 
         let registry = Arc::new(LaneManifestRegistry::from_config(
@@ -4992,15 +5050,14 @@ impl Queue {
     ) {
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
-        let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
-            nexus.routing_policy.clone(),
-            (*dataspace_catalog).clone(),
-            (*lane_catalog).clone(),
-        ));
+        let (router, uses_config_router) =
+            Self::router_for_nexus(nexus, &lane_catalog, &dataspace_catalog);
         *self.router.write() = Arc::clone(&router);
         *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
         *self.lane_catalog.write() = Arc::clone(&lane_catalog);
         *self.dataspace_catalog.write() = Arc::clone(&dataspace_catalog);
+        *self.routing_policy.write() = nexus.routing_policy.clone();
+        *self.routing_uses_config_router.write() = uses_config_router;
         *self.lane_compliance.write() = lane_compliance;
 
         let registry = Arc::new(LaneManifestRegistry::from_config(
@@ -5339,6 +5396,77 @@ pub mod tests {
         assert_eq!(routing.lane_id, lane_b.id);
         assert_eq!(queue.queue_limits().for_lane(lane_b.id).teu_capacity, 123);
         assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
+    }
+
+    #[test]
+    fn proposal_queue_syncs_stale_router_from_committed_nexus() {
+        let NexusFeeFixture {
+            mut state,
+            authority_id,
+            authority_keypair,
+            ..
+        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let lane_id = LaneId::new(3);
+        let dataspace_id = DataSpaceId::new(10);
+        let (lane_catalog, dataspace_catalog) =
+            Queue::test_catalogs_for_routes(&[(lane_id, dataspace_id)]);
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = (*lane_catalog).clone();
+        nexus.dataspace_catalog = (*dataspace_catalog).clone();
+        nexus.routing_policy.default_lane = lane_id;
+        nexus.routing_policy.default_dataspace = dataspace_id;
+        nexus.fees.base_fee = Numeric::zero();
+        state.set_nexus(nexus.clone()).expect("set Nexus config");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_secs(60),
+                capacity: nonzero!(8_usize),
+                capacity_per_user: nonzero!(4_usize),
+                ..Config::default()
+            },
+            &time_source,
+        ));
+
+        let tx = accepted_tx_with(
+            authority_id,
+            &authority_keypair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "stale router sync".into(),
+            ))],
+            Metadata::default(),
+        );
+        let tx_hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push");
+        assert_eq!(
+            *queue
+                .routing_decisions
+                .get(&tx_hash)
+                .expect("initial routing"),
+            RoutingDecision::default()
+        );
+
+        assert!(queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
+        assert_eq!(
+            *queue
+                .routing_decisions
+                .get(&tx_hash)
+                .expect("refreshed routing"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+        assert!(!queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
+
+        let mut popped = Vec::new();
+        queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut popped);
+        assert_eq!(popped.len(), 1);
+        assert_eq!(
+            popped[0].routing(),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
     }
 
     impl LaneRouter for StaticRouter {

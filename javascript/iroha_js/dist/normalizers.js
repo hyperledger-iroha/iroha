@@ -367,6 +367,39 @@ export function ensureCanonicalAccountId(value, name) {
   return canonical;
 }
 
+export function normalizeAccountAliasLiteral(value, name) {
+  const alias = assertString(value, name).trim();
+  if (alias.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+  }
+  const aliasParts = alias.split("@");
+  const scopeParts = aliasParts[1]?.split(".") ?? [];
+  if (
+    aliasParts.length !== 2 ||
+    !aliasParts[0] ||
+    !aliasParts[1] ||
+    scopeParts.length < 1 ||
+    scopeParts.length > 2 ||
+    scopeParts.some((part) => !part) ||
+    /\s/.test(alias)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must use name@dataspace or name@domain.dataspace form`,
+      name,
+    );
+  }
+  return alias;
+}
+
+export function normalizeAccountIdOrAliasLiteral(value, name) {
+  const raw = assertString(value, name).trim();
+  if (raw.includes("@")) {
+    return normalizeAccountAliasLiteral(raw, name);
+  }
+  return normalizeAccountId(raw, name);
+}
+
 export function normalizeAssetId(value, name) {
   const raw = assertString(value, name).trim();
   if (raw.length === 0) {

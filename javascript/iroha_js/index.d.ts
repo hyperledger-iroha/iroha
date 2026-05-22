@@ -312,7 +312,7 @@ export interface MultisigProposePayload {
 }
 
 export interface MultisigContractCallProposeRequest extends MultisigAccountSelector {
-  signerAccountId: string;
+  signerAccountId?: string;
   contractAddress?: string;
   contractAlias?: string;
   entrypoint: string;
@@ -364,9 +364,10 @@ export interface MultisigContractCallProposePayload {
 }
 
 export interface MultisigContractCallApproveRequest extends MultisigAccountSelector {
-  signerAccountId: string;
+  signerAccountId?: string;
   proposalId?: string | null;
   instructionsHash?: string | null;
+  feeSponsor?: string | null;
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
@@ -380,6 +381,7 @@ export interface MultisigContractCallApproveRequest extends MultisigAccountSelec
   signer_account_id?: string;
   proposal_id?: string | null;
   instructions_hash?: string | null;
+  fee_sponsor?: string | null;
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
@@ -396,6 +398,7 @@ export interface MultisigContractCallApprovePayload {
   signer_account_id: string;
   proposal_id?: string;
   instructions_hash?: string;
+  fee_sponsor?: string;
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
@@ -8217,6 +8220,12 @@ export interface MultisigProposeNoritoRequest {
 }
 export function noritoEncodeMultisigProposeRequest(
   request: MultisigProposeNoritoRequest,
+): Buffer;
+export function noritoEncodeMultisigContractCallProposeRequest(
+  request: MultisigContractCallProposeRequest,
+): Buffer;
+export function noritoEncodeMultisigContractCallApproveRequest(
+  request: MultisigContractCallApproveRequest,
 ): Buffer;
 export function noritoDecodeInstruction(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,

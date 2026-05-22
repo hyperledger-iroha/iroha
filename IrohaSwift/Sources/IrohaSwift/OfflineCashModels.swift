@@ -159,7 +159,7 @@ public struct ToriiOfflineSpendAuthorization: Codable, Sendable, Equatable, Iden
     public var id: String { authorizationId }
     public var deviceId: String { deviceBinding.deviceId }
     public var offlinePublicKey: String { deviceBinding.offlinePublicKey }
-    public var appAttestKeyId: String { deviceBinding.attestationKeyId }
+    public var attestationKeyId: String { deviceBinding.attestationKeyId }
 
     public init(
         authorizationId: String,
@@ -808,7 +808,6 @@ public enum ToriiOfflineCashCodec {
                             refreshAtMs: authorization.refreshAtMs,
                             expiresAtMs: authorization.expiresAtMs,
                             deviceBinding: authorization.deviceBinding,
-                            appAttestKeyId: authorization.appAttestKeyId,
                             issuerSignatureBase64: authorization.issuerSignatureBase64
                         )
                     },
@@ -1001,7 +1000,6 @@ private extension ToriiOfflineCashCodec {
         let refreshAtMs: UInt64
         let expiresAtMs: UInt64
         let deviceBinding: ToriiOfflineDeviceBinding
-        let appAttestKeyId: String
         let issuerSignatureBase64: String
 
         enum CodingKeys: String, CodingKey {
@@ -1017,7 +1015,6 @@ private extension ToriiOfflineCashCodec {
             case refreshAtMs = "refresh_at_ms"
             case expiresAtMs = "expires_at_ms"
             case deviceBinding = "device_binding"
-            case appAttestKeyId = "app_attest_key_id"
             case issuerSignatureBase64 = "issuer_signature_base64"
         }
     }

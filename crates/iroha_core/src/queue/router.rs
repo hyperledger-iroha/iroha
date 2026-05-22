@@ -550,6 +550,25 @@ where
     })
 }
 
+fn asset_balance_operation_dataspace_target(
+    asset_definition_target: Option<DataSpaceId>,
+    explicit_asset_target: Option<DataSpaceId>,
+    account_targets: impl IntoIterator<Item = Option<DataSpaceId>>,
+) -> Option<DataSpaceId> {
+    let effective_definition_target = if explicit_asset_target.is_some()
+        && asset_definition_target == Some(DataSpaceId::UNIVERSAL)
+    {
+        None
+    } else {
+        asset_definition_target
+    };
+    merge_instruction_dataspace_targets(
+        core::iter::once(effective_definition_target)
+            .chain(core::iter::once(explicit_asset_target))
+            .chain(account_targets),
+    )
+}
+
 fn settlement_transaction_dataspace_target(
     tx: &AcceptedTransaction<'_>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -1371,7 +1390,7 @@ fn instruction_transaction_dataspace_target(
                 dataspace_catalog,
                 state_view,
             ),
-            TransferBox::Asset(transfer) => merge_instruction_dataspace_targets([
+            TransferBox::Asset(transfer) => asset_balance_operation_dataspace_target(
                 asset_definition_dataspace_target(
                     &transfer.source.definition,
                     None,
@@ -1380,19 +1399,24 @@ fn instruction_transaction_dataspace_target(
                     state_view,
                 ),
                 asset_id_explicit_dataspace_target(&transfer.source),
-                account_dataspace_target(
-                    state_view.map(StateView::world),
-                    &transfer.source.account,
-                ),
-                account_dataspace_target(state_view.map(StateView::world), &transfer.destination),
-            ]),
+                [
+                    account_dataspace_target(
+                        state_view.map(StateView::world),
+                        &transfer.source.account,
+                    ),
+                    account_dataspace_target(
+                        state_view.map(StateView::world),
+                        &transfer.destination,
+                    ),
+                ],
+            ),
             TransferBox::Nft(_) => None,
         };
     }
 
     if let Some(mint) = any.downcast_ref::<MintBox>() {
         return match mint {
-            MintBox::Asset(mint) => merge_instruction_dataspace_targets([
+            MintBox::Asset(mint) => asset_balance_operation_dataspace_target(
                 asset_definition_dataspace_target(
                     &mint.destination.definition,
                     None,
@@ -1401,18 +1425,18 @@ fn instruction_transaction_dataspace_target(
                     state_view,
                 ),
                 asset_id_explicit_dataspace_target(&mint.destination),
-                account_dataspace_target(
+                [account_dataspace_target(
                     state_view.map(StateView::world),
                     &mint.destination.account,
-                ),
-            ]),
+                )],
+            ),
             MintBox::TriggerRepetitions(_) => None,
         };
     }
 
     if let Some(burn) = any.downcast_ref::<BurnBox>() {
         return match burn {
-            BurnBox::Asset(burn) => merge_instruction_dataspace_targets([
+            BurnBox::Asset(burn) => asset_balance_operation_dataspace_target(
                 asset_definition_dataspace_target(
                     &burn.destination.definition,
                     None,
@@ -1421,11 +1445,11 @@ fn instruction_transaction_dataspace_target(
                     state_view,
                 ),
                 asset_id_explicit_dataspace_target(&burn.destination),
-                account_dataspace_target(
+                [account_dataspace_target(
                     state_view.map(StateView::world),
                     &burn.destination.account,
-                ),
-            ]),
+                )],
+            ),
             BurnBox::TriggerRepetitions(_) => None,
         };
     }
@@ -1583,7 +1607,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 dataspace_catalog,
                 world,
             ),
-            TransferBox::Asset(transfer) => merge_instruction_dataspace_targets([
+            TransferBox::Asset(transfer) => asset_balance_operation_dataspace_target(
                 asset_definition_dataspace_target_with_world(
                     &transfer.source.definition,
                     None,
@@ -1592,16 +1616,18 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                     world,
                 ),
                 asset_id_explicit_dataspace_target(&transfer.source),
-                account_dataspace_target(Some(world), &transfer.source.account),
-                account_dataspace_target(Some(world), &transfer.destination),
-            ]),
+                [
+                    account_dataspace_target(Some(world), &transfer.source.account),
+                    account_dataspace_target(Some(world), &transfer.destination),
+                ],
+            ),
             TransferBox::Nft(_) => None,
         };
     }
 
     if let Some(mint) = any.downcast_ref::<MintBox>() {
         return match mint {
-            MintBox::Asset(mint) => merge_instruction_dataspace_targets([
+            MintBox::Asset(mint) => asset_balance_operation_dataspace_target(
                 asset_definition_dataspace_target_with_world(
                     &mint.destination.definition,
                     None,
@@ -1610,15 +1636,18 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                     world,
                 ),
                 asset_id_explicit_dataspace_target(&mint.destination),
-                account_dataspace_target(Some(world), &mint.destination.account),
-            ]),
+                [account_dataspace_target(
+                    Some(world),
+                    &mint.destination.account,
+                )],
+            ),
             MintBox::TriggerRepetitions(_) => None,
         };
     }
 
     if let Some(burn) = any.downcast_ref::<BurnBox>() {
         return match burn {
-            BurnBox::Asset(burn) => merge_instruction_dataspace_targets([
+            BurnBox::Asset(burn) => asset_balance_operation_dataspace_target(
                 asset_definition_dataspace_target_with_world(
                     &burn.destination.definition,
                     None,
@@ -1627,8 +1656,11 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                     world,
                 ),
                 asset_id_explicit_dataspace_target(&burn.destination),
-                account_dataspace_target(Some(world), &burn.destination.account),
-            ]),
+                [account_dataspace_target(
+                    Some(world),
+                    &burn.destination.account,
+                )],
+            ),
             BurnBox::TriggerRepetitions(_) => None,
         };
     }
@@ -6535,6 +6567,67 @@ mod tests {
             router
                 .try_route_with_view(&tx, &state.view())
                 .expect("stored alias mint route must resolve with state"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn explicit_dataspace_scoped_mint_routes_to_private_bucket() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let scoped_asset_id = AssetId::with_scope(
+            asset_definition.clone(),
+            alice_id.clone(),
+            AssetBalanceScope::Dataspace(dataspace_id),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Mint::asset_numeric(
+                1_u32,
+                scoped_asset_id,
+            ))],
+        );
+        let state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition)
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("explicit scoped mint without state should defer for definition policy"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("explicit scoped mint must route to the asset balance bucket"),
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }

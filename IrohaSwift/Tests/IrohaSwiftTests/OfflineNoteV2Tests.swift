@@ -1015,6 +1015,22 @@ final class OfflineNoteV2Tests: XCTestCase {
             payload: OfflineNoteV2TransferHandoff.rawReceiptAckBytes(for: receiptAck),
             contentType: OfflineNoteV2TransferHandoff.receiptAckContentType
         )
+        let textChallenge = try OfflineNoteV2ReceiveRequestCodec.encodeText(receiveRequest)
+        let textPayment = try OfflineNoteV2PaymentTokenCodec.encodeText(token)
+        let textAck = try OfflineNoteV2ReceiptAckCodec.encodeText(receiptAck)
+        let textChallengeBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+            payload: textChallenge,
+            kind: .receiveRequest,
+            pairingChallenge: challenge
+        )
+        let textPaymentBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+            payload: textPayment,
+            kind: .paymentToken
+        )
+        let textAckBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+            payload: textAck,
+            kind: .receiptAck
+        )
 
         XCTAssertEqual(try OfflineNoteV2NearbyEnvelope.decode(challengeEnvelope.encoded()).pairingChallenge, challenge)
         XCTAssertEqual(
@@ -1027,6 +1043,27 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(
             try OfflineNoteV2NearbyEnvelope.decode(ackEnvelope.encoded()).receiptAck().tokenIdHex,
             receiptAck.tokenIdHex
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+                from: textChallengeBytes,
+                expectedKind: .receiveRequest
+            ).payload,
+            textChallenge
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+                from: textPaymentBytes,
+                expectedKind: .paymentToken
+            ).payload,
+            textPayment
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+                from: textAckBytes,
+                expectedKind: .receiptAck
+            ).payload,
+            textAck
         )
     }
 
@@ -1073,6 +1110,40 @@ final class OfflineNoteV2Tests: XCTestCase {
                 contentType: OfflineNoteV2TransferHandoff.receiveRequestContentType
             )
         )
+        let invalidTextReceiveRequest = try OfflineNoteV2TransferTextPayloadCodec.encode(
+            Data("garbage".utf8),
+            kind: .receiveRequest
+        )
+        let invalidTextPayment = try OfflineNoteV2TransferTextPayloadCodec.encode(
+            Data("garbage".utf8),
+            kind: .paymentToken
+        )
+        let invalidTextAck = try OfflineNoteV2TransferTextPayloadCodec.encode(
+            Data("garbage".utf8),
+            kind: .receiptAck
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .challenge,
+                payload: Data(invalidTextReceiveRequest.utf8),
+                contentType: OfflineNoteV2TransferHandoff.textReceiveRequestContentType,
+                pairingChallenge: pairing
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .payment,
+                payload: Data(invalidTextPayment.utf8),
+                contentType: OfflineNoteV2TransferHandoff.textPaymentTokenContentType
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .receiptAck,
+                payload: Data(invalidTextAck.utf8),
+                contentType: OfflineNoteV2TransferHandoff.textReceiptAckContentType
+            )
+        )
 
         let unsupportedVersion = Data(
             #"{"version":2,"kind":"payment","payload":"AQID","contentType":"application/vnd.iroha.offline.payment-token-v2+norito"}"#.utf8
@@ -1112,11 +1183,17 @@ final class OfflineNoteV2Tests: XCTestCase {
         let ackWithPairing = Data(
             #"{"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receipt-ack-v2+norito","pairingChallenge":"nearby_pairing_bird"}"#.utf8
         )
+        let decodedInvalidTextPayment = Data(
+            """
+            {"version":1,"kind":"payment","payload":"\(Self.base64Url(Data(invalidTextPayment.utf8)))","contentType":"text/vnd.iroha.offline.payment-token-v2"}
+            """.utf8
+        )
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(topLevelArray))
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(invalidBase64Payload))
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(badPairingObject))
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(smuggledPairingObject))
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(ackWithPairing))
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(decodedInvalidTextPayment))
         XCTAssertThrowsError(
             try OfflineNoteV2NearbyEnvelope(
                 kind: .payment,
@@ -1667,6 +1744,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             offlinePublicKey: offlinePublicKey,
             deviceBinding: [
                 "device_id": "device-1",
+                "attestation_key_id": "attestation-key-1",
                 "offline_public_key": offlinePublicKey,
                 "signature_base64": "nested-device-signature-is-not-body-auth",
             ]
@@ -1753,6 +1831,9 @@ final class OfflineNoteV2Tests: XCTestCase {
         let refillBody = try Self.requestBody(requests[0])
         XCTAssertEqual(try Self.string(refillBody, "account_id"), accountId)
         XCTAssertEqual(try Self.string(refillBody, "operation_id"), "operation-refill-1")
+        XCTAssertEqual(try Self.uint64(refillBody, "local_revision"), 0)
+        XCTAssertEqual(try Self.string(refillBody, "local_state_hash"), "")
+        XCTAssertEqual(try Self.string(refillBody, "attestation_key_id"), "attestation-key-1")
         XCTAssertEqual(try Self.string(refillBody, "nonce"), "auth-refill-1")
         XCTAssertFalse(try Self.string(refillBody, "signature_base64").isEmpty)
         XCTAssertEqual(
@@ -2619,6 +2700,20 @@ final class OfflineNoteV2Tests: XCTestCase {
                 .invalidIssuerSignatureLength(expected: 64, actual: 63)
             )
         }
+
+        XCTAssertNoThrow(try OfflineNoteKeyCertificateV2(
+            platform: cert.platform,
+            keyId: cert.keyId,
+            deviceId: cert.deviceId,
+            accountId: cert.accountId,
+            publicKey: publicKey,
+            assertionScheme: cert.assertionScheme,
+            assertionKeyAlgorithm: cert.assertionKeyAlgorithm,
+            assertionPublicKey: assertionPublicKey,
+            assertionUsageCountLimit: cert.assertionUsageCountLimit,
+            oneUse: true,
+            issuerSignature: issuerSignature
+        ))
     }
 
     func testOfflineNoteV2AuditBundleRejectsInvalidShapes() throws {
@@ -3828,6 +3923,13 @@ final class OfflineNoteV2Tests: XCTestCase {
             throw OfflineNoteV2FixtureError.invalidBase64
         }
         return data
+    }
+
+    private static func base64Url(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
     }
 
     private static func certificateJSON(_ certificate: OfflineCertificateJSON,

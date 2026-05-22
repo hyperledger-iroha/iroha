@@ -36,6 +36,14 @@ public final class OfflineNoteV2IssuerDeviceBinding {
     return offlinePublicKey;
   }
 
+  public String attestationKeyId() {
+    final Object keyId = deviceBinding.get("attestation_key_id");
+    if (keyId instanceof String value && !value.trim().isEmpty()) {
+      return value.trim();
+    }
+    throw new IllegalStateException("device_binding.attestation_key_id is required");
+  }
+
   public Map<String, Object> deviceBinding() {
     return deepCopyObject(deviceBinding);
   }

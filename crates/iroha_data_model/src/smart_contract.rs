@@ -1,6 +1,6 @@
 //! This module contains data and structures related only to smart contract execution
 
-use std::{format, str::FromStr, string::String, vec::Vec};
+use std::{format, io::Write, str::FromStr, string::String, vec::Vec};
 
 use bech32::{Bech32m, Hrp};
 use iroha_data_model_derive::model;
@@ -160,17 +160,13 @@ mod model {
     use super::*;
 
     /// Canonical Bech32m-encoded public contract address.
-    #[derive(
-        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema,
-    )]
+    #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractAlias(pub(super) ConstString);
 
     /// Canonical Bech32m-encoded public contract address.
-    #[derive(
-        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema,
-    )]
+    #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractAddress(pub(super) ConstString);
@@ -383,6 +379,35 @@ impl AsRef<str> for ContractAlias {
     }
 }
 
+impl norito::core::NoritoSerialize for ContractAlias {
+    fn serialize<W: Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
+    }
+}
+
+impl<'a> norito::core::NoritoDeserialize<'a> for ContractAlias {
+    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("ContractAlias deserialization must succeed for valid archives")
+    }
+
+    fn try_deserialize(
+        archived: &'a norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let value = <String as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        ContractAlias::from_str(&value)
+            .map_err(|err| norito::core::Error::Message(err.reason.into()))
+    }
+}
+
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ContractAlias {
     fn write_json(&self, out: &mut String) {
@@ -516,6 +541,35 @@ impl ContractAddress {
 impl AsRef<str> for ContractAddress {
     fn as_ref(&self) -> &str {
         &self.0
+    }
+}
+
+impl norito::core::NoritoSerialize for ContractAddress {
+    fn serialize<W: Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
+    }
+}
+
+impl<'a> norito::core::NoritoDeserialize<'a> for ContractAddress {
+    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("ContractAddress deserialization must succeed for valid archives")
+    }
+
+    fn try_deserialize(
+        archived: &'a norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let value = <String as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        ContractAddress::from_str(&value)
+            .map_err(|err| norito::core::Error::Message(err.to_string()))
     }
 }
 
@@ -762,6 +816,48 @@ mod contract_address_tests {
         ] {
             assert!(raw.parse::<ContractAlias>().is_err(), "must fail: {raw}");
         }
+    }
+
+    #[test]
+    fn contract_alias_norito_wire_is_validated_string_literal() {
+        let alias: ContractAlias = "router::dex.universal".parse().expect("valid alias");
+        let alias_bytes = norito::codec::Encode::encode(&alias);
+        let string_bytes = norito::codec::Encode::encode(&alias.as_ref().to_owned());
+        assert_eq!(alias_bytes, string_bytes);
+
+        let decoded = <ContractAlias as norito::codec::Decode>::decode(&mut alias_bytes.as_slice())
+            .expect("decode contract alias");
+        assert_eq!(decoded, alias);
+
+        let invalid_bytes = norito::codec::Encode::encode(&"router".to_owned());
+        let err = <ContractAlias as norito::codec::Decode>::decode(&mut invalid_bytes.as_slice())
+            .expect_err("invalid alias literal must fail");
+        assert!(err.to_string().contains("contract alias"));
+    }
+
+    #[test]
+    fn contract_address_norito_wire_is_validated_string_literal() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let address = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            12,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let address_bytes = norito::codec::Encode::encode(&address);
+        let string_bytes = norito::codec::Encode::encode(&address.as_ref().to_owned());
+        assert_eq!(address_bytes, string_bytes);
+
+        let decoded =
+            <ContractAddress as norito::codec::Decode>::decode(&mut address_bytes.as_slice())
+                .expect("decode contract address");
+        assert_eq!(decoded, address);
+
+        let invalid_bytes = norito::codec::Encode::encode(&"not-an-address".to_owned());
+        let err = <ContractAddress as norito::codec::Decode>::decode(&mut invalid_bytes.as_slice())
+            .expect_err("invalid address literal must fail");
+        assert!(err.to_string().contains("invalid contract address"));
     }
 }
 // Smart contract manifest types and helpers.

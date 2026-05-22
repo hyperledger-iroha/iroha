@@ -96,10 +96,29 @@ final class OfflineQrStreamTests: XCTestCase {
     }
 
     func testTransferTextNearbyEnvelopeRoundTripsKinds() throws {
-        let payload = Data(#"{"version":2}"#.utf8)
-        let challenge = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .receiveRequest)
-        let payment = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .paymentToken)
-        let ack = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .receiptAck)
+        let payment = try Self.fixturePaymentTokenText()
+        let token = try OfflineNoteV2PaymentTokenCodec.decodeText(payment)
+        let receiveOutput = try XCTUnwrap(token.audit.outputClaims.first)
+        let assetDefinitionId = try XCTUnwrap(
+            receiveOutput.assetId.split(separator: "#", maxSplits: 1).first
+        ).description
+        let receiveRequest = try OfflineNoteV2ReceiveRequest(
+            chainId: token.chainId,
+            paymentRequestId: token.paymentRequestId,
+            accountId: receiveOutput.keyCertificate.accountId,
+            assetDefinitionId: assetDefinitionId,
+            assetId: receiveOutput.assetId,
+            amount: receiveOutput.amount,
+            keyCertificate: receiveOutput.keyCertificate,
+            outputCommitment: receiveOutput.noteCommitment
+        )
+        let receiptAck = try OfflineNoteV2ReceiptAck.fromPaymentToken(
+            token,
+            recipientAccountId: receiveOutput.keyCertificate.accountId,
+            acceptedAtMs: 1_706_000_000_444
+        )
+        let challenge = try OfflineNoteV2ReceiveRequestCodec.encodeText(receiveRequest)
+        let ack = try OfflineNoteV2ReceiptAckCodec.encodeText(receiptAck)
         let pairing = try OfflineNoteV2NearbyPairingChallenge(assetName: "nearby_pairing_stars")
 
         let challengeBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
@@ -604,6 +623,16 @@ final class OfflineQrStreamTests: XCTestCase {
         return Data(bytes)
     }
 
+    private static func fixturePaymentTokenText() throws -> String {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let fixtureURL = testFile
+            .deletingLastPathComponent()
+            .appendingPathComponent("../../../fixtures/offline/interop_contract_v2.json")
+            .standardizedFileURL
+        let data = try Data(contentsOf: fixtureURL)
+        return try JSONDecoder().decode(TextNearbyInteropFixture.self, from: data).sdkInterop.paymentTokenText
+    }
+
     private func mutatedHeaderFrame(
         _ header: OfflineQrStreamFrame,
         mutate: (inout Data) -> Void
@@ -622,5 +651,21 @@ final class OfflineQrStreamTests: XCTestCase {
     private func setUInt16LE(_ data: inout Data, offset: Int, value: UInt16) {
         data[data.startIndex + offset] = UInt8(value & 0xff)
         data[data.startIndex + offset + 1] = UInt8((value >> 8) & 0xff)
+    }
+}
+
+private struct TextNearbyInteropFixture: Decodable {
+    let sdkInterop: TextNearbySdkInterop
+
+    private enum CodingKeys: String, CodingKey {
+        case sdkInterop = "sdk_interop"
+    }
+}
+
+private struct TextNearbySdkInterop: Decodable {
+    let paymentTokenText: String
+
+    private enum CodingKeys: String, CodingKey {
+        case paymentTokenText = "payment_token_text"
     }
 }

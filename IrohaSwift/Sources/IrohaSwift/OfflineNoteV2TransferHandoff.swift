@@ -271,6 +271,21 @@ public enum OfflineNoteV2TransferTextPayloadCodec {
         return (kind, payload)
     }
 
+    static func validatePayloadContents(
+        _ value: String,
+        expectedKind: OfflineNoteV2TextPayloadKind? = nil
+    ) throws {
+        let decoded = try decode(value, expectedKind: expectedKind)
+        switch decoded.kind {
+        case .receiveChallenge:
+            try validateReceiveRequest(value)
+        case .paymentToken:
+            try validatePaymentToken(value)
+        case .receiptAck:
+            try validateReceiptAck(value)
+        }
+    }
+
     public static func payloadKind(for value: String) -> OfflineQrPayloadKind {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix(receiveRequestPrefix) || trimmed.hasPrefix(receiveChallengePrefix) {
@@ -283,6 +298,21 @@ public enum OfflineNoteV2TransferTextPayloadCodec {
             return OfflineNoteV2TextPayloadKind.receiptAck.qrPayloadKind
         }
         return .unspecified
+    }
+
+    private static func validateReceiveRequest(_ value: String) throws {
+        _ = try decodeReceiveChallenge(value)
+    }
+
+    private static func validatePaymentToken(_ value: String) throws {
+        if (try? OfflineNoteV2PaymentTokenCodec.decodeText(value)) != nil {
+            return
+        }
+        _ = try decodePaymentToken(value)
+    }
+
+    private static func validateReceiptAck(_ value: String) throws {
+        _ = try decodeReceiptAck(value)
     }
 
     private static func base64UrlEncode(_ data: Data) -> String {
@@ -577,7 +607,7 @@ public enum OfflineNoteV2TransferHandoff {
         expectedKind: OfflineNoteV2TextPayloadKind? = nil
     ) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        _ = try OfflineNoteV2TransferTextPayloadCodec.decode(trimmed, expectedKind: expectedKind)
+        try OfflineNoteV2TransferTextPayloadCodec.validatePayloadContents(trimmed, expectedKind: expectedKind)
         return trimmed
     }
 

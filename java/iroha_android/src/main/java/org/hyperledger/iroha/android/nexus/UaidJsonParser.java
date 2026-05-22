@@ -66,17 +66,28 @@ public final class UaidJsonParser {
               expectObject(
                   assetItems.get(k),
                   "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "]");
+          final String assetPath =
+              "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "]";
+          final Object assetDefinition = pick(asset, "asset_definition_id", "assetDefinitionId");
+          if (assetDefinition != null) {
+            assets.add(
+                new UaidPortfolioAsset(
+                    asString(pick(asset, "asset_id", "assetId"), assetPath + ".asset_id"),
+                    asString(assetDefinition, assetPath + ".asset_definition_id"),
+                    asString(asset.get("quantity"), assetPath + ".quantity")));
+            continue;
+          }
           assets.add(
-              new UaidPortfolioAsset(
+              UaidPortfolioAsset.legacy(
                   asString(
                       asset.get("asset"),
-                      "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].asset"),
+                      assetPath + ".asset"),
                   asString(
                       asset.get("scope"),
-                      "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].scope"),
+                      assetPath + ".scope"),
                   asString(
                       asset.get("quantity"),
-                      "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].quantity")));
+                      assetPath + ".quantity")));
         }
         accountsList.add(new UaidPortfolioAccount(accountId, label, assets));
       }
@@ -224,6 +235,15 @@ public final class UaidJsonParser {
       return null;
     }
     return value instanceof String string ? string : String.valueOf(value);
+  }
+
+  private static Object pick(final Map<String, Object> object, final String... keys) {
+    for (final String key : keys) {
+      if (object.containsKey(key)) {
+        return object.get(key);
+      }
+    }
+    return null;
   }
 
   private static long asLong(final Object value, final String path) {

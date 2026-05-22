@@ -10,6 +10,10 @@ import java.util.Base64
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.LongSupplier
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -1503,6 +1507,67 @@ class OfflineNoteV2Test {
     }
 
     @Test
+    fun walletLoadDoesNotBlockIssuerCompletionThread() {
+        val fixture = loadFixture()
+        val token = obj(fixture, "payment_token")
+        val derivation = obj(obj(fixture, "chain_vectors"), "derivation")
+        val issue = obj(obj(fixture, "chain_vectors"), "issue")
+        val senderCertificate = certificate(obj(token, "sender_key_certificate"))
+        val accountId = accountFromAssetId(string(issue, "asset_id"))
+        val loadContext = OfflineNoteV2LoadContext(
+            operationId = string(derivation, "issuer_load_operation_id"),
+            lineageId = string(derivation, "issuer_load_lineage_id"),
+            localRevision = long(derivation, "issuer_load_local_revision"),
+            keyCertificate = senderCertificate,
+        )
+        val issuerClient = CompletionControlledIssuerClient(loadContext)
+        val store = BlockingOfflineNoteV2Store()
+        val wallet = OfflineNoteV2Wallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountId,
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            store = store,
+            issuerClient = issuerClient,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "source_note_secret_hex")))),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_001_000L },
+        )
+
+        val load = wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount"))
+        assertTrue(issuerClient.issueRequested.await(5, TimeUnit.SECONDS))
+        val request = requireNotNull(issuerClient.lastIssueRequest)
+        val response = OfflineNoteV2IssueResponse(
+            noteCommitment = request.noteCommitment(),
+            operationId = request.loadContext.operationId,
+            lineageId = request.loadContext.lineageId,
+            localRevision = request.loadContext.localRevision,
+            keyCertificate = request.loadContext.keyCertificate,
+            settlementEntryHashHex = "settlement-entry-hash",
+        )
+        val completeReturned = AtomicBoolean(false)
+        val issuerCompleter = Executors.newSingleThreadExecutor { Thread(it, "offline-note-v2-issuer-completer") }
+        try {
+            issuerCompleter.submit {
+                issuerClient.issueFuture.complete(response)
+                completeReturned.set(true)
+            }
+            assertTrue(store.entered.await(5, TimeUnit.SECONDS))
+            assertTrue(completeReturned.get())
+            store.release.countDown()
+            assertEquals(
+                string(derivation, "source_note_commitment"),
+                load.get(5, TimeUnit.SECONDS).noteCommitmentHex(),
+            )
+        } finally {
+            store.release.countDown()
+            issuerCompleter.shutdownNow()
+        }
+    }
+
+    @Test
     fun toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment() {
         val fixture = loadFixture()
         val certificateJson = obj(obj(fixture, "payment_token"), "sender_key_certificate")
@@ -1514,6 +1579,7 @@ class OfflineNoteV2Test {
             offlinePublicKey = offlinePublicKey,
             deviceBinding = linkedMapOf(
                 "device_id" to "device-1",
+                "attestation_key_id" to "attestation-key-1",
                 "offline_public_key" to offlinePublicKey,
                 "signature_base64" to "nested-device-signature-is-not-body-auth",
             ),
@@ -1569,6 +1635,9 @@ class OfflineNoteV2Test {
         val refillBody = executor.requestBody(0)
         assertEquals(accountId, string(refillBody, "account_id"))
         assertEquals("operation-refill-1", string(refillBody, "operation_id"))
+        assertEquals(0L, long(refillBody, "local_revision"))
+        assertEquals("", string(refillBody, "local_state_hash"))
+        assertEquals("attestation-key-1", string(refillBody, "attestation_key_id"))
         assertEquals("auth-refill-1", string(refillBody, "nonce"))
         assertTrue(string(refillBody, "signature_base64").isNotBlank())
         assertEquals(
@@ -2899,6 +2968,44 @@ class OfflineNoteV2Test {
                     settlementEntryHashHex = "settlement-entry-hash",
                 )
             )
+        }
+    }
+
+    private class CompletionControlledIssuerClient(
+        private val loadContext: OfflineNoteV2LoadContext,
+    ) : OfflineNoteV2IssuerClient {
+        val issueRequested = CountDownLatch(1)
+        val issueFuture = CompletableFuture<OfflineNoteV2IssueResponse>()
+
+        @Volatile
+        var lastIssueRequest: OfflineNoteV2IssueRequest? = null
+
+        override fun prepareLoad(
+            chainId: String,
+            accountId: String,
+            assetDefinitionId: String,
+            amount: String,
+        ): CompletableFuture<OfflineNoteV2LoadContext> = CompletableFuture.completedFuture(loadContext)
+
+        override fun issueNote(request: OfflineNoteV2IssueRequest): CompletableFuture<OfflineNoteV2IssueResponse> {
+            lastIssueRequest = request
+            issueRequested.countDown()
+            return issueFuture
+        }
+    }
+
+    private class BlockingOfflineNoteV2Store : OfflineNoteV2Store {
+        private val notes = LinkedHashMap<String, OfflineNoteV2WalletNote>()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+
+        @Synchronized
+        override fun <T> mutateNotes(mutator: (MutableMap<String, OfflineNoteV2WalletNote>) -> T): T {
+            entered.countDown()
+            check(release.await(5, TimeUnit.SECONDS)) {
+                "timed out waiting to release blocked note store"
+            }
+            return mutator(notes)
         }
     }
 
