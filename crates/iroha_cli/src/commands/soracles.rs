@@ -15,10 +15,10 @@ use iroha::data_model::{
     isi::{InstructionBox, oracle as oracle_isi},
     nexus::UniversalAccountId,
     oracle::{
-        FeedConfig, FeedConfigVersion, FeedEventOutcome, FeedId, FeedSlot, KeyedHash, Observation,
-        OracleChangeClass, OracleChangeId, OracleChangeStage, OracleDisputeId,
-        OracleDisputeOutcome, OracleProviderKey, OracleRejectionCode, DefiOracleAttestation,
-        DefiOracleAttestationKey, TwitterBindingAttestation,
+        DefiOracleAttestation, DefiOracleAttestationKey, FeedConfig, FeedConfigVersion,
+        FeedEventOutcome, FeedId, FeedSlot, KeyedHash, Observation, OracleChangeClass,
+        OracleChangeId, OracleChangeStage, OracleDisputeId, OracleDisputeOutcome,
+        OracleProviderKey, OracleRejectionCode, TwitterBindingAttestation,
     },
     prelude::{Hash, QueryBuilderExt},
     query::oracle::prelude as oracle_query,
@@ -627,8 +627,7 @@ impl Run for TxCommand {
                 reason: args.reason,
             }),
             Self::AttestDefi(args) => {
-                let attestation: DefiOracleAttestation =
-                    load_json_file(&args.attestation_json)?;
+                let attestation: DefiOracleAttestation = load_json_file(&args.attestation_json)?;
                 InstructionBox::from(oracle_isi::SubmitDefiOracleAttestation { attestation })
             }
             Self::RecordTwitterBinding(args) => {
@@ -1967,7 +1966,13 @@ mod tests {
                 "--change-id",
                 change_id.as_str(),
             ],
-            vec!["soracles", "tx", "record-twitter-binding", "--feed-id", "xor_usd"],
+            vec![
+                "soracles",
+                "tx",
+                "record-twitter-binding",
+                "--feed-id",
+                "xor_usd",
+            ],
         ];
 
         for argv in cases {
@@ -2038,20 +2043,8 @@ mod tests {
                 "--outcome",
                 "upheld",
             ],
-            vec![
-                "soracles",
-                "query",
-                "change",
-                "--change-id",
-                "not-a-hash",
-            ],
-            vec![
-                "soracles",
-                "query",
-                "dispute",
-                "--dispute-id",
-                "not-an-id",
-            ],
+            vec!["soracles", "query", "change", "--change-id", "not-a-hash"],
+            vec!["soracles", "query", "dispute", "--dispute-id", "not-an-id"],
         ];
 
         for argv in cases {

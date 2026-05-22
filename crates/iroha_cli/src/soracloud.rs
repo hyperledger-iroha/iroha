@@ -161,6 +161,18 @@ pub enum Command {
     Agent(AgentCommand),
 }
 
+impl Command {
+    pub(crate) fn allows_fallback_config(&self) -> bool {
+        match self {
+            Self::App(command) => command.allows_fallback_config(),
+            Self::Service(command) => command.allows_fallback_config(),
+            Self::Model(command) => command.allows_fallback_config(),
+            Self::Hf(command) => command.allows_fallback_config(),
+            Self::Agent(command) => command.allows_fallback_config(),
+        }
+    }
+}
+
 #[derive(clap::Subcommand, Debug)]
 pub enum ServiceCommand {
     /// Scaffold baseline container/service manifests.
@@ -342,6 +354,19 @@ pub enum AppCommand {
 }
 
 impl AppCommand {
+    fn allows_fallback_config(&self) -> bool {
+        matches!(
+            self,
+            Self::Init(_)
+                | Self::LocalPlan(_)
+                | Self::Doctor(_)
+                | Self::LocalDev(_)
+                | Self::BuildAndSync(_)
+                | Self::Simulate(_)
+                | Self::Status(_)
+        )
+    }
+
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Init(args) => context.print_data(&args.run()?),
@@ -394,6 +419,22 @@ impl Run for Command {
 }
 
 impl ServiceCommand {
+    fn allows_fallback_config(&self) -> bool {
+        matches!(
+            self,
+            Self::Init(_)
+                | Self::LocalPlan(_)
+                | Self::LocalDev(_)
+                | Self::BuildAndSync(_)
+                | Self::DeployWorkspace(_)
+                | Self::UpgradeWorkspace(_)
+                | Self::SyncManifests(_)
+                | Self::Status(_)
+                | Self::ConfigStatus(_)
+                | Self::SecretStatus(_)
+        )
+    }
+
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Init(args) => context.print_data(&args.run()?),
@@ -451,6 +492,13 @@ impl ServiceCommand {
 }
 
 impl AgentCommand {
+    fn allows_fallback_config(&self) -> bool {
+        matches!(
+            self,
+            Self::Status(_) | Self::MailboxStatus(_) | Self::AutonomyStatus(_)
+        )
+    }
+
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Deploy(args) => {
@@ -501,6 +549,18 @@ impl AgentCommand {
 }
 
 impl ModelCommand {
+    fn allows_fallback_config(&self) -> bool {
+        matches!(
+            self,
+            Self::TrainingJobStatus(_)
+                | Self::ArtifactStatus(_)
+                | Self::WeightStatus(_)
+                | Self::UploadEncryptionRecipient(_)
+                | Self::UploadStatus(_)
+                | Self::HostStatus(_)
+        )
+    }
+
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::TrainingJobStart(args) => {
@@ -558,6 +618,10 @@ impl ModelCommand {
 }
 
 impl HfCommand {
+    fn allows_fallback_config(&self) -> bool {
+        matches!(self, Self::Status(_))
+    }
+
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Deploy(args) => {
@@ -2280,7 +2344,7 @@ impl AppDoctorArgs {
 
         let live_prefix_ok = hosted_services
             .iter()
-            .all(|service| service.route_path_prefix.as_deref() == Some("/api/v1"));
+            .any(|service| service.route_path_prefix.as_deref() == Some("/api/v1"));
         push_check(
             "live_route_prefix",
             !hosted_services.is_empty() && live_prefix_ok,
@@ -2308,11 +2372,11 @@ impl AppDoctorArgs {
             let service_path = resolve_manifest_path(&manifest_dir, &service_ref.service_manifest);
             let container: SoraContainerManifestV1 = load_json(&container_path)?;
             let service: SoraServiceManifestV1 = load_json(&service_path)?;
-            let bundle_exists = service_ref
+            let bundle_path = service_ref
                 .bundle_file
                 .as_deref()
-                .map(|path| resolve_manifest_path(&manifest_dir, path))
-                .is_some_and(|path| path.is_file());
+                .map(|path| resolve_manifest_path(&manifest_dir, path));
+            let bundle_exists = bundle_path.as_ref().is_some_and(|path| path.is_file());
             push_check(
                 &format!("bundle_file:{}", service_ref.service_name),
                 bundle_exists,
@@ -2327,15 +2391,17 @@ impl AppDoctorArgs {
                     .unwrap_or_else(|| "<none>".to_owned()),
             );
 
+            let service_workspace_dir = app_service_workspace_dir(&container_path, &service_path);
+            let bundle_is_in_service_workspace = service_workspace_dir
+                .as_ref()
+                .zip(bundle_path.as_ref())
+                .is_some_and(|(workspace_dir, bundle_path)| bundle_path.starts_with(workspace_dir));
             let child_scripts_ok = if container.runtime == SoraContainerRuntimeV1::Inrou {
-                let scripts = app_service_workspace_scripts(
-                    app_service_workspace_dir(&container_path, &service_path).as_deref(),
-                );
-                scripts.dev.is_some() && scripts.build.is_some()
+                let scripts = app_service_workspace_scripts(service_workspace_dir.as_deref());
+                (scripts.dev.is_some() && scripts.build.is_some())
+                    || (bundle_exists && !bundle_is_in_service_workspace)
             } else {
-                let scripts = app_service_workspace_scripts(
-                    app_service_workspace_dir(&container_path, &service_path).as_deref(),
-                );
+                let scripts = app_service_workspace_scripts(service_workspace_dir.as_deref());
                 scripts.dev.is_some() && scripts.build.is_some() && scripts.verify_build.is_some()
             };
             push_check(

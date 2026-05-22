@@ -135,6 +135,14 @@ fn test_domain_register_request(
     domain: &DomainId,
     owner: &AccountId,
 ) -> Result<RegisterNameRequestV1> {
+    test_domain_register_request_for_owner_payer(domain, owner, owner)
+}
+
+fn test_domain_register_request_for_owner_payer(
+    domain: &DomainId,
+    owner: &AccountId,
+    payer: &AccountId,
+) -> Result<RegisterNameRequestV1> {
     let domain_label = domain.to_string();
     Ok(RegisterNameRequestV1 {
         selector: iroha_data_model::sns::NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_label)
@@ -148,12 +156,34 @@ fn test_domain_register_request(
             gross_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
             net_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
             settlement_tx: Json::from("mock-settlement"),
-            payer: owner.clone(),
+            payer: payer.clone(),
             signature: Json::from("mock-signature"),
         },
         governance: None,
         metadata: Metadata::default(),
     })
+}
+
+/// Build the SNS lease instruction required before a runtime domain registration.
+pub fn domain_registration_lease_instruction_for_owner_payer(
+    domain: &DomainId,
+    owner: &AccountId,
+    payer: &AccountId,
+) -> Result<InstructionBox> {
+    Ok(
+        RegisterSnsName::new(test_domain_register_request_for_owner_payer(
+            domain, owner, payer,
+        )?)
+        .into(),
+    )
+}
+
+/// Build the SNS lease instruction required before a runtime domain registration.
+pub fn domain_registration_lease_instruction(
+    domain: &DomainId,
+    owner: &AccountId,
+) -> Result<InstructionBox> {
+    domain_registration_lease_instruction_for_owner_payer(domain, owner, owner)
 }
 
 fn is_duplicate_sns_selector_error(err: &Report) -> bool {

@@ -556,8 +556,8 @@ impl Command {
             | Self::Ledger(_)
             | Self::Ops(_)
             | Self::Contract(_)
-            | Self::Taira(_)
-            | Self::Soracloud(_) => false,
+            | Self::Taira(_) => false,
+            Self::Soracloud(command) => command.allows_fallback_config(),
         }
     }
 }
@@ -834,8 +834,7 @@ mod app {
 
     fn sorafs_allows_fallback_config(command: &crate::commands::sorafs::Command) -> bool {
         use crate::commands::sorafs::{
-            Command as SorafsCommand, IncentivesCommand, IncentivesServiceCommand,
-            ReserveCommand,
+            Command as SorafsCommand, IncentivesCommand, IncentivesServiceCommand, ReserveCommand,
         };
 
         match command {
@@ -1078,7 +1077,9 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
 
     let mut config = match Config::load(load_path) {
         Ok(cfg) => cfg,
-        Err(_) if !config_was_explicit && !args.machine && args.command.allows_fallback_config() => {
+        Err(_)
+            if !config_was_explicit && !args.machine && args.command.allows_fallback_config() =>
+        {
             fallback_config()
         }
         Err(report) => {
@@ -8017,6 +8018,28 @@ mod tests {
         ])
         .expect_err("old nested Soracloud path must be removed");
         assert_eq!(err.kind(), ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn soracloud_offline_app_commands_allow_fallback_config() {
+        let init = Args::try_parse_from(["iroha", "soracloud", "app", "init"])
+            .expect("app init should parse");
+        assert!(init.command.allows_fallback_config());
+
+        let simulate = Args::try_parse_from([
+            "iroha",
+            "soracloud",
+            "app",
+            "simulate",
+            "--manifest",
+            "app_manifest.json",
+        ])
+        .expect("app simulate should parse");
+        assert!(simulate.command.allows_fallback_config());
+
+        let release = Args::try_parse_from(["iroha", "soracloud", "app", "release"])
+            .expect("app release should parse");
+        assert!(!release.command.allows_fallback_config());
     }
 
     #[test]
