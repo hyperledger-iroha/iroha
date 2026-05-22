@@ -10,6 +10,9 @@ import java.util.Base64
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.LongSupplier
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
@@ -303,6 +306,131 @@ class OfflineNoteV2ReceiveRequest(
     fun outputCommitmentHex(): String = hexLower(_outputCommitment)
 }
 
+/** QR/Norito handoff codec for Offline Note V2 receive requests. */
+object OfflineNoteV2ReceiveRequestCodec {
+    const val TYPE: String = "offline_receive_request_v2"
+    const val VERSION: Long = 2
+    const val TEXT_PREFIX: String = "wallet-offline-receive-v2:"
+    private const val RECEIVE_REQUEST_ENVELOPE_SCHEMA =
+        "iroha_data_model::offline::model::OfflineNoteReceiveRequestEnvelopeV2"
+
+    @JvmStatic
+    fun encodeNorito(request: OfflineNoteV2ReceiveRequest): ByteArray =
+        NoritoCodec.encode(request, RECEIVE_REQUEST_ENVELOPE_SCHEMA, ReceiveRequestAdapter, NoritoHeader.COMPACT_LEN)
+
+    @JvmStatic
+    fun decodeNorito(payload: ByteArray): OfflineNoteV2ReceiveRequest =
+        NoritoCodec.decode(payload, ReceiveRequestAdapter, RECEIVE_REQUEST_ENVELOPE_SCHEMA)
+
+    @JvmStatic
+    fun encodeText(request: OfflineNoteV2ReceiveRequest): String =
+        TEXT_PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(encodeNorito(request))
+
+    @JvmStatic
+    fun decodeText(text: String): OfflineNoteV2ReceiveRequest {
+        val trimmed = text.trim()
+        require(trimmed.startsWith(TEXT_PREFIX)) { "Offline Note V2 receive request prefix missing" }
+        return decodeNorito(Base64.getUrlDecoder().decode(trimmed.substring(TEXT_PREFIX.length)))
+    }
+
+    @JvmStatic
+    fun encodeQrFrameBytes(request: OfflineNoteV2ReceiveRequest): List<ByteArray> =
+        encodeQrFrameBytes(request, OfflineQrStream.Options())
+
+    @JvmStatic
+    fun encodeQrFrameBytes(
+        request: OfflineNoteV2ReceiveRequest,
+        options: OfflineQrStream.Options,
+    ): List<ByteArray> =
+        OfflineQrStream.Encoder.encodeFrameBytes(
+            encodeNorito(request),
+            OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_REQUEST_V2,
+            options,
+        )
+
+    @JvmStatic
+    fun decodeQrPayload(payload: ByteArray): OfflineNoteV2ReceiveRequest = decodeNorito(payload)
+
+    private object ReceiveRequestAdapter : TypeAdapter<OfflineNoteV2ReceiveRequest> {
+        override fun encode(encoder: NoritoEncoder, value: OfflineNoteV2ReceiveRequest) {
+            writeField(encoder) { it.writeUInt(VERSION, 64) }
+            writeField(encoder) { writeString(it, value.chainId) }
+            writeField(encoder) { writeString(it, value.paymentRequestId) }
+            writeField(encoder) { writeString(it, value.accountId) }
+            writeField(encoder) { writeString(it, value.assetDefinitionId) }
+            writeField(encoder) { writeString(it, value.assetId) }
+            writeField(encoder) { writeString(it, value.canonicalAmount) }
+            writeField(encoder) { writeBytesVec(it, value.keyCertificate.noritoEncoded()) }
+            writeField(encoder) { it.writeBytes(value.outputCommitment()) }
+        }
+
+        override fun decode(decoder: NoritoDecoder): OfflineNoteV2ReceiveRequest {
+            val version = readField(decoder) { it.readUInt(64) }
+            require(version == VERSION) { "Offline Note V2 receive request Norito version must be $VERSION" }
+            val chainId = readField(decoder) { readString(it) }
+            val paymentRequestId = readField(decoder) { readString(it) }
+            val accountId = readField(decoder) { readString(it) }
+            val assetDefinitionId = readField(decoder) { readString(it) }
+            val assetId = readField(decoder) { readString(it) }
+            val amount = readField(decoder) { readString(it) }
+            val keyCertificate = OfflineNoteV2.decodeCertificate(readField(decoder) { readBytesVec(it) })
+            val outputCommitment = readField(decoder) { it.readBytes(32) }
+            return OfflineNoteV2ReceiveRequest(
+                chainId = chainId,
+                paymentRequestId = paymentRequestId,
+                accountId = accountId,
+                assetDefinitionId = assetDefinitionId,
+                assetId = assetId,
+                amount = amount,
+                keyCertificate = keyCertificate,
+                outputCommitment = outputCommitment,
+            )
+        }
+    }
+
+    private fun writeField(encoder: NoritoEncoder, write: (NoritoEncoder) -> Unit) {
+        val child = encoder.childEncoder()
+        write(child)
+        val payload = child.toByteArray()
+        encoder.writeLength(payload.size.toLong(), true)
+        encoder.writeBytes(payload)
+    }
+
+    private fun writeString(encoder: NoritoEncoder, value: String) {
+        val bytes = value.toByteArray(StandardCharsets.UTF_8)
+        encoder.writeLength(bytes.size.toLong(), true)
+        encoder.writeBytes(bytes)
+    }
+
+    private fun writeBytesVec(encoder: NoritoEncoder, value: ByteArray) {
+        encoder.writeUInt(value.size.toLong(), 64)
+        encoder.writeBytes(value)
+    }
+
+    private fun <T> readField(decoder: NoritoDecoder, read: (NoritoDecoder) -> T): T {
+        val length = decoder.readLength(true)
+        require(length <= Int.MAX_VALUE) { "Offline Note V2 receive request field length overflow" }
+        val child = NoritoDecoder(decoder.readBytes(length.toInt()), decoder.flags, decoder.flagsHint)
+        val value = read(child)
+        require(child.remaining() == 0) { "Trailing bytes after Offline Note V2 receive request field decode" }
+        return value
+    }
+
+    private fun readString(decoder: NoritoDecoder): String {
+        val length = decoder.readLength(true)
+        require(length <= Int.MAX_VALUE) { "Offline Note V2 receive request string length overflow" }
+        val value = String(decoder.readBytes(length.toInt()), StandardCharsets.UTF_8)
+        require(value.isNotBlank()) { "Offline Note V2 receive request string must not be blank" }
+        return value
+    }
+
+    private fun readBytesVec(decoder: NoritoDecoder): ByteArray {
+        val length = decoder.readUInt(64)
+        require(length <= Int.MAX_VALUE) { "Offline Note V2 receive request bytes length overflow" }
+        return decoder.readBytes(length.toInt())
+    }
+}
+
 /** Payment token produced by a payer and accepted by the recipient. */
 class OfflineNoteV2PaymentToken(
     val chainId: String,
@@ -445,6 +573,171 @@ object OfflineNoteV2PaymentTokenCodec {
         val length = decoder.readUInt(64)
         require(length <= Int.MAX_VALUE) { "Offline Note V2 payment token bytes length overflow" }
         return decoder.readBytes(length.toInt())
+    }
+}
+
+/** Receipt ACK returned by a recipient after accepting an Offline Note V2 payment token. */
+class OfflineNoteV2ReceiptAck(
+    val chainId: String,
+    val paymentRequestId: String,
+    tokenId: ByteArray,
+    val recipientAccountId: String,
+    val acceptedAtMs: Long,
+) {
+    private val _tokenId = tokenId.copyOf()
+
+    init {
+        require(chainId.isNotBlank()) { "chainId must not be blank" }
+        require(paymentRequestId.isNotBlank()) { "paymentRequestId must not be blank" }
+        require(_tokenId.size == 32) { "tokenId must be 32 bytes" }
+        require(recipientAccountId.isNotBlank()) { "recipientAccountId must not be blank" }
+        require(acceptedAtMs >= 0L) { "acceptedAtMs must be non-negative" }
+    }
+
+    fun tokenId(): ByteArray = _tokenId.copyOf()
+    fun tokenIdHex(): String = hexLower(_tokenId)
+
+    fun matchesPaymentToken(token: OfflineNoteV2PaymentToken): Boolean =
+        chainId == token.chainId &&
+            paymentRequestId == token.paymentRequestId &&
+            _tokenId.contentEquals(token.tokenId()) &&
+            receiptAckTokenHasRecipientOutput(token, recipientAccountId)
+
+    fun requireMatchesPaymentToken(token: OfflineNoteV2PaymentToken) {
+        require(matchesPaymentToken(token)) { "receipt ACK does not match payment token" }
+    }
+
+    companion object {
+        @JvmStatic
+        fun fromPaymentToken(
+            token: OfflineNoteV2PaymentToken,
+            recipientAccountId: String,
+            acceptedAtMs: Long,
+        ): OfflineNoteV2ReceiptAck {
+            val checkedRecipient = recipientAccountId.trim()
+            require(checkedRecipient.isNotEmpty()) { "recipientAccountId must not be blank" }
+            require(receiptAckTokenHasRecipientOutput(token, checkedRecipient)) {
+                "payment token does not contain recipient output"
+            }
+            return OfflineNoteV2ReceiptAck(
+                chainId = token.chainId,
+                paymentRequestId = token.paymentRequestId,
+                tokenId = token.tokenId(),
+                recipientAccountId = checkedRecipient,
+                acceptedAtMs = acceptedAtMs,
+            )
+        }
+    }
+}
+
+private fun receiptAckTokenHasRecipientOutput(
+    token: OfflineNoteV2PaymentToken,
+    recipientAccountId: String,
+): Boolean =
+    token.audit.outputClaims.any { it.keyCertificate.accountId == recipientAccountId }
+
+/** QR/Norito handoff codec for Offline Note V2 receipt ACKs. */
+object OfflineNoteV2ReceiptAckCodec {
+    const val TYPE: String = "offline_receipt_ack_v2"
+    const val VERSION: Long = 2
+    const val TEXT_PREFIX: String = "wallet-offline-ack-v2:"
+    private const val RECEIPT_ACK_ENVELOPE_SCHEMA =
+        "iroha_data_model::offline::model::OfflineNoteReceiptAckEnvelopeV2"
+
+    @JvmStatic
+    fun encodeNorito(ack: OfflineNoteV2ReceiptAck): ByteArray =
+        NoritoCodec.encode(ack, RECEIPT_ACK_ENVELOPE_SCHEMA, ReceiptAckAdapter, NoritoHeader.COMPACT_LEN)
+
+    @JvmStatic
+    fun decodeNorito(payload: ByteArray): OfflineNoteV2ReceiptAck =
+        NoritoCodec.decode(payload, ReceiptAckAdapter, RECEIPT_ACK_ENVELOPE_SCHEMA)
+
+    @JvmStatic
+    fun encodeText(ack: OfflineNoteV2ReceiptAck): String =
+        TEXT_PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(encodeNorito(ack))
+
+    @JvmStatic
+    fun decodeText(text: String): OfflineNoteV2ReceiptAck {
+        val trimmed = text.trim()
+        require(trimmed.startsWith(TEXT_PREFIX)) { "Offline Note V2 receipt ACK prefix missing" }
+        return decodeNorito(Base64.getUrlDecoder().decode(trimmed.substring(TEXT_PREFIX.length)))
+    }
+
+    @JvmStatic
+    fun encodeQrFrameBytes(ack: OfflineNoteV2ReceiptAck): List<ByteArray> =
+        encodeQrFrameBytes(ack, OfflineQrStream.Options())
+
+    @JvmStatic
+    fun encodeQrFrameBytes(
+        ack: OfflineNoteV2ReceiptAck,
+        options: OfflineQrStream.Options,
+    ): List<ByteArray> =
+        OfflineQrStream.Encoder.encodeFrameBytes(
+            encodeNorito(ack),
+            OfflineQrStream.PayloadKind.OFFLINE_RECEIPT_ACK_V2,
+            options,
+        )
+
+    @JvmStatic
+    fun decodeQrPayload(payload: ByteArray): OfflineNoteV2ReceiptAck = decodeNorito(payload)
+
+    private object ReceiptAckAdapter : TypeAdapter<OfflineNoteV2ReceiptAck> {
+        override fun encode(encoder: NoritoEncoder, value: OfflineNoteV2ReceiptAck) {
+            writeField(encoder) { it.writeUInt(VERSION, 64) }
+            writeField(encoder) { writeString(it, value.chainId) }
+            writeField(encoder) { writeString(it, value.paymentRequestId) }
+            writeField(encoder) { it.writeBytes(value.tokenId()) }
+            writeField(encoder) { writeString(it, value.recipientAccountId) }
+            writeField(encoder) { it.writeUInt(value.acceptedAtMs, 64) }
+        }
+
+        override fun decode(decoder: NoritoDecoder): OfflineNoteV2ReceiptAck {
+            val version = readField(decoder) { it.readUInt(64) }
+            require(version == VERSION) { "Offline Note V2 receipt ACK Norito version must be $VERSION" }
+            val chainId = readField(decoder) { readString(it) }
+            val paymentRequestId = readField(decoder) { readString(it) }
+            val tokenId = readField(decoder) { it.readBytes(32) }
+            val recipientAccountId = readField(decoder) { readString(it) }
+            val acceptedAtMs = readField(decoder) { it.readUInt(64) }
+            return OfflineNoteV2ReceiptAck(
+                chainId = chainId,
+                paymentRequestId = paymentRequestId,
+                tokenId = tokenId,
+                recipientAccountId = recipientAccountId,
+                acceptedAtMs = acceptedAtMs,
+            )
+        }
+    }
+
+    private fun writeField(encoder: NoritoEncoder, write: (NoritoEncoder) -> Unit) {
+        val child = encoder.childEncoder()
+        write(child)
+        val payload = child.toByteArray()
+        encoder.writeLength(payload.size.toLong(), true)
+        encoder.writeBytes(payload)
+    }
+
+    private fun writeString(encoder: NoritoEncoder, value: String) {
+        val bytes = value.toByteArray(StandardCharsets.UTF_8)
+        encoder.writeLength(bytes.size.toLong(), true)
+        encoder.writeBytes(bytes)
+    }
+
+    private fun <T> readField(decoder: NoritoDecoder, read: (NoritoDecoder) -> T): T {
+        val length = decoder.readLength(true)
+        require(length <= Int.MAX_VALUE) { "Offline Note V2 receipt ACK field length overflow" }
+        val child = NoritoDecoder(decoder.readBytes(length.toInt()), decoder.flags, decoder.flagsHint)
+        val value = read(child)
+        require(child.remaining() == 0) { "Trailing bytes after Offline Note V2 receipt ACK field decode" }
+        return value
+    }
+
+    private fun readString(decoder: NoritoDecoder): String {
+        val length = decoder.readLength(true)
+        require(length <= Int.MAX_VALUE) { "Offline Note V2 receipt ACK string length overflow" }
+        val value = String(decoder.readBytes(length.toInt()), StandardCharsets.UTF_8)
+        require(value.isNotBlank()) { "Offline Note V2 receipt ACK string must not be blank" }
+        return value
     }
 }
 
@@ -792,6 +1085,15 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
     private val idGenerator: OfflineNoteV2IdGenerator = UuidOfflineNoteV2IdGenerator(),
     private val clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
 ) {
+    private companion object {
+        private val loadThreadIds = AtomicInteger()
+        private val loadExecutor = Executors.newCachedThreadPool { task ->
+            Thread(task, "iroha-offline-note-v2-wallet-${loadThreadIds.incrementAndGet()}").apply {
+                isDaemon = true
+            }
+        }
+    }
+
     init {
         require(chainId.trim().isNotEmpty()) { "chainId must not be blank" }
         require(accountId.trim().isNotEmpty()) { "accountId must not be blank" }
@@ -804,54 +1106,94 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
             IllegalStateException("Offline Note V2 issuer client is required for load")
         )
         val assetId = walletAssetId(assetDefinitionId, accountId)
-        return issuer.prepareLoad(chainId, accountId, assetDefinition(assetId), amount)
-            .thenCompose { context ->
-                requireTrustedCertificate(context.keyCertificate, accountId)
-                val noteSecret = random32()
-                val origin = OfflineNoteV2.CommitmentOriginV2.IssuerLoad(
-                    operationId = context.operationId,
-                    lineageId = context.lineageId,
-                    localRevision = context.localRevision,
-                )
-                val noteCommitment = deriveNoteCommitment(
-                    keyCertificate = context.keyCertificate,
-                    assetId = assetId,
-                    amount = amount,
-                    noteSecret = noteSecret,
-                    origin = origin,
-                )
-                val request = OfflineNoteV2IssueRequest(
-                    chainId = chainId,
-                    accountId = accountId,
-                    assetDefinitionId = assetDefinition(assetId),
-                    assetId = assetId,
-                    amount = amount,
-                    loadContext = context,
-                    noteCommitment = noteCommitment,
-                )
-                issuer.issueNote(request).thenApply { response ->
-                    require(response.noteCommitment().contentEquals(noteCommitment)) {
-                        "issuer returned a different Offline Note V2 commitment"
+        val result = CompletableFuture<OfflineNoteV2WalletNote>()
+        issuer.prepareLoad(chainId, accountId, assetDefinition(assetId), amount)
+            .whenComplete { context, prepareError ->
+                loadExecutor.execute(prepareComplete@{
+                    if (prepareError != null) {
+                        result.completeExceptionally(unwrapCompletion(prepareError))
+                        return@prepareComplete
                     }
-                    val issuedCertificate = response.keyCertificate ?: context.keyCertificate
-                    requireTrustedCertificate(issuedCertificate, accountId)
-                    val issued = OfflineNoteV2WalletNote(
-                        chainId = chainId,
-                        accountId = accountId,
-                        assetId = assetId,
-                        amount = amount,
-                        keyCertificate = issuedCertificate,
-                        noteCommitment = noteCommitment,
-                        noteSecret = noteSecret,
-                        origin = origin,
-                        state = OfflineNoteV2WalletNoteState.SPENDABLE,
-                        createdAtMs = clock.getAsLong(),
-                        updatedAtMs = clock.getAsLong(),
-                    )
-                    store.upsert(issued)
-                    issued
-                }
+                    if (context == null) {
+                        result.completeExceptionally(
+                            IllegalStateException("Offline Note V2 issuer returned no load context")
+                        )
+                        return@prepareComplete
+                    }
+                    val noteSecret: ByteArray
+                    val origin: OfflineNoteV2.CommitmentOriginV2.IssuerLoad
+                    val noteCommitment: ByteArray
+                    val request: OfflineNoteV2IssueRequest
+                    try {
+                        requireTrustedCertificate(context.keyCertificate, accountId)
+                        noteSecret = random32()
+                        origin = OfflineNoteV2.CommitmentOriginV2.IssuerLoad(
+                            operationId = context.operationId,
+                            lineageId = context.lineageId,
+                            localRevision = context.localRevision,
+                        )
+                        noteCommitment = deriveNoteCommitment(
+                            keyCertificate = context.keyCertificate,
+                            assetId = assetId,
+                            amount = amount,
+                            noteSecret = noteSecret,
+                            origin = origin,
+                        )
+                        request = OfflineNoteV2IssueRequest(
+                            chainId = chainId,
+                            accountId = accountId,
+                            assetDefinitionId = assetDefinition(assetId),
+                            assetId = assetId,
+                            amount = amount,
+                            loadContext = context,
+                            noteCommitment = noteCommitment,
+                        )
+                    } catch (error: Throwable) {
+                        result.completeExceptionally(error)
+                        return@prepareComplete
+                    }
+                    issuer.issueNote(request).whenComplete { response, issueError ->
+                        loadExecutor.execute(issueComplete@{
+                            if (issueError != null) {
+                                result.completeExceptionally(unwrapCompletion(issueError))
+                                return@issueComplete
+                            }
+                            if (response == null) {
+                                result.completeExceptionally(
+                                    IllegalStateException("Offline Note V2 issuer returned no issue response")
+                                )
+                                return@issueComplete
+                            }
+                            try {
+                                require(response.noteCommitment().contentEquals(noteCommitment)) {
+                                    "issuer returned a different Offline Note V2 commitment"
+                                }
+                                val issuedCertificate = response.keyCertificate ?: context.keyCertificate
+                                requireTrustedCertificate(issuedCertificate, accountId)
+                                val now = clock.getAsLong()
+                                val issued = OfflineNoteV2WalletNote(
+                                    chainId = chainId,
+                                    accountId = accountId,
+                                    assetId = assetId,
+                                    amount = amount,
+                                    keyCertificate = issuedCertificate,
+                                    noteCommitment = noteCommitment,
+                                    noteSecret = noteSecret,
+                                    origin = origin,
+                                    state = OfflineNoteV2WalletNoteState.SPENDABLE,
+                                    createdAtMs = now,
+                                    updatedAtMs = now,
+                                )
+                                store.upsert(issued)
+                                result.complete(issued)
+                            } catch (error: Throwable) {
+                                result.completeExceptionally(error)
+                            }
+                        })
+                    }
+                })
             }
+        return result
     }
 
     fun prepareReceive(assetDefinitionId: String, amount: String): OfflineNoteV2ReceiveRequest {
@@ -1292,6 +1634,9 @@ private fun <T> failedFuture(error: Throwable): CompletableFuture<T> {
     future.completeExceptionally(error)
     return future
 }
+
+private fun unwrapCompletion(error: Throwable): Throwable =
+    if (error is CompletionException && error.cause != null) error.cause!! else error
 
 @Suppress("UNCHECKED_CAST")
 private fun requireObject(value: Any?, path: String): Map<String, Any?> {

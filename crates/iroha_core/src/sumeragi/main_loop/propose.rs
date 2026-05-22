@@ -681,6 +681,17 @@ impl Actor {
         let mut ivm_transactions_included = 0usize;
         let mut ivm_transactions_deferred = 0usize;
         let scan_budget = scan_budget.max(1);
+        let committed_nexus = state.nexus_snapshot();
+        if self.queue.reconfigure_nexus_with_state_if_needed(
+            &committed_nexus,
+            state,
+            self.queue.lane_compliance_engine(),
+        ) {
+            info!(
+                height,
+                view, "proposal queue routing refreshed from committed Nexus state"
+            );
+        }
 
         loop {
             let remaining_budget = scan_budget.saturating_sub(fetched_total);

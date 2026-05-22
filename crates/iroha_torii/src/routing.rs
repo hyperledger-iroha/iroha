@@ -23696,6 +23696,7 @@ pub struct ContractViewBatchGetParams {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(decode_from_slice)]
 /// Selects a multisig authority either by its active concrete account id or by stable alias.
 pub struct MultisigAccountSelectorDto {
     /// Active concrete multisig account id.
@@ -23863,6 +23864,78 @@ pub struct MultisigContractCallApproveDto {
     /// Optional deterministic hash of the proposal instructions.
     #[norito(default)]
     pub instructions_hash: Option<String>,
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod multisig_native_norito_dto_tests {
+    use super::{IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto};
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{account::AccountId, smart_contract::ContractAlias};
+    use norito::NoritoSerialize;
+
+    fn bare_payload_with_flags<T: NoritoSerialize>(
+        value: &T,
+        flags: u8,
+        flags_hint: u8,
+    ) -> Vec<u8> {
+        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
+        let _sequential = norito::core::SequentialOverrideGuard::enter();
+        let mut payload = Vec::new();
+        value
+            .serialize(&mut payload)
+            .expect("serialize bare payload");
+        payload
+    }
+
+    #[test]
+    fn multisig_contract_call_propose_native_norito_flattens_selector() {
+        let signer = AccountId::new(KeyPair::random().public_key().clone());
+        let request = MultisigContractCallProposeDto {
+            selector: MultisigAccountSelectorDto {
+                multisig_account_id: None,
+                multisig_account_alias: Some("cbdc@hbl.sbp".to_owned()),
+            },
+            signer_account_id: signer.clone(),
+            private_key: None,
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(1_700_000_000_234),
+            contract_address: None,
+            contract_alias: Some(
+                "apps_mint_request::sbp"
+                    .parse::<ContractAlias>()
+                    .expect("contract alias"),
+            ),
+            entrypoint: "create_mint_request".to_owned(),
+            payload: Some(IrohaJson::new(norito::json::Value::from(111_u64))),
+            gas_asset_id: None,
+            fee_sponsor: Some("sponsor@sbp".to_owned()),
+            gas_limit: Some(10_000),
+        };
+
+        let bytes = norito::to_bytes(&request).expect("encode request");
+        let view = norito::core::from_bytes_view(&bytes).expect("payload view");
+        let selector_payload =
+            bare_payload_with_flags(&request.selector, view.flags(), view.flags_hint());
+        assert_eq!(
+            view.as_bytes().get(..selector_payload.len()),
+            Some(selector_payload.as_slice()),
+            "native Norito selector must be flattened for contract-call multisig DTOs"
+        );
+
+        let decoded: MultisigContractCallProposeDto =
+            norito::decode_from_bytes(&bytes).expect("decode request");
+        assert_eq!(decoded.signer_account_id, signer);
+        assert_eq!(
+            decoded.selector.multisig_account_alias.as_deref(),
+            Some("cbdc@hbl.sbp")
+        );
+        assert_eq!(decoded.entrypoint, "create_mint_request");
+        let payload = decoded.payload.expect("payload");
+        let payload: norito::json::Value = payload.try_into_any_norito().expect("json payload");
+        assert_eq!(payload.as_u64(), Some(111));
+        assert_eq!(decoded.fee_sponsor.as_deref(), Some("sponsor@sbp"));
+    }
 }
 
 #[cfg(feature = "app_api")]

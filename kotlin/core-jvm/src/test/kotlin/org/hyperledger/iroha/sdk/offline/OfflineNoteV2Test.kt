@@ -10,6 +10,10 @@ import java.util.Base64
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.LongSupplier
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -481,6 +485,103 @@ class OfflineNoteV2Test {
     }
 
     @Test
+    fun receiveRequestCodecRoundTripsNoritoTextAndQrFrames() {
+        val fixture = loadFixture()
+        val request = receiveRequestFixture(fixture)
+
+        val noritoDecoded = OfflineNoteV2ReceiveRequestCodec.decodeNorito(
+            OfflineNoteV2ReceiveRequestCodec.encodeNorito(request)
+        )
+        assertEquals(request.paymentRequestId, noritoDecoded.paymentRequestId)
+        assertEquals(request.accountId, noritoDecoded.accountId)
+        assertEquals(request.assetId, noritoDecoded.assetId)
+        assertEquals(request.canonicalAmount, noritoDecoded.canonicalAmount)
+        assertEquals(request.outputCommitmentHex(), noritoDecoded.outputCommitmentHex())
+        assertEquals(hex(request.keyCertificate.payloadHash()), hex(noritoDecoded.keyCertificate.payloadHash()))
+
+        val text = OfflineNoteV2ReceiveRequestCodec.encodeText(request)
+        assertTrue(text.startsWith(OfflineNoteV2ReceiveRequestCodec.TEXT_PREFIX))
+        assertEquals(
+            request.outputCommitmentHex(),
+            OfflineNoteV2ReceiveRequestCodec.decodeText(text).outputCommitmentHex(),
+        )
+
+        val frames = OfflineNoteV2ReceiveRequestCodec.encodeQrFrameBytes(
+            request,
+            OfflineQrStream.Options(chunkSize = 180, parityGroup = 2),
+        )
+        val decoder = OfflineQrStream.Decoder()
+        var payload: ByteArray? = null
+        for (frame in frames) {
+            val result = decoder.ingest(frame)
+            assertEquals(OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_REQUEST_V2, result.payloadKind)
+            payload = result.payload ?: payload
+        }
+        assertEquals(
+            request.outputCommitmentHex(),
+            OfflineNoteV2ReceiveRequestCodec.decodeQrPayload(assertNotNull(payload)).outputCommitmentHex(),
+        )
+    }
+
+    @Test
+    fun receiptAckCodecRoundTripsNoritoTextAndQrFrames() {
+        val fixture = loadFixture()
+        val payment = obj(fixture, "payment_token")
+        val token = OfflineNoteV2PaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")),
+        )
+        val ack = OfflineNoteV2ReceiptAck.fromPaymentToken(
+            token = token,
+            recipientAccountId = string(payment, "recipient_account_id"),
+            acceptedAtMs = long(obj(fixture, "receipt_ack"), "accepted_at_ms"),
+        )
+
+        val noritoDecoded = OfflineNoteV2ReceiptAckCodec.decodeNorito(
+            OfflineNoteV2ReceiptAckCodec.encodeNorito(ack),
+        )
+        assertEquals(ack.chainId, noritoDecoded.chainId)
+        assertEquals(ack.paymentRequestId, noritoDecoded.paymentRequestId)
+        assertEquals(ack.tokenIdHex(), noritoDecoded.tokenIdHex())
+        assertEquals(ack.recipientAccountId, noritoDecoded.recipientAccountId)
+        assertTrue(noritoDecoded.matchesPaymentToken(token))
+
+        val text = OfflineNoteV2ReceiptAckCodec.encodeText(ack)
+        assertTrue(text.startsWith(OfflineNoteV2ReceiptAckCodec.TEXT_PREFIX))
+        assertEquals(ack.tokenIdHex(), OfflineNoteV2ReceiptAckCodec.decodeText(text).tokenIdHex())
+
+        val frames = OfflineNoteV2ReceiptAckCodec.encodeQrFrameBytes(
+            ack,
+            OfflineQrStream.Options(chunkSize = 180, parityGroup = 2),
+        )
+        val decoder = OfflineQrStream.Decoder()
+        var payload: ByteArray? = null
+        for (frame in frames) {
+            val result = decoder.ingest(frame)
+            assertEquals(OfflineQrStream.PayloadKind.OFFLINE_RECEIPT_ACK_V2, result.payloadKind)
+            payload = result.payload ?: payload
+        }
+        assertEquals(
+            ack.tokenIdHex(),
+            OfflineNoteV2ReceiptAckCodec.decodeQrPayload(assertNotNull(payload)).tokenIdHex(),
+        )
+    }
+
+    private fun receiveRequestFixture(fixture: Map<String, Any?>): OfflineNoteV2ReceiveRequest {
+        val derivation = obj(obj(fixture, "chain_vectors"), "derivation")
+        val payment = obj(fixture, "payment_token")
+        return OfflineNoteV2ReceiveRequest(
+            chainId = string(derivation, "chain_id"),
+            paymentRequestId = string(derivation, "payment_request_id"),
+            accountId = string(payment, "recipient_account_id"),
+            assetDefinitionId = string(payment, "asset_definition_id"),
+            assetId = "${string(payment, "asset_definition_id")}#${string(payment, "recipient_account_id")}",
+            amount = string(payment, "amount"),
+            keyCertificate = certificate(obj(payment, "recipient_key_certificate")),
+            outputCommitment = hexBytes(string(derivation, "recipient_output_commitment")),
+        )
+    }
+
+    @Test
     fun qrStreamRejectsAdversarialEnvelopesAndChunkShapes() {
         val payload = ByteArray(300) { ((it * 31 + 7) and 0xff).toByte() }
         val frames = OfflineQrStream.Encoder.encodeFrames(
@@ -602,7 +703,7 @@ class OfflineNoteV2Test {
         assertFailsWith<IllegalArgumentException> {
             repeatedHeaderDecoder.ingest(mutatedHeaderFrame(header) { envelope ->
                 envelope.apply {
-                    writeUInt16LE(this, 10, OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_CHALLENGE_V2.value)
+                    writeUInt16LE(this, 10, OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_REQUEST_V2.value)
                 }
             })
         }
@@ -763,6 +864,11 @@ class OfflineNoteV2Test {
             audit = audit(fixture),
             createdAtMs = long(payment, "created_at_ms"),
         )
+        val receiptAck = OfflineNoteV2ReceiptAck.fromPaymentToken(
+            token = token,
+            recipientAccountId = string(payment, "recipient_account_id"),
+            acceptedAtMs = long(obj(fixture, "receipt_ack"), "accepted_at_ms"),
+        )
         val canonicalPayload = base64Bytes(string(sdkInterop, "payment_token_norito_base64"))
 
         val capabilities = OfflineNoteV2TransferCapabilities.current()
@@ -775,6 +881,17 @@ class OfflineNoteV2Test {
         assertEquals(OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE, nearby.contentType)
         assertContentEquals(canonicalPayload, nearby.payload())
         assertEquals(token.tokenIdHex(), OfflineNoteV2TransferHandoff.decodePaymentToken(nearby).tokenIdHex())
+        val nearbyAck = OfflineNoteV2TransferHandoff.receiptAckPayload(
+            receiptAck,
+            OfflineNoteV2TransferModality.NEARBY,
+        )
+        assertEquals(receiptAck.tokenIdHex(), OfflineNoteV2TransferHandoff.decodeReceiptAck(nearbyAck).tokenIdHex())
+        assertEquals(
+            receiptAck.tokenIdHex(),
+            OfflineNoteV2TransferHandoff.decodeNearbyReceiptAck(
+                OfflineNoteV2TransferHandoff.nearbyReceiptAckEnvelopeBytes(receiptAck),
+            ).tokenIdHex(),
+        )
 
         @Suppress("UNCHECKED_CAST")
         val expectedFrames = list(obj(sdkInterop, "payment_token_qr_v1"), "frames")
@@ -796,6 +913,14 @@ class OfflineNoteV2Test {
             nfcResult = nfcReceiver.ingestFrame(frame)
         }
         assertEquals(token.tokenIdHex(), assertNotNull(nfcResult?.token).tokenIdHex())
+
+        val ackFrames = OfflineNoteV2TransferHandoff.qrStreamingFrameBytes(receiptAck)
+        val ackReceiver = OfflineNoteV2TransferStreamReceiver()
+        var ackResult: OfflineNoteV2TransferStreamResult? = null
+        for (frame in ackFrames) {
+            ackResult = ackReceiver.ingestFrame(frame)
+        }
+        assertEquals(receiptAck.tokenIdHex(), assertNotNull(ackResult?.receiptAck).tokenIdHex())
     }
 
     @Test
@@ -1170,34 +1295,36 @@ class OfflineNoteV2Test {
         val token = OfflineNoteV2PaymentTokenCodec.decodeNorito(
             base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")),
         )
+        val receiveRequest = receiveRequestFixture(fixture)
+        val receiptAck = OfflineNoteV2ReceiptAck.fromPaymentToken(
+            token = token,
+            recipientAccountId = string(obj(fixture, "payment_token"), "recipient_account_id"),
+            acceptedAtMs = long(obj(fixture, "receipt_ack"), "accepted_at_ms"),
+        )
         val challenge = OfflineNoteV2NearbyPairingChallenge(" nearby_pairing_bird ")
         val challengeEnvelope = OfflineNoteV2NearbyEnvelope(
             kind = OfflineNoteV2NearbyMessageKind.CHALLENGE,
-            payload = "receive-challenge".toByteArray(),
-            contentType = OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE,
+            payload = OfflineNoteV2TransferHandoff.rawReceiveRequestBytes(receiveRequest),
+            contentType = OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE,
             pairingChallenge = challenge,
         )
         val paymentBytes = OfflineNoteV2TransferHandoff.nearbyPaymentEnvelopeBytes(token)
         val paymentEnvelope = OfflineNoteV2NearbyEnvelope.decode(paymentBytes)
         val ackEnvelope = OfflineNoteV2NearbyEnvelope(
             kind = OfflineNoteV2NearbyMessageKind.RECEIPT_ACK,
-            payload = "accepted-locally".toByteArray(),
+            payload = OfflineNoteV2TransferHandoff.rawReceiptAckBytes(receiptAck),
             contentType = OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE,
         )
 
         assertEquals(challenge, OfflineNoteV2NearbyEnvelope.decode(challengeEnvelope.encoded()).pairingChallenge)
+        assertEquals(
+            receiveRequest.outputCommitmentHex(),
+            OfflineNoteV2NearbyEnvelope.decode(challengeEnvelope.encoded()).receiveRequest().outputCommitmentHex(),
+        )
         assertEquals(OfflineNoteV2NearbyMessageKind.PAYMENT, paymentEnvelope.kind)
         assertEquals(token.tokenIdHex(), paymentEnvelope.paymentToken().tokenIdHex())
         assertEquals(token.tokenIdHex(), OfflineNoteV2TransferHandoff.decodeNearbyPaymentToken(paymentBytes).tokenIdHex())
-        assertContentEquals(
-            "accepted-locally".toByteArray(),
-            OfflineNoteV2NearbyEnvelope.decode(ackEnvelope.encoded()).payload(),
-        )
-
-        val legacyPairing = """
-            {"version":1,"kind":"challenge","payload":"cmVjZWl2ZS1jaGFsbGVuZ2U","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":"nearby_pairing_bird"}}
-        """.trimIndent().toByteArray()
-        assertEquals(challenge, OfflineNoteV2NearbyEnvelope.decode(legacyPairing).pairingChallenge)
+        assertTrue(OfflineNoteV2NearbyEnvelope.decode(ackEnvelope.encoded()).receiptAck().matchesPaymentToken(token))
     }
 
     @Test
@@ -1211,7 +1338,7 @@ class OfflineNoteV2Test {
             OfflineNoteV2NearbyEnvelope(
                 kind = OfflineNoteV2NearbyMessageKind.CHALLENGE,
                 payload = "challenge".toByteArray(),
-                contentType = OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE,
+                contentType = OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -1241,7 +1368,7 @@ class OfflineNoteV2Test {
             OfflineNoteV2NearbyEnvelope(
                 kind = OfflineNoteV2NearbyMessageKind.RECEIPT_ACK,
                 payload = "ok".toByteArray(),
-                contentType = OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE,
+                contentType = OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE,
             )
         }
 
@@ -1249,19 +1376,19 @@ class OfflineNoteV2Test {
             {"version":2,"kind":"payment","payload":"AQID","contentType":"application/vnd.iroha.offline.payment-token-v2+norito"}
         """.trimIndent().toByteArray()
         val fractionalVersion = """
-            {"version":1.5,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}
+            {"version":1.5,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-request-v2+norito","pairingChallenge":"nearby_pairing_bird"}
         """.trimIndent().toByteArray()
         val unknownField = """
             {"version":1,"kind":"payment","payload":"AQID","contentType":"application/vnd.iroha.offline.payment-token-v2+norito","extra":true}
         """.trimIndent().toByteArray()
         val challengeContentTypeDowngrade = """
-            {"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receipt-ack-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}
+            {"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receipt-ack-v2+norito","pairingChallenge":"nearby_pairing_bird"}
         """.trimIndent().toByteArray()
         val ackContentTypeDowngrade = """
-            {"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream"}
+            {"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receive-request-v2+norito"}
         """.trimIndent().toByteArray()
         val paddedPayload = """
-            {"version":1,"kind":"challenge","payload":"YQ==","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}
+            {"version":1,"kind":"challenge","payload":"YQ==","contentType":"application/vnd.iroha.offline.receive-request-v2+norito","pairingChallenge":"nearby_pairing_bird"}
         """.trimIndent().toByteArray()
         assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(unsupportedVersion) }
         assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(fractionalVersion) }
@@ -1272,16 +1399,16 @@ class OfflineNoteV2Test {
 
         val topLevelArray = "[]".toByteArray()
         val invalidBase64Payload = """
-            {"version":1,"kind":"challenge","payload":"!!!!","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}
+            {"version":1,"kind":"challenge","payload":"!!!!","contentType":"application/vnd.iroha.offline.receive-request-v2+norito","pairingChallenge":"nearby_pairing_bird"}
         """.trimIndent().toByteArray()
         val badPairingObject = """
-            {"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":1}}
+            {"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-request-v2+norito","pairingChallenge":{"assetName":1}}
         """.trimIndent().toByteArray()
         val smuggledPairingObject = """
-            {"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":"nearby_pairing_bird","extra":true}}
+            {"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-request-v2+norito","pairingChallenge":{"assetName":"nearby_pairing_bird","extra":true}}
         """.trimIndent().toByteArray()
         val ackWithPairing = """
-            {"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receipt-ack-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}
+            {"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receipt-ack-v2+norito","pairingChallenge":"nearby_pairing_bird"}
         """.trimIndent().toByteArray()
         assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(topLevelArray) }
         assertFailsWith<IllegalArgumentException> { OfflineNoteV2NearbyEnvelope.decode(invalidBase64Payload) }
@@ -1380,6 +1507,67 @@ class OfflineNoteV2Test {
     }
 
     @Test
+    fun walletLoadDoesNotBlockIssuerCompletionThread() {
+        val fixture = loadFixture()
+        val token = obj(fixture, "payment_token")
+        val derivation = obj(obj(fixture, "chain_vectors"), "derivation")
+        val issue = obj(obj(fixture, "chain_vectors"), "issue")
+        val senderCertificate = certificate(obj(token, "sender_key_certificate"))
+        val accountId = accountFromAssetId(string(issue, "asset_id"))
+        val loadContext = OfflineNoteV2LoadContext(
+            operationId = string(derivation, "issuer_load_operation_id"),
+            lineageId = string(derivation, "issuer_load_lineage_id"),
+            localRevision = long(derivation, "issuer_load_local_revision"),
+            keyCertificate = senderCertificate,
+        )
+        val issuerClient = CompletionControlledIssuerClient(loadContext)
+        val store = BlockingOfflineNoteV2Store()
+        val wallet = OfflineNoteV2Wallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountId,
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            store = store,
+            issuerClient = issuerClient,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "source_note_secret_hex")))),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_001_000L },
+        )
+
+        val load = wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount"))
+        assertTrue(issuerClient.issueRequested.await(5, TimeUnit.SECONDS))
+        val request = requireNotNull(issuerClient.lastIssueRequest)
+        val response = OfflineNoteV2IssueResponse(
+            noteCommitment = request.noteCommitment(),
+            operationId = request.loadContext.operationId,
+            lineageId = request.loadContext.lineageId,
+            localRevision = request.loadContext.localRevision,
+            keyCertificate = request.loadContext.keyCertificate,
+            settlementEntryHashHex = "settlement-entry-hash",
+        )
+        val completeReturned = AtomicBoolean(false)
+        val issuerCompleter = Executors.newSingleThreadExecutor { Thread(it, "offline-note-v2-issuer-completer") }
+        try {
+            issuerCompleter.submit {
+                issuerClient.issueFuture.complete(response)
+                completeReturned.set(true)
+            }
+            assertTrue(store.entered.await(5, TimeUnit.SECONDS))
+            assertTrue(completeReturned.get())
+            store.release.countDown()
+            assertEquals(
+                string(derivation, "source_note_commitment"),
+                load.get(5, TimeUnit.SECONDS).noteCommitmentHex(),
+            )
+        } finally {
+            store.release.countDown()
+            issuerCompleter.shutdownNow()
+        }
+    }
+
+    @Test
     fun toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment() {
         val fixture = loadFixture()
         val certificateJson = obj(obj(fixture, "payment_token"), "sender_key_certificate")
@@ -1391,6 +1579,7 @@ class OfflineNoteV2Test {
             offlinePublicKey = offlinePublicKey,
             deviceBinding = linkedMapOf(
                 "device_id" to "device-1",
+                "attestation_key_id" to "attestation-key-1",
                 "offline_public_key" to offlinePublicKey,
                 "signature_base64" to "nested-device-signature-is-not-body-auth",
             ),
@@ -1446,6 +1635,9 @@ class OfflineNoteV2Test {
         val refillBody = executor.requestBody(0)
         assertEquals(accountId, string(refillBody, "account_id"))
         assertEquals("operation-refill-1", string(refillBody, "operation_id"))
+        assertEquals(0L, long(refillBody, "local_revision"))
+        assertEquals("", string(refillBody, "local_state_hash"))
+        assertEquals("attestation-key-1", string(refillBody, "attestation_key_id"))
         assertEquals("auth-refill-1", string(refillBody, "nonce"))
         assertTrue(string(refillBody, "signature_base64").isNotBlank())
         assertEquals(
@@ -2776,6 +2968,44 @@ class OfflineNoteV2Test {
                     settlementEntryHashHex = "settlement-entry-hash",
                 )
             )
+        }
+    }
+
+    private class CompletionControlledIssuerClient(
+        private val loadContext: OfflineNoteV2LoadContext,
+    ) : OfflineNoteV2IssuerClient {
+        val issueRequested = CountDownLatch(1)
+        val issueFuture = CompletableFuture<OfflineNoteV2IssueResponse>()
+
+        @Volatile
+        var lastIssueRequest: OfflineNoteV2IssueRequest? = null
+
+        override fun prepareLoad(
+            chainId: String,
+            accountId: String,
+            assetDefinitionId: String,
+            amount: String,
+        ): CompletableFuture<OfflineNoteV2LoadContext> = CompletableFuture.completedFuture(loadContext)
+
+        override fun issueNote(request: OfflineNoteV2IssueRequest): CompletableFuture<OfflineNoteV2IssueResponse> {
+            lastIssueRequest = request
+            issueRequested.countDown()
+            return issueFuture
+        }
+    }
+
+    private class BlockingOfflineNoteV2Store : OfflineNoteV2Store {
+        private val notes = LinkedHashMap<String, OfflineNoteV2WalletNote>()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+
+        @Synchronized
+        override fun <T> mutateNotes(mutator: (MutableMap<String, OfflineNoteV2WalletNote>) -> T): T {
+            entered.countDown()
+            check(release.await(5, TimeUnit.SECONDS)) {
+                "timed out waiting to release blocked note store"
+            }
+            return mutator(notes)
         }
     }
 

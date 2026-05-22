@@ -8,7 +8,9 @@ import { getNativeBinding } from "./native.js";
 import {
   canonicalizeMultihashHex,
   ensureCanonicalAccountId,
+  normalizeAccountAliasLiteral,
   normalizeAccountId,
+  normalizeAccountIdOrAliasLiteral,
   normalizeAssetId,
   normalizeAssetHoldingId,
   normalizeIdentifierInput,
@@ -19477,31 +19479,7 @@ function normalizeMultisigAccountSelector(input, context) {
 }
 
 function normalizeMultisigAccountAliasLiteral(value, context) {
-  const alias = requireNonEmptyString(value, context).trim();
-  const parts = alias.split("@");
-  const scopeParts = parts[1]?.split(".") ?? [];
-  if (
-    parts.length !== 2 ||
-    !parts[0] ||
-    !parts[1] ||
-    scopeParts.length < 1 ||
-    scopeParts.length > 2 ||
-    scopeParts.some((part) => !part)
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must use name@dataspace or name@domain.dataspace form`,
-      normalizeErrorPath(context),
-    );
-  }
-  if (/\s/.test(alias)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must not contain whitespace`,
-      normalizeErrorPath(context),
-    );
-  }
-  return alias;
+  return normalizeAccountAliasLiteral(value, context);
 }
 
 function normalizeAccountPathLiteral(value, context) {
@@ -19607,7 +19585,7 @@ function normalizeMultisigProposeRequest(input) {
   }
   const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
   if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = ToriiClient._normalizeAccountId(
+    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
       feeSponsor,
       "proposeMultisig request.fee_sponsor",
     );
@@ -19677,7 +19655,7 @@ function normalizeMultisigContractCallProposeRequest(input) {
   }
   const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
   if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = ToriiClient._normalizeAccountId(
+    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
       feeSponsor,
       "proposeMultisigContractCall request.fee_sponsor",
     );
@@ -19758,6 +19736,13 @@ function normalizeMultisigContractCallApproveRequest(input) {
       ValidationErrorCode.INVALID_OBJECT,
       "approveMultisigContractCall request requires proposal_id or instructions_hash",
       "approveMultisigContractCall.request",
+    );
+  }
+  const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
+  if (feeSponsor !== undefined && feeSponsor !== null) {
+    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
+      feeSponsor,
+      "approveMultisigContractCall request.fee_sponsor",
     );
   }
   return payload;

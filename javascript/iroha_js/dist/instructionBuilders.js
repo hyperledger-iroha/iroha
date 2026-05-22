@@ -3,7 +3,9 @@ import { noritoEncodeInstruction } from "./norito.js";
 import {
   canonicalizeMultihashHex,
   ensureCanonicalAccountId,
+  normalizeAccountAliasLiteral,
   normalizeAccountId,
+  normalizeAccountIdOrAliasLiteral,
   normalizeAssetId,
   normalizeAssetHoldingId,
   normalizeRwaId,
@@ -666,27 +668,10 @@ function normalizeMultisigAccountSelectorInput(source, context) {
       ),
     };
   }
-  const alias = assertString(
+  const alias = normalizeAccountAliasLiteral(
     source.multisigAccountAlias ?? source.multisig_account_alias,
     `${context}.multisigAccountAlias`,
   );
-  const aliasParts = alias.split("@");
-  const scopeParts = aliasParts[1]?.split(".") ?? [];
-  if (
-    aliasParts.length !== 2 ||
-    !aliasParts[0] ||
-    !aliasParts[1] ||
-    scopeParts.length < 1 ||
-    scopeParts.length > 2 ||
-    scopeParts.some((part) => !part) ||
-    /\s/.test(alias)
-  ) {
-    fail(
-      ValidationErrorCode.INVALID_STRING,
-      `${context}.multisigAccountAlias must use name@dataspace or name@domain.dataspace form`,
-      `${context}.multisigAccountAlias`,
-    );
-  }
   return {
     multisig_account_alias: alias,
   };
@@ -3227,7 +3212,10 @@ export function buildMultisigProposeRequest(options) {
   };
   const feeSponsor = source.feeSponsor ?? source.fee_sponsor;
   if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountId(feeSponsor, "multisigPropose.feeSponsor");
+    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
+      feeSponsor,
+      "multisigPropose.feeSponsor",
+    );
   }
   const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
@@ -3300,7 +3288,7 @@ export function buildMultisigContractCallProposeRequest(options) {
   }
   const feeSponsor = source.feeSponsor ?? source.fee_sponsor;
   if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountId(
+    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
       feeSponsor,
       "multisigContractCallPropose.feeSponsor",
     );

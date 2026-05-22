@@ -116,7 +116,6 @@ object OfflineJsonParser {
             asLong(obj["refresh_at_ms"], "$path.refresh_at_ms"),
             asLong(obj["expires_at_ms"], "$path.expires_at_ms"),
             binding,
-            asOptionalString(obj["app_attest_key_id"]),
             asString(obj["issuer_signature_base64"], "$path.issuer_signature_base64"),
         )
     }

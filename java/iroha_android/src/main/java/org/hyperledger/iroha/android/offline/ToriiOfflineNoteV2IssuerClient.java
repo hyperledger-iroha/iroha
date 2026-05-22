@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.offline;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -12,6 +13,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
@@ -32,6 +34,7 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
 
   private final ToriiCanonicalRequestAuth canonicalAuth;
   private final OfflineNoteV2IssuerDeviceBindingProvider deviceBindingProvider;
+  private final OfflineNoteV2IssuerDeviceProofProvider deviceProofProvider;
   private final HttpTransportExecutor executor;
   private final URI baseUri;
   private final Duration timeout;
@@ -39,6 +42,8 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
   private final List<ClientObserver> observers;
   private final LongSupplier clock;
   private final OfflineNoteV2IdGenerator nonceGenerator;
+  private final boolean idempotencyKeysEnabled;
+  private BiConsumer<String, Map<String, Object>> responseListener = (path, response) -> {};
   private final Map<String, PendingLoad> pendingLoads = new LinkedHashMap<>();
   private final Map<String, StoredLineageState> lineageStates = new LinkedHashMap<>();
 
@@ -67,9 +72,60 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
       final List<ClientObserver> observers,
       final LongSupplier clock,
       final OfflineNoteV2IdGenerator nonceGenerator) {
-    this.canonicalAuth = Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    this(
+        canonicalAuth,
+        deviceBindingProvider,
+        null,
+        executor,
+        baseUri,
+        timeout,
+        defaultHeaders,
+        observers,
+        clock,
+        nonceGenerator,
+        false);
+  }
+
+  public ToriiOfflineNoteV2IssuerClient(
+      final OfflineNoteV2IssuerDeviceBindingProvider deviceBindingProvider,
+      final OfflineNoteV2IssuerDeviceProofProvider deviceProofProvider,
+      final HttpTransportExecutor executor,
+      final URI baseUri,
+      final Duration timeout,
+      final Map<String, String> defaultHeaders,
+      final List<ClientObserver> observers,
+      final LongSupplier clock,
+      final OfflineNoteV2IdGenerator nonceGenerator) {
+    this(
+        null,
+        deviceBindingProvider,
+        deviceProofProvider,
+        executor,
+        baseUri,
+        timeout,
+        defaultHeaders,
+        observers,
+        clock,
+        nonceGenerator,
+        true);
+  }
+
+  private ToriiOfflineNoteV2IssuerClient(
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final OfflineNoteV2IssuerDeviceBindingProvider deviceBindingProvider,
+      final OfflineNoteV2IssuerDeviceProofProvider deviceProofProvider,
+      final HttpTransportExecutor executor,
+      final URI baseUri,
+      final Duration timeout,
+      final Map<String, String> defaultHeaders,
+      final List<ClientObserver> observers,
+      final LongSupplier clock,
+      final OfflineNoteV2IdGenerator nonceGenerator,
+      final boolean idempotencyKeysEnabled) {
+    this.canonicalAuth = canonicalAuth;
     this.deviceBindingProvider =
         Objects.requireNonNull(deviceBindingProvider, "deviceBindingProvider");
+    this.deviceProofProvider = deviceProofProvider;
     this.executor = Objects.requireNonNull(executor, "executor");
     this.baseUri = Objects.requireNonNull(baseUri, "baseUri");
     this.timeout = timeout;
@@ -78,6 +134,25 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
     this.observers = List.copyOf(observers == null ? List.of() : observers);
     this.clock = Objects.requireNonNull(clock, "clock");
     this.nonceGenerator = Objects.requireNonNull(nonceGenerator, "nonceGenerator");
+    this.idempotencyKeysEnabled = idempotencyKeysEnabled;
+  }
+
+  public void rememberLineageState(
+      final String chainId,
+      final String accountId,
+      final String assetDefinitionId,
+      final OfflineNoteV2IssuerDeviceBinding binding,
+      final Map<String, Object> lineageState,
+      final OfflineNoteV2.KeyCertificateV2 keyCertificate) {
+    Objects.requireNonNull(chainId, "chainId");
+    final StoredLineageState stored = storedLineageState(lineageState, keyCertificate);
+    synchronized (this) {
+      lineageStates.put(lineageKey(accountId, assetDefinitionId, binding), stored);
+    }
+  }
+
+  public void setResponseListener(final BiConsumer<String, Map<String, Object>> responseListener) {
+    this.responseListener = responseListener == null ? (path, response) -> {} : responseListener;
   }
 
   @Override
@@ -86,7 +161,7 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
       final String accountId,
       final String assetDefinitionId,
       final String amount) {
-    if (!canonicalAuth.accountId().equals(accountId)) {
+    if (canonicalAuth != null && !canonicalAuth.accountId().equals(accountId)) {
       return failedFuture(
           new IllegalArgumentException("canonical auth accountId must match wallet accountId"));
     }
@@ -145,11 +220,24 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
     body.put("local_balance", pending.localBalance);
     body.put("local_revision", pending.preIssueRevision);
     body.put("note_commitment", request.noteCommitmentHex());
+    final Object stateHash = pending.lineageState.get("server_state_hash");
+    if (stateHash instanceof String value && !value.trim().isEmpty()) {
+      body.put("local_state_hash", value.trim());
+    }
+    addDeviceProof(
+        body,
+        request.chainId(),
+        request.accountId(),
+        request.assetDefinitionId(),
+        "load",
+        pending.lineageId,
+        request.amount());
     return executePost(
         NOTES_ISSUE_PATH,
         body,
         payload -> {
           final Map<String, Object> response = expectObject(parseJson(payload), "notes issue response");
+          notifyIssuerResponse(NOTES_ISSUE_PATH, response);
           final byte[] commitment =
               hexToBytes(requiredString(response, "issued_note_commitment"), "issued_note_commitment");
           final Map<String, Object> lineageState =
@@ -161,17 +249,9 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
           final Map<String, Object> settlement = optionalObject(response.get("settlement"));
           final String settlementEntryHash =
               settlement == null ? null : optionalString(settlement.get("entry_hash"));
-          final Map<String, Object> authorization =
-              optionalObject(lineageState.get("authorization"));
           final StoredLineageState stored =
-              new StoredLineageState(
-                  requiredString(lineageState, "lineage_id"),
-                  requiredLong(lineageState, "server_revision"),
-                  requiredString(lineageState, "balance"),
-                  authorization == null ? null : optionalLong(authorization.get("expires_at_ms")),
-                  optionalLong(certificateJson.get("expires_at_ms")),
-                  keyCertificate,
-                  lineageState);
+              storedLineageState(
+                  lineageState, keyCertificate, optionalLong(certificateJson.get("expires_at_ms")));
           synchronized (this) {
             pendingLoads.remove(pending.operationId);
             lineageStates.put(pending.lineageKey, stored);
@@ -202,8 +282,14 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
     body.put("operation_id", operationId);
     body.put("device_id", binding.deviceId());
     body.put("offline_public_key", binding.offlinePublicKey());
+    body.put("attestation_key_id", binding.attestationKeyId());
     body.put("asset_definition_id", assetDefinitionId);
+    body.put("local_revision", existing == null ? 0L : existing.revision);
+    final String localStateHash =
+        existing == null ? "" : optionalString(existing.lineageState.get("server_state_hash"));
+    body.put("local_state_hash", localStateHash == null ? "" : localStateHash);
     body.put("device_binding", binding.deviceBinding());
+    addDeviceProof(body, chainId, accountId, assetDefinitionId, "setup", "", null);
     if (existing != null) {
       body.put("existing_lineage_id", existing.lineageId);
       body.put("lineage_state", OfflineNoteV2IssuerDeviceBinding.deepCopyObject(existing.lineageState));
@@ -213,6 +299,7 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
         body,
         payload -> {
           final Map<String, Object> response = expectObject(parseJson(payload), "keys refill response");
+          notifyIssuerResponse(KEYS_REFILL_PATH, response);
           final Map<String, Object> lineageState =
               expectObject(requiredValue(response, "lineage_state"), "lineage_state");
           final OfflineNoteV2.KeyCertificateV2 keyCertificate =
@@ -238,7 +325,7 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
       final String path, final Map<String, Object> bodyFields, final Function<byte[], T> parser) {
     final URI target = resolvePath(path);
     final byte[] signedBody = signedBody("POST", target, bodyFields);
-    final TransportRequest request = buildPostRequest(target, signedBody);
+    final TransportRequest request = buildPostRequest(path, target, signedBody);
     notifyRequest(request);
     final CompletableFuture<T> future = new CompletableFuture<>();
     executor.execute(request)
@@ -295,6 +382,9 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
 
   private byte[] signedBody(
       final String method, final URI target, final Map<String, Object> bodyFields) {
+    if (canonicalAuth == null) {
+      return JsonEncoder.encode(bodyFields).getBytes(StandardCharsets.UTF_8);
+    }
     final long timestampMs =
         canonicalAuth.timestampMs() == null ? clock.getAsLong() : canonicalAuth.timestampMs();
     final String nonce =
@@ -311,14 +401,34 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
     return JsonEncoder.encode(signed).getBytes(StandardCharsets.UTF_8);
   }
 
-  private TransportRequest buildPostRequest(final URI target, final byte[] body) {
+  private TransportRequest buildPostRequest(final String path, final URI target, final byte[] body) {
     final Map<String, String> headers = new LinkedHashMap<>(defaultHeaders);
     ensureHeader(headers, "Content-Type", "application/json");
     ensureHeader(headers, "Accept", "application/json");
+    if (idempotencyKeysEnabled && !containsHeader(headers, "Idempotency-Key")) {
+      ensureHeader(headers, "Idempotency-Key", idempotencyKey(path, body));
+    }
     final TransportRequest.Builder builder =
         TransportRequest.builder().setUri(target).setMethod("POST").setBody(body).setTimeout(timeout);
     headers.forEach(builder::addHeader);
     return builder.build();
+  }
+
+  private void addDeviceProof(
+      final Map<String, Object> body,
+      final String chainId,
+      final String accountId,
+      final String assetDefinitionId,
+      final String operation,
+      final String lineageId,
+      final String amount) {
+    if (deviceProofProvider == null) {
+      return;
+    }
+    final Map<String, Object> proof =
+        deviceProofProvider.currentDeviceProof(
+            chainId, accountId, assetDefinitionId, operation, lineageId, amount);
+    body.put("device_proof", OfflineNoteV2IssuerDeviceBinding.deepCopyObject(proof));
   }
 
   private URI resolvePath(final String path) {
@@ -348,6 +458,10 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
     }
   }
 
+  private void notifyIssuerResponse(final String path, final Map<String, Object> response) {
+    responseListener.accept(path, OfflineNoteV2IssuerDeviceBinding.deepCopyObject(response));
+  }
+
   private static OfflineNoteV2.KeyCertificateV2 parseKeyCertificate(final Map<String, Object> value) {
     return new OfflineNoteV2.KeyCertificateV2(
         Math.toIntExact(requiredLong(value, "version")),
@@ -364,6 +478,27 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
             : Math.toIntExact(optionalLong(value.get("assertion_usage_count_limit"))),
         requiredBoolean(value, "one_use"),
         decodeBase64(requiredString(value, "issuer_signature_base64"), "issuer_signature_base64"));
+  }
+
+  private static StoredLineageState storedLineageState(
+      final Map<String, Object> lineageState,
+      final OfflineNoteV2.KeyCertificateV2 keyCertificate) {
+    return storedLineageState(lineageState, keyCertificate, null);
+  }
+
+  private static StoredLineageState storedLineageState(
+      final Map<String, Object> lineageState,
+      final OfflineNoteV2.KeyCertificateV2 keyCertificate,
+      final Long keyCertificateExpiresAtMs) {
+    final Map<String, Object> authorization = optionalObject(lineageState.get("authorization"));
+    return new StoredLineageState(
+        requiredString(lineageState, "lineage_id"),
+        requiredLong(lineageState, "server_revision"),
+        requiredString(lineageState, "balance"),
+        authorization == null ? null : optionalLong(authorization.get("expires_at_ms")),
+        keyCertificateExpiresAtMs,
+        keyCertificate,
+        lineageState);
   }
 
   private static Object parseJson(final byte[] payload) {
@@ -489,6 +624,36 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
       }
     }
     headers.put(existing == null ? name : existing, value);
+  }
+
+  private static boolean containsHeader(final Map<String, String> headers, final String name) {
+    for (final String key : headers.keySet()) {
+      if (key.equalsIgnoreCase(name)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static String idempotencyKey(final String path, final byte[] body) {
+    final String action =
+        path.contains("/keys/refill")
+            ? "v2.keys.refill"
+            : path.contains("/notes/issue") ? "v2.notes.issue" : "v2.mutation";
+    return "offline-cash." + action + "." + sha256Hex(body);
+  }
+
+  private static String sha256Hex(final byte[] bytes) {
+    try {
+      final byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
+      final StringBuilder out = new StringBuilder(digest.length * 2);
+      for (final byte item : digest) {
+        out.append(String.format("%02x", item & 0xff));
+      }
+      return out.toString();
+    } catch (Exception ex) {
+      throw new IllegalStateException("sha256 unavailable", ex);
+    }
   }
 
   private static String lineageKey(

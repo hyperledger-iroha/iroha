@@ -8,13 +8,13 @@ import org.hyperledger.iroha.sdk.client.JsonParser
 
 /** Offline Note V2 payload kind used by NFC APDUs and Nearby envelopes. */
 enum class OfflineNoteV2NfcPayloadKind(val code: Int) {
-    RECEIVE_CHALLENGE(1),
+    RECEIVE_REQUEST(1),
     PAYMENT_TOKEN(2),
     RECEIPT_ACK(3);
 
     fun qrPayloadKind(): OfflineQrStream.PayloadKind =
         when (this) {
-            RECEIVE_CHALLENGE -> OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_CHALLENGE_V2
+            RECEIVE_REQUEST -> OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_REQUEST_V2
             PAYMENT_TOKEN -> OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2
             RECEIPT_ACK -> OfflineQrStream.PayloadKind.OFFLINE_RECEIPT_ACK_V2
         }
@@ -549,6 +549,8 @@ class OfflineNoteV2NearbyEnvelope @JvmOverloads constructor(
 
     fun payload(): ByteArray = _payload.copyOf()
 
+    fun textPayload(): String = String(_payload, StandardCharsets.UTF_8)
+
     fun encoded(): ByteArray {
         val map = LinkedHashMap<String, Any?>()
         map["version"] = version
@@ -563,10 +565,35 @@ class OfflineNoteV2NearbyEnvelope @JvmOverloads constructor(
 
     fun paymentToken(): OfflineNoteV2PaymentToken {
         require(kind == OfflineNoteV2NearbyMessageKind.PAYMENT) { "Nearby envelope is not a payment" }
-        require(contentType == OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE) {
-            "Nearby envelope content type is not a payment token"
+        return when (contentType) {
+            OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE ->
+                OfflineNoteV2PaymentTokenCodec.decodeNorito(_payload)
+            OfflineNoteV2TransferHandoff.TEXT_PAYMENT_TOKEN_CONTENT_TYPE ->
+                OfflineNoteV2PaymentTokenCodec.decodeText(textPayload())
+            else -> throw IllegalArgumentException("Nearby envelope content type is not a payment token")
         }
-        return OfflineNoteV2PaymentTokenCodec.decodeNorito(_payload)
+    }
+
+    fun receiveRequest(): OfflineNoteV2ReceiveRequest {
+        require(kind == OfflineNoteV2NearbyMessageKind.CHALLENGE) { "Nearby envelope is not a receive request" }
+        return when (contentType) {
+            OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE ->
+                OfflineNoteV2ReceiveRequestCodec.decodeNorito(_payload)
+            OfflineNoteV2TransferHandoff.TEXT_RECEIVE_REQUEST_CONTENT_TYPE ->
+                OfflineNoteV2ReceiveRequestCodec.decodeText(textPayload())
+            else -> throw IllegalArgumentException("Nearby envelope content type is not a receive request")
+        }
+    }
+
+    fun receiptAck(): OfflineNoteV2ReceiptAck {
+        require(kind == OfflineNoteV2NearbyMessageKind.RECEIPT_ACK) { "Nearby envelope is not a receipt ACK" }
+        return when (contentType) {
+            OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE ->
+                OfflineNoteV2ReceiptAckCodec.decodeNorito(_payload)
+            OfflineNoteV2TransferHandoff.TEXT_RECEIPT_ACK_CONTENT_TYPE ->
+                OfflineNoteV2ReceiptAckCodec.decodeText(textPayload())
+            else -> throw IllegalArgumentException("Nearby envelope content type is not a receipt ACK")
+        }
     }
 
     companion object {
@@ -620,26 +647,33 @@ class OfflineNoteV2NearbyEnvelope @JvmOverloads constructor(
             when (kind) {
                 OfflineNoteV2NearbyMessageKind.CHALLENGE -> {
                     require(pairingChallenge != null) { "Challenge envelope requires pairing challenge" }
-                    require(contentType == OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE) {
+                    require(
+                        contentType == OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE ||
+                            contentType == OfflineNoteV2TransferHandoff.TEXT_RECEIVE_REQUEST_CONTENT_TYPE,
+                    ) {
                         "Challenge envelope content type mismatch"
                     }
+                    validateReceiveRequestPayload(payload, contentType)
                 }
                 OfflineNoteV2NearbyMessageKind.PAYMENT -> {
                     require(pairingChallenge == null) { "Payment envelope must not include pairing challenge" }
-                    require(contentType == OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE) {
+                    require(
+                        contentType == OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE ||
+                            contentType == OfflineNoteV2TransferHandoff.TEXT_PAYMENT_TOKEN_CONTENT_TYPE,
+                    ) {
                         "Payment envelope content type mismatch"
                     }
-                    try {
-                        OfflineNoteV2PaymentTokenCodec.decodeNorito(payload)
-                    } catch (ex: RuntimeException) {
-                        throw IllegalArgumentException("Payment envelope payload is invalid", ex)
-                    }
+                    validatePaymentPayload(payload, contentType)
                 }
                 OfflineNoteV2NearbyMessageKind.RECEIPT_ACK -> {
                     require(pairingChallenge == null) { "Envelope must not include pairing challenge" }
-                    require(contentType == OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE) {
+                    require(
+                        contentType == OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE ||
+                            contentType == OfflineNoteV2TransferHandoff.TEXT_RECEIPT_ACK_CONTENT_TYPE,
+                    ) {
                         "Receipt ACK envelope content type mismatch"
                     }
+                    validateReceiptAckPayload(payload, contentType)
                 }
                 OfflineNoteV2NearbyMessageKind.REJECTED ->
                     require(pairingChallenge == null) { "Envelope must not include pairing challenge" }
@@ -658,6 +692,42 @@ class OfflineNoteV2NearbyEnvelope @JvmOverloads constructor(
                 return OfflineNoteV2NearbyPairingChallenge.fromAssetName(assetName)
             }
             throw IllegalArgumentException("Nearby pairing challenge is invalid")
+        }
+
+        private fun validateReceiveRequestPayload(payload: ByteArray, contentType: String) {
+            try {
+                if (contentType == OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE) {
+                    OfflineNoteV2ReceiveRequestCodec.decodeNorito(payload)
+                } else {
+                    OfflineNoteV2ReceiveRequestCodec.decodeText(String(payload, StandardCharsets.UTF_8))
+                }
+            } catch (ex: RuntimeException) {
+                throw IllegalArgumentException("Challenge envelope payload is invalid", ex)
+            }
+        }
+
+        private fun validatePaymentPayload(payload: ByteArray, contentType: String) {
+            try {
+                if (contentType == OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE) {
+                    OfflineNoteV2PaymentTokenCodec.decodeNorito(payload)
+                } else {
+                    OfflineNoteV2PaymentTokenCodec.decodeText(String(payload, StandardCharsets.UTF_8))
+                }
+            } catch (ex: RuntimeException) {
+                throw IllegalArgumentException("Payment envelope payload is invalid", ex)
+            }
+        }
+
+        private fun validateReceiptAckPayload(payload: ByteArray, contentType: String) {
+            try {
+                if (contentType == OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE) {
+                    OfflineNoteV2ReceiptAckCodec.decodeNorito(payload)
+                } else {
+                    OfflineNoteV2ReceiptAckCodec.decodeText(String(payload, StandardCharsets.UTF_8))
+                }
+            } catch (ex: RuntimeException) {
+                throw IllegalArgumentException("Receipt ACK envelope payload is invalid", ex)
+            }
         }
 
         private fun base64UrlEncode(bytes: ByteArray): String =

@@ -872,6 +872,29 @@ where
     Ok(batch)
 }
 
+/// Build a FASTPQ batch from a committed transcript bundle and attach the entry-level metadata
+/// required by AXT proof binding.
+///
+/// This is the public reconstruction form used by recovery surfaces when compact sidecars retain
+/// public inputs but omit transition rows.
+///
+/// # Errors
+/// Returns [`TranscriptBatchError`] if any transcript fails to append to the batch.
+pub fn batch_from_transcript_bundle(
+    parameter_set: impl Into<String>,
+    public_inputs: PublicInputs,
+    entry_hash: Hash,
+    transcripts: &[TransferTranscript],
+) -> Result<TransitionBatch, TranscriptBatchError> {
+    let mut batch = batch_from_transcripts(
+        parameter_set,
+        public_inputs_to_dto(&public_inputs),
+        transcripts,
+    )?;
+    annotate_metadata(&mut batch, &entry_hash, transcripts.len());
+    Ok(batch)
+}
+
 fn append_transcript(
     batch: &mut TransitionBatch,
     transcript: &TransferTranscript,
@@ -1832,6 +1855,31 @@ mod tests {
         assert_eq!(
             decode_le(transcript_count_bytes),
             bundle.transcripts.len() as u64
+        );
+    }
+
+    #[test]
+    fn batch_from_transcript_bundle_adds_axt_entry_metadata() {
+        let bundle = sample_bundle(Hash::prehashed([0x34; 32]));
+        let batch = batch_from_transcript_bundle(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            public_inputs_from_dto(&sample_public_inputs()),
+            bundle.entry_hash,
+            &bundle.transcripts,
+        )
+        .expect("batch");
+
+        assert_eq!(batch.transitions.len(), 2);
+        let entry_hex = batch
+            .metadata
+            .get(ENTRY_HASH_METADATA_KEY)
+            .map(hex::encode)
+            .expect("entry hash metadata");
+        assert_eq!(entry_hex, hex::encode(bundle.entry_hash.as_ref()));
+        assert!(
+            batch
+                .metadata
+                .contains_key(TRANSFER_TRANSCRIPTS_METADATA_KEY)
         );
     }
 

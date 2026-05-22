@@ -129,6 +129,23 @@ Last updated: 2026-05-22
   - `cargo test -p iroha_cli --bin iroha soracloud -- --nocapture`
   - `node --test javascript/iroha_js/test/soracloud.test.js javascript/iroha_js/test/toriiClient.test.js`
 
+## 2026-05-21 Swift Offline V2 transport validation hardening
+
+- Swift Offline Note V2 compact certificate conversion now rejects missing,
+  malformed, and non-64-byte `issuer_signature_base64` values instead of
+  fabricating a zero signature.
+- Text Nearby envelopes now validate decoded receive-request, payment-token,
+  and receipt-ACK contents through the existing native and compatibility
+  decoders before accepting the envelope.
+- Focused validation passed:
+  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test --filter OfflineQrStreamTests` from `IrohaSwift`
+- Broader `swift test` from `IrohaSwift` was attempted and remains blocked by
+  unrelated existing fixture/native-bridge parity failures in
+  `ConfidentialWalletFixturesTests`, `NativeBridgeLoaderTests`,
+  `SwiftTransactionEncoderSigningKeyTests`, `ToriiClientTests`, and
+  `TransactionParityFixturesTests`.
+
 ## 2026-05-21 Iroha-first contract devex hardening follow-up
 
 - `iroha contract dev doctor` now loads manifest profile client configs, reaches

@@ -1226,6 +1226,8 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(response.total, 1)
         XCTAssertEqual(response.items.count, 1)
         XCTAssertEqual(response.items.first?.policyId, "phone#retail")
+        XCTAssertEqual(response.items.first?.programId, "")
+        XCTAssertEqual(response.items.first?.outputOpeningPublicKey, "")
         XCTAssertEqual(response.items.first?.owner, owner)
         XCTAssertEqual(response.items.first?.normalization, .phoneE164)
         XCTAssertEqual(response.items.first?.inputEncryption, "bfv-v1")
@@ -1311,6 +1313,68 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(
             response.items.first?.inputEncryptionPublicParametersDecoded?.maxInputBytes,
             63
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListIdentifierPoliciesAcceptsLiveResolverCanonicalizedInputMode() async throws {
+        let owner = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/identifier-policies")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = """
+            {
+              "total": 1,
+              "items": [{
+                "policy_id":"email#retail",
+                "owner":"\(owner)",
+                "active":true,
+                "normalization":"email_address",
+                "resolver_public_key":"ed25519:resolver-key",
+                "backend":"bfv-programmed-sha3-256-v1",
+                "input_encryption":"bfv-v1",
+                "input_encryption_public_parameters_decoded":{
+                  "parameters":{
+                    "polynomial_degree":64,
+                    "plaintext_modulus":256,
+                    "ciphertext_modulus":4503599627370496,
+                    "decomposition_base_log":12
+                  },
+                  "public_key":{
+                    "b":[1,2,3],
+                    "a":[4,5,6]
+                  },
+                  "max_input_bytes":63
+                },
+                "ram_fhe_profile":{
+                  "profile_version":1,
+                  "register_count":4,
+                  "memory_lane_count":32,
+                  "ciphertext_mul_per_step":1,
+                  "encrypted_input_mode":{
+                    "mode":"ResolverCanonicalizedEnvelopeV1",
+                    "value":null
+                  },
+                  "min_ciphertext_modulus":4503599627370496
+                },
+                "note":"Retail identifier policy email#retail"
+              }]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let response = try await makeClient().listIdentifierPolicies()
+        XCTAssertEqual(response.items.first?.policyId, "email#retail")
+        XCTAssertEqual(response.items.first?.programId, "")
+        XCTAssertEqual(
+            response.items.first?.ramFheProfile?.encryptedInputMode,
+            .resolverCanonicalizedEnvelopeV1
         )
     }
 

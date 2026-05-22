@@ -39,7 +39,7 @@ public enum OfflineQrStreamFrameEncoding: Sendable {
 
 public enum OfflineQrPayloadKind: UInt16, Sendable {
     case unspecified = 0
-    case offlineReceiveChallengeV2 = 1
+    case offlineReceiveRequestV2 = 1
     case offlinePaymentTokenV2 = 2
     case offlineReceiptAckV2 = 3
 }
@@ -765,14 +765,14 @@ public final class OfflineQrStreamScanSession {
 }
 
 public enum OfflineQrStreamTextCodec {
-    private static let prefix = "iroha:qr1:"
+    public static let base64Prefix = "iroha:qr1:"
 
     public static func encode(_ data: Data, encoding: OfflineQrStreamFrameEncoding) -> String {
         switch encoding {
         case .binary:
             return data.base64EncodedString()
         case .base64:
-            return prefix + data.base64EncodedString()
+            return base64Prefix + data.base64EncodedString()
         }
     }
 
@@ -784,7 +784,7 @@ public enum OfflineQrStreamTextCodec {
             }
             return decoded
         case .base64:
-            guard let stripped = value.trimmingCharacters(in: .whitespacesAndNewlines).stripPrefix(prefix) else {
+            guard let stripped = value.trimmingCharacters(in: .whitespacesAndNewlines).stripPrefix(base64Prefix) else {
                 throw OfflineQrStreamError.invalidEnvelope("qr text prefix missing")
             }
             guard let decoded = Data(base64Encoded: stripped) else {

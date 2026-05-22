@@ -1373,6 +1373,14 @@ final class Halo2PastaTests: XCTestCase {
             XCTAssertTrue(try Halo2OfflineNoteV2Prover.verifyZK1Payload(payload, publicValues: auditValues.publicValues))
         }
         XCTAssertLessThan(proof.proof.bytes.count, Halo2OfflineNoteV2Prover.maxEnvelopeBytes)
+        XCTAssertEqual(
+            try Halo2OfflineNoteV2Prover.publicValues(fromOpenVerifyEnvelope: proof.proof.bytes),
+            auditValues.publicValues
+        )
+        XCTAssertTrue(try Halo2OfflineNoteV2Prover.verifyOpenVerifyEnvelope(
+            proof.proof.bytes,
+            publicValues: auditValues.publicValues
+        ))
         XCTAssertEqual(proof.publicInputsHash, Data(hexString: fixture.chainVectors.audit.publicInputsHash))
         try audit.replacingRecursiveProof(proof).validateProofBinding()
     }

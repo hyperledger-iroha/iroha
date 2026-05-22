@@ -68,6 +68,14 @@ public struct OfflineNoteV2IssuerDeviceBinding {
         try Self.deepCopyObject(binding)
     }
 
+    public func attestationKeyId() throws -> String {
+        guard let value = binding["attestation_key_id"] as? String,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ToriiOfflineNoteV2IssuerClientError.invalidJSON("device_binding.attestation_key_id")
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     fileprivate static func deepCopyObject(_ value: [String: Any]) throws -> [String: Any] {
         var copy: [String: Any] = [:]
         for (key, item) in value {
@@ -228,15 +236,20 @@ public final class ToriiOfflineNoteV2IssuerClient: OfflineNoteV2IssuerClient {
                             binding: OfflineNoteV2IssuerDeviceBinding,
                             lineageKey: String) async throws -> OfflineNoteV2LoadContext {
         let operationId = nonceGenerator.nextId(prefix: "offline-key-refill")
+        let existing = withLock { lineageStates[lineageKey] }
         var body: [String: Any] = [
             "account_id": accountId,
             "operation_id": operationId,
             "device_id": binding.deviceId,
             "offline_public_key": binding.offlinePublicKey,
+            "attestation_key_id": try binding.attestationKeyId(),
             "asset_definition_id": assetDefinitionId,
+            "local_revision": NSNumber(value: existing?.revision ?? 0),
+            "local_state_hash": (existing?.lineageState["server_state_hash"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
             "device_binding": try binding.deviceBinding(),
         ]
-        if let existing = withLock({ lineageStates[lineageKey] }) {
+        if let existing = existing {
             body["existing_lineage_id"] = existing.lineageId
             body["lineage_state"] = try OfflineNoteV2IssuerDeviceBinding.deepCopyObject(existing.lineageState)
         }
