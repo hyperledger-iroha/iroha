@@ -8,26 +8,29 @@ use std::{
 };
 
 use blake3::Hasher;
+use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{
     events::data::oracle::{
-        OracleChangeProposed, OracleChangeStageUpdated, OracleEvent, TwitterBindingRecorded,
-        TwitterBindingRevoked,
+        DefiOracleAttestationRecorded, OracleChangeProposed, OracleChangeStageUpdated, OracleEvent,
+        TwitterBindingRecorded, TwitterBindingRevoked,
     },
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError},
         oracle::{
             AggregateOracleFeed, OpenOracleDispute, ProposeOracleChange, RecordTwitterBinding,
             RegisterOracleFeed, ResolveOracleDispute, RevokeTwitterBinding, RollbackOracleChange,
-            SubmitOracleObservation, VoteOracleChangeStage,
+            SubmitDefiOracleAttestation, SubmitOracleObservation, VoteOracleChangeStage,
         },
     },
     oracle::{
-        FeedConfigVersion, FeedEventOutcome, FeedId, FeedSlot, Observation, ObservationOutcome,
-        OracleChangeEvidence, OracleChangeFailure, OracleChangeProposal, OracleChangeStage,
-        OracleChangeStageFailure, OracleChangeStageRecord, OracleChangeStatus, OracleDispute,
-        OracleDisputeId, OracleDisputeOutcome, OracleDisputeStatus, OraclePenalty,
-        OraclePenaltyKind, OracleProviderKey, OracleProviderStats, OracleReward,
-        TwitterBindingAttestation, TwitterBindingRecord,
+        DEFI_ORACLE_DOMAIN_COVER_POLICY, DEFI_ORACLE_DOMAIN_OPTIONS_SERIES,
+        DEFI_ORACLE_DOMAIN_OPTIONS_SHOUT, DEFI_ORACLE_DOMAIN_PERPS_MARKET, DefiOracleAttestation,
+        DefiOracleAttestationSource, FeedConfigVersion, FeedEventOutcome, FeedId, FeedSlot,
+        Observation, ObservationOutcome, OracleChangeEvidence, OracleChangeFailure,
+        OracleChangeProposal, OracleChangeStage, OracleChangeStageFailure, OracleChangeStageRecord,
+        OracleChangeStatus, OracleDispute, OracleDisputeId, OracleDisputeOutcome,
+        OracleDisputeStatus, OraclePenalty, OraclePenaltyKind, OracleProviderKey,
+        OracleProviderStats, OracleReward, TwitterBindingAttestation, TwitterBindingRecord,
     },
     permission::{Permission as DataPermission, Permissions},
     prelude::*,
@@ -753,6 +756,209 @@ fn derive_dispute_id(
     OracleDisputeId(u64::from_le_bytes(buf))
 }
 
+fn payload_u64(payload: &norito::json::Map, field: &str) -> Result<u64, Error> {
+    let value = payload
+        .get(field)
+        .ok_or_else(|| signature_err(format!("DeFi oracle payload missing `{field}`")))?;
+    if let Some(value) = value.as_u64() {
+        return Ok(value);
+    }
+    if let Some(value) = value.as_i64()
+        && value >= 0
+    {
+        return Ok(value as u64);
+    }
+    Err(signature_err(format!(
+        "DeFi oracle payload field `{field}` must be a non-negative integer"
+    )))
+}
+
+fn checked_observation_integer(
+    value: iroha_data_model::oracle::ObservationValue,
+) -> Result<u64, Error> {
+    if value.mantissa < 0 {
+        return Err(signature_err("DeFi source feed value must be non-negative"));
+    }
+    let mut divisor = 1_i128;
+    for _ in 0..value.scale {
+        divisor = divisor
+            .checked_mul(10)
+            .ok_or_else(|| signature_err("DeFi source feed scale overflow"))?;
+    }
+    if divisor > 1 && value.mantissa % divisor != 0 {
+        return Err(signature_err(
+            "DeFi source feed value must resolve to an integer payload field",
+        ));
+    }
+    let normalized = value.mantissa / divisor;
+    u64::try_from(normalized).map_err(|_| signature_err("DeFi source feed value exceeds u64 range"))
+}
+
+fn find_retained_source_event<'a>(
+    world: &'a WorldTransaction<'_, '_>,
+    source: &DefiOracleAttestationSource,
+) -> Option<&'a FeedEventRecord> {
+    world
+        .oracle_history
+        .get(&source.feed_id)?
+        .iter()
+        .find(|record| {
+            record.event.slot == source.slot && record.event.request_hash == source.request_hash
+        })
+}
+
+fn derive_defi_attestation_hash(attestation: &DefiOracleAttestation) -> u64 {
+    let mut hasher = Hasher::new();
+    hasher.update(b"defi-oracle-attestation-v1");
+    hasher.update(&attestation.key.domain.to_le_bytes());
+    hasher.update(&attestation.key.subject_id.to_le_bytes());
+    hasher.update(&attestation.oracle_slot.to_le_bytes());
+    hasher.update(&attestation.status_flags.to_le_bytes());
+    for source in &attestation.source_events {
+        hasher.update(source.feed_id.as_str().as_bytes());
+        hasher.update(&source.slot.to_le_bytes());
+        hasher.update(source.request_hash.as_ref());
+        hasher.update(source.field.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut buf = [0_u8; 8];
+    buf.copy_from_slice(&digest.as_bytes()[..8]);
+    let value = u64::from_le_bytes(buf) & i64::MAX as u64;
+    value.max(1)
+}
+
+fn validate_defi_payload_shape(
+    attestation: &DefiOracleAttestation,
+) -> Result<norito::json::Map, Error> {
+    if !attestation.key.has_supported_domain() {
+        return Err(signature_err(format!(
+            "unsupported DeFi oracle domain {}",
+            attestation.key.domain
+        )));
+    }
+    if attestation.oracle_payload.is_empty() {
+        return Err(signature_err("DeFi oracle payload must not be empty"));
+    }
+    if attestation.oracle_signature.is_empty() {
+        return Err(signature_err("DeFi oracle signature must not be empty"));
+    }
+    if attestation.source_events.is_empty() {
+        return Err(signature_err(
+            "DeFi oracle attestation must reference retained feed events",
+        ));
+    }
+
+    let value: norito::json::Value = norito::json::from_slice(&attestation.oracle_payload)
+        .map_err(|err| signature_err(format!("invalid DeFi oracle JSON payload: {err}")))?;
+    let object = value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| signature_err("DeFi oracle payload must be a JSON object"))?;
+
+    let domain = payload_u64(&object, "domain")?;
+    if domain != u64::from(attestation.key.domain) {
+        return Err(signature_err("DeFi oracle payload domain mismatch"));
+    }
+    let subject_field = attestation
+        .key
+        .subject_field()
+        .ok_or_else(|| signature_err("unsupported DeFi oracle domain"))?;
+    let subject_id = payload_u64(&object, subject_field)?;
+    if subject_id != attestation.key.subject_id {
+        return Err(signature_err("DeFi oracle payload subject mismatch"));
+    }
+    if payload_u64(&object, "oracle_slot")? != attestation.oracle_slot {
+        return Err(signature_err("DeFi oracle payload slot mismatch"));
+    }
+    if payload_u64(&object, "status_flags")? != u64::from(attestation.status_flags) {
+        return Err(signature_err("DeFi oracle payload status_flags mismatch"));
+    }
+    if payload_u64(&object, "attestation_hash")? != attestation.attestation_hash {
+        return Err(signature_err(
+            "DeFi oracle payload attestation_hash mismatch",
+        ));
+    }
+    if attestation.attestation_hash != derive_defi_attestation_hash(attestation) {
+        return Err(signature_err(
+            "DeFi oracle attestation_hash is not deterministic",
+        ));
+    }
+
+    match attestation.key.domain {
+        DEFI_ORACLE_DOMAIN_PERPS_MARKET => {
+            for field in ["mark_price_bps", "index_price_bps", "confidence_bps"] {
+                let _ = payload_u64(&object, field)?;
+            }
+        }
+        DEFI_ORACLE_DOMAIN_OPTIONS_SERIES => {
+            for field in ["final_mark", "final_quote_mark"] {
+                let _ = payload_u64(&object, field)?;
+            }
+        }
+        DEFI_ORACLE_DOMAIN_OPTIONS_SHOUT => {
+            let _ = payload_u64(&object, "mark_price_bps")?;
+        }
+        DEFI_ORACLE_DOMAIN_COVER_POLICY => {
+            let _ = payload_u64(&object, "observed_price")?;
+        }
+        _ => {}
+    }
+
+    Ok(object)
+}
+
+fn validate_defi_sources(
+    world: &WorldTransaction<'_, '_>,
+    attestation: &DefiOracleAttestation,
+    payload: &norito::json::Map,
+    provider: &AccountId,
+) -> Result<(), Error> {
+    for source in &attestation.source_events {
+        if source.field.is_empty() {
+            return Err(signature_err("DeFi oracle source field must not be empty"));
+        }
+        let config = world.oracle_feeds.get(&source.feed_id).ok_or_else(|| {
+            Error::Find(iroha_data_model::query::error::FindError::OracleFeed(
+                source.feed_id.clone(),
+            ))
+        })?;
+        ensure_provider_allowed(config, provider)?;
+        let record = find_retained_source_event(world, source).ok_or_else(|| {
+            signature_err(format!(
+                "no retained oracle feed event for feed `{}` slot {} request {}",
+                source.feed_id.as_str(),
+                source.slot,
+                source.request_hash
+            ))
+        })?;
+        let FeedEventOutcome::Success(success) = &record.event.outcome else {
+            return Err(signature_err(format!(
+                "DeFi oracle source feed `{}` did not produce a successful value",
+                source.feed_id.as_str()
+            )));
+        };
+        if !success
+            .entries
+            .iter()
+            .any(|entry| &entry.oracle_id == provider)
+        {
+            return Err(signature_err(format!(
+                "DeFi oracle provider `{provider}` did not contribute to feed `{}`",
+                source.feed_id.as_str()
+            )));
+        }
+        let expected = payload_u64(payload, &source.field)?;
+        let actual = checked_observation_integer(success.value)?;
+        if actual != expected {
+            return Err(signature_err(format!(
+                "DeFi oracle source field `{}` value {} does not match payload value {}",
+                source.field, actual, expected
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl Execute for RegisterOracleFeed {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -869,6 +1075,78 @@ impl Execute for SubmitOracleObservation {
             .world
             .oracle_observations
             .insert(key, window);
+        Ok(())
+    }
+}
+
+impl Execute for SubmitDefiOracleAttestation {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let attestation = self.attestation;
+        let provider = &attestation.provider;
+
+        if provider != authority {
+            return Err(signature_err(format!(
+                "authority `{authority}` is not the DeFi oracle provider `{provider}`"
+            )));
+        }
+
+        if attestation.oracle_scheme != 1 {
+            return Err(signature_err(
+                "DeFi oracle attestation currently requires Ed25519 scheme 1",
+            ));
+        }
+
+        let provider_signatory = provider.controller().single_signatory().ok_or_else(|| {
+            signature_err("DeFi oracle providers must use single-signature controllers")
+        })?;
+        let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &attestation.signer_public_key)
+            .map_err(|err| signature_err(format!("invalid DeFi signer public key: {err}")))?;
+        if &public_key != provider_signatory {
+            return Err(signature_err(
+                "DeFi oracle signer must match provider account controller",
+            ));
+        }
+        Signature::from_bytes(&attestation.oracle_signature)
+            .verify(&public_key, &attestation.oracle_payload)
+            .map_err(|err| signature_err(format!("invalid DeFi oracle signature: {err}")))?;
+
+        let payload = validate_defi_payload_shape(&attestation)?;
+        validate_defi_sources(&state_transaction.world, &attestation, &payload, provider)?;
+
+        let key = attestation.key;
+        let mut retained = state_transaction
+            .world
+            .defi_oracle_attestations
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(last) = retained.last()
+            && attestation.oracle_slot <= last.oracle_slot
+        {
+            return Err(signature_err(
+                "DeFi oracle attestation slot must increase for the subject",
+            ));
+        }
+        retained.push(attestation.clone());
+        let depth = state_transaction.oracle.history_depth.get();
+        if retained.len() > depth {
+            let drop_count = retained.len() - depth;
+            retained.drain(0..drop_count);
+        }
+        state_transaction
+            .world
+            .defi_oracle_attestations
+            .insert(key, retained);
+        state_transaction
+            .world
+            .emit_events(Some(OracleEvent::DefiAttestationRecorded(
+                DefiOracleAttestationRecorded { attestation },
+            )));
+
         Ok(())
     }
 }
@@ -1561,14 +1839,15 @@ pub mod query {
     use iroha_data_model::{
         events::data::oracle::FeedEventRecord,
         oracle::{
-            FeedConfig, OracleChangeProposal, OracleDispute, OracleProviderStats,
-            OracleProviderStatsRecord, TwitterBindingRecord,
+            DefiOracleAttestation, FeedConfig, OracleChangeProposal, OracleDispute,
+            OracleProviderStats, OracleProviderStatsRecord, TwitterBindingRecord,
         },
         query::{
             dsl::CompoundPredicate,
             dsl_fast::EvaluatePredicate,
             error::{FindError, QueryExecutionFail as Error},
             oracle::prelude::{
+                FindDefiOracleAttestationsByKey, FindLatestDefiOracleAttestation,
                 FindOracleChangeById, FindOracleChanges, FindOracleDisputeById, FindOracleDisputes,
                 FindOracleDisputesByFeedId, FindOracleFeedById, FindOracleFeeds,
                 FindOracleHistoryByFeedId, FindOracleProviderStatsByFeedId,
@@ -1644,6 +1923,19 @@ pub mod query {
         }
     }
 
+    impl ValidSingularQuery for FindLatestDefiOracleAttestation {
+        #[metrics(+"find_latest_defi_oracle_attestation")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<DefiOracleAttestation, Error> {
+            state_ro
+                .world()
+                .defi_oracle_attestations()
+                .get(&self.key)
+                .and_then(|items| items.last())
+                .cloned()
+                .ok_or_else(|| Error::Find(FindError::DefiOracleAttestation(self.key)))
+        }
+    }
+
     impl ValidQuery for FindOracleFeeds {
         #[metrics(+"find_oracle_feeds")]
         fn execute(
@@ -1701,6 +1993,26 @@ pub mod query {
                     })
                 })
                 .filter(move |record| filter.applies(record))
+                .collect::<Vec<_>>();
+            Ok(items.into_iter())
+        }
+    }
+
+    impl ValidQuery for FindDefiOracleAttestationsByKey {
+        #[metrics(+"find_defi_oracle_attestations_by_key")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<DefiOracleAttestation>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = DefiOracleAttestation>, Error> {
+            let items = state_ro
+                .world()
+                .defi_oracle_attestations()
+                .get(&self.key)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(move |attestation| filter.applies(attestation))
                 .collect::<Vec<_>>();
             Ok(items.into_iter())
         }

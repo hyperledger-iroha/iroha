@@ -24,7 +24,7 @@ Options:
 EOF
 }
 
-IROHA_CLI_BIN=${IROHA_CLI_BIN:-iroha}
+IROHA_BIN=${IROHA_BIN:-iroha}
 OUTPUT_DIR="artifacts/address_toolkit"
 NETWORK_PREFIX=753
 FORMAT="i105"
@@ -55,7 +55,7 @@ while (($#)); do
             shift
             ;;
         --iroha-cli)
-            IROHA_CLI_BIN=${2:?--iroha-cli requires a value}
+            IROHA_BIN=${2:?--iroha-cli requires a value}
             shift 2
             ;;
         --allow-errors)
@@ -91,7 +91,7 @@ CONVERT_PATH="$OUTPUT_DIR/normalized.txt"
 
 echo "[address-local-toolkit] writing audit report to $AUDIT_PATH"
 AUDIT_CMD=(
-    "$IROHA_CLI_BIN" tools address audit
+    "$IROHA_BIN" tools address audit
     --input "$INPUT_PATH"
     --network-prefix "$NETWORK_PREFIX"
     --format json
@@ -109,7 +109,7 @@ fi
 
 echo "[address-local-toolkit] generating normalized output at $CONVERT_PATH"
 NORMALIZE_CMD=(
-    "$IROHA_CLI_BIN" tools address normalize
+    "$IROHA_BIN" tools address normalize
     --input "$INPUT_PATH"
     --network-prefix "$NETWORK_PREFIX"
     --format "$FORMAT"

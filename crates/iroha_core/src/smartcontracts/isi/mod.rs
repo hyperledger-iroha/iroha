@@ -7,6 +7,8 @@ pub mod asset;
 pub mod block;
 /// Content lane instruction handlers.
 pub mod content;
+/// DeFi-native instruction handlers.
+pub mod defi;
 pub mod domain;
 /// Native asset escrow instruction handlers.
 pub mod escrow;
@@ -36,8 +38,6 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
-/// SoraSwap DeFi-native instruction handlers.
-pub mod soraswap;
 pub mod space_directory;
 /// Public lane staking instruction handlers.
 pub mod staking;
@@ -138,19 +138,19 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::rwa::ReleaseRwa>,
     dispatch_instruction::<iroha_data_model::isi::rwa::ForceTransferRwa>,
     dispatch_instruction::<iroha_data_model::isi::rwa::SetRwaControls>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::SoraSwapInstructionBox>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::SubmitSoraSwapIntent>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::SettleSoraSwapIntent>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::RegisterSoraSwapVault>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::RecordSoraSwapVaultRequest>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::RegisterSoraSwapOperator>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::RecordSoraSwapOperatorHeartbeat>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::ConfigureSoraSwapDlmmHook>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::RecordSoraSwapHookExecution>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::RegisterSoraSwapMarginMarket>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::UpdateSoraSwapMarginAccount>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::RegisterSoraSwapRwaMarket>,
-    dispatch_instruction::<iroha_data_model::isi::soraswap::ReportSoraSwapRwaNav>,
+    dispatch_instruction::<iroha_data_model::isi::defi::DeFiInstructionBox>,
+    dispatch_instruction::<iroha_data_model::isi::defi::SubmitDefiIntent>,
+    dispatch_instruction::<iroha_data_model::isi::defi::SettleDefiIntent>,
+    dispatch_instruction::<iroha_data_model::isi::defi::RegisterDefiVault>,
+    dispatch_instruction::<iroha_data_model::isi::defi::RecordDefiVaultRequest>,
+    dispatch_instruction::<iroha_data_model::isi::defi::RegisterDefiOperator>,
+    dispatch_instruction::<iroha_data_model::isi::defi::RecordDefiOperatorHeartbeat>,
+    dispatch_instruction::<iroha_data_model::isi::defi::ConfigureDefiAmmHook>,
+    dispatch_instruction::<iroha_data_model::isi::defi::RecordDefiHookExecution>,
+    dispatch_instruction::<iroha_data_model::isi::defi::RegisterDefiMarginMarket>,
+    dispatch_instruction::<iroha_data_model::isi::defi::UpdateDefiMarginAccount>,
+    dispatch_instruction::<iroha_data_model::isi::defi::RegisterDefiRwaMarket>,
+    dispatch_instruction::<iroha_data_model::isi::defi::ReportDefiRwaNav>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ApprovePinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RetirePinManifest>,
@@ -283,6 +283,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::oracle::ProposeOracleChange>,
     dispatch_instruction::<iroha_data_model::isi::oracle::VoteOracleChangeStage>,
     dispatch_instruction::<iroha_data_model::isi::oracle::RollbackOracleChange>,
+    dispatch_instruction::<iroha_data_model::isi::oracle::SubmitDefiOracleAttestation>,
     dispatch_instruction::<iroha_data_model::isi::oracle::RecordTwitterBinding>,
     dispatch_instruction::<iroha_data_model::isi::oracle::RevokeTwitterBinding>,
     dispatch_instruction::<iroha_data_model::isi::staking::RebindPublicLaneValidatorPeer>,

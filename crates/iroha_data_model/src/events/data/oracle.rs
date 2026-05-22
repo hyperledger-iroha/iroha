@@ -3,8 +3,9 @@
 use super::*;
 use crate::{
     oracle::{
-        FeedEvent, FeedId, KeyedHash, OracleChangeClass, OracleChangeId, OracleChangeStage,
-        OracleChangeStatus, OracleDispute, OraclePenalty, OracleReward, TwitterBindingRecord,
+        DefiOracleAttestation, FeedEvent, FeedId, KeyedHash, OracleChangeClass, OracleChangeId,
+        OracleChangeStage, OracleChangeStatus, OracleDispute, OraclePenalty, OracleReward,
+        TwitterBindingRecord,
     },
     prelude::{AccountId, Hash},
 };
@@ -97,6 +98,18 @@ pub struct OracleChangeStageUpdated {
     pub evidence_hashes: Vec<Hash>,
 }
 
+/// Event emitted when a native DeFi oracle attestation is recorded.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct DefiOracleAttestationRecorded {
+    /// Recorded attestation.
+    pub attestation: DefiOracleAttestation,
+}
+
 /// Oracle lifecycle events.
 #[derive(
     Debug,
@@ -131,12 +144,15 @@ pub enum OracleEvent {
     ChangeProposed(OracleChangeProposed),
     /// Oracle change stage received a vote or terminal outcome.
     ChangeStageUpdated(OracleChangeStageUpdated),
+    /// Native DeFi compatibility oracle attestation recorded.
+    DefiAttestationRecorded(DefiOracleAttestationRecorded),
 }
 
 /// Prelude exports.
 pub mod prelude {
     pub use super::{
-        FeedEventRecord, OracleChangeProposed, OracleChangeStageUpdated, OracleEvent,
-        OracleEventSet, TwitterBindingRecorded, TwitterBindingRevoked,
+        DefiOracleAttestationRecorded, FeedEventRecord, OracleChangeProposed,
+        OracleChangeStageUpdated, OracleEvent, OracleEventSet, TwitterBindingRecorded,
+        TwitterBindingRevoked,
     };
 }

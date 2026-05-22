@@ -8,7 +8,7 @@ set -euo pipefail
 #   CARGO_TARGET_DIR Cargo target directory override (default: <IROHA_DIR>/target).
 #   KAGAMI_BIN       Path to the `kagami` binary (default: <target-dir>/<profile>/kagami).
 #   IROHAD_BIN       Path to the `irohad` binary (default: <target-dir>/<profile>/irohad).
-#   IROHA_CLI_BIN    Path to the `iroha` CLI binary (default: <target-dir>/<profile>/iroha).
+#   IROHA_BIN        Path to the `iroha` CLI binary (default: <target-dir>/<profile>/iroha).
 #   SKIP_TOOL_BUILD  Skip cargo build and reuse existing binaries (default: false).
 #   IROHA_LOCALNET_NOFILE_MIN Minimum RLIMIT_NOFILE for localnet peers (default: 4096).
 #   IROHA_LOCALNET_GUEST_STACK_BYTES Override [concurrency].guest_stack_bytes in generated peer configs.
@@ -434,7 +434,7 @@ fi
 
 KAGAMI_BIN="${KAGAMI_BIN:-"$TARGET_DIR/$PROFILE/kagami"}"
 IROHAD_BIN="${IROHAD_BIN:-"$TARGET_DIR/$PROFILE/irohad"}"
-CLI_BIN="${IROHA_CLI_BIN:-"$TARGET_DIR/$PROFILE/iroha"}"
+CLI_BIN="${IROHA_BIN:-"$TARGET_DIR/$PROFILE/iroha"}"
 for bin_path in "$KAGAMI_BIN" "$IROHAD_BIN" "$CLI_BIN"; do
   if [[ ! -x "$bin_path" ]]; then
     echo "Required binary is missing or not executable: $bin_path" >&2

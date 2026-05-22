@@ -538,6 +538,12 @@ export type SccpTokenMessagePayload =
   | { TokenPause: SccpTokenControlPayload }
   | { TokenResume: SccpTokenControlPayload };
 
+export type SccpGovernancePayload =
+  | { Add: SccpTokenAddPayload }
+  | { Pause: SccpTokenControlPayload }
+  | { Resume: SccpTokenControlPayload }
+  | SccpTokenMessagePayload;
+
 export type SccpHubMessageKind =
   | "Burn"
   | "TokenAdd"
@@ -582,6 +588,16 @@ export interface SccpTokenMessageBundle {
   finality_proof: string;
 }
 
+export interface SccpGovernanceBundle {
+  version: number;
+  commitment_root: string;
+  commitment: SccpHubCommitment & { parliament_certificate_hash: string };
+  merkle_proof: SccpMerkleProof;
+  payload: SccpGovernancePayload;
+  parliament_certificate: string;
+  finality_proof: string;
+}
+
 export interface SccpBundleSurfaceValidation {
   ok: boolean;
   expectedMessageId: string;
@@ -590,11 +606,16 @@ export interface SccpBundleSurfaceValidation {
   checks: Record<string, boolean>;
 }
 
+export interface SccpGovernanceBundleSurfaceValidation extends SccpBundleSurfaceValidation {
+  expectedCertificateHash: string;
+}
+
 export function isSupportedSccpDomain(domainId: number): boolean;
 export function canonicalSccpBurnPayloadBytes(payload: SccpBurnPayload): Uint8Array;
 export function canonicalSccpTokenAddPayloadBytes(payload: SccpTokenAddPayload): Uint8Array;
 export function canonicalSccpTokenControlPayloadBytes(payload: SccpTokenControlPayload): Uint8Array;
 export function canonicalSccpTokenMessagePayloadBytes(payload: SccpTokenMessagePayload): Uint8Array;
+export function canonicalSccpGovernancePayloadBytes(payload: SccpGovernancePayload): Uint8Array;
 export function canonicalSccpCommitmentBytes(commitment: SccpHubCommitment): Uint8Array;
 export function sccpBurnMessageId(
   payload: SccpBurnPayload,
@@ -616,7 +637,15 @@ export function sccpTokenMessageId(
   payload: SccpTokenMessagePayload,
   options?: { prefix?: boolean },
 ): string;
+export function sccpGovernanceMessageId(
+  payload: SccpGovernancePayload,
+  options?: { prefix?: boolean },
+): string;
 export function sccpTokenMessageTargetDomain(payload: SccpTokenMessagePayload): number;
+export function sccpParliamentCertificateHash(
+  certificate: Uint8Array | ArrayBufferView | ArrayBuffer | string,
+  options?: { prefix?: boolean },
+): string;
 export function sccpPayloadHash(
   payload: Uint8Array | ArrayBufferView | ArrayBuffer | string,
   options?: { prefix?: boolean },
@@ -634,6 +663,30 @@ export function validateSccpBurnBundleSurface(bundle: SccpBurnBundle): SccpBundl
 export function validateSccpTokenMessageBundleSurface(
   bundle: SccpTokenMessageBundle,
 ): SccpBundleSurfaceValidation;
+export function validateSccpGovernanceBundleSurface(
+  bundle: SccpGovernanceBundle,
+): SccpGovernanceBundleSurfaceValidation;
+
+export interface DefiOracleAttestationQuery {
+  baseUrl?: string;
+  toriiUrl?: string;
+  domain: number | string;
+  subjectId: number | string;
+  status?: number | string;
+}
+
+export function queryOracleFeeds(
+  baseUrl: string,
+  options?: Record<string, string | number | boolean | undefined>,
+): Promise<JsonValue>;
+export function queryOracleFeedHistory(
+  baseUrl: string,
+  feedId: string,
+  options?: Record<string, string | number | boolean | undefined>,
+): Promise<JsonValue>;
+export function getLatestDefiOracleAttestation(
+  query: DefiOracleAttestationQuery,
+): Promise<JsonValue>;
 
 export interface BuildPacs008Options {
   messageId: string;

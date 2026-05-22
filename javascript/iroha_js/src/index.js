@@ -318,20 +318,29 @@ export {
   canonicalSccpTokenAddPayloadBytes,
   canonicalSccpTokenControlPayloadBytes,
   canonicalSccpTokenMessagePayloadBytes,
+  canonicalSccpGovernancePayloadBytes,
   canonicalSccpCommitmentBytes,
   sccpBurnMessageId,
   sccpTokenAddMessageId,
   sccpTokenPauseMessageId,
   sccpTokenResumeMessageId,
   sccpTokenMessageId,
+  sccpGovernanceMessageId,
   sccpTokenMessageTargetDomain,
+  sccpParliamentCertificateHash,
   sccpPayloadHash,
   sccpCommitmentLeafHash,
   sccpMerkleRootFromCommitment,
   validateSccpBurnBundleSurface,
   validateSccpTokenMessageBundleSurface,
+  validateSccpGovernanceBundleSurface,
 } from "./sccp.js";
 export { decodeReplicationOrder, SorafsGatewayFetchError, sorafsGatewayFetch } from "./sorafs.js";
+export {
+  queryOracleFeeds,
+  queryOracleFeedHistory,
+  getLatestDefiOracleAttestation,
+} from "./soracles.js";
 export { ConnectRetryPolicy } from "./connectRetryPolicy.js";
 
 import * as toriiNamespace from "./toriiClient.js";

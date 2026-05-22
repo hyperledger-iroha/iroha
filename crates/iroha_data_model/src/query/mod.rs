@@ -809,6 +809,8 @@ mod model {
         OracleChangeProposal(Vec<crate::oracle::OracleChangeProposal>),
         /// Batch of twitter binding records.
         TwitterBindingRecord(Vec<crate::oracle::TwitterBindingRecord>),
+        /// Batch of DeFi oracle attestations.
+        DefiOracleAttestation(Vec<crate::oracle::DefiOracleAttestation>),
         /// Batch of native asset escrow records.
         AssetEscrowRecord(Vec<crate::escrow::AssetEscrowRecord>),
         /// Batch of native anonymous asset escrow records.
@@ -873,6 +875,8 @@ mod model {
         FindOracleChangeById(oracle::prelude::FindOracleChangeById),
         /// Fetch oracle provider statistics by key.
         FindOracleProviderStatsByKey(oracle::prelude::FindOracleProviderStatsByKey),
+        /// Fetch the latest DeFi oracle attestation for a key.
+        FindLatestDefiOracleAttestation(oracle::prelude::FindLatestDefiOracleAttestation),
         /// Fetch domain endorsement records.
         FindDomainEndorsements(endorsement::prelude::FindDomainEndorsements),
         /// Fetch the domain endorsement policy.
@@ -963,6 +967,8 @@ mod model {
         OracleChangeProposal(crate::oracle::OracleChangeProposal),
         /// Oracle provider statistics payload.
         OracleProviderStats(crate::oracle::OracleProviderStats),
+        /// Latest DeFi oracle attestation payload.
+        DefiOracleAttestation(crate::oracle::DefiOracleAttestation),
         /// Domain endorsements payload.
         DomainEndorsements(Vec<crate::nexus::DomainEndorsementRecord>),
         /// Domain endorsement policy payload.
@@ -1233,6 +1239,8 @@ mod model {
         OracleChangeProposal,
         /// Twitter binding record items.
         TwitterBindingRecord,
+        /// DeFi oracle attestation items.
+        DefiOracleAttestation,
         /// Permission items.
         Permission,
         /// Native asset escrow records.
@@ -1392,6 +1400,12 @@ mod model {
     impl ItemKindTag for crate::oracle::TwitterBindingRecord {
         fn kind() -> QueryItemKind {
             QueryItemKind::TwitterBindingRecord
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for crate::oracle::DefiOracleAttestation {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::DefiOracleAttestation
         }
     }
     #[cfg(feature = "fast_dsl")]
@@ -1993,6 +2007,7 @@ impl QueryOutputBatchBox {
             (Self::OracleDispute(v1), Self::OracleDispute(v2)) => v1.extend(v2),
             (Self::OracleChangeProposal(v1), Self::OracleChangeProposal(v2)) => v1.extend(v2),
             (Self::TwitterBindingRecord(v1), Self::TwitterBindingRecord(v2)) => v1.extend(v2),
+            (Self::DefiOracleAttestation(v1), Self::DefiOracleAttestation(v2)) => v1.extend(v2),
             (Self::AssetEscrowRecord(v1), Self::AssetEscrowRecord(v2)) => v1.extend(v2),
             (Self::AnonymousAssetEscrowRecord(v1), Self::AnonymousAssetEscrowRecord(v2)) => {
                 v1.extend(v2)
@@ -2047,6 +2062,7 @@ impl QueryOutputBatchBox {
             Self::OracleDispute(v) => v.len(),
             Self::OracleChangeProposal(v) => v.len(),
             Self::TwitterBindingRecord(v) => v.len(),
+            Self::DefiOracleAttestation(v) => v.len(),
             Self::AssetEscrowRecord(v) => v.len(),
             Self::AnonymousAssetEscrowRecord(v) => v.len(),
         }
@@ -2794,6 +2810,7 @@ impl_iter_queries! {
     oracle::prelude::FindOracleDisputesByFeedId => crate::oracle::OracleDispute,
     oracle::prelude::FindOracleChanges => crate::oracle::OracleChangeProposal,
     oracle::prelude::FindTwitterBindingsByUaid => crate::oracle::TwitterBindingRecord,
+    oracle::prelude::FindDefiOracleAttestationsByKey => crate::oracle::DefiOracleAttestation,
 }
 
 impl_singular_queries! {
@@ -2816,6 +2833,7 @@ impl_singular_queries! {
     oracle::FindOracleDisputeById => crate::oracle::OracleDispute,
     oracle::FindOracleChangeById => crate::oracle::OracleChangeProposal,
     oracle::FindOracleProviderStatsByKey => crate::oracle::OracleProviderStats,
+    oracle::FindLatestDefiOracleAttestation => crate::oracle::DefiOracleAttestation,
     endorsement::prelude::FindDomainEndorsements => Vec<crate::nexus::DomainEndorsementRecord>,
     endorsement::prelude::FindDomainEndorsementPolicy => crate::nexus::DomainEndorsementPolicy,
     endorsement::prelude::FindDomainCommittee => crate::nexus::DomainCommittee,
@@ -3479,7 +3497,10 @@ pub mod oracle {
 
     use crate::{
         nexus::UniversalAccountId,
-        oracle::{FeedId, KeyedHash, OracleChangeId, OracleDisputeId, OracleProviderKey},
+        oracle::{
+            DefiOracleAttestationKey, FeedId, KeyedHash, OracleChangeId, OracleDisputeId,
+            OracleProviderKey,
+        },
     };
 
     queries! {
@@ -3591,6 +3612,26 @@ pub mod oracle {
             pub binding_hash: KeyedHash,
         }
 
+        /// Find retained DeFi oracle attestations for a domain and subject id.
+        #[derive(Display)]
+        #[display("Find DeFi oracle attestations for `{key:?}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindDefiOracleAttestationsByKey {
+            /// Domain and subject id key.
+            pub key: DefiOracleAttestationKey,
+        }
+
+        /// Find the latest DeFi oracle attestation for a domain and subject id.
+        #[derive(Display)]
+        #[display("Find latest DeFi oracle attestation for `{key:?}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindLatestDefiOracleAttestation {
+            /// Domain and subject id key.
+            pub key: DefiOracleAttestationKey,
+        }
+
     }
 
     impl FindTwitterBindingByHash {
@@ -3603,7 +3644,8 @@ pub mod oracle {
     pub mod prelude {
         //! Prelude re-exports for oracle queries.
         pub use super::{
-            FindOracleChangeById, FindOracleChanges, FindOracleDisputeById, FindOracleDisputes,
+            FindDefiOracleAttestationsByKey, FindLatestDefiOracleAttestation, FindOracleChangeById,
+            FindOracleChanges, FindOracleDisputeById, FindOracleDisputes,
             FindOracleDisputesByFeedId, FindOracleFeedById, FindOracleFeeds,
             FindOracleHistoryByFeedId, FindOracleProviderStatsByFeedId,
             FindOracleProviderStatsByKey, FindTwitterBindingByHash, FindTwitterBindingsByUaid,
@@ -4429,6 +4471,8 @@ pub mod error {
             OracleChange(crate::oracle::OracleChangeId),
             /// Failed to find oracle provider stats `{0:?}`
             OracleProviderStats(crate::oracle::OracleProviderKey),
+            /// Failed to find DeFi oracle attestation `{0:?}`
+            DefiOracleAttestation(crate::oracle::DefiOracleAttestationKey),
             /// Failed to find native asset escrow: `{0:?}`
             AssetEscrow(crate::escrow::EscrowId),
         }
