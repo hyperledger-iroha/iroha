@@ -2345,10 +2345,17 @@ mod tests {
         let err = overlay
             .apply_with_chunk(&mut tx, &authority, 1)
             .expect_err("plain overlay must not record SCCP messages");
-        assert!(
-            err.to_string().contains("requires verified IVM proof"),
-            "unexpected error: {err}"
-        );
+        match err {
+            ValidationFail::InstructionFailed(
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                    message,
+                ),
+            ) => assert!(
+                message.contains("requires verified IVM proof"),
+                "unexpected invariant violation: {message}"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
