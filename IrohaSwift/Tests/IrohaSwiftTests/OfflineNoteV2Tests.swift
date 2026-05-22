@@ -1733,6 +1733,61 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(note.state, .spendable)
     }
 
+    /// Regression: `Wallet.load(assetDefinitionId:)` must forward the
+    /// asset definition id verbatim to the issuer client. An earlier
+    /// revision derived the value from the SDK-internal 2-part `assetId
+    /// = name#account`, which dropped any suffix after the first `#`
+    /// (e.g. `someBase58Alias#extra` → `someBase58Alias`). The pass-
+    /// through is verified against the Base58 form that the wallet's
+    /// note-commitment encoding requires.
+    func testWalletLoadForwardsAssetDefinitionIdVerbatimToIssuerClient() async throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let loadContext = OfflineNoteV2LoadContext(
+            operationId: derivation.issuerLoadOperationId,
+            lineageId: derivation.issuerLoadLineageId,
+            localRevision: derivation.issuerLoadLocalRevision,
+            keyCertificate: senderCertificate
+        )
+        let issuerClient = RecordingIssuerClient(loadContext: loadContext)
+        let wallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            issuerClient: issuerClient,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            certificateVerifier: try Self.certificateVerifier(fixture),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.sourceNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_001_000 }
+        )
+
+        // The Base58 form is what the wallet's note-commitment encoding
+        // requires (assetId = `<asset-def-base58>#<account>`); the
+        // regression check is that the exact Base58 value is forwarded
+        // to the issuer client, not the substring before any later `#`.
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
+        _ = try await wallet.load(
+            assetDefinitionId: assetDefinitionId,
+            amount: fixture.chainVectors.issue.amount
+        )
+
+        XCTAssertEqual(
+            issuerClient.lastPrepareLoadAssetDefinitionId,
+            assetDefinitionId,
+            "prepareLoad must receive the assetDefinitionId verbatim; an earlier revision derived it from the SDK-internal assetId which dropped suffixes"
+        )
+        XCTAssertEqual(
+            issuerClient.lastIssueRequest?.assetDefinitionId,
+            assetDefinitionId,
+            "issueNote must receive the assetDefinitionId verbatim; an earlier revision derived it from the SDK-internal assetId which dropped suffixes"
+        )
+    }
+
     func testToriiIssuerClientBodySignsRefillAndIssuesWalletCommitment() async throws {
         let fixture = try Self.loadFixture()
         let certificate = fixture.paymentToken.senderKeyCertificate
@@ -1847,6 +1902,82 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(try Self.string(issueBody, "local_balance"), "0")
         XCTAssertEqual(try Self.string(issueBody, "nonce"), "auth-issue-1")
         _ = try Self.object(issueBody, "lineage_state")
+    }
+
+    /// Regression: the canonical body sent to Torii must NOT escape `/` as
+    /// `\/`. The server reconstructs the signing bytes via `norito::json::to_vec`
+    /// which never escapes slashes; if Swift's `JSONSerialization` does, the
+    /// reconstructed bytes diverge and every refill / issue fails with
+    /// `OFFLINE_V2_SIGNATURE_INVALID` (403). Base64 fields routinely contain `/`,
+    /// so this is hit by every real device binding in practice.
+    func testRefillBodyDoesNotEscapeForwardSlashesForCanonicalSigning() async throws {
+        let fixture = try Self.loadFixture()
+        let certificate = fixture.paymentToken.senderKeyCertificate
+        let accountId = certificate.accountId
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
+        // Deliberately use a base64-shaped value that contains `/` so we
+        // exercise the escape path. `JSONSerialization` with only
+        // `[.sortedKeys]` would emit `\/` here.
+        let offlinePublicKey = "AB//CD/EFGH//IJ="
+        let deviceBinding = try OfflineNoteV2IssuerDeviceBinding(
+            deviceId: "device-1",
+            offlinePublicKey: offlinePublicKey,
+            deviceBinding: [
+                "device_id": "device-1",
+                "offline_public_key": offlinePublicKey,
+                "signature_base64": "ABC//DEF/GHI/JKL=",
+            ]
+        )
+        OfflineIssuerURLProtocol.reset()
+        OfflineIssuerURLProtocol.handler = { request in
+            let body = try Self.requestBody(request)
+            let response: [String: Any] = [
+                "operation_id": try Self.string(body, "operation_id"),
+                "lineage_state": Self.lineageState(revision: 0, balance: "0"),
+                "key_certificate": Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
+                "key_certificates": [Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
+            ]
+            return (200, try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]))
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfflineIssuerURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiOfflineNoteV2IssuerClient(
+            baseURL: URL(string: "https://torii.example")!,
+            session: session,
+            canonicalAuth: ToriiCanonicalRequestAuth(
+                accountId: accountId,
+                privateKey: Data(0..<32)
+            ),
+            deviceBindingProvider: StaticIssuerDeviceBindingProvider(binding: deviceBinding),
+            clock: { 1_700_000_000_000 },
+            nonceGenerator: SequenceIdGenerator(ids: [
+                "operation-refill-slash",
+                "auth-refill-slash",
+            ])
+        )
+
+        _ = try await client.prepareLoad(
+            chainId: "chain-1",
+            accountId: accountId,
+            assetDefinitionId: assetDefinitionId,
+            amount: "5"
+        )
+
+        let requests = OfflineIssuerURLProtocol.requests
+        XCTAssertEqual(requests.count, 1)
+        guard let rawBody = OfflineIssuerURLProtocol.body(for: requests[0]) else {
+            return XCTFail("missing request body")
+        }
+        let rawString = String(decoding: rawBody, as: UTF8.self)
+        XCTAssertFalse(
+            rawString.contains("\\/"),
+            "canonical body must not contain escaped slashes (\\/); server reconstructs bytes via norito::json::to_vec which never escapes /"
+        )
+        XCTAssertTrue(
+            rawString.contains(offlinePublicKey),
+            "expected the raw offline_public_key (with /) to appear unescaped in the body"
+        )
     }
 
     func testOfflineNoteV2WalletLifecycleBuildsAuditAcceptAndRedeemTransactions() async throws {
@@ -3758,6 +3889,7 @@ final class OfflineNoteV2Tests: XCTestCase {
     private final class RecordingIssuerClient: OfflineNoteV2IssuerClient {
         let loadContext: OfflineNoteV2LoadContext
         var lastIssueRequest: OfflineNoteV2IssueRequest?
+        var lastPrepareLoadAssetDefinitionId: String?
 
         init(loadContext: OfflineNoteV2LoadContext) {
             self.loadContext = loadContext
@@ -3767,7 +3899,8 @@ final class OfflineNoteV2Tests: XCTestCase {
                          accountId: String,
                          assetDefinitionId: String,
                          amount: String) async throws -> OfflineNoteV2LoadContext {
-            loadContext
+            lastPrepareLoadAssetDefinitionId = assetDefinitionId
+            return loadContext
         }
 
         func issueNote(_ request: OfflineNoteV2IssueRequest) async throws -> OfflineNoteV2IssueResponse {
