@@ -840,4 +840,15 @@ mod tests {
         assert_registry_decodes(&registry, record_binding);
         assert_registry_decodes(&registry, revoke_binding);
     }
+
+    #[test]
+    fn default_registry_encodes_defi_attestation_instruction_box() {
+        crate::isi::set_instruction_registry(crate::instruction_registry::default());
+        let instruction = crate::isi::InstructionBox::from(SubmitDefiOracleAttestation {
+            attestation: defi_attestation(),
+        });
+
+        norito::to_bytes(&instruction)
+            .expect("default registry should encode SubmitDefiOracleAttestation");
+    }
 }

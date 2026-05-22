@@ -72,6 +72,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<oracle::ProposeOracleChange>,
     InstructionRegistry::register_slice::<oracle::VoteOracleChangeStage>,
     InstructionRegistry::register_slice::<oracle::RollbackOracleChange>,
+    InstructionRegistry::register_slice::<oracle::SubmitDefiOracleAttestation>,
     InstructionRegistry::register_slice::<oracle::RecordTwitterBinding>,
     InstructionRegistry::register_slice::<oracle::RevokeTwitterBinding>,
     InstructionRegistry::register_slice::<social::ClaimTwitterFollowReward>,

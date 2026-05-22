@@ -842,11 +842,6 @@ fn validate_defi_payload_shape(
     if attestation.oracle_signature.is_empty() {
         return Err(signature_err("DeFi oracle signature must not be empty"));
     }
-    if attestation.source_events.is_empty() {
-        return Err(signature_err(
-            "DeFi oracle attestation must reference retained feed events",
-        ));
-    }
 
     let value: norito::json::Value = norito::json::from_slice(&attestation.oracle_payload)
         .map_err(|err| signature_err(format!("invalid DeFi oracle JSON payload: {err}")))?;
@@ -878,7 +873,14 @@ fn validate_defi_payload_shape(
             "DeFi oracle payload attestation_hash mismatch",
         ));
     }
-    if attestation.attestation_hash != derive_defi_attestation_hash(attestation) {
+    if attestation.attestation_hash == 0 {
+        return Err(signature_err(
+            "DeFi oracle attestation_hash must be non-zero",
+        ));
+    }
+    if !attestation.source_events.is_empty()
+        && attestation.attestation_hash != derive_defi_attestation_hash(attestation)
+    {
         return Err(signature_err(
             "DeFi oracle attestation_hash is not deterministic",
         ));
@@ -957,6 +959,78 @@ fn validate_defi_sources(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_data_model::oracle::{DefiOracleAttestationKey, kits};
+
+    use super::*;
+
+    fn provider() -> AccountId {
+        kits::price_xor_usd()
+            .observations
+            .first()
+            .expect("observation fixture")
+            .body
+            .provider_id
+            .clone()
+    }
+
+    fn direct_defi_attestation(attestation_hash: u64) -> DefiOracleAttestation {
+        DefiOracleAttestation {
+            key: DefiOracleAttestationKey::new(DEFI_ORACLE_DOMAIN_PERPS_MARKET, 42),
+            provider: provider(),
+            oracle_slot: 11,
+            status_flags: 0,
+            attestation_hash,
+            oracle_payload: format!(
+                "{{\"domain\":1,\"market_id\":42,\"mark_price_bps\":10000,\"index_price_bps\":10000,\"confidence_bps\":5,\"oracle_slot\":11,\"status_flags\":0,\"attestation_hash\":{attestation_hash}}}"
+            )
+            .into_bytes(),
+            oracle_signature: vec![7; 64],
+            signer_public_key: vec![9; 32],
+            oracle_scheme: 1,
+            source_events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn direct_defi_attestation_shape_accepts_empty_sources() {
+        validate_defi_payload_shape(&direct_defi_attestation(17))
+            .expect("direct provider-signed attestation should not require source events");
+    }
+
+    #[test]
+    fn direct_defi_attestation_shape_rejects_zero_hash() {
+        let err = validate_defi_payload_shape(&direct_defi_attestation(0))
+            .expect_err("zero compatibility hash must reject");
+        assert!(format!("{err:?}").contains("attestation_hash must be non-zero"));
+    }
+
+    #[test]
+    fn source_linked_defi_attestation_keeps_deterministic_hash_check() {
+        let mut attestation = direct_defi_attestation(17);
+        let kit = kits::price_xor_usd();
+        attestation.source_events.push(DefiOracleAttestationSource {
+            feed_id: kit.feed_config.feed_id,
+            slot: 11,
+            request_hash: kit.connector_request.request_hash(),
+            field: "mark_price_bps".to_owned(),
+        });
+        let err = validate_defi_payload_shape(&attestation)
+            .expect_err("source-linked attestation must keep deterministic hash validation");
+        assert!(format!("{err:?}").contains("attestation_hash is not deterministic"));
+
+        let deterministic_hash = derive_defi_attestation_hash(&attestation);
+        attestation.attestation_hash = deterministic_hash;
+        attestation.oracle_payload = format!(
+            "{{\"domain\":1,\"market_id\":42,\"mark_price_bps\":10000,\"index_price_bps\":10000,\"confidence_bps\":5,\"oracle_slot\":11,\"status_flags\":0,\"attestation_hash\":{deterministic_hash}}}"
+        )
+        .into_bytes();
+        validate_defi_payload_shape(&attestation)
+            .expect("source-linked attestation with deterministic hash should validate");
+    }
 }
 
 impl Execute for RegisterOracleFeed {

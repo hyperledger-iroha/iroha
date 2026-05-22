@@ -100,7 +100,12 @@ pub struct DefiOracleAttestationSource {
     pub field: String,
 }
 
-/// Native Soracles attestation carrying the ABI-compatible DeFi oracle bytes.
+/// Native Soracles attestation carrying ABI-compatible DeFi oracle bytes.
+///
+/// `source_events` can link the attestation back to retained native feed
+/// events for full auditability. Empty `source_events` are also valid for
+/// direct provider-signed attestations when the provider account is itself the
+/// submitting authority and signature controller.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -126,7 +131,7 @@ pub struct DefiOracleAttestation {
     pub signer_public_key: Vec<u8>,
     /// Compatibility signature scheme (`1` is Ed25519).
     pub oracle_scheme: u32,
-    /// Native feed events retained on-chain that justify payload field values.
+    /// Optional native feed events retained on-chain that justify payload field values.
     #[cfg_attr(feature = "json", norito(default))]
     pub source_events: Vec<DefiOracleAttestationSource>,
 }
