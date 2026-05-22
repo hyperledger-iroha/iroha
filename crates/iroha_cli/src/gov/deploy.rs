@@ -313,9 +313,7 @@ impl Run for DeployMetaArgs {
             self.contract_address.as_deref(),
             self.contract_alias.as_deref(),
         )?;
-        let mut pairs = vec![
-            ("gov_contract_address", json_value(&contract_address)?),
-        ];
+        let mut pairs = vec![("gov_contract_address", json_value(&contract_address)?)];
 
         if !self.approvers.is_empty() {
             let mut accounts = Vec::with_capacity(self.approvers.len());

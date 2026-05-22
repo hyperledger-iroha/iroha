@@ -766,8 +766,8 @@ mod tests {
 
     #[test]
     fn address_network_context_resolves_profile_and_rejects_mismatch() {
-        let context = resolve_address_network_context(Some("taira"), None, None)
-            .expect("profile resolves");
+        let context =
+            resolve_address_network_context(Some("taira"), None, None).expect("profile resolves");
         assert_eq!(
             context.chain_discriminant,
             iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
