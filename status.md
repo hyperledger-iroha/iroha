@@ -1,6 +1,17 @@
 # Status
 
-Last updated: 2026-05-21
+Last updated: 2026-05-22
+
+## 2026-05-22 Governance referendum height transition fix
+
+- Stage rejection quorum now requires a positive threshold, so test fixtures
+  and zero-threshold approval gates no longer treat zero rejections as an
+  automatic rejection quorum.
+- Height-triggered governance referenda can open at their scheduled start
+  height when all required parliament approval gates are satisfied.
+- Focused validation passed:
+  - `cargo test -p iroha_core --test gov_referendum_open_close referendum_open_and_close_by_height -- --nocapture`
+  - `cargo test -p iroha_core --lib governance_stage_rejection_quorum_requires_positive_threshold -- --nocapture`
 
 ## 2026-05-21 CLI smoke offline-command config recovery
 
