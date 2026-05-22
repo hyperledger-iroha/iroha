@@ -36129,6 +36129,7 @@ impl Actor {
             .unwrap_or(near_quorum_timeout)
             .max(Duration::from_millis(200));
         let mut near_quorum_recovery_candidates = Vec::new();
+        let mut local_quorum_completion_candidates = Vec::new();
 
         for (block_hash, pending) in &self.pending.pending_blocks {
             if !self.pending_block_is_active_for_tip(
@@ -36167,6 +36168,20 @@ impl Actor {
             let stall_age = pending.progress_age(now);
             if near_quorum_fast_timeout_allowed && stall_age >= near_quorum_recovery_window {
                 near_quorum_recovery_candidates.push((
+                    *block_hash,
+                    pending.height,
+                    pending.view,
+                    stall_age,
+                    decision.vote_count,
+                    decision.min_votes_for_commit,
+                ));
+            }
+            if decision.vote_count > 0
+                && decision.vote_count < decision.min_votes_for_commit
+                && decision.vote_count.saturating_add(1) >= decision.min_votes_for_commit
+                && stall_age >= near_quorum_recovery_window
+            {
+                local_quorum_completion_candidates.push((
                     *block_hash,
                     pending.height,
                     pending.view,
@@ -36353,6 +36368,38 @@ impl Actor {
                     "deferring forced view change while commit worker owns the stalled frontier"
                 );
             }
+            return false;
+        }
+        let mut local_quorum_completion_emitted = 0usize;
+        if !local_quorum_completion_candidates.is_empty() {
+            let mut completed_candidates = BTreeSet::<(HashOf<BlockHeader>, u64, u64)>::new();
+            for (block_hash, candidate_height, candidate_view, stall_age, vote_count, min_votes) in
+                local_quorum_completion_candidates.into_iter().take(4)
+            {
+                if !completed_candidates.insert((block_hash, candidate_height, candidate_view)) {
+                    continue;
+                }
+                if self.maybe_emit_local_vote_to_complete_stalled_pending_quorum(
+                    block_hash,
+                    candidate_height,
+                    candidate_view,
+                    "stalled_pending_near_quorum_completion",
+                ) {
+                    local_quorum_completion_emitted =
+                        local_quorum_completion_emitted.saturating_add(1);
+                    debug!(
+                        height = candidate_height,
+                        view = candidate_view,
+                        block = %block_hash,
+                        votes = vote_count,
+                        min_votes,
+                        stall_age_ms = stall_age.as_millis(),
+                        "emitted local precommit to complete stalled pending quorum"
+                    );
+                }
+            }
+        }
+        if local_quorum_completion_emitted > 0 {
             return false;
         }
         let mut near_quorum_preemptive_escalations = 0usize;
@@ -36620,6 +36667,86 @@ impl Actor {
         }
         self.trigger_view_change_with_cause(height, view, ViewChangeCause::QuorumTimeout);
         true
+    }
+
+    fn maybe_emit_local_vote_to_complete_stalled_pending_quorum(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        trigger: &'static str,
+    ) -> bool {
+        let Some((pending_roots, pending_height, pending_view)) = self
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .and_then(|pending| {
+                (!pending.aborted
+                    && !pending.local_commit_vote_emitted()
+                    && !pending.commit_qc_observed()
+                    && pending.validation_status == ValidationStatus::Valid)
+                    .then_some((
+                        pending.parent_state_root.zip(pending.post_state_root),
+                        pending.height,
+                        pending.view,
+                    ))
+            })
+        else {
+            return false;
+        };
+        if pending_height != height || pending_view != view {
+            return false;
+        }
+
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let mut vote_roster = if height == self.committed_height_snapshot().saturating_add(1) {
+            self.roster_for_live_vote_with_mode(height, consensus_mode)
+        } else {
+            Vec::new()
+        };
+        if vote_roster.is_empty() {
+            vote_roster = self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        }
+        if vote_roster.is_empty() {
+            vote_roster = self.effective_commit_topology();
+        }
+        if vote_roster.is_empty() {
+            return false;
+        }
+
+        let topology = super::network_topology::Topology::new(vote_roster.clone());
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
+            return false;
+        };
+        if !self.candidate_commit_quorum_completes_with_local_vote(
+            block_hash,
+            height,
+            view,
+            &topology,
+            &signature_topology,
+            local_idx,
+            pending_roots,
+        ) {
+            return false;
+        }
+
+        let emitted = self.maybe_emit_local_commit_vote_for_pending_event(
+            block_hash,
+            height,
+            view,
+            &vote_roster,
+            trigger,
+        );
+        if emitted {
+            info!(
+                height,
+                view,
+                block = %block_hash,
+                "local precommit completed stalled pending commit quorum"
+            );
+        }
+        emitted
     }
 
     fn stalled_pending_near_quorum_fast_timeout_gate_open(

@@ -204,6 +204,118 @@ pub(super) fn select_commit_root_signers_by_stake(
 }
 
 impl Actor {
+    #[allow(clippy::too_many_arguments)]
+    fn maybe_emit_late_new_view_vote_to_complete_near_quorum(
+        &mut self,
+        groups: &[(crate::sumeragi::consensus::QcRef, BTreeSet<ValidatorIndex>)],
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        consensus_mode: ConsensusMode,
+        signature_topology: &super::network_topology::Topology,
+        emission_topology: &super::network_topology::Topology,
+        npos_stake_roster: Option<&[PeerId]>,
+        required: usize,
+        voting_len: usize,
+    ) -> bool {
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+        // Complete current or past near-quorums only; future-view support must
+        // first move the local pacemaker before we add a local signature.
+        if !self
+            .phase_tracker
+            .current_view(height)
+            .is_some_and(|current_view| current_view >= view)
+        {
+            return false;
+        }
+        if self
+            .local_same_slot_vote(
+                crate::sumeragi::consensus::Phase::NewView,
+                height,
+                view,
+                epoch,
+            )
+            .is_some()
+        {
+            return false;
+        }
+        let Some(local_idx) = self.local_validator_index_for_topology(signature_topology) else {
+            return false;
+        };
+        let mut selected: Option<(crate::sumeragi::consensus::QcRef, BTreeSet<ValidatorIndex>)> =
+            None;
+        for (highest_qc, group) in groups {
+            if highest_qc.subject_block_hash != block_hash || group.contains(&local_idx) {
+                continue;
+            }
+            let mut with_local = group.clone();
+            with_local.insert(local_idx);
+            let completes = match consensus_mode {
+                ConsensusMode::Permissioned => {
+                    voting_signer_count(group, voting_len).saturating_add(1) >= required
+                        && voting_signer_count(&with_local, voting_len) >= required
+                }
+                ConsensusMode::Npos => {
+                    let Some(stake_roster) = npos_stake_roster else {
+                        return false;
+                    };
+                    let Ok(signer_peers) =
+                        signer_peers_for_topology(&with_local, signature_topology)
+                    else {
+                        continue;
+                    };
+                    let world = self.state.world_view();
+                    super::stake_snapshot::stake_quorum_reached_for_world(
+                        &world,
+                        stake_roster,
+                        &signer_peers,
+                    )
+                    .unwrap_or(false)
+                }
+            };
+            if !completes {
+                continue;
+            }
+            let replace = selected.as_ref().is_none_or(|(best_qc, best_group)| {
+                super::new_view_highest_qc_rank(*highest_qc)
+                    > super::new_view_highest_qc_rank(*best_qc)
+                    || (super::new_view_highest_qc_rank(*highest_qc)
+                        == super::new_view_highest_qc_rank(*best_qc)
+                        && group.len() > best_group.len())
+            });
+            if replace {
+                selected = Some((*highest_qc, with_local));
+            }
+        }
+        let Some((highest_qc, signers_with_local)) = selected else {
+            return false;
+        };
+        let emitted = self.emit_new_view_vote_to_complete_near_quorum(
+            height,
+            view,
+            highest_qc,
+            emission_topology,
+        );
+        if emitted {
+            info!(
+                height,
+                view,
+                block = %block_hash,
+                signer = local_idx,
+                signers_after_local = signers_with_local.len(),
+                required,
+                highest_height = highest_qc.height,
+                highest_view = highest_qc.view,
+                highest_block = %highest_qc.subject_block_hash,
+                "emitted late NEW_VIEW vote to complete same-highest near quorum"
+            );
+        }
+        emitted
+    }
+
     pub(super) fn npos_stake_roster_for_qc(
         &self,
         canonical_topology: &super::network_topology::Topology,
@@ -3960,9 +4072,10 @@ impl Actor {
             let group_count = groups.len();
             let selected = match consensus_mode {
                 ConsensusMode::Permissioned => groups
-                    .into_iter()
+                    .iter()
                     .filter(|(_, group)| voting_signer_count(group, voting_len) >= required)
-                    .max_by_key(|(highest_qc, _)| super::new_view_highest_qc_rank(*highest_qc)),
+                    .max_by_key(|(highest_qc, _)| super::new_view_highest_qc_rank(*highest_qc))
+                    .map(|(highest_qc, group)| (*highest_qc, group.clone())),
                 ConsensusMode::Npos => {
                     let Some(stake_roster) = npos_stake_roster.as_deref() else {
                         warn!(
@@ -3975,7 +4088,7 @@ impl Actor {
                     };
                     let world = self.state.world_view();
                     groups
-                        .into_iter()
+                        .iter()
                         .filter_map(|(highest_qc, group)| {
                             let signer_peers =
                                 signer_peers_for_topology(&group, &signature_topology).ok()?;
@@ -3985,12 +4098,26 @@ impl Actor {
                                 &signer_peers,
                             )
                             .ok()?;
-                            quorum.then_some((highest_qc, group))
+                            quorum.then_some((*highest_qc, group.clone()))
                         })
                         .max_by_key(|(highest_qc, _)| super::new_view_highest_qc_rank(*highest_qc))
                 }
             };
             let Some((highest_qc, filtered_signers)) = selected else {
+                let late_local_vote_emitted = self
+                    .maybe_emit_late_new_view_vote_to_complete_near_quorum(
+                        &groups,
+                        block_hash,
+                        height,
+                        view,
+                        epoch,
+                        consensus_mode,
+                        &signature_topology,
+                        signature_topology_source,
+                        npos_stake_roster.as_deref(),
+                        required,
+                        voting_len,
+                    );
                 warn!(
                     height,
                     view,
@@ -3999,6 +4126,7 @@ impl Actor {
                     voting_signers = snapshot.voting_signers,
                     total_signers = snapshot.total_signers,
                     required,
+                    late_local_vote_emitted,
                     "skipping NEW_VIEW certificate: no single highest-QC vote group reached quorum"
                 );
                 return;

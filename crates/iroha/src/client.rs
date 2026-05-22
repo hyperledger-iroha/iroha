@@ -12265,7 +12265,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_runtime_upgrades_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/runtime/upgrades");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get runtime upgrades: {} {}",

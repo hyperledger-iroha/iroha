@@ -9120,6 +9120,18 @@ mod tests {
     }
 
     #[test]
+    fn status_error_is_connection_refused_detects_nested_io_error() {
+        let report = Err::<(), Report>(Report::from(std::io::Error::new(
+            ErrorKind::ConnectionRefused,
+            "refused",
+        )))
+        .wrap_err("client status probe failed")
+        .unwrap_err();
+
+        assert!(status_error_is_connection_refused(&report));
+    }
+
+    #[test]
     fn status_error_is_connection_refused_ignores_other_errors() {
         let err = std::io::Error::other("other");
         let report = Report::from(err);
@@ -9136,8 +9148,26 @@ mod tests {
     }
 
     #[test]
+    fn status_error_is_torii_query_backpressure_detects_nested_status_throttle() {
+        let report = Err::<(), Report>(eyre!(
+            "Unexpected status response; status: 429 Too Many Requests; response body: Reached the limit of parallel queries"
+        ))
+        .wrap_err("client status probe failed")
+        .unwrap_err();
+
+        assert!(status_error_is_torii_query_backpressure(&report));
+    }
+
+    #[test]
     fn status_error_is_torii_query_backpressure_ignores_other_throttles() {
         let report = eyre!("Unexpected status response; status: 429 Too Many Requests");
+
+        assert!(!status_error_is_torii_query_backpressure(&report));
+    }
+
+    #[test]
+    fn status_error_is_torii_query_backpressure_ignores_limit_phrase_without_429() {
+        let report = eyre!("Reached the limit of parallel queries while validating locally");
 
         assert!(!status_error_is_torii_query_backpressure(&report));
     }
@@ -9177,8 +9207,43 @@ mod tests {
     }
 
     #[test]
+    fn torii_request_error_is_transient_detects_connect_error_phrase() {
+        let report = eyre!(
+            "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: client error (Connect)\n   1: Connection refused"
+        );
+
+        assert!(torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_detects_raw_connection_refused_io_error() {
+        let report = Report::from(std::io::Error::new(
+            ErrorKind::ConnectionRefused,
+            "connection refused",
+        ));
+
+        assert!(torii_request_error_is_transient(&report));
+    }
+
+    #[test]
     fn torii_request_error_is_transient_requires_http_transport_context() {
         let report = eyre!("connection reset while applying local validation");
+
+        assert!(!torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_ignores_plain_timeout_without_http_context() {
+        let report = eyre!("operation timed out while applying local validation");
+
+        assert!(!torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_ignores_http_context_without_transport_failure() {
+        let report = eyre!(
+            "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: validation rejected duplicate domain"
+        );
 
         assert!(!torii_request_error_is_transient(&report));
     }

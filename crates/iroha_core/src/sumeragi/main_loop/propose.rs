@@ -375,6 +375,46 @@ impl Actor {
         }
     }
 
+    fn vote_locked_frontier_recovery_ready(&self, height: u64, view: u64, now: Instant) -> bool {
+        let Some(lock) = self.same_height_vote_lock_blocking_candidate(height, view, None) else {
+            return false;
+        };
+        if self.same_height_block_has_observed_qc(lock.block_hash, height, lock.view) {
+            return false;
+        }
+        let min_stale_age = self
+            .quorum_timeout(self.runtime_da_enabled())
+            .max(self.frontier_slot_lag_window())
+            .max(Duration::from_millis(1));
+        let hard_stale_age = min_stale_age.saturating_mul(3);
+        self.stale_same_height_recovery_age(height, lock.view, now)
+            .is_some_and(|age| age >= hard_stale_age)
+            || self.same_height_vote_recovery_escalation_view_gap_exhausted(
+                lock.view,
+                view,
+                lock.total_validators,
+            )
+    }
+
+    pub(super) fn frontier_recovery_ingress_override_active(
+        &self,
+        height: u64,
+        view: u64,
+        now: Instant,
+        ingress_grace: Duration,
+    ) -> bool {
+        if !self.config.resilience.enabled
+            || height != self.committed_height_snapshot().saturating_add(1)
+            || view == 0
+            || !self.frontier_proposal_starved_past_ingress_grace(now, ingress_grace)
+        {
+            return false;
+        }
+        self.vote_locked_frontier_recovery_ready(height, view, now)
+            || self.frontier_missing_qc_liveness_active(height, view)
+            || self.exact_frontier_body_repair_active_at_height(height)
+    }
+
     fn warn_resilience_frontier_proposal_deferred(
         &mut self,
         height: u64,
@@ -1077,7 +1117,7 @@ impl Actor {
         now: Instant,
         trigger: &'static str,
     ) -> bool {
-        let mut progress = false;
+        let mut progress = self.request_frontier_owner_body_repair(block_hash, height, view, now);
         if self.frontier_block_materialized_locally(block_hash) {
             let targets =
                 self.known_block_commit_qc_recovery_targets(block_hash, height, view, &[]);
@@ -1775,6 +1815,19 @@ impl Actor {
                     "vote_locked_same_height",
                     false,
                 );
+                let highest_qc_dependency_repair_requested = if recovery_escalation_due
+                    && highest_qc.height.saturating_add(1) == proposal_height
+                    && !self.block_known_locally(highest_qc.subject_block_hash)
+                {
+                    let _ = self.mark_highest_qc_missing_defer_for_round(
+                        proposal_height,
+                        view,
+                        highest_qc,
+                    );
+                    self.observe_new_view_highest_qc_exact_repair(highest_qc)
+                } else {
+                    false
+                };
                 let stale_vote_locked_recovery_requested = recovery_escalation_due
                     && !qc_observed
                     && self.escalate_stale_vote_locked_frontier_owner_recovery(
@@ -1798,6 +1851,10 @@ impl Actor {
                     recovery_exhausted,
                     recovery_escalation_due,
                     qc_observed,
+                    highest_qc_dependency_repair_requested,
+                    highest_qc_height = highest_qc.height,
+                    highest_qc_view = highest_qc.view,
+                    highest_qc_block = %highest_qc.subject_block_hash,
                     stale_vote_locked_recovery_requested,
                     "deferring proposal assembly: same-height vote history makes a fresh branch non-viable"
                 );
@@ -3603,15 +3660,23 @@ impl Actor {
         let active_topology_peers = topology_peers.clone();
         let tracked_view = self.phase_tracker.current_view(tracked_height).unwrap_or(0);
         let queue_depths = super::status::worker_queue_depth_snapshot();
+        let ingress_grace = self.frontier_ingress_drain_grace(self.runtime_da_enabled());
+        let frontier_recovery_ingress_override = self.frontier_recovery_ingress_override_active(
+            tracked_height,
+            tracked_view,
+            now,
+            ingress_grace,
+        );
         let frontier_proposal_ingress_deferring = self.config.resilience.enabled
             && tracked_height == committed_height.saturating_add(1)
             && tracked_view > 0
+            && !frontier_recovery_ingress_override
             && self.frontier_proposal_ingress_defer_active(
                 tracked_height,
                 tracked_view,
                 now,
                 queue_depths,
-                self.frontier_ingress_drain_grace(self.runtime_da_enabled()),
+                ingress_grace,
             );
         if self.proposal_gated_by_missing_dependencies(tracked_height)
             && !allow_dependency_gated_reproposal
@@ -4616,14 +4681,19 @@ impl Actor {
 
         if height == self.committed_height_snapshot().saturating_add(1) && view_idx > 0 {
             let queue_depths = super::status::worker_queue_depth_snapshot();
+            let ingress_grace = self.frontier_ingress_drain_grace(da_enabled);
+            let frontier_recovery_ingress_override = self
+                .frontier_recovery_ingress_override_active(height, view_idx, now, ingress_grace);
             if Self::frontier_consensus_ingress_queued(queue_depths) {
-                if self.frontier_proposal_ingress_defer_active(
-                    height,
-                    view_idx,
-                    now,
-                    queue_depths,
-                    self.frontier_ingress_drain_grace(da_enabled),
-                ) {
+                if !frontier_recovery_ingress_override
+                    && self.frontier_proposal_ingress_defer_active(
+                        height,
+                        view_idx,
+                        now,
+                        queue_depths,
+                        ingress_grace,
+                    )
+                {
                     self.subsystems.propose.pacemaker.next_deadline = now
                         .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
                         .unwrap_or(now);
@@ -4648,7 +4718,6 @@ impl Actor {
                     return false;
                 }
                 let view_age = self.phase_tracker.view_age(height, now).unwrap_or_default();
-                let ingress_grace = self.frontier_ingress_drain_grace(da_enabled);
                 let proposal_starved =
                     self.frontier_proposal_starved_past_ingress_grace(now, ingress_grace);
                 if view_age < ingress_grace && !proposal_starved {

@@ -6386,6 +6386,44 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
+    fn sccp_message_backend_descriptor_rejects_sora_only_and_unknown_domains() {
+        let sora_only = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            nonce: 4,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            recipient: b"alice@sora".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"sora:sora:xor".to_vec(),
+        });
+        let err = sccp_message_backend_descriptor(&sora_only)
+            .expect_err("SORA-only message must not select backend");
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| message.contains("requires a non-SORA counterparty"))
+        );
+
+        let unknown = SccpPayloadV1::TokenPause(iroha_sccp::TokenControlPayloadV1 {
+            version: 1,
+            target_domain: 0xFFFF_FFFE,
+            nonce: 5,
+            sora_asset_id: [0x11; 32],
+        });
+        let err = sccp_message_backend_descriptor(&unknown)
+            .expect_err("unknown domain must not select backend");
+        assert!(conversion_message(&err).is_some_and(|message| {
+            message.contains("unsupported SCCP domain for message backend selection")
+        }));
+    }
+
+    #[test]
     fn bridge_record_to_json_includes_sccp_counterparty_metadata() {
         let record = iroha_data_model::bridge::BridgeProofRecord {
             proof: iroha_data_model::bridge::BridgeProof {
@@ -6579,6 +6617,169 @@ mod sccp_message_backend_tests {
             submission_package: artifact.submission_package.clone(),
             bundle: artifact.bundle,
         }
+    }
+
+    fn sample_sccp_finality_proof_bytes(commitment_root: [u8; 32]) -> Vec<u8> {
+        norito::to_bytes(&NexusBridgeFinalityProofV1 {
+            version: 1,
+            chain_id: "taira".to_owned(),
+            height: 31,
+            block_hash: [0x31; 32],
+            commitment_root,
+            block_header_bytes: vec![0x01, 0x02, 0x03],
+            commit_qc: NexusCommitQcV1 {
+                version: 1,
+                phase: NexusConsensusPhaseV1::Commit,
+                height: 31,
+                view: 1,
+                epoch: 1,
+                mode_tag: "normal".to_owned(),
+                subject_block_hash: [0x31; 32],
+                validator_set_hash_version: 1,
+                validator_public_keys: vec!["validator-1".to_owned()],
+                validator_set_pops: vec![vec![0xAA]],
+                signers_bitmap: vec![0x01],
+                bls_aggregate_signature: vec![0xBB],
+            },
+        })
+        .expect("encode finality proof")
+    }
+
+    fn sample_burn_bundle(nonce: u64) -> NexusSccpBurnProofV1 {
+        let payload = BurnPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            nonce,
+            sora_asset_id: [0x44; 32],
+            amount: 99,
+            recipient: [0x55; 32],
+        };
+        let commitment = SccpHubCommitmentV1 {
+            version: 1,
+            kind: SccpHubMessageKind::Burn,
+            target_domain: payload.dest_domain,
+            message_id: iroha_sccp::burn_message_id(&payload),
+            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_burn_payload_bytes(
+                &payload,
+            )),
+        };
+        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
+        let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+        NexusSccpBurnProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof,
+            payload,
+            finality_proof: sample_sccp_finality_proof_bytes(commitment_root),
+        }
+    }
+
+    fn sample_eth_message_bundle(nonce: u64) -> NexusSccpMessageProofV1 {
+        let payload = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 17,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let commitment = SccpHubCommitmentV1 {
+            version: 1,
+            kind: SccpHubMessageKind::Transfer,
+            target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            message_id: iroha_sccp::sccp_message_id(&payload),
+            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
+                &payload,
+            )),
+        };
+        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
+        let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+        NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof,
+            payload,
+            finality_proof: sample_sccp_finality_proof_bytes(commitment_root),
+        }
+    }
+
+    #[test]
+    fn sccp_burn_counterparty_selection_rejects_sora_only_and_unknown_domains() {
+        let valid = sample_burn_bundle(41).payload;
+
+        let mut payload = valid.clone();
+        payload.source_domain = iroha_sccp::SCCP_DOMAIN_SORA;
+        payload.dest_domain = iroha_sccp::SCCP_DOMAIN_SORA;
+        let err = sccp_counterparty_for_burn_payload(&payload)
+            .expect_err("SORA-only burn must not select a counterparty");
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| message.contains("requires a non-SORA counterparty"))
+        );
+
+        let mut payload = valid;
+        payload.source_domain = iroha_sccp::SCCP_DOMAIN_SORA;
+        payload.dest_domain = 0xFFFF_FFFE;
+        let err = sccp_counterparty_for_burn_payload(&payload)
+            .expect_err("unknown domain must not select a backend");
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| message.contains("unsupported SCCP domain"))
+        );
+    }
+
+    #[test]
+    fn bridge_proof_from_sccp_burn_bundle_rejects_tampered_bundles() {
+        let bundle = sample_burn_bundle(42);
+        let proof = bridge_proof_from_sccp_burn_bundle(&bundle).expect("valid bridge proof");
+        assert_eq!(proof.range.start_height, 31);
+        assert_eq!(proof.range.end_height, 31);
+
+        let mut tampered_message_id = bundle.clone();
+        tampered_message_id.commitment.message_id[0] ^= 0x01;
+        let err = bridge_proof_from_sccp_burn_bundle(&tampered_message_id)
+            .expect_err("tampered commitment must be rejected");
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| message.contains("failed structural verification"))
+        );
+
+        let mut tampered_finality = bundle;
+        tampered_finality.finality_proof = sample_sccp_finality_proof_bytes([0xFE; 32]);
+        let err = bridge_proof_from_sccp_burn_bundle(&tampered_finality)
+            .expect_err("mismatched finality root must be rejected");
+        assert!(
+            conversion_message(&err)
+                .is_some_and(|message| message.contains("failed structural verification"))
+        );
+    }
+
+    #[test]
+    fn evm_destination_binding_query_refuses_disabled_evm_lane_even_with_fields() {
+        let bundle = sample_eth_message_bundle(43);
+        let fields = SccpEvmDestinationQuery {
+            network_id_hex: Some(format!("0x{}", "11".repeat(32))),
+            verifier_address_hex: Some(format!("0x{}", "22".repeat(20))),
+            bridge_address_hex: Some(format!("0x{}", "33".repeat(20))),
+        };
+        let binding =
+            sccp_evm_destination_binding_for_bundle(&bundle, &fields).expect("destination query");
+
+        assert!(
+            binding.is_none(),
+            "disabled EVM lanes must not materialize deployment bindings"
+        );
     }
 
     #[test]

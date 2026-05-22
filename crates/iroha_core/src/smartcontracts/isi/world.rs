@@ -5203,30 +5203,6 @@ pub mod isi {
         ctx: &ApprovalContext,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) {
-        if let Some(mut proposal) = state_transaction
-            .world
-            .governance_proposals
-            .get(&ctx.proposal_id)
-            .cloned()
-        {
-            if matches!(
-                proposal.status,
-                crate::state::GovernanceProposalStatus::Proposed
-            ) {
-                proposal.status = crate::state::GovernanceProposalStatus::Approved;
-                state_transaction
-                    .world
-                    .governance_proposals
-                    .insert(ctx.proposal_id, proposal);
-                state_transaction
-                    .world
-                    .emit_events(Some(GovernanceEvent::ProposalApproved(
-                        iroha_data_model::events::data::governance::GovernanceProposalApproved {
-                            id: ctx.proposal_id,
-                        },
-                    )));
-            }
-        }
         if ctx.referendum.status == crate::state::GovernanceReferendumStatus::Proposed
             && ctx.now_h >= ctx.referendum.h_start
             && ctx.now_h <= ctx.referendum.h_end

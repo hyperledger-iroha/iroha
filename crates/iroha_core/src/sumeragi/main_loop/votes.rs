@@ -2935,8 +2935,14 @@ impl Actor {
                     });
                 let local_candidate_completes_quorum = matches!(vote.phase, Phase::Commit)
                     && signer_peer == self.common_config.peer.id()
-                    && existing.view < vote.view
+                    && existing.view != vote.view
                     && !new_view_qc_supersedes
+                    && !self.same_height_block_has_recoverable_qc(
+                        existing.block_hash,
+                        vote.height,
+                        existing.view,
+                    )
+                    && !self.same_height_has_recoverable_qc(vote.height)
                     && self.candidate_commit_quorum_completes_with_local_vote(
                         vote.block_hash,
                         vote.height,

@@ -23,6 +23,12 @@ pub(super) enum EpochRefreshPhase {
     PostCommit,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum NewViewVoteEmission {
+    Normal,
+    CompleteNearQuorum,
+}
+
 #[derive(Debug)]
 pub(super) struct CommitWork {
     pub(super) id: u64,
@@ -5512,9 +5518,15 @@ impl Actor {
                 Instant::now(),
                 true,
             );
-            let candidate_completes_quorum = conflict.view < view
+            let conflict_has_recoverable_qc = self.same_height_block_has_recoverable_qc(
+                conflict.block_hash,
+                height,
+                conflict.view,
+            ) || self.same_height_has_recoverable_qc(height);
+            let candidate_completes_quorum = conflict.view != view
                 && !new_view_qc_supersedes
                 && !stale_vote_can_rotate
+                && !conflict_has_recoverable_qc
                 && self.candidate_commit_quorum_completes_with_local_vote(
                     block_hash,
                     height,
@@ -5537,6 +5549,7 @@ impl Actor {
                     new_view_qc_supersedes,
                     stale_vote_can_rotate,
                     candidate_completes_quorum,
+                    conflict_has_recoverable_qc,
                     "allowing precommit: same-height local vote is superseded"
                 );
             } else {
@@ -5549,6 +5562,7 @@ impl Actor {
                     previous_phase = ?conflict.phase,
                     previous_block = ?conflict.block_hash,
                     signer = local_idx,
+                    conflict_has_recoverable_qc,
                     "skipping precommit: local validator already voted for a different same-height block"
                 );
                 return false;
@@ -5770,9 +5784,45 @@ impl Actor {
         highest_qc: crate::sumeragi::consensus::QcRef,
         topology: &super::network_topology::Topology,
     ) -> bool {
+        self.emit_new_view_vote_with_mode(
+            height,
+            view,
+            highest_qc,
+            topology,
+            NewViewVoteEmission::Normal,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn emit_new_view_vote_to_complete_near_quorum(
+        &mut self,
+        height: u64,
+        view: u64,
+        highest_qc: crate::sumeragi::consensus::QcRef,
+        topology: &super::network_topology::Topology,
+    ) -> bool {
+        self.emit_new_view_vote_with_mode(
+            height,
+            view,
+            highest_qc,
+            topology,
+            NewViewVoteEmission::CompleteNearQuorum,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn emit_new_view_vote_with_mode(
+        &mut self,
+        height: u64,
+        view: u64,
+        highest_qc: crate::sumeragi::consensus::QcRef,
+        topology: &super::network_topology::Topology,
+        emission: NewViewVoteEmission,
+    ) -> bool {
         if self.is_observer() {
             return false;
         }
+        let completing_near_quorum = matches!(emission, NewViewVoteEmission::CompleteNearQuorum);
         if self.round_liveness_isolated() {
             debug!(
                 height,
@@ -5820,12 +5870,48 @@ impl Actor {
         if let Some(higher_view) =
             self.local_higher_view_new_view_vote(height, view, consensus_mode, mode_tag, prf_seed)
         {
-            info!(
+            if completing_near_quorum
+                && !self
+                    .local_higher_new_view_vote_conflicts_with_highest_qc(height, view, highest_qc)
+            {
+                debug!(
+                    height,
+                    view,
+                    higher_view,
+                    signer = local_idx,
+                    highest_height = highest_qc.height,
+                    highest_view = highest_qc.view,
+                    highest_block = %highest_qc.subject_block_hash,
+                    "allowing late NEW_VIEW vote to complete same-highest near quorum"
+                );
+            } else {
+                info!(
+                    height,
+                    view,
+                    higher_view,
+                    signer = local_idx,
+                    "skipping NEW_VIEW vote: local validator already voted in a higher view"
+                );
+                return false;
+            }
+        }
+        let higher_new_view_qc = self
+            .qc_cache
+            .keys()
+            .filter_map(|(phase, _, qc_height, qc_view, _, _, _)| {
+                (*phase == crate::sumeragi::consensus::Phase::NewView
+                    && *qc_height == height
+                    && *qc_view > view)
+                    .then_some(*qc_view)
+            })
+            .max();
+        if let Some(higher_view) = higher_new_view_qc {
+            debug!(
                 height,
                 view,
                 higher_view,
                 signer = local_idx,
-                "skipping NEW_VIEW vote: local validator already voted in a higher view"
+                "skipping NEW_VIEW vote: higher view QC already exists"
             );
             return false;
         }
@@ -5835,8 +5921,17 @@ impl Actor {
             .propose
             .new_view_tracker
             .highest_quorum_view_for_height(height, required, topology.as_ref())
+            && higher_view > view
         {
-            if higher_view > view {
+            if completing_near_quorum {
+                debug!(
+                    height,
+                    view,
+                    higher_view,
+                    signer = local_idx,
+                    "allowing late NEW_VIEW vote despite higher f+1 view support"
+                );
+            } else {
                 info!(
                     height,
                     view,
@@ -5993,6 +6088,26 @@ impl Actor {
             });
         }
         true
+    }
+
+    fn local_higher_new_view_vote_conflicts_with_highest_qc(
+        &self,
+        height: u64,
+        view: u64,
+        highest_qc: crate::sumeragi::consensus::QcRef,
+    ) -> bool {
+        let local_peer = self.common_config.peer.id();
+        self.stored_votes().any(|vote| {
+            vote.phase == crate::sumeragi::consensus::Phase::NewView
+                && vote.height == height
+                && vote.view > view
+                && self
+                    .vote_signer_peer(vote)
+                    .as_ref()
+                    .is_some_and(|peer| peer == local_peer)
+                && (vote.block_hash != highest_qc.subject_block_hash
+                    || vote.highest_qc != Some(highest_qc))
+        })
     }
 
     fn local_higher_view_new_view_vote(

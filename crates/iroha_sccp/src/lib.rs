@@ -5298,6 +5298,32 @@ mod tests {
     }
 
     #[test]
+    fn message_bundle_structure_rejects_commitment_metadata_replays() {
+        let valid = sample_evm_transfer_bundle(65);
+        assert!(verify_message_bundle_structure(&valid));
+
+        let mut bundle = valid.clone();
+        bundle.version = 2;
+        assert!(!verify_message_bundle_structure(&bundle));
+
+        let mut bundle = valid.clone();
+        bundle.commitment.version = 2;
+        assert!(!verify_message_bundle_structure(&bundle));
+
+        let mut bundle = valid.clone();
+        bundle.commitment.kind = SccpHubMessageKind::Burn;
+        assert!(!verify_message_bundle_structure(&bundle));
+
+        let mut bundle = valid.clone();
+        bundle.commitment.target_domain = SCCP_DOMAIN_SOL;
+        assert!(!verify_message_bundle_structure(&bundle));
+
+        let mut bundle = valid;
+        bundle.commitment_root[0] ^= 0x01;
+        assert!(!verify_message_bundle_structure(&bundle));
+    }
+
+    #[test]
     fn message_transparent_proof_builder_refuses_disabled_counterparty_lanes() {
         let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
@@ -6347,6 +6373,54 @@ mod tests {
     }
 
     #[test]
+    fn payload_projection_rejects_malformed_codec_values_without_normalizing() {
+        let asset_register = SccpPayloadV1::AssetRegister(AssetRegisterPayloadV1 {
+            version: 1,
+            target_domain: SCCP_DOMAIN_ETH,
+            home_domain: SCCP_DOMAIN_SORA,
+            nonce: 31,
+            asset_id_codec: SCCP_CODEC_EVM_HEX,
+            asset_id: b"0xfeedface".to_vec(),
+            decimals: 18,
+        });
+        assert!(!verify_sccp_payload_structure(&asset_register));
+        assert_eq!(sccp_payload_projection(&asset_register), None);
+
+        let route_activate = SccpPayloadV1::RouteActivate(RouteActivatePayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            target_domain: SCCP_DOMAIN_TON,
+            nonce: 32,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            route_id_codec: SCCP_CODEC_TON_RAW,
+            route_id: b"+0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_vec(),
+        });
+        assert!(!verify_sccp_payload_structure(&route_activate));
+        assert_eq!(sccp_payload_projection(&route_activate), None);
+
+        let transfer = SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SOL,
+            dest_domain: SCCP_DOMAIN_SORA,
+            nonce: 33,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 11,
+            sender_codec: SCCP_CODEC_SOLANA_BASE58,
+            sender: b"not a solana public key".to_vec(),
+            recipient_codec: SCCP_CODEC_TEXT_UTF8,
+            recipient: b"alice@sora".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"sol:sora:xor".to_vec(),
+        });
+        assert!(!verify_sccp_payload_structure(&transfer));
+        assert_eq!(sccp_payload_projection(&transfer), None);
+    }
+
+    #[test]
     fn canonical_payload_decoder_rejects_unknown_truncated_and_trailing_bytes() {
         let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
@@ -6608,6 +6682,30 @@ mod tests {
     }
 
     #[test]
+    fn finality_proof_structure_rejects_padding_signer_bits_for_multi_byte_rosters() {
+        let commitment_root = [0x8B; 32];
+        let mut valid = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
+            .expect("decode proof");
+        valid.commit_qc.validator_public_keys =
+            (0..9).map(|idx| format!("validator-{idx}")).collect();
+        valid.commit_qc.validator_set_pops = (0..9)
+            .map(|idx| vec![u8::try_from(idx + 1).expect("index fits u8")])
+            .collect();
+        valid.commit_qc.signers_bitmap = vec![0b0000_0001, 0b0000_0001];
+        assert!(verify_nexus_bridge_finality_proof_structure(&valid));
+
+        let mut padded_bit = valid.clone();
+        padded_bit.commit_qc.signers_bitmap = vec![0b0000_0000, 0b0000_0010];
+        assert!(!verify_nexus_bridge_finality_proof_structure(&padded_bit));
+
+        let mut truncated_bitmap = valid;
+        truncated_bitmap.commit_qc.signers_bitmap = vec![0b0000_0001];
+        assert!(!verify_nexus_bridge_finality_proof_structure(
+            &truncated_bitmap
+        ));
+    }
+
+    #[test]
     fn finality_proof_structure_rejects_version_key_and_bitmap_edges() {
         let commitment_root = [0x8A; 32];
         let valid = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
@@ -6645,7 +6743,19 @@ mod tests {
         assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
 
         let mut proof = valid.clone();
+        proof.version = 2;
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.chain_id.clear();
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
         proof.block_header_bytes.clear();
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.block_hash[0] ^= 0x01;
         assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
 
         let mut proof = valid.clone();
@@ -7235,6 +7345,50 @@ mod tests {
     }
 
     #[test]
+    fn evm_destination_binding_rejects_cross_lane_and_contract_replay_by_hash() {
+        let eth = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("eth manifest");
+        let bsc = sccp_proof_manifest_for_domain(SCCP_DOMAIN_BSC).expect("bsc manifest");
+        let network_id = [0x11; 32];
+        let verifier_address = [0x22; 20];
+        let bridge_address = [0x33; 20];
+        let eth_binding =
+            build_sccp_evm_destination_binding(&eth, network_id, verifier_address, bridge_address);
+
+        let bsc_binding =
+            build_sccp_evm_destination_binding(&bsc, network_id, verifier_address, bridge_address);
+        assert_ne!(eth_binding.key, bsc_binding.key);
+        assert_ne!(eth_binding.binding_hash, bsc_binding.binding_hash);
+
+        let changed_verifier =
+            build_sccp_evm_destination_binding(&eth, network_id, [0x44; 20], bridge_address);
+        assert_ne!(eth_binding.binding_hash, changed_verifier.binding_hash);
+
+        let changed_bridge =
+            build_sccp_evm_destination_binding(&eth, network_id, verifier_address, [0x55; 20]);
+        assert_ne!(eth_binding.binding_hash, changed_bridge.binding_hash);
+
+        let mut forked_manifest = eth.clone();
+        forked_manifest.proof_family.push_str("-fork");
+        let forked_binding = build_sccp_evm_destination_binding(
+            &forked_manifest,
+            network_id,
+            verifier_address,
+            bridge_address,
+        );
+        assert_ne!(eth_binding.binding_hash, forked_binding.binding_hash);
+
+        let mut backend_fork = eth;
+        backend_fork.verifier_backend.key.push_str("-fork");
+        let backend_binding = build_sccp_evm_destination_binding(
+            &backend_fork,
+            network_id,
+            verifier_address,
+            bridge_address,
+        );
+        assert_ne!(eth_binding.binding_hash, backend_binding.binding_hash);
+    }
+
+    #[test]
     fn evm_submission_package_builder_accepts_explicit_deployment_binding() {
         let bundle = sample_evm_transfer_bundle(58);
         let mut manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("eth manifest");
@@ -7295,6 +7449,31 @@ mod tests {
                 &manifest,
                 &[0xAA, 0xBB],
                 &signer,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn evm_submission_package_builder_rejects_non_secp256k1_attestor() {
+        let bundle = sample_evm_transfer_bundle(63);
+        let mut manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("eth manifest");
+        manifest.production_ready = true;
+        manifest.disabled_reason = None;
+        let deployment_binding =
+            build_sccp_evm_destination_binding(&manifest, [0x11; 32], [0x33; 20], [0x22; 20]);
+        let ed25519_signer = iroha_crypto::KeyPair::from_seed(
+            b"iroha:sccp:test:wrong-attestor".to_vec(),
+            iroha_crypto::Algorithm::Ed25519,
+        );
+
+        assert!(
+            build_sccp_counterparty_submission_package_with_destination_binding_and_signer(
+                &bundle,
+                &manifest,
+                &[0xAA, 0xBB],
+                &deployment_binding,
+                &ed25519_signer,
             )
             .is_none()
         );
@@ -7431,6 +7610,24 @@ mod tests {
     }
 
     #[test]
+    fn evm_attestation_envelope_codec_rejects_version_overread_and_bad_signature_shapes() {
+        let (_manifest, proof) = sample_valid_evm_submission_proof(62);
+        let payload = evm_payload_from_proof(&proof);
+
+        let mut oversized_version = payload.proof_bytes.clone();
+        oversized_version[30] = 1;
+        assert!(decode_sccp_evm_attestation_envelope(&oversized_version).is_none());
+
+        let mut declared_overread = payload.proof_bytes.clone();
+        declared_overread[32 * 7 + 31] = 130;
+        assert!(decode_sccp_evm_attestation_envelope(&declared_overread).is_none());
+
+        let mut bad_signature = payload.attestation.clone();
+        bad_signature.signatures[0].signature_bytes.pop();
+        assert!(encode_sccp_evm_attestation_envelope(&bad_signature).is_none());
+    }
+
+    #[test]
     fn evm_submission_package_verifier_rejects_attestation_signature_replay_edges() {
         let (manifest, proof) = sample_valid_evm_submission_proof(54);
         let valid_payload = evm_payload_from_proof(&proof);
@@ -7511,6 +7708,32 @@ mod tests {
         assert!(!verify_sccp_evm_submission_package(
             &manifest,
             &noncanonical_envelope
+        ));
+    }
+
+    #[test]
+    fn evm_submission_package_verifier_rejects_public_input_and_binding_replays() {
+        let (manifest, proof) = sample_valid_evm_submission_proof(64);
+        let valid_payload = evm_payload_from_proof(&proof);
+
+        let mut public_input_words_replay = proof.clone();
+        let mut payload = valid_payload.clone();
+        payload.public_inputs.target_domain_word[31] ^= 0x01;
+        replace_evm_payload(&mut public_input_words_replay, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &public_input_words_replay
+        ));
+
+        let mut destination_hash_replay = proof;
+        let mut payload = valid_payload;
+        payload.attestation.destination_binding_hash[0] ^= 0x01;
+        payload.proof_bytes =
+            encode_sccp_evm_attestation_envelope(&payload.attestation).expect("encode envelope");
+        replace_evm_payload(&mut destination_hash_replay, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &destination_hash_replay
         ));
     }
 

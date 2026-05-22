@@ -63,6 +63,26 @@ Last updated: 2026-05-21
 - Documentation now describes bond-based citizenship, equal Parliament votes,
   and policy-jury commit/reveal as a remaining hardening layer over the signed
   clear-ballot path.
+- Integration fixtures now drive deploy and runtime proposals with signed
+  `CastParliamentBallot` approvals from seated snapshot members for every
+  required body, keep Rules+Agenda-only deploy proposals in `Proposed`, and
+  include the FMA committee gate for runtime/high-risk flows.
+- Parliament quorum now opens the referendum without marking the proposal
+  finally approved; `FinalizeReferendum` remains the approval boundary, so
+  `EnactReferendum` rejects before the citizen referendum is finalized.
+- The runtime-upgrade JSON client helper now requests `application/json`
+  explicitly before parsing `/v1/runtime/upgrades`, avoiding accidental Norito
+  response decoding in governance smoke flows.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model governance`
+  - `cargo test -p iroha_core governance`
+  - `cargo test -p iroha_core --test gov_council_gate body_rejection_closes_and_prevents_later_opening`
+  - `cargo test -p iroha_core --test gov_parliament_lifecycle_plain --test gov_parliament_lifecycle_zk --test gov_council_gate`
+  - `cargo test -p iroha_torii --lib council_`
+  - `cargo test -p iroha_torii --test gov_read_endpoints gov_council_current_uses_configured_fallback`
+  - `cargo test -p integration_tests --test nexus_and_streaming sora_parliament_lifecycle_smoke::sora_parliament_lifecycle_smoke -- --test-threads=1 --nocapture`
+  - `git diff --check`
 
 ## 2026-05-21 Soracloud first-release CLI cleanup
 
