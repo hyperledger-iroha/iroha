@@ -7492,7 +7492,7 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
         })
         .filter(|hash| !hash.is_empty())
     {
-        return Ok(hash.to_owned());
+        return normalize_submission_receipt_hash(hash);
     }
 
     if let Some(encoded) = body.as_str().filter(|body| !body.is_empty()) {
@@ -7505,6 +7505,18 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
     }
 
     Err("submission response missing transaction hash field (`tx_hash_hex`, `tx_hash`, `transaction_hash`, `payload.tx_hash`, or base64 Norito receipt body)".to_owned())
+}
+
+fn normalize_submission_receipt_hash(hash: &str) -> Result<String, String> {
+    if !hash.starts_with("hash:") {
+        return Ok(hash.to_owned());
+    }
+
+    let body = norito::literal::parse("hash", hash)
+        .map_err(|err| format!("decode submission receipt hash literal: {err}"))?;
+    body.parse::<iroha_crypto::Hash>()
+        .map(|hash| hash.to_string())
+        .map_err(|err| format!("decode submission receipt hash literal body: {err}"))
 }
 
 fn extract_pipeline_status_kind(status_result: &Value) -> Option<&str> {
@@ -16382,6 +16394,30 @@ mod tests {
 
         let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
         assert_eq!(hash, "feedface");
+    }
+
+    #[test]
+    fn extract_transaction_hash_from_submit_result_normalizes_json_receipt_literal_hash() {
+        let hash_body = "AB".repeat(iroha_crypto::Hash::LENGTH);
+        let hash_literal = norito::literal::format("hash", &hash_body);
+        let submit_result = norito::json!({
+            "status": 202,
+            "body": {
+                "payload": {
+                    "tx_hash": hash_literal
+                },
+                "signature": "ignored"
+            }
+        });
+
+        let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
+        assert_eq!(hash, hash_body.to_ascii_lowercase());
+    }
+
+    #[test]
+    fn normalize_submission_receipt_hash_preserves_bare_hash() {
+        let hash = normalize_submission_receipt_hash("deadbeef").expect("hash");
+        assert_eq!(hash, "deadbeef");
     }
 
     #[test]

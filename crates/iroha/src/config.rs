@@ -392,9 +392,10 @@ mod tests {
             .set("CHAIN", "wonder")
             .set("TORII_URL", "http://localhost:8080")
             .set("TORII_API_VERSION", DEFAULT_TORII_API_VERSION)
+            .set("ACCOUNT_PROFILE", iroha_torii_shared::NETWORK_PROFILE_TAIRA)
             .set(
                 "ACCOUNT_CHAIN_DISCRIMINANT",
-                iroha_config::parameters::defaults::common::chain_discriminant().to_string(),
+                iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT.to_string(),
             )
             .set("ACCOUNT_DOMAIN", "land.universal")
             .set(

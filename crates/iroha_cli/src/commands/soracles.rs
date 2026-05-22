@@ -17,7 +17,8 @@ use iroha::data_model::{
     oracle::{
         FeedConfig, FeedConfigVersion, FeedEventOutcome, FeedId, FeedSlot, KeyedHash, Observation,
         OracleChangeClass, OracleChangeId, OracleChangeStage, OracleDisputeId,
-        OracleDisputeOutcome, OracleProviderKey, OracleRejectionCode, TwitterBindingAttestation,
+        OracleDisputeOutcome, OracleProviderKey, OracleRejectionCode, DefiOracleAttestation,
+        DefiOracleAttestationKey, TwitterBindingAttestation,
     },
     prelude::{Hash, QueryBuilderExt},
     query::oracle::prelude as oracle_query,
@@ -134,6 +135,9 @@ pub enum TxCommand {
     /// Roll back the active stage of an oracle feed change.
     #[command(name = "rollback-change")]
     RollbackChange(RollbackChangeTx),
+    /// Submit a native DeFi oracle attestation.
+    #[command(name = "attest-defi")]
+    AttestDefi(AttestDefiTx),
     /// Record a Twitter binding attestation.
     #[command(name = "record-twitter-binding")]
     RecordTwitterBinding(RecordTwitterBindingTx),
@@ -164,6 +168,9 @@ pub enum QueryCommand {
     /// List Twitter bindings by UAID from a Norito JSON UAID file.
     #[command(name = "twitter-bindings")]
     TwitterBindings(TwitterBindingsQuery),
+    /// Fetch latest DeFi oracle attestation by domain and subject id.
+    #[command(name = "defi-attestation")]
+    DefiAttestation(DefiAttestationQuery),
 }
 
 #[derive(Args, Debug)]
@@ -303,6 +310,13 @@ pub struct RevokeTwitterBindingTx {
 }
 
 #[derive(Args, Debug)]
+pub struct AttestDefiTx {
+    /// Norito JSON file containing `DefiOracleAttestation`.
+    #[arg(long, value_name = "PATH")]
+    attestation_json: PathBuf,
+}
+
+#[derive(Args, Debug)]
 pub struct FeedQuery {
     /// Feed identifier.
     #[arg(long)]
@@ -345,6 +359,17 @@ pub struct TwitterBindingsQuery {
     /// Norito JSON file containing `UniversalAccountId`.
     #[arg(long, value_name = "PATH")]
     uaid_json: PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct DefiAttestationQuery {
+    /// DeFi oracle domain (`1=perps_market`, `2=options_series`,
+    /// `3=options_shout`, `4=cover_policy`).
+    #[arg(long)]
+    domain: u32,
+    /// Domain subject id (`market_id`, `series_id`, `position_id`, or `policy_id`).
+    #[arg(long = "subject-id")]
+    subject_id: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -601,6 +626,11 @@ impl Run for TxCommand {
                 stage: args.stage.map(Into::into),
                 reason: args.reason,
             }),
+            Self::AttestDefi(args) => {
+                let attestation: DefiOracleAttestation =
+                    load_json_file(&args.attestation_json)?;
+                InstructionBox::from(oracle_isi::SubmitDefiOracleAttestation { attestation })
+            }
             Self::RecordTwitterBinding(args) => {
                 let attestation: TwitterBindingAttestation =
                     load_json_file(&args.attestation_json)?;
@@ -695,6 +725,13 @@ impl Run for QueryCommand {
                     .query(oracle_query::FindTwitterBindingsByUaid::new(uaid))
                     .execute_all()?;
                 context.print_data(&bindings)
+            }
+            Self::DefiAttestation(args) => {
+                let attestation =
+                    client.query_single(oracle_query::FindLatestDefiOracleAttestation::new(
+                        DefiOracleAttestationKey::new(args.domain, args.subject_id),
+                    ))?;
+                context.print_data(&attestation)
             }
         }
     }

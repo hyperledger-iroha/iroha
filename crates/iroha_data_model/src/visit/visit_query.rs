@@ -304,6 +304,7 @@ mod tests {
             SingularQueryBox::FindOracleDisputeById(_) => {}
             SingularQueryBox::FindOracleChangeById(_) => {}
             SingularQueryBox::FindOracleProviderStatsByKey(_) => {}
+            SingularQueryBox::FindLatestDefiOracleAttestation(_) => {}
             SingularQueryBox::FindTwitterBindingByHash(_) => {}
             SingularQueryBox::FindDaPinIntentByTicket(_) => {}
             SingularQueryBox::FindDaPinIntentByManifest(_) => {}

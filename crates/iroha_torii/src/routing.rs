@@ -13130,6 +13130,7 @@ async fn submit_contract_call_request(
     if let Some(private_key) = private_key {
         let tx = builder.sign(&private_key.0);
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
         handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
         return Ok(ContractCallResponseDto {
             ok: true,
@@ -13140,6 +13141,7 @@ async fn submit_contract_call_request(
             abi_hash_hex,
             creation_time_ms,
             tx_hash_hex: Some(tx_hash_hex),
+            entrypoint_hash_hex: Some(entrypoint_hash_hex),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
             signing_message_b64: None,
@@ -13194,6 +13196,7 @@ async fn submit_contract_call_request(
             ))
         })?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
         handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
         return Ok(ContractCallResponseDto {
             ok: true,
@@ -13204,6 +13207,7 @@ async fn submit_contract_call_request(
             abi_hash_hex,
             creation_time_ms,
             tx_hash_hex: Some(tx_hash_hex),
+            entrypoint_hash_hex: Some(entrypoint_hash_hex),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
             signing_message_b64: None,
@@ -13216,6 +13220,7 @@ async fn submit_contract_call_request(
     let tx = builder
         .sign(scaffold_key.private_key())
         .with_authority(authority.into());
+    let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
     let signed_transaction_b64 =
         base64::engine::general_purpose::STANDARD.encode(norito::codec::Encode::encode(&tx));
     let signing_message_b64 = base64::engine::general_purpose::STANDARD
@@ -13229,6 +13234,7 @@ async fn submit_contract_call_request(
         abi_hash_hex,
         creation_time_ms,
         tx_hash_hex: None,
+        entrypoint_hash_hex: Some(entrypoint_hash_hex),
         transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
         signed_transaction_b64: Some(signed_transaction_b64),
         signing_message_b64: Some(signing_message_b64),
@@ -23469,6 +23475,9 @@ pub struct ContractCallResponseDto {
     /// Hex-encoded transaction hash submitted to the queue.
     #[norito(default)]
     pub tx_hash_hex: Option<String>,
+    /// Hex-encoded transaction entrypoint hash used by committed transaction queries.
+    #[norito(default)]
+    pub entrypoint_hash_hex: Option<String>,
     /// Base64-encoded transaction scaffold for wallet `SIGN_REQUEST_TX` flows.
     #[norito(default)]
     pub transaction_scaffold_b64: Option<String>,

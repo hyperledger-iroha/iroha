@@ -6027,6 +6027,15 @@ struct ExplorerPaginationOnly {
 
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+struct DefiOracleAttestationLatestQuery {
+    domain: u32,
+    subject_id: u64,
+    #[norito(default)]
+    status: Option<u32>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(JsonDeserialize)]
 struct ExplorerAssetDefinitionsQuery {
     #[norito(flatten)]
     pagination: explorer::ExplorerPaginationQuery,
@@ -7138,6 +7147,114 @@ async fn handler_explorer_metrics(
     }
     routing::handle_v1_explorer_metrics(app.state.clone(), app.kura.clone(), app.telemetry.clone())
         .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_defi_oracle_attestation_latest(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(query): AxQuery<DefiOracleAttestationLatestQuery>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/soracles/defi/attestations/latest",
+        )
+        .await?;
+    }
+    let key =
+        iroha_data_model::oracle::DefiOracleAttestationKey::new(query.domain, query.subject_id);
+    let state_view = app.state.view();
+    let Some(attestation) = state_view
+        .world()
+        .defi_oracle_attestations()
+        .get(&key)
+        .and_then(|items| {
+            items.iter().rev().find(|item| {
+                query
+                    .status
+                    .map_or(true, |status| item.status_flags == status)
+            })
+        })
+        .cloned()
+    else {
+        let mut payload = Map::new();
+        payload.insert(
+            "error_code".to_owned(),
+            Value::String("defi_oracle_attestation_not_found".to_owned()),
+        );
+        payload.insert(
+            "message".to_owned(),
+            Value::String(format!(
+                "DeFi oracle attestation not found for domain {} subject_id {}",
+                query.domain, query.subject_id
+            )),
+        );
+        return Ok((StatusCode::NOT_FOUND, JsonBody(Value::Object(payload))).into_response());
+    };
+    Ok(JsonBody(attestation).into_response())
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_oracle_feeds(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, Some(remote_ip), "v1/soracles/feeds").await?;
+    }
+    let feeds = app
+        .state
+        .view()
+        .world()
+        .oracle_feeds()
+        .iter()
+        .map(|(_, feed)| feed.clone())
+        .collect::<Vec<_>>();
+    Ok(JsonBody(feeds).into_response())
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_oracle_feed_history(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(feed_id_raw): AxPath<String>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, Some(remote_ip), "v1/soracles/feeds/history").await?;
+    }
+    let feed_id = feed_id_raw
+        .parse::<iroha_data_model::oracle::FeedId>()
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "failed to parse oracle feed id `{feed_id_raw}`: {err}"
+                )),
+            ))
+        })?;
+    let history = app
+        .state
+        .view()
+        .world()
+        .oracle_history()
+        .get(&feed_id)
+        .cloned()
+        .unwrap_or_default();
+    Ok(JsonBody(history).into_response())
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -14133,6 +14250,9 @@ fn canonicalize_query_batch_box(
         }
         QueryOutputBatchBox::TwitterBindingRecord(items) => {
             canonicalize_variant!(items, TwitterBindingRecord)
+        }
+        QueryOutputBatchBox::DefiOracleAttestation(items) => {
+            canonicalize_variant!(items, DefiOracleAttestation)
         }
         QueryOutputBatchBox::AssetEscrowRecord(items) => {
             canonicalize_variant!(items, AssetEscrowRecord)
@@ -35009,6 +35129,15 @@ impl Torii {
                 .route(
                     "/v1/explorer/instructions/latest",
                     get(handler_explorer_instructions_latest),
+                )
+                .route(
+                    "/v1/soracles/defi/attestations/latest",
+                    get(handler_defi_oracle_attestation_latest),
+                )
+                .route("/v1/soracles/feeds", get(handler_oracle_feeds))
+                .route(
+                    "/v1/soracles/feeds/{feed_id}/history",
+                    get(handler_oracle_feed_history),
                 )
                 .merge({
                     #[cfg(all(feature = "app_api", feature = "telemetry"))]

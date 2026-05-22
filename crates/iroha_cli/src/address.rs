@@ -59,8 +59,11 @@ pub struct Convert {
 
 impl Convert {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let network_context =
-            resolve_address_network_context(self.profile.as_deref(), self.network_prefix)?;
+        let network_context = resolve_address_network_context(
+            self.profile.as_deref(),
+            self.network_prefix,
+            Some(context.config().account_chain_discriminant),
+        )?;
         let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix)?;
         let input = parse_address_input(self.input.as_str(), Some(expect_prefix))
             .wrap_err("failed to parse address literal")?;
@@ -116,8 +119,11 @@ impl Audit {
         if inputs.is_empty() {
             eyre::bail!("no addresses provided");
         }
-        let network_context =
-            resolve_address_network_context(self.profile.as_deref(), self.network_prefix)?;
+        let network_context = resolve_address_network_context(
+            self.profile.as_deref(),
+            self.network_prefix,
+            Some(context.config().account_chain_discriminant),
+        )?;
         let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix)?;
 
         let mut stats = AddressAuditStats::default();
@@ -237,8 +243,11 @@ impl Normalize {
             eyre::bail!("no addresses provided");
         }
 
-        let network_context =
-            resolve_address_network_context(self.profile.as_deref(), self.network_prefix)?;
+        let network_context = resolve_address_network_context(
+            self.profile.as_deref(),
+            self.network_prefix,
+            Some(context.config().account_chain_discriminant),
+        )?;
         let expect_prefix = resolve_address_expect_prefix(&network_context, self.expect_prefix)?;
         let outputs = self.process_entries(
             &inputs,
@@ -316,6 +325,7 @@ struct AddressNetworkContext {
 fn resolve_address_network_context(
     profile: Option<&str>,
     network_prefix: Option<u16>,
+    default_network_prefix: Option<u16>,
 ) -> Result<AddressNetworkContext> {
     match (
         profile.map(str::trim).filter(|value| !value.is_empty()),
@@ -357,7 +367,15 @@ fn resolve_address_network_context(
             profile: None,
             chain_discriminant: network_prefix,
         }),
-        (None, None) => eyre::bail!("provide --profile or --network-prefix"),
+        (None, None) => default_network_prefix.map_or_else(
+            || Err(eyre::eyre!("provide --profile or --network-prefix")),
+            |chain_discriminant| {
+                Ok(AddressNetworkContext {
+                    profile: None,
+                    chain_discriminant,
+                })
+            },
+        ),
     }
 }
 
@@ -729,7 +747,7 @@ mod tests {
 
     #[test]
     fn address_network_context_requires_profile_or_prefix() {
-        let err = resolve_address_network_context(None, None)
+        let err = resolve_address_network_context(None, None, None)
             .expect_err("missing network context should fail");
 
         assert!(
@@ -739,15 +757,23 @@ mod tests {
     }
 
     #[test]
+    fn address_network_context_uses_config_default_prefix() {
+        let context = resolve_address_network_context(None, None, Some(DEFAULT_I105_PREFIX))
+            .expect("default prefix should resolve");
+
+        assert_eq!(context.chain_discriminant, DEFAULT_I105_PREFIX);
+    }
+
+    #[test]
     fn address_network_context_resolves_profile_and_rejects_mismatch() {
-        let context =
-            resolve_address_network_context(Some("taira"), None).expect("profile resolves");
+        let context = resolve_address_network_context(Some("taira"), None, None)
+            .expect("profile resolves");
         assert_eq!(
             context.chain_discriminant,
             iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
         );
 
-        let err = resolve_address_network_context(Some("taira"), Some(DEFAULT_I105_PREFIX))
+        let err = resolve_address_network_context(Some("taira"), Some(DEFAULT_I105_PREFIX), None)
             .expect_err("profile mismatch should fail");
         assert!(
             err.to_string()

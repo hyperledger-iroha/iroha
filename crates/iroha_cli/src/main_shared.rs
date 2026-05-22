@@ -546,6 +546,22 @@ impl Run for Command {
     }
 }
 
+impl Command {
+    fn allows_fallback_config(&self) -> bool {
+        match self {
+            Self::App(command) => command.allows_fallback_config(),
+            Self::Tools(command) => command.allows_fallback_config(),
+            Self::Account(_)
+            | Self::Tx(_)
+            | Self::Ledger(_)
+            | Self::Ops(_)
+            | Self::Contract(_)
+            | Self::Taira(_)
+            | Self::Soracloud(_) => false,
+        }
+    }
+}
+
 mod ledger {
     use super::*;
 
@@ -764,6 +780,84 @@ mod app {
             }
         }
     }
+
+    impl Command {
+        pub(super) fn allows_fallback_config(&self) -> bool {
+            match self {
+                Self::Da(
+                    crate::commands::da::Command::RentQuote(_)
+                    | crate::commands::da::Command::RentLedger(_),
+                ) => true,
+                Self::Sorafs(command) => sorafs_allows_fallback_config(command),
+                Self::SpaceDirectory(crate::space_directory::Command::Manifest(
+                    crate::space_directory::ManifestCommand::Encode(_)
+                    | crate::space_directory::ManifestCommand::AuditBundle(_)
+                    | crate::space_directory::ManifestCommand::Scaffold(_),
+                )) => true,
+                Self::Gov(_)
+                | Self::Contracts(_)
+                | Self::Zk(_)
+                | Self::Confidential(_)
+                | Self::Taikai(_)
+                | Self::Content(_)
+                | Self::Da(_)
+                | Self::Streaming(_)
+                | Self::Nexus(_)
+                | Self::Staking(_)
+                | Self::Subscriptions(_)
+                | Self::Endorsement(_)
+                | Self::Jurisdiction(_)
+                | Self::Compute(_)
+                | Self::Social(_)
+                | Self::SpaceDirectory(_)
+                | Self::Kaigi(_)
+                | Self::Soracles(_)
+                | Self::Sns(_)
+                | Self::Alias(_)
+                | Self::Repo(_)
+                | Self::Settlement(_) => false,
+            }
+        }
+    }
+
+    fn sorafs_allows_fallback_config(command: &crate::commands::sorafs::Command) -> bool {
+        use crate::commands::sorafs::{
+            Command as SorafsCommand, IncentivesCommand, IncentivesServiceCommand,
+            ReserveCommand,
+        };
+
+        match command {
+            SorafsCommand::Reserve(ReserveCommand::Quote(_) | ReserveCommand::Ledger(_)) => true,
+            SorafsCommand::Incentives(
+                IncentivesCommand::Compute(_)
+                | IncentivesCommand::OpenDispute(_)
+                | IncentivesCommand::Dashboard(_),
+            ) => true,
+            SorafsCommand::Incentives(IncentivesCommand::Service(command)) => match command {
+                IncentivesServiceCommand::Process(args) => !args.submit_transfer,
+                IncentivesServiceCommand::Init(_)
+                | IncentivesServiceCommand::Record(_)
+                | IncentivesServiceCommand::Dispute(_)
+                | IncentivesServiceCommand::Dashboard(_)
+                | IncentivesServiceCommand::Audit(_)
+                | IncentivesServiceCommand::ShadowRun(_)
+                | IncentivesServiceCommand::Reconcile(_)
+                | IncentivesServiceCommand::Daemon(_) => true,
+            },
+            SorafsCommand::Pin(_)
+            | SorafsCommand::Alias(_)
+            | SorafsCommand::Replication(_)
+            | SorafsCommand::Storage(_)
+            | SorafsCommand::Gateway(_)
+            | SorafsCommand::Handshake(_)
+            | SorafsCommand::Toolkit(_)
+            | SorafsCommand::GuardDirectory(_)
+            | SorafsCommand::Gar(_)
+            | SorafsCommand::Repair(_)
+            | SorafsCommand::Gc(_)
+            | SorafsCommand::Fetch(_) => false,
+        }
+    }
 }
 
 mod tools {
@@ -796,6 +890,12 @@ mod tools {
                 MarkdownHelp(variant) => Run::run(variant, context),
                 Version(variant) => Run::run(variant, context),
             }
+        }
+    }
+
+    impl Command {
+        pub(super) fn allows_fallback_config(&self) -> bool {
+            matches!(self, Self::Address(_))
         }
     }
 }
@@ -966,6 +1066,9 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
 
     let mut config = match Config::load(load_path) {
         Ok(cfg) => cfg,
+        Err(_) if !config_was_explicit && !args.machine && args.command.allows_fallback_config() => {
+            fallback_config()
+        }
         Err(report) => {
             let mut report = report
                 .change_context(MainError::Config)
@@ -4488,7 +4591,7 @@ mod transaction {
     impl Run for Status {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
-            if self.wait.is_enabled() {
+            if self.wait.wait {
                 let status = crate::wait_for_transaction_status(&client, self.hash, &self.wait)?;
                 context.print_data(&status)
             } else {
@@ -7642,6 +7745,54 @@ mod tests {
         let args = Args::try_parse_from(["iroha", "--output-format", "json", "tools", "version"])
             .expect("parse args");
         assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
+    }
+
+    #[test]
+    fn fallback_config_is_limited_to_offline_commands() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "da",
+            "rent-quote",
+            "--gib",
+            "1",
+            "--months",
+            "1",
+        ])
+        .expect("parse offline rent quote");
+        assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from(["iroha", "tools", "address", "convert", "sora1"])
+            .expect("parse address conversion");
+        assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ])
+        .expect("parse runtime tx status");
+        assert!(!args.command.allows_fallback_config());
+    }
+
+    #[test]
+    fn tx_status_wait_is_explicit() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ])
+        .expect("parse tx status");
+        let Command::Tx(transaction::Command::Status(status)) = args.command else {
+            panic!("expected tx status command");
+        };
+
+        assert!(!status.wait.wait);
+        assert!(status.wait.is_enabled());
     }
 
     #[test]

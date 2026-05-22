@@ -139,9 +139,9 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_rwa_instruction_box(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<crate::isi::soraswap::SoraSwapInstructionBox>()
+        .downcast_ref::<crate::isi::defi::DeFiInstructionBox>()
     {
-        visitor.visit_soraswap_instruction_box(v);
+        visitor.visit_defi_instruction_box(v);
     } else {
         return false;
     }
@@ -441,10 +441,10 @@ pub fn visit_rwa_instruction_box<V: Visit + ?Sized>(
 ) {
 }
 
-/// Dispatch grouped SoraSwap DeFi instructions.
-pub fn visit_soraswap_instruction_box<V: Visit + ?Sized>(
+/// Dispatch grouped DeFi instructions.
+pub fn visit_defi_instruction_box<V: Visit + ?Sized>(
     _visitor: &mut V,
-    _isi: &crate::isi::soraswap::SoraSwapInstructionBox,
+    _isi: &crate::isi::defi::DeFiInstructionBox,
 ) {
 }
 

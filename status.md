@@ -2,6 +2,23 @@
 
 Last updated: 2026-05-21
 
+## 2026-05-21 CLI smoke offline-command config recovery
+
+- CLI startup now falls back to an in-memory offline config only for explicitly
+  classified offline helpers when no `--config` is supplied and `--machine` is
+  not active. Runtime commands and explicit config paths keep strict config
+  loading.
+- Address conversion/audit/normalize commands now default to the active client
+  account chain discriminant when `--profile`/`--network-prefix` are omitted.
+- `tx status` now performs a single pipeline status read by default and only
+  polls for terminal status when `--wait` is supplied.
+- Focused validation passed:
+  - `cargo test -p iroha_cli fallback_config_is_limited_to_offline_commands -- --nocapture`
+  - `cargo test -p iroha_cli tx_status_wait_is_explicit -- --nocapture`
+  - `cargo test -p iroha_cli address_network_context_uses_config_default_prefix -- --nocapture`
+  - `cargo test -p iroha_cli --test cli_smoke -- --nocapture`
+  - `cargo clippy -p iroha_cli --bins --tests --no-deps -- -D warnings`
+
 ## 2026-05-21 WSV/Kura memory-only stabilization closure
 
 - WSV recovery remains memory-only and rebuilds process-local query state from

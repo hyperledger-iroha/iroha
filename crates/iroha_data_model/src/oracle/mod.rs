@@ -26,6 +26,116 @@ pub type OracleId = AccountId;
 /// Slot index used by oracle feeds.
 pub type FeedSlot = u64;
 
+/// DeFi oracle domain for perps market payloads.
+pub const DEFI_ORACLE_DOMAIN_PERPS_MARKET: u32 = 1;
+/// DeFi oracle domain for options series settlement payloads.
+pub const DEFI_ORACLE_DOMAIN_OPTIONS_SERIES: u32 = 2;
+/// DeFi oracle domain for options shout exercise payloads.
+pub const DEFI_ORACLE_DOMAIN_OPTIONS_SHOUT: u32 = 3;
+/// DeFi oracle domain for cover policy observation payloads.
+pub const DEFI_ORACLE_DOMAIN_COVER_POLICY: u32 = 4;
+
+/// Key used to store DeFi oracle attestations by contract ABI domain and subject id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+pub struct DefiOracleAttestationKey {
+    /// DeFi oracle domain (`1=perps_market`, `2=options_series`,
+    /// `3=options_shout`, `4=cover_policy`).
+    pub domain: u32,
+    /// Subject id inside the domain (`market_id`, `series_id`, `position_id`, or `policy_id`).
+    pub subject_id: u64,
+}
+
+impl DefiOracleAttestationKey {
+    /// Construct an attestation key.
+    #[must_use]
+    pub const fn new(domain: u32, subject_id: u64) -> Self {
+        Self { domain, subject_id }
+    }
+
+    /// Return `true` when the domain is one of the DeFi oracle ABI domains.
+    #[must_use]
+    pub const fn has_supported_domain(&self) -> bool {
+        matches!(
+            self.domain,
+            DEFI_ORACLE_DOMAIN_PERPS_MARKET
+                | DEFI_ORACLE_DOMAIN_OPTIONS_SERIES
+                | DEFI_ORACLE_DOMAIN_OPTIONS_SHOUT
+                | DEFI_ORACLE_DOMAIN_COVER_POLICY
+        )
+    }
+
+    /// Payload subject field expected for the key domain.
+    #[must_use]
+    pub const fn subject_field(&self) -> Option<&'static str> {
+        match self.domain {
+            DEFI_ORACLE_DOMAIN_PERPS_MARKET => Some("market_id"),
+            DEFI_ORACLE_DOMAIN_OPTIONS_SERIES => Some("series_id"),
+            DEFI_ORACLE_DOMAIN_OPTIONS_SHOUT => Some("position_id"),
+            DEFI_ORACLE_DOMAIN_COVER_POLICY => Some("policy_id"),
+            _ => None,
+        }
+    }
+}
+
+/// Reference to a native oracle feed event that supports a DeFi attestation field.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+pub struct DefiOracleAttestationSource {
+    /// Source feed identifier.
+    pub feed_id: FeedId,
+    /// Source feed slot.
+    pub slot: FeedSlot,
+    /// Source feed request hash.
+    pub request_hash: Hash,
+    /// Payload field whose integer value must match the retained feed event value.
+    pub field: String,
+}
+
+/// Native Soracles attestation carrying ABI-compatible DeFi oracle bytes.
+///
+/// `source_events` can link the attestation back to retained native feed
+/// events for full auditability. Empty `source_events` are also valid for
+/// direct provider-signed attestations when the provider account is itself the
+/// submitting authority and signature controller.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+pub struct DefiOracleAttestation {
+    /// Domain and subject id this attestation is valid for.
+    pub key: DefiOracleAttestationKey,
+    /// Oracle provider account that submitted the attestation.
+    pub provider: OracleId,
+    /// Oracle slot embedded in the contract payload.
+    pub oracle_slot: FeedSlot,
+    /// Payload status flags embedded in the contract payload.
+    pub status_flags: u32,
+    /// Deterministic non-zero compatibility hash embedded in the contract payload.
+    pub attestation_hash: u64,
+    /// Exact compact JSON bytes signed for the existing DeFi contract ABI.
+    pub oracle_payload: Vec<u8>,
+    /// Signature bytes over [`Self::oracle_payload`].
+    pub oracle_signature: Vec<u8>,
+    /// Signer public key bytes for the compatibility signature.
+    pub signer_public_key: Vec<u8>,
+    /// Compatibility signature scheme (`1` is Ed25519).
+    pub oracle_scheme: u32,
+    /// Optional native feed events retained on-chain that justify payload field values.
+    #[cfg_attr(feature = "json", norito(default))]
+    pub source_events: Vec<DefiOracleAttestationSource>,
+}
+
 /// Identifier for an oracle feed.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
