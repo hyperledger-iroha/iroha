@@ -2344,7 +2344,7 @@ impl AppDoctorArgs {
 
         let live_prefix_ok = hosted_services
             .iter()
-            .any(|service| service.route_path_prefix.as_deref() == Some("/api/v1"));
+            .all(|service| service.route_path_prefix.as_deref() == Some("/api/v1"));
         push_check(
             "live_route_prefix",
             !hosted_services.is_empty() && live_prefix_ok,
@@ -28839,6 +28839,102 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-args.txt"
                 .any(|route| route.service_name == "travel-ops_vault"
                     && route.path == "/api/auth/challenge")
         );
+    }
+
+    #[test]
+    fn app_doctor_rejects_any_hosted_live_route_outside_api_v1() {
+        let dir = temp_dir("split_app_doctor_rejects_hosted_prefix");
+        AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
+            overwrite: false,
+        }
+        .run()
+        .expect("split-app init should succeed");
+
+        fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist");
+        fs::write(
+            dir.join("frontend/dist/index.html"),
+            "<!doctype html><title>Travel Ops</title>",
+        )
+        .expect("write frontend index");
+        fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
+        fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
+        fs::write(
+            dir.join("services/live/build/live-api.tgz"),
+            b"doctor-live-bundle",
+        )
+        .expect("write live bundle");
+        fs::write(
+            dir.join("services/vault/build/vault-api.to"),
+            b"doctor-vault-bundle",
+        )
+        .expect("write vault bundle");
+
+        let admin_dir = dir.join("services/admin");
+        fs::create_dir_all(&admin_dir).expect("create admin service dir");
+        let admin_container_path = admin_dir.join("container_manifest.json");
+        let admin_service_path = admin_dir.join("service_manifest.json");
+        let artifact_dir = dir.join("artifacts");
+        let admin_bundle_path = artifact_dir.join("admin-api.tgz");
+        fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+        fs::write(&admin_bundle_path, b"doctor-admin-bundle").expect("write admin bundle");
+
+        let admin_container: SoraContainerManifestV1 =
+            load_json(&dir.join("services/live/container_manifest.json")).expect("live container");
+        let mut admin_service: SoraServiceManifestV1 =
+            load_json(&dir.join("services/live/service_manifest.json")).expect("live service");
+        admin_service.service_name = "travel-ops_admin".parse().expect("admin service name");
+        admin_service
+            .route
+            .as_mut()
+            .expect("hosted service route")
+            .path_prefix = "/admin".to_owned();
+        write_json(&admin_container_path, &admin_container).expect("write admin container");
+        write_json(&admin_service_path, &admin_service).expect("write admin service");
+
+        let manifest_path = dir.join("app_manifest.json");
+        let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
+        manifest.services.push(SoracloudAppServiceRefV1 {
+            service_name: "travel-ops_admin".to_owned(),
+            container_manifest: relative_path_string(&manifest_path, &admin_container_path),
+            service_manifest: relative_path_string(&manifest_path, &admin_service_path),
+            bundle_file: Some(relative_path_string(&manifest_path, &admin_bundle_path)),
+            initial_configs: None,
+            initial_secrets: None,
+        });
+        write_json(&manifest_path, &manifest).expect("write app manifest");
+
+        let output = AppDoctorArgs {
+            manifest: manifest_path,
+        }
+        .run()
+        .expect("doctor should produce a report");
+
+        assert!(
+            !output.ok,
+            "doctor must fail when any hosted Inrou route leaves /api/v1"
+        );
+        let failing_checks = output
+            .checks
+            .iter()
+            .filter(|check| check.status == "fail")
+            .map(|check| check.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(failing_checks, vec!["live_route_prefix"]);
+        let live_route_prefix = output
+            .checks
+            .iter()
+            .find(|check| check.name == "live_route_prefix")
+            .expect("live route prefix check");
+        assert_eq!(live_route_prefix.status, "fail");
+        assert!(live_route_prefix.detail.contains("travel-ops_live:/api/v1"));
+        assert!(live_route_prefix.detail.contains("travel-ops_admin:/admin"));
     }
 
     #[test]
