@@ -19005,7 +19005,9 @@ const server = http.createServer(async (req, res) => {{
 }});
 
 server.listen(PORT, "0.0.0.0", () => {{
-  console.log(`${{SERVICE_NAME}} listening on ${{PORT}}`);
+  const address = server.address();
+  const boundPort = typeof address === "object" && address ? address.port : PORT;
+  console.log(`${{SERVICE_NAME}} listening on ${{boundPort}}`);
 }});
 "#
     )
@@ -29357,7 +29359,6 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
         let collector_state_dir = dir.join("lease/collector-state");
         let runtime_cache_dir = dir.join("lease/runtime-cache");
         let mut script = r#"import { spawn } from "node:child_process";
-import net from "node:net";
 
 const SERVER_PATH = __SERVER_PATH__;
 const SHARED_CACHE_DIR = __SHARED_CACHE_DIR__;
@@ -29371,30 +29372,12 @@ function assert(condition, message) {
   }
 }
 
-async function freePort() {
-  return await new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      probe.close((closeError) => {
-        if (closeError) {
-          reject(closeError);
-          return;
-        }
-        resolve(port);
-      });
-    });
-  });
-}
-
-function startServer(port) {
+function startServer() {
   const child = spawn(process.execPath, [SERVER_PATH], {
     env: {
       ...process.env,
-      PORT: String(port),
-      SORACLOUD_HTTP_PORT: String(port),
+      PORT: "0",
+      SORACLOUD_HTTP_PORT: "0",
       SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR: SHARED_CACHE_DIR,
       SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_DIR: SEARCH_SESSIONS_DIR,
       SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_DIR: COLLECTOR_STATE_DIR,
@@ -29416,42 +29399,66 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function childExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 async function waitForExit(child, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  while (child.exitCode === null && Date.now() < deadline) {
+  while (!childExited(child) && Date.now() < deadline) {
     await sleep(25);
   }
 }
 
 async function stopServer(server) {
-  if (!server || !server.child || server.child.exitCode !== null) {
+  if (!server || !server.child || childExited(server.child)) {
     return;
   }
   server.child.kill("SIGTERM");
   await waitForExit(server.child, 800);
-  if (server.child.exitCode === null) {
+  if (!childExited(server.child)) {
     server.child.kill("SIGKILL");
     await waitForExit(server.child, 1500);
   }
 }
 
-async function waitForHealth(port) {
-  for (let attempt = 0; attempt < 160; attempt += 1) {
+async function waitForListeningPort(server) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const match = server.logs().match(/listening on (\d+)/);
+    if (match) {
+      return Number(match[1]);
+    }
+    if (childExited(server.child)) {
+      throw new Error(`server exited before listen: ${server.logs()}`);
+    }
+    await sleep(25);
+  }
+  throw new Error(`server did not report a listening port: ${server.logs()}`);
+}
+
+async function waitForHealth(server, port) {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`);
+      const response = await fetch(`http://127.0.0.1:${port}/health`, {
+        headers: { connection: "close" }
+      });
       if (response.status === 200) {
         return;
       }
     } catch {
       // keep retrying while process boots
     }
+    if (childExited(server.child)) {
+      throw new Error(`server exited before healthcheck: ${server.logs()}`);
+    }
     await sleep(25);
   }
-  throw new Error(`server failed healthcheck on port ${port}`);
+  throw new Error(`server failed healthcheck on port ${port}: ${server.logs()}`);
 }
 
 async function jsonRequest(port, method, route, body) {
-  const init = { method, headers: {} };
+  const init = { method, headers: { connection: "close" } };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
     init.body = JSON.stringify(body);
@@ -29465,7 +29472,9 @@ async function jsonRequest(port, method, route, body) {
 }
 
 async function textRequest(port, route) {
-  const response = await fetch(`http://127.0.0.1:${port}${route}`);
+  const response = await fetch(`http://127.0.0.1:${port}${route}`, {
+    headers: { connection: "close" }
+  });
   return {
     status: response.status,
     body: await response.text()
@@ -29475,9 +29484,9 @@ async function textRequest(port, route) {
 async function main() {
   let server = null;
   try {
-    const port = await freePort();
-    server = startServer(port);
-    await waitForHealth(port);
+    server = startServer();
+    const port = await waitForListeningPort(server);
+    await waitForHealth(server, port);
 
     const search = await jsonRequest(port, "POST", "/search", { origin: "SYD" });
     assert(search.status === 202, `search failed: ${JSON.stringify(search)}`);
@@ -34290,7 +34299,6 @@ main().catch((error) => {
         let harness_path = dir.join("pii_auth_origin_mismatch.mjs");
         let mut script = r#"import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import net from "node:net";
 
 const SERVER_PATH = __SERVER_PATH__;
 const FORWARDED_PROTO = "https";
@@ -34303,26 +34311,8 @@ function assert(condition, message) {
   }
 }
 
-async function freePort() {
-  return await new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      probe.close((closeError) => {
-        if (closeError) {
-          reject(closeError);
-          return;
-        }
-        resolve(port);
-      });
-    });
-  });
-}
-
-function startServer(port, envOverrides) {
-  const child = spawn(process.execPath, [SERVER_PATH, `--port=${port}`], {
+function startServer(envOverrides) {
+  const child = spawn(process.execPath, [SERVER_PATH, "--port=0"], {
     env: { ...process.env, ...envOverrides },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -34340,38 +34330,62 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function childExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 async function waitForExit(child, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  while (child.exitCode === null && Date.now() < deadline) {
+  while (!childExited(child) && Date.now() < deadline) {
     await sleep(25);
   }
 }
 
 async function stopServer(server) {
-  if (!server || !server.child || server.child.exitCode !== null) {
+  if (!server || !server.child || childExited(server.child)) {
     return;
   }
   server.child.kill("SIGTERM");
   await waitForExit(server.child, 800);
-  if (server.child.exitCode === null) {
+  if (!childExited(server.child)) {
     server.child.kill("SIGKILL");
     await waitForExit(server.child, 1500);
   }
 }
 
-async function waitForHealth(port) {
-  for (let attempt = 0; attempt < 160; attempt += 1) {
+async function waitForListeningPort(server) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const match = server.logs().match(/pii api listening on :(\d+)/);
+    if (match) {
+      return Number(match[1]);
+    }
+    if (childExited(server.child)) {
+      throw new Error(`server exited before listen: ${server.logs()}`);
+    }
+    await sleep(25);
+  }
+  throw new Error(`server did not report a listening port: ${server.logs()}`);
+}
+
+async function waitForHealth(server, port) {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/pii/api/healthz`);
+      const response = await fetch(`http://127.0.0.1:${port}/pii/api/healthz`, {
+        headers: { connection: "close" }
+      });
       if (response.status === 200) {
         return;
       }
     } catch {
       // keep retrying while process boots
     }
+    if (childExited(server.child)) {
+      throw new Error(`server exited before healthcheck: ${server.logs()}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error(`server failed healthcheck on port ${port}`);
+  throw new Error(`server failed healthcheck on port ${port}: ${server.logs()}`);
 }
 
 async function jsonRequest(port, method, route, body, headers = {}) {
@@ -34380,7 +34394,7 @@ async function jsonRequest(port, method, route, body, headers = {}) {
     () => controller.abort(new Error(`${method} ${route} request timed out`)),
     REQUEST_TIMEOUT_MS
   );
-  const init = { method, headers: { ...headers }, signal: controller.signal };
+  const init = { method, headers: { ...headers, connection: "close" }, signal: controller.signal };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
     init.body = JSON.stringify(body);
@@ -34388,6 +34402,10 @@ async function jsonRequest(port, method, route, body, headers = {}) {
   let response;
   try {
     response = await fetch(`http://127.0.0.1:${port}${route}`, init);
+  } catch (error) {
+    throw new Error(
+      `${method} ${route} request failed on port ${port}: ${error?.stack ?? String(error)}`
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -34425,9 +34443,9 @@ async function main() {
       PUBLIC_BASE_URL: ""
     };
 
-    const port = await freePort();
-    server = startServer(port, env);
-    await waitForHealth(port);
+    server = startServer(env);
+    const port = await waitForListeningPort(server);
+    await waitForHealth(server, port);
 
     const challenge = await jsonRequest(
       port,
