@@ -164,6 +164,11 @@ enabled = true
 [zk.halo2]
 enabled = true
 
+[pipeline.ivm_proved]
+enabled = true
+skip_replay = false
+allowed_circuits = ["ivm-execution-v1"]
+
 [pipeline.gas]
 # `gas_asset_id` transaction metadata is canonicalized to the Base58 asset
 # definition id before execution. The live XOR alias `xor#universal` resolves to

@@ -1286,6 +1286,18 @@ fn deploy_posts_register_payload_with_content_length_and_pins_peers() {
     assert!(out_dir.join("site.bin.car").exists());
     assert!(out_dir.join("site.bin.plan.json").exists());
     assert!(out_dir.join("site.bin.manifest.to").exists());
+    let checks = summary
+        .get("gateway_verification")
+        .and_then(|value| value.get("checks"))
+        .and_then(Value::as_array)
+        .expect("gateway checks");
+    assert_eq!(
+        checks
+            .first()
+            .and_then(|value| value.get("hash_ok"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
 }
 
 #[test]
@@ -1299,7 +1311,7 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
     let (client_config, _private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
 
-    primary.mock(|when, then| {
+    let status = primary.mock(|when, then| {
         when.method(GET).path("/status");
         then.status(200)
             .header("Content-Type", "application/json")
@@ -1330,6 +1342,7 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
+        .arg("--submitted-epoch=8")
         .arg(format!(
             "--out-dir={}",
             tempdir.path().join("out").display()
@@ -1337,6 +1350,7 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
         .assert()
         .success();
 
+    status.assert_calls(0);
     discovery.assert_calls(1);
     register.assert_calls(1);
     pin.assert_calls(1);
@@ -1358,6 +1372,140 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
             .and_then(Value::as_str)
             .is_some()
     );
+}
+
+#[test]
+fn deploy_uses_transaction_fallback_when_pin_register_route_unavailable() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("payload.bin");
+    let payload = b"fallback transaction deploy".to_vec();
+    fs::write(&payload_path, &payload).expect("write payload");
+
+    let primary = MockServer::start();
+    let (client_config, _private_key) =
+        write_deploy_client_config(tempdir.path(), &primary.base_url());
+
+    let register = primary.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/pin/register");
+        then.status(405).body("method not allowed");
+    });
+    let registry = primary.mock(|when, then| {
+        when.method(GET).path("/v1/sorafs/pin");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"attestation":{"chain_id":"809574f5-fee7-5e69-bfcf-52451e42d50f"}}"#);
+    });
+    let transaction = primary.mock(|when, then| {
+        when.method(POST).path("/transaction");
+        then.status(202).body("");
+    });
+    let pipeline = primary.mock(|when, then| {
+        when.method(GET).path("/v1/pipeline/transactions/status");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"content":{"status":{"kind":"Committed","block_height":16}}}"#);
+    });
+    primary.mock(|when, then| {
+        when.method(GET).path("/v1/sorafs/storage/peers");
+        then.status(404).body("not found");
+    });
+    let pin = primary.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/storage/pin");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"status":"stored"}"#);
+    });
+    primary.mock(|when, then| {
+        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+/$");
+        then.status(200).body(payload.clone());
+    });
+
+    let assert = sorafs_cli_cmd()
+        .arg("deploy")
+        .arg(format!("--payload={}", payload_path.display()))
+        .arg(format!("--client-config={}", client_config.display()))
+        .arg("--submitted-epoch=7")
+        .arg(format!(
+            "--out-dir={}",
+            tempdir.path().join("fallback-out").display()
+        ))
+        .assert()
+        .success();
+
+    register.assert_calls(1);
+    registry.assert_calls(1);
+    transaction.assert_calls(1);
+    pipeline.assert_calls(1);
+    pin.assert_calls(1);
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
+    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        summary
+            .get("registration")
+            .and_then(Value::as_object)
+            .and_then(|registration| registration.get("submission_mode"))
+            .and_then(Value::as_str),
+        Some("transaction_fallback")
+    );
+}
+
+#[test]
+fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("payload.bin");
+    fs::write(&payload_path, b"abc").expect("write payload");
+
+    let primary = MockServer::start();
+    let (client_config, _private_key) =
+        write_deploy_client_config(tempdir.path(), &primary.base_url());
+
+    primary.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/pin/register");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"pin_fee_nano":"1"}"#);
+    });
+    primary.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/storage/pin");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"status":"stored"}"#);
+    });
+    primary.mock(|when, then| {
+        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+/$");
+        then.status(200).body("xyz");
+    });
+
+    let output = sorafs_cli_cmd()
+        .arg("deploy")
+        .arg(format!("--payload={}", payload_path.display()))
+        .arg(format!("--client-config={}", client_config.display()))
+        .arg("--submitted-epoch=10")
+        .arg("--no-peer-discovery")
+        .arg(format!(
+            "--out-dir={}",
+            tempdir.path().join("hash-out").display()
+        ))
+        .output()
+        .expect("command executes");
+
+    assert!(
+        !output.status.success(),
+        "deploy should fail when gateway bytes have the right length but wrong hash"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
+    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
+    let check = summary
+        .get("gateway_verification")
+        .and_then(|value| value.get("checks"))
+        .and_then(Value::as_array)
+        .and_then(|checks| checks.first())
+        .expect("gateway check");
+    assert_eq!(check.get("length_ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(check.get("hash_ok").and_then(Value::as_bool), Some(false));
 }
 
 #[test]

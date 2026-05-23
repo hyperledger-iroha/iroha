@@ -182,6 +182,10 @@ pub const ZK_BACKEND_HALO2_IPA: &str = "halo2/ipa";
 pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri";
 /// Canonical circuit identifier suffix for proved IVM execution commitments.
 pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution-v1";
+/// Halo2 IPA parameter degree used by the canonical IVM execution binding circuit.
+pub const IVM_EXECUTION_V1_IPA_K: u32 = 7;
+/// Maximum encoded proof payload accepted for IVM execution proofs.
+pub const IVM_EXECUTION_V1_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
 
 /// Canonical public-input schema descriptor for `halo2/ipa:ivm-execution-v1`.
 ///
@@ -200,6 +204,75 @@ pub fn ivm_execution_public_inputs_schema_descriptor() -> &'static [u8] {
 #[must_use]
 pub fn ivm_execution_public_inputs_schema_hash() -> [u8; 32] {
     iroha_crypto::Hash::new(ivm_execution_public_inputs_schema_descriptor()).into()
+}
+
+/// Build the canonical inline verifier key for `ivm-execution-v1`.
+///
+/// The returned key is a real Halo2 IPA verifier key envelope (`IPAK` + `H2VK`)
+/// for the current IVM execution binding circuit, suitable for WSV registration.
+///
+/// # Errors
+///
+/// Returns an error if Halo2 verifier-key generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, String> {
+    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            build_halo2_ipa_ivm_execution_vk_box()
+                .map_err(|err| format!("failed to generate ivm-execution-v1 verifying key: {err}"))
+        })
+        .clone()
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn build_halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
+    use halo2_proofs::plonk::keygen_vk;
+
+    let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
+    let circuit = pasta_tiny::IvmExecutionBindV1::default();
+    let vk = keygen_vk(&params, &circuit)?;
+    let mut bytes = zk1::wrap_start();
+    zk1::wrap_append_ipa_k(&mut bytes, IVM_EXECUTION_V1_IPA_K);
+    zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+    Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
+}
+
+/// Build a governance/WSV verifier-key record for `ivm-execution-v1`.
+///
+/// The record is active, embeds the real Halo2 IPA verifier key inline, and
+/// binds to the canonical IVM execution public-input schema hash.
+///
+/// # Errors
+///
+/// Returns an error if verifier-key generation fails or the key length cannot be encoded.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn halo2_ipa_ivm_execution_vk_record(
+    namespace: impl Into<String>,
+    version: u32,
+) -> Result<iroha_data_model::proof::VerifyingKeyRecord, String> {
+    use iroha_data_model::{
+        confidential::ConfidentialStatus, proof::VerifyingKeyRecord, zk::BackendTag,
+    };
+
+    let vk_box = halo2_ipa_ivm_execution_vk_box()?;
+    let mut record = VerifyingKeyRecord::new(
+        version,
+        IVM_EXECUTION_V1_CIRCUIT_ID,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        ivm_execution_public_inputs_schema_hash(),
+        hash_vk(&vk_box),
+    );
+    record.vk_len = u32::try_from(vk_box.bytes.len())
+        .map_err(|_| "ivm-execution-v1 verifying key length overflowed u32".to_owned())?;
+    record.max_proof_bytes = IVM_EXECUTION_V1_MAX_PROOF_BYTES;
+    record.gas_schedule_id = Some("halo2_default".to_owned());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+    record.namespace = namespace.into();
+    Ok(record)
 }
 
 /// Canonical circuit identifier for Offline V2 recursive note proofs.
