@@ -349,6 +349,7 @@ impl Actor {
         qc: &crate::sumeragi::consensus::Qc,
         consensus_mode: ConsensusMode,
         mode_tag: &str,
+        stake_snapshot_hint: Option<&CommitStakeSnapshot>,
     ) -> Option<(
         super::network_topology::Topology,
         Option<CommitStakeSnapshot>,
@@ -396,9 +397,13 @@ impl Actor {
         let parsed_signers = qc_signer_indices(qc, roster_len, roster_len).ok()?;
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => None,
-            ConsensusMode::Npos => self
-                .roster_validation_cache
-                .stake_snapshot_for_roster(topology.as_ref()),
+            ConsensusMode::Npos => stake_snapshot_hint
+                .filter(|snapshot| snapshot.matches_roster(topology.as_ref()))
+                .cloned()
+                .or_else(|| {
+                    self.roster_validation_cache
+                        .stake_snapshot_for_roster(topology.as_ref())
+                }),
         };
         match consensus_mode {
             ConsensusMode::Permissioned => {
@@ -481,13 +486,14 @@ impl Actor {
         mode_tag: &str,
         prf_seed: Option<[u8; 32]>,
         aggregate_ok: Option<bool>,
+        stake_snapshot_hint: Option<&CommitStakeSnapshot>,
     ) -> Option<(
         super::network_topology::Topology,
         Option<CommitStakeSnapshot>,
         QcValidationOutcome,
     )> {
         let (topology, stake_snapshot) =
-            self.certified_embedded_qc_roster(qc, consensus_mode, mode_tag)?;
+            self.certified_embedded_qc_roster(qc, consensus_mode, mode_tag, stake_snapshot_hint)?;
 
         let (validation, evidence) = {
             let world = self.state.world_view();
@@ -6208,12 +6214,38 @@ impl Actor {
         self.handle_qc_with_aggregate_and_roster(qc, aggregate_ok, None)
     }
 
+    pub(super) fn handle_qc_with_stake_snapshot(
+        &mut self,
+        qc: crate::sumeragi::consensus::Qc,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> Result<()> {
+        self.handle_qc_with_aggregate_and_roster_and_stake(qc, None, None, stake_snapshot, true)
+    }
+
     #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
     fn handle_qc_with_aggregate_and_roster(
         &mut self,
         qc: crate::sumeragi::consensus::Qc,
         aggregate_ok: Option<bool>,
         topology_override: Option<Vec<PeerId>>,
+    ) -> Result<()> {
+        self.handle_qc_with_aggregate_and_roster_and_stake(
+            qc,
+            aggregate_ok,
+            topology_override,
+            None,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
+    fn handle_qc_with_aggregate_and_roster_and_stake(
+        &mut self,
+        qc: crate::sumeragi::consensus::Qc,
+        aggregate_ok: Option<bool>,
+        topology_override: Option<Vec<PeerId>>,
+        stake_snapshot_hint: Option<CommitStakeSnapshot>,
+        force_inline_aggregate: bool,
     ) -> Result<()> {
         let mut aggregate_ok = aggregate_ok;
         // Prepare certificates are view-scoped; commit/new-view certificates can safely arrive
@@ -6418,6 +6450,7 @@ impl Actor {
         }
         if aggregate_ok.is_none()
             && topology_len > QC_VERIFY_INLINE_ROSTER_MAX
+            && !force_inline_aggregate
             && !self.subsystems.qc_verify.work_txs.is_empty()
         {
             if let Some(inputs) = super::qc_aggregate_inputs(
@@ -6534,7 +6567,11 @@ impl Actor {
             let world = self.state.world_view();
             let stake_snapshot = match consensus_mode {
                 ConsensusMode::Permissioned => None,
-                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(&world, topology.as_ref()),
+                ConsensusMode::Npos => stake_snapshot_hint
+                    .as_ref()
+                    .filter(|snapshot| snapshot.matches_roster(topology.as_ref()))
+                    .cloned()
+                    .or_else(|| CommitStakeSnapshot::from_roster(&world, topology.as_ref())),
             };
             let (validation, evidence) = validate_qc_with_evidence(
                 &self.vote_log,
@@ -6571,6 +6608,7 @@ impl Actor {
                             mode_tag,
                             prf_seed,
                             aggregate_ok,
+                            stake_snapshot_hint.as_ref(),
                         )
                     {
                         topology = fallback_topology;

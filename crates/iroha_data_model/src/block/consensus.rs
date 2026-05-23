@@ -123,7 +123,8 @@ impl QuorumPolicy {
         let Self::PermissionedCount(validators) = self else {
             return false;
         };
-        Self::permissioned_threshold(*validators).is_some_and(|required| signed_count >= required)
+        Self::permissioned_threshold(*validators)
+            .is_some_and(|required| signed_count <= *validators && signed_count >= required)
     }
 
     /// Return true when `signed_stake` strictly exceeds two thirds of total stake.
@@ -142,6 +143,9 @@ impl QuorumPolicy {
             return false;
         };
         if signed_stake.mantissa().is_negative() {
+            return false;
+        }
+        if &signed_stake > total_stake {
             return false;
         }
         let Some(signed_scaled) =
@@ -2973,7 +2977,7 @@ mod tests {
     use std::num::NonZeroU64;
 
     use iroha_crypto::{Algorithm, KeyPair, MerkleTree, SignatureOf};
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::{bigint::BigInt, numeric::Numeric};
     use norito::core::DecodeFromSlice;
 
     use crate::consensus::VALIDATOR_SET_HASH_VERSION_V1;
@@ -3041,6 +3045,15 @@ mod tests {
         }
     }
 
+    fn max_positive_numeric() -> Numeric {
+        let mut bytes = [0xff; 64];
+        bytes[63] = 0x7f;
+        Numeric::new(
+            BigInt::from_twos_bytes(&bytes).expect("512-bit positive mantissa fits"),
+            0,
+        )
+    }
+
     #[derive(Encode)]
     struct LegacyLaneBlockCommitment {
         block_height: u64,
@@ -3089,12 +3102,12 @@ mod tests {
         phase: NativeAmxPhase,
         source_id: [u8; 32],
         plan_digest: Hash,
-        coordinator_lane_id: LaneId,
-        coordinator_dataspace_id: DataSpaceId,
-        participant_lane_id: LaneId,
-        participant_dataspace_id: DataSpaceId,
+        coordinator: (LaneId, DataSpaceId),
+        participant: (LaneId, DataSpaceId),
         validator_set: Vec<PeerId>,
     ) -> NativeAmxAttestationQcV1 {
+        let (coordinator_lane_id, coordinator_dataspace_id) = coordinator;
+        let (participant_lane_id, participant_dataspace_id) = participant;
         NativeAmxAttestationQcV1 {
             body: NativeAmxAttestationBodyV1 {
                 source_id,
@@ -3200,20 +3213,16 @@ mod tests {
                             NativeAmxPhase::Prepare,
                             source_id,
                             plan_digest,
-                            coordinator_lane_id,
-                            coordinator_dataspace_id,
-                            LaneId::new(7),
-                            DataSpaceId::new(7),
+                            (coordinator_lane_id, coordinator_dataspace_id),
+                            (LaneId::new(7), DataSpaceId::new(7)),
                             validators.clone(),
                         ),
                         commit_qc: sample_native_amx_qc(
                             NativeAmxPhase::Commit,
                             source_id,
                             plan_digest,
-                            coordinator_lane_id,
-                            coordinator_dataspace_id,
-                            LaneId::new(7),
-                            DataSpaceId::new(7),
+                            (coordinator_lane_id, coordinator_dataspace_id),
+                            (LaneId::new(7), DataSpaceId::new(7)),
                             validators.clone(),
                         ),
                     },
@@ -3224,20 +3233,16 @@ mod tests {
                             NativeAmxPhase::Prepare,
                             source_id,
                             plan_digest,
-                            coordinator_lane_id,
-                            coordinator_dataspace_id,
-                            LaneId::new(8),
-                            DataSpaceId::new(8),
+                            (coordinator_lane_id, coordinator_dataspace_id),
+                            (LaneId::new(8), DataSpaceId::new(8)),
                             validators.clone(),
                         ),
                         commit_qc: sample_native_amx_qc(
                             NativeAmxPhase::Commit,
                             source_id,
                             plan_digest,
-                            coordinator_lane_id,
-                            coordinator_dataspace_id,
-                            LaneId::new(8),
-                            DataSpaceId::new(8),
+                            (coordinator_lane_id, coordinator_dataspace_id),
+                            (LaneId::new(8), DataSpaceId::new(8)),
                             validators,
                         ),
                     },
@@ -3698,29 +3703,61 @@ mod tests {
         assert_eq!(QuorumPolicy::permissioned_threshold(4), Some(3));
         assert_eq!(QuorumPolicy::permissioned_threshold(5), Some(4));
         assert_eq!(QuorumPolicy::permissioned_threshold(6), Some(5));
+        assert_eq!(QuorumPolicy::permissioned_threshold(7), Some(5));
+        assert_eq!(QuorumPolicy::permissioned_threshold(8), Some(6));
+        assert_eq!(QuorumPolicy::permissioned_threshold(9), Some(7));
         assert_eq!(
             QuorumPolicy::permissioned_threshold(u32::MAX),
             Some(2_863_311_531)
         );
         assert_eq!(QuorumPolicy::permissioned_threshold(0), None);
+        assert!(!QuorumPolicy::PermissionedCount(0).is_satisfied_by_count(u32::MAX));
 
         let count = QuorumPolicy::PermissionedCount(5);
         assert!(!count.is_satisfied_by_count(3));
         assert!(count.is_satisfied_by_count(4));
+        assert!(!count.is_satisfied_by_count(6));
         assert!(!count.is_satisfied_by_stake(Some(Numeric::from(4_u64))));
+        for validators in 1..=3 {
+            let policy = QuorumPolicy::PermissionedCount(validators);
+            assert!(!policy.is_satisfied_by_count(validators - 1));
+            assert!(policy.is_satisfied_by_count(validators));
+            assert!(!policy.is_satisfied_by_count(validators + 1));
+        }
+        let max_count = QuorumPolicy::PermissionedCount(u32::MAX);
+        assert!(!max_count.is_satisfied_by_count(2_863_311_530));
+        assert!(max_count.is_satisfied_by_count(2_863_311_531));
 
         let stake = QuorumPolicy::NposStake(Numeric::from(3_u64));
         assert!(!stake.is_satisfied_by_count(3));
         assert!(!stake.is_satisfied_by_stake(None));
         assert!(!stake.is_satisfied_by_stake(Some(Numeric::new(-1_i128, 0))));
         assert!(!stake.is_satisfied_by_stake(Some(Numeric::from(2_u64))));
+        assert!(!stake.is_satisfied_by_stake(Some(Numeric::from(4_u64))));
         assert!(stake.is_satisfied_by_stake(Some(Numeric::new(201_u128, 2))));
+
+        let fractional_stake = QuorumPolicy::NposStake(Numeric::new(15_u128, 1));
+        assert!(!fractional_stake.is_satisfied_by_stake(Some(Numeric::new(10_u128, 1))));
+        assert!(fractional_stake.is_satisfied_by_stake(Some(Numeric::new(101_u128, 2))));
+
+        let tiny_fractional_stake = QuorumPolicy::NposStake(Numeric::new(3_u128, 2));
+        assert!(!tiny_fractional_stake.is_satisfied_by_stake(Some(Numeric::new(2_u128, 2))));
+        assert!(
+            tiny_fractional_stake.is_satisfied_by_stake(Some(Numeric::new(
+                200_000_000_000_000_000_000_000_001_u128,
+                28,
+            )))
+        );
 
         let zero_total = QuorumPolicy::NposStake(Numeric::zero());
         assert!(!zero_total.is_satisfied_by_stake(Some(Numeric::from(1_u64))));
 
         let negative_total = QuorumPolicy::NposStake(Numeric::new(-3_i128, 0));
         assert!(!negative_total.is_satisfied_by_stake(Some(Numeric::from(1_u64))));
+
+        let max_total = max_positive_numeric();
+        let overflowing_stake = QuorumPolicy::NposStake(max_total.clone());
+        assert!(!overflowing_stake.is_satisfied_by_stake(Some(max_total)));
     }
 
     #[test]

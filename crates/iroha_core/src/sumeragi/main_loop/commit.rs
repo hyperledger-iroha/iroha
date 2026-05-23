@@ -5113,9 +5113,8 @@ impl Actor {
         let Some(highest_qc) = qc.highest_qc else {
             return false;
         };
-        if self
-            .cached_new_view_qc_extends_committed_frontier(qc.height, qc.view, highest_qc)
-            .is_none()
+        if !self
+            .cached_new_view_qc_extends_committed_frontier(qc.height, qc.view, qc.view, highest_qc)
         {
             return false;
         }
@@ -7498,6 +7497,23 @@ impl Actor {
         }
 
         for (hash, height, view) in stale_pending {
+            if self.pending_block_already_committed(hash, height, committed_height, committed_hash)
+            {
+                if let Some(tx_count) =
+                    self.drop_committed_pending_block_without_requeue(hash, height, view)
+                {
+                    info!(
+                        height,
+                        view,
+                        tx_count,
+                        block = %hash,
+                        committed_height,
+                        committed_hash = %committed_hash,
+                        "dropped pending block already committed on the canonical chain"
+                    );
+                }
+                continue;
+            }
             info!(
                 height,
                 view,
@@ -7612,6 +7628,45 @@ impl Actor {
             let _ = self.qc_cache.remove(&key);
             let _ = self.qc_signer_tally.remove(&key);
         }
+    }
+
+    fn pending_block_already_committed(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        committed_height: u64,
+        committed_hash: HashOf<BlockHeader>,
+    ) -> bool {
+        if height == committed_height && block_hash == committed_hash {
+            return true;
+        }
+        self.kura
+            .get_block_height_by_hash(block_hash)
+            .and_then(|stored_height| u64::try_from(stored_height.get()).ok())
+            .is_some_and(|stored_height| stored_height == height)
+    }
+
+    fn drop_committed_pending_block_without_requeue(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> Option<usize> {
+        let pending = self.pending.pending_blocks.remove(&block_hash)?;
+        let tx_count = pending.block.external_entrypoints_cloned().count();
+        self.pending.pending_fetch_requests.remove(&block_hash);
+        self.pending.pending_block_body_requests.remove(&block_hash);
+        self.clear_validation_ownership_for_block(block_hash);
+        self.clean_rbc_sessions_for_block(block_hash, height);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_hint(height, view);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_proposal(height, view);
+        Some(tx_count)
     }
 
     fn clean_rbc_sessions_for_block_inner(

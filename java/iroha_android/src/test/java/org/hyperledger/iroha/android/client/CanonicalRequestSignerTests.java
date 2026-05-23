@@ -2,12 +2,11 @@ package org.hyperledger.iroha.android.client;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.Signature;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class CanonicalRequestSignerTests {
 
@@ -15,9 +14,9 @@ public final class CanonicalRequestSignerTests {
 
   public static void main(final String[] args) throws Exception {
     canonicalQuerySortsPairs();
-    headersCarryVerifiableSignature();
+    callbackHeadersReceiveCanonicalMessage();
     unsignedBodyAuthJsonRemovesOnlyTopLevelProofFields();
-    bodySignatureFieldsCarryVerifiableSignature();
+    callbackBodySignatureReceivesCanonicalMessage();
     System.out.println("[IrohaAndroid] Canonical request signer tests passed.");
   }
 
@@ -28,33 +27,41 @@ public final class CanonicalRequestSignerTests {
         : "canonical query mismatch: " + rendered;
   }
 
-  private static void headersCarryVerifiableSignature() throws Exception {
-    final KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
-    final KeyPair keyPair = generator.generateKeyPair();
-    final URI uri =
-        new URI("http://localhost:8080/v1/accounts/sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB/assets?limit=5");
-    final byte[] body = "{\"foo\":1}".getBytes(StandardCharsets.UTF_8);
-    final long timestampMs = 1_717_171_717_000L;
-    final String nonce = "android-canonical-nonce";
+  private static void callbackHeadersReceiveCanonicalMessage() throws Exception {
+    final URI uri = new URI("https://torii.example/v1/offline/v2/keys/refill?b=2&a=1");
+    final byte[] body = "{\"operation_id\":\"operation-1\"}".getBytes(StandardCharsets.UTF_8);
+    final long timestampMs = 1_717_171_717_001L;
+    final String nonce = "callback-header-nonce";
+    final byte[] expectedMessage =
+        CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            "post", uri, body, timestampMs, nonce);
+    final byte[] expectedSignature = fakeSignature(expectedMessage);
+    final AtomicReference<byte[]> signedMessage = new AtomicReference<>();
+    final ToriiCanonicalRequestAuth auth =
+        new ToriiCanonicalRequestAuth(
+            "alice",
+            message -> {
+              signedMessage.set(Arrays.copyOf(message, message.length));
+              return fakeSignature(message);
+            },
+            timestampMs,
+            nonce);
 
     final Map<String, String> headers =
-        CanonicalRequestSigner.buildHeaders(
-            "get", uri, body, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", keyPair.getPrivate(), timestampMs, nonce);
-    final byte[] message =
-        CanonicalRequestSigner.canonicalRequestSignatureMessage(
-            "get", uri, body, timestampMs, nonce);
-    final byte[] signature =
-        Base64.getDecoder().decode(headers.get(CanonicalRequestSigner.HEADER_SIGNATURE));
+        CanonicalRequestSigner.buildHeaders("post", uri, body, auth, timestampMs, nonce);
 
-    final Signature verifier = Signature.getInstance("Ed25519");
-    verifier.initVerify(keyPair.getPublic());
-    verifier.update(message);
+    assert Arrays.equals(expectedMessage, signedMessage.get()) : "callback header message mismatch";
+    assert "alice".equals(headers.get(CanonicalRequestSigner.HEADER_ACCOUNT))
+        : "callback account header mismatch";
     assert Long.toString(timestampMs)
             .equals(headers.get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS))
-        : "timestamp header mismatch";
+        : "callback timestamp header mismatch";
     assert nonce.equals(headers.get(CanonicalRequestSigner.HEADER_NONCE))
-        : "nonce header mismatch";
-    assert verifier.verify(signature) : "signature verification failed";
+        : "callback nonce header mismatch";
+    assert Base64.getEncoder()
+            .encodeToString(expectedSignature)
+            .equals(headers.get(CanonicalRequestSigner.HEADER_SIGNATURE))
+        : "callback signature header mismatch";
   }
 
   private static void unsignedBodyAuthJsonRemovesOnlyTopLevelProofFields() {
@@ -77,38 +84,49 @@ public final class CanonicalRequestSignerTests {
         : "unsigned body auth JSON mismatch: " + unsigned;
   }
 
-  private static void bodySignatureFieldsCarryVerifiableSignature() throws Exception {
-    final KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
-    final KeyPair keyPair = generator.generateKeyPair();
-    final URI uri =
-        new URI("https://torii.example/v1/offline/v2/keys/refill?b=2&a=1");
-    final long timestampMs = 1_717_171_717_000L;
-    final String nonce = "offline-body-nonce";
+  private static void callbackBodySignatureReceivesCanonicalMessage() throws Exception {
+    final URI uri = new URI("https://torii.example/v1/offline/v2/notes/issue");
+    final long timestampMs = 1_717_171_717_002L;
+    final String nonce = "callback-body-nonce";
+    final AtomicReference<byte[]> signedMessage = new AtomicReference<>();
+    final ToriiCanonicalRequestAuth auth =
+        new ToriiCanonicalRequestAuth(
+            "alice",
+            message -> {
+              signedMessage.set(Arrays.copyOf(message, message.length));
+              return fakeSignature(message);
+            },
+            timestampMs,
+            nonce);
     final Map<String, Object> body = new LinkedHashMap<>();
-    body.put("operation_id", "operation-1");
+    body.put("operation_id", "operation-2");
 
     final Map<String, Object> signed =
-        CanonicalRequestSigner.withBodySignature(
-            "post", uri, body, "alice", keyPair.getPrivate(), timestampMs, nonce);
-
-    assert "alice".equals(signed.get(CanonicalRequestSigner.BODY_ACCOUNT_ID))
-        : "account_id mismatch";
-    assert Long.valueOf(timestampMs).equals(signed.get(CanonicalRequestSigner.BODY_TIMESTAMP_MS))
-        : "timestamp mismatch";
-    assert nonce.equals(signed.get(CanonicalRequestSigner.BODY_NONCE))
-        : "nonce mismatch";
-    assert !signed.containsKey(CanonicalRequestSigner.BODY_WITNESS_BASE64)
-        : "witness proof must not be present for single-signature body auth";
-
-    final byte[] signature =
-        Base64.getDecoder()
-            .decode((String) signed.get(CanonicalRequestSigner.BODY_SIGNATURE_BASE64));
-    final byte[] message =
+        CanonicalRequestSigner.withBodySignature("post", uri, body, auth, timestampMs, nonce);
+    final byte[] expectedMessage =
         CanonicalRequestSigner.canonicalBodyAuthSignatureMessage(
             "post", uri, signed, timestampMs, nonce);
-    final Signature verifier = Signature.getInstance("Ed25519");
-    verifier.initVerify(keyPair.getPublic());
-    verifier.update(message);
-    assert verifier.verify(signature) : "body auth signature verification failed";
+
+    assert Arrays.equals(expectedMessage, signedMessage.get()) : "callback body message mismatch";
+    assert "alice".equals(signed.get(CanonicalRequestSigner.BODY_ACCOUNT_ID))
+        : "callback body account_id mismatch";
+    assert Long.valueOf(timestampMs).equals(signed.get(CanonicalRequestSigner.BODY_TIMESTAMP_MS))
+        : "callback body timestamp mismatch";
+    assert nonce.equals(signed.get(CanonicalRequestSigner.BODY_NONCE))
+        : "callback body nonce mismatch";
+    assert Base64.getEncoder()
+            .encodeToString(fakeSignature(expectedMessage))
+            .equals(signed.get(CanonicalRequestSigner.BODY_SIGNATURE_BASE64))
+        : "callback body signature mismatch";
+    assert !signed.containsKey(CanonicalRequestSigner.BODY_WITNESS_BASE64)
+        : "callback body auth must not include witness";
+  }
+
+  private static byte[] fakeSignature(final byte[] message) {
+    final byte[] signature = new byte[64];
+    for (int index = 0; index < signature.length; index++) {
+      signature[index] = (byte) (message[index % message.length] ^ index);
+    }
+    return signature;
   }
 }

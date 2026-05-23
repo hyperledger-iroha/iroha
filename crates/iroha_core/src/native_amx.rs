@@ -9,7 +9,6 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::consensus::{NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1, NativeAmxPhase},
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
 use norito::codec::{Decode, Encode};
@@ -166,18 +165,12 @@ struct NativeAmxSession {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct NativeAmxVoteBucket {
-    phase: NativeAmxPhase,
-    participant_lane_id: LaneId,
-    participant_dataspace_id: DataSpaceId,
+    body: NativeAmxAttestationBodyV1,
 }
 
 impl NativeAmxVoteBucket {
     const fn from_body(body: &NativeAmxAttestationBodyV1) -> Self {
-        Self {
-            phase: body.phase,
-            participant_lane_id: body.participant_lane_id,
-            participant_dataspace_id: body.participant_dataspace_id,
-        }
+        Self { body: *body }
     }
 }
 
@@ -220,12 +213,12 @@ impl NativeAmxSessionCache {
         }
     }
 
-    /// Insert a vote, rejecting duplicate signers for the same session and phase.
+    /// Insert a vote, rejecting duplicate signers for the same exact attestation body.
     ///
     /// Eviction is deterministic FIFO by session key insertion order.
     ///
     /// # Errors
-    /// Returns [`NativeAmxSessionError::DuplicateSigner`] when a signer votes twice in one phase.
+    /// Returns [`NativeAmxSessionError::DuplicateSigner`] when a signer votes twice for one body.
     pub fn insert_vote(&mut self, vote: NativeAmxVoteV1) -> Result<(), NativeAmxSessionError> {
         let key = NativeAmxSessionKey::from_body(&vote.body);
         if !self.sessions.contains_key(&key) {
@@ -253,7 +246,7 @@ impl NativeAmxSessionCache {
                 session
                     .votes
                     .iter()
-                    .filter(|(bucket, _)| bucket.phase == phase)
+                    .filter(|(bucket, _)| bucket.body.phase == phase)
                     .flat_map(|(_, votes)| votes.values().cloned())
                     .collect()
             })
@@ -325,6 +318,30 @@ mod tests {
             cache.insert_vote(vote),
             Err(NativeAmxSessionError::DuplicateSigner)
         ));
+    }
+
+    #[test]
+    fn session_cache_allows_same_signer_for_retried_body() {
+        let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(4).expect("nonzero"));
+        let vote = vote(NativeAmxPhase::Prepare);
+        let key = NativeAmxSessionKey::from_body(&vote.body);
+        let mut retried_vote = vote.clone();
+        retried_vote.body.planned_coordinator_block_height = retried_vote
+            .body
+            .planned_coordinator_block_height
+            .saturating_add(1);
+
+        cache.insert_vote(vote.clone()).expect("first body vote");
+        cache
+            .insert_vote(retried_vote.clone())
+            .expect("same signer may vote on a retried body");
+
+        assert_eq!(cache.sorted_votes_for_body(key, &vote.body), vec![vote]);
+        assert_eq!(
+            cache.sorted_votes_for_body(key, &retried_vote.body),
+            vec![retried_vote]
+        );
+        assert_eq!(cache.sorted_votes(key, NativeAmxPhase::Prepare).len(), 2);
     }
 
     #[test]

@@ -486,12 +486,15 @@ impl TransactionGossiper {
         }
         let mut filtered = Vec::with_capacity(targets.len());
         let mut suppressed = 0usize;
-        for peer in targets {
-            if self.peer_recently_seen_all_hashes(&peer, tx_hashes) {
+        for peer in &targets {
+            if self.peer_recently_seen_all_hashes(peer, tx_hashes) {
                 suppressed = suppressed.saturating_add(1);
             } else {
-                filtered.push(peer);
+                filtered.push(peer.clone());
             }
+        }
+        if filtered.is_empty() && suppressed > 0 {
+            return (targets, suppressed);
         }
         (filtered, suppressed)
     }
@@ -3832,7 +3835,11 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             vec![peer.clone()],
             std::slice::from_ref(&tx_hash),
         );
-        assert!(targets.is_empty());
+        assert_eq!(
+            targets,
+            vec![peer.clone()],
+            "all-suppressed target sets must still be retried for liveness"
+        );
         assert_eq!(suppressed, 1);
 
         for _ in 0..GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS {

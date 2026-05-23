@@ -392,8 +392,7 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
             method,
             target,
             bodyFields,
-            canonicalAuth.accountId(),
-            canonicalAuth.privateKey(),
+            canonicalAuth,
             timestampMs,
             nonce);
     return JsonEncoder.encode(signed).getBytes(StandardCharsets.UTF_8);

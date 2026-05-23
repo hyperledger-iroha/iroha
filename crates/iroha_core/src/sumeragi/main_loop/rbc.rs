@@ -5599,7 +5599,7 @@ impl Actor {
         Ok(())
     }
 
-    fn evaluate_rbc_deliver_outcome(
+    pub(super) fn evaluate_rbc_deliver_outcome(
         deliver_quorum: usize,
         session: &mut RbcSession,
         key: SessionKey,
@@ -5648,13 +5648,11 @@ impl Actor {
                     .as_deref()
                     .is_some_and(|sig| sig != deliver.signature.as_slice())
             {
-                session.invalid = true;
-                invalidate = true;
-                warn!(
+                debug!(
                     height = key.1,
                     view = key.2,
                     sender = deliver.sender,
-                    "conflicting RBC DELIVER signature detected; marking session invalid"
+                    "ignoring RBC DELIVER with refreshed READY bundle after session delivery"
                 );
             }
             return (

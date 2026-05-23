@@ -5607,29 +5607,30 @@ impl Actor {
     fn cached_new_view_qc_extends_committed_frontier(
         &self,
         proposal_height: u64,
+        min_new_view: u64,
         proposal_view: u64,
         highest_qc: crate::sumeragi::consensus::QcHeaderRef,
-    ) -> Option<crate::sumeragi::consensus::Qc> {
+    ) -> bool {
         if highest_qc.phase != crate::sumeragi::consensus::Phase::Commit {
-            return None;
+            return false;
         }
         if highest_qc.height.saturating_add(1) != proposal_height {
-            return None;
+            return false;
         }
-        if self.latest_committed_qc()? != highest_qc {
-            return None;
+        if self.latest_committed_qc() != Some(highest_qc) {
+            return false;
         }
 
         let proposal_epoch = self.epoch_for_height(proposal_height);
-        let qc = cached_qc_for(
-            &self.qc_cache,
-            crate::sumeragi::consensus::Phase::NewView,
-            highest_qc.subject_block_hash,
-            proposal_height,
-            proposal_view,
-            proposal_epoch,
-        )?;
-        (qc.highest_qc == Some(highest_qc)).then_some(qc)
+        self.qc_cache.values().any(|qc| {
+            qc.phase == crate::sumeragi::consensus::Phase::NewView
+                && qc.subject_block_hash == highest_qc.subject_block_hash
+                && qc.height == proposal_height
+                && qc.epoch == proposal_epoch
+                && qc.view >= min_new_view
+                && qc.view <= proposal_view
+                && qc.highest_qc == Some(highest_qc)
+        })
     }
 
     fn new_view_qc_supersedes_same_height_vote_conflict(
@@ -5659,10 +5660,10 @@ impl Actor {
         }
         self.cached_new_view_qc_extends_committed_frontier(
             proposal_height,
+            conflicting_view.saturating_add(1),
             proposal_view,
             highest_qc,
         )
-        .is_some()
     }
 
     fn new_view_qc_supersedes_same_height_vote_lock(
@@ -23204,6 +23205,8 @@ impl Actor {
             | BlockMessage::BlockSyncUpdate(_)
             | BlockMessage::BlockBodyResponse(_)
             | BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Response(_))
+            | BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Proof(_))
+            | BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Body(_))
             | BlockMessage::FetchPendingBlock(_)
             | BlockMessage::Proposal(_)
             | BlockMessage::RbcChunk(_)
@@ -23558,6 +23561,10 @@ impl Actor {
                 super::message::CertifiedBlockFetch::Response(response) => {
                     Some((response.height, response.view))
                 }
+                super::message::CertifiedBlockFetch::Proof(proof) => {
+                    Some((proof.height, proof.view))
+                }
+                super::message::CertifiedBlockFetch::Body(body) => Some((body.height, body.view)),
             },
             BlockMessage::ExecWitness(witness) => Some((witness.height, witness.view)),
             BlockMessage::RbcInitRequest(request) => Some((request.height, request.view)),
@@ -23587,6 +23594,8 @@ impl Actor {
             BlockMessage::CertifiedBlockFetch(fetch) => match fetch {
                 super::message::CertifiedBlockFetch::Request(_) => "CertifiedBlockFetchRequest",
                 super::message::CertifiedBlockFetch::Response(_) => "CertifiedBlockFetchResponse",
+                super::message::CertifiedBlockFetch::Proof(_) => "CertifiedBlockFetchProof",
+                super::message::CertifiedBlockFetch::Body(_) => "CertifiedBlockFetchBody",
             },
             BlockMessage::ConsensusParams(_) => "ConsensusParams",
             BlockMessage::QcVote(vote) => match vote.phase {
@@ -38769,11 +38778,11 @@ pub(super) fn commit_quorum_timeout_from_durations(
         return block_time.max(Duration::from_millis(1));
     }
 
-    // DA runs need additional slack for payload dissemination. For non-DA we follow
-    // effective block/commit timing directly; fixed 2s floors cap throughput in
-    // fast local/soak pipelines and mask real pacing behavior.
+    // DA runs need additional slack for payload dissemination. The window includes
+    // the proposal cadence plus three commit intervals so slower hosts can finish
+    // availability and commit-QC exchange before rotating the view.
     let base = if da_enabled {
-        block_time.max(saturating_mul_duration(commit_time, 2))
+        block_time.saturating_add(saturating_mul_duration(commit_time, 3))
     } else {
         block_time.max(commit_time)
     };
@@ -41460,9 +41469,8 @@ impl RbcSession {
             {
                 return false;
             }
-            if self.deliver_sender == Some(sender) {
-                self.invalid = true;
-            }
+            // DELIVER signatures include the bundled READY set, so a signer can
+            // refresh the bundle without changing the delivered chunk root.
             return false;
         }
         self.delivered = true;

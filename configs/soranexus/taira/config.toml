@@ -90,6 +90,15 @@ known_capabilities = ["torii_gateway", "chunk_range_fetch"]
 [sorafs.discovery.admission]
 envelopes_dir = "configs/soranexus/taira/sorafs_admission"
 
+[sorafs.discovery.publish]
+gateway_base_url = "https://taira.sora.org"
+pin_torii_urls = [
+  "https://taira-validator-1.sora.org",
+  "https://taira-validator-2.sora.org",
+  "https://taira-validator-3.sora.org",
+  "https://taira-validator-4.sora.org",
+]
+
 [sorafs.gateway.denylist]
 catalog_path = "configs/soranexus/taira/sorafs_gateway_denylist.catalog.json"
 opt_out_packs = []
@@ -255,11 +264,13 @@ description = "Single-lane data space"
 [[nexus.dataspace_catalog]]
 alias = "governance"
 id = 1
+manifest_hash = "0100000000000000000000000000000000000000000000000000000000000000"
 description = "Governance proposals & manifests"
 
 [[nexus.dataspace_catalog]]
 alias = "zk"
 id = 2
+manifest_hash = "0200000000000000000000000000000000000000000000000000000000000000"
 description = "Zero-knowledge proofs and attachments"
 
 [nexus.governance]
@@ -344,6 +355,11 @@ review_panel_size = 13
 policy_jury_size = 25
 oversight_committee_size = 7
 fma_committee_size = 5
+
+[gov.sorafs_pin_policy]
+# Public SoraFS pinning is permissionless and fee-gated; do not require
+# governance/council signatures on user-submitted manifests.
+require_council_signatures = false
 
 [gov.sorafs_telemetry]
 submitters = ["testuﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T"]

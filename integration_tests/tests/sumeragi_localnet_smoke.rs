@@ -129,14 +129,14 @@ const THROUGHPUT_NPOS_SLO_BACKPRESSURE_RATE_MAX: f64 = 3.0;
 const THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX: f64 = 0.3;
 const THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV: &str = "IROHA_THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_SECS";
 const REALISTIC_30TPS_PEERS: usize = 4;
-const REALISTIC_30TPS_DURATION_SECS: u64 = 1_200;
+const REALISTIC_30TPS_DURATION_SECS: u64 = 7_200;
 // Default to the transaction-capacity floor; env can raise this for stricter
 // block-cadence checks.
 const REALISTIC_30TPS_TARGET_BLOCKS: u64 = 0;
 const REALISTIC_30TPS_TARGET_TPS: u64 = 30;
-const REALISTIC_30TPS_BLOCK_TIME_MS: u64 = 500;
+const REALISTIC_30TPS_BLOCK_TIME_MS: u64 = 400;
 const REALISTIC_30TPS_COMMIT_TIME_MS: u64 = 500;
-const REALISTIC_30TPS_BLOCK_MAX_TXS: u64 = 512;
+const REALISTIC_30TPS_BLOCK_MAX_TXS: u64 = 128;
 const REALISTIC_30TPS_SUBMIT_PARALLELISM: usize = 16;
 const REALISTIC_30TPS_QUEUE_SOFT_LIMIT: u64 = 3_000;
 const REALISTIC_30TPS_STALL_THRESHOLD: Duration = Duration::from_secs(20);
@@ -845,6 +845,15 @@ fn expected_realistic_ram_lfe_email_claim_counts(
     counts
 }
 
+fn realistic_load_metadata(index: u64) -> Metadata {
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        Name::from_str("tx_sequence").expect("tx_sequence metadata key"),
+        index,
+    );
+    metadata
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn submit_ram_lfe_emails_paced(
     tx_count: u64,
@@ -892,12 +901,13 @@ async fn submit_ram_lfe_emails_paced(
             );
             submit_account
                 .client
-                .submit::<InstructionBox>(
+                .submit_with_metadata::<InstructionBox>(
                     ClaimIdentifier {
                         account: submit_account.id,
                         receipt,
                     }
                     .into(),
+                    realistic_load_metadata(index),
                 )
                 .wrap_err_with(|| {
                     format!(
@@ -964,9 +974,10 @@ async fn submit_transfers_paced(
             let source_asset_id = AssetId::new(asset_definition_id, source_account.id.clone());
             source_account
                 .client
-                .submit::<InstructionBox>(
+                .submit_with_metadata::<InstructionBox>(
                     Transfer::asset_numeric(source_asset_id, Numeric::from(amount), destination_id)
                         .into(),
+                    realistic_load_metadata(index),
                 )
                 .wrap_err_with(|| {
                     format!(
@@ -1051,23 +1062,23 @@ fn verify_realistic_ram_lfe_email_claim_counts(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "long-running 4-peer localnet regression (30 TPS for 20 minutes)"]
+#[ignore = "long-running 4-peer localnet regression (30 TPS for 2 hours)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
-async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
+async fn permissioned_localnet_realistic_30tps_2h() -> Result<()> {
     run_realistic_30tps_localnet(
         Realistic30TpsConsensusMode::Permissioned,
-        stringify!(permissioned_localnet_realistic_30tps_20min),
+        stringify!(permissioned_localnet_realistic_30tps_2h),
     )
     .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "long-running 4-peer localnet regression (30 TPS for 20 minutes, NPoS)"]
+#[ignore = "long-running 4-peer localnet regression (30 TPS for 2 hours, NPoS)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
-async fn npos_localnet_realistic_30tps_20min() -> Result<()> {
+async fn npos_localnet_realistic_30tps_2h() -> Result<()> {
     run_realistic_30tps_localnet(
         Realistic30TpsConsensusMode::Npos,
-        stringify!(npos_localnet_realistic_30tps_20min),
+        stringify!(npos_localnet_realistic_30tps_2h),
     )
     .await
 }
@@ -1128,6 +1139,8 @@ async fn run_realistic_30tps_localnet(
         REALISTIC_30TPS_STALL_THRESHOLD.as_secs(),
     );
     let stall_threshold = Duration::from_secs(stall_secs.max(1));
+    let max_avg_secs_per_block =
+        env_or_default_f64("IROHA_REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK", 3.0);
     let submit_parallelism = env_or_default_usize(
         "IROHA_REALISTIC_30TPS_PARALLELISM",
         REALISTIC_30TPS_SUBMIT_PARALLELISM,
@@ -1230,11 +1243,14 @@ async fn run_realistic_30tps_localnet(
                     ["sumeragi", "consensus_mode"],
                     consensus_mode.as_config_str(),
                 )
-                .write(["network", "transaction_gossip_period_ms"], 200_i64)
-                .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
+                .write(["logger", "level"], "WARN")
+                .write(["network", "transaction_gossip_period_ms"], 20_i64)
+                .write(["network", "transaction_gossip_size"], 64_i64)
+                .write(["network", "max_frame_bytes_tx_gossip"], 65_536_i64)
+                .write(["network", "transaction_gossip_public_target_cap"], 8_i64)
                 .write(
                     ["network", "transaction_gossip_restricted_target_cap"],
-                    3_i64,
+                    8_i64,
                 )
                 .write(
                     ["network", "transaction_gossip_restricted_fallback"],
@@ -1248,6 +1264,41 @@ async fn run_realistic_30tps_localnet(
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
                 .write(["network", "disconnect_on_post_overflow"], false)
+                .write(
+                    ["sumeragi", "advanced", "worker", "parallel_ingress"],
+                    false,
+                )
+                .write(
+                    [
+                        "sumeragi",
+                        "advanced",
+                        "worker",
+                        "vote_burst_cap_with_payload_backlog",
+                    ],
+                    1_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
+                    2_i64,
+                )
+                .write(
+                    [
+                        "sumeragi",
+                        "advanced",
+                        "da",
+                        "availability_timeout_multiplier",
+                    ],
+                    2_i64,
+                )
+                .write(
+                    [
+                        "sumeragi",
+                        "advanced",
+                        "da",
+                        "availability_timeout_floor_ms",
+                    ],
+                    100_i64,
+                )
                 .write(
                     ["sumeragi", "block", "fast_finality_max_transactions"],
                     i64::try_from(block_max_txs).expect("realistic block max txs fits i64"),
@@ -1519,7 +1570,7 @@ async fn run_realistic_30tps_localnet(
             };
 
             eprintln!(
-                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, ram_lfe_email_accounts={}, ram_lfe_email_policy={}, ram_lfe_program={}, submit_parallelism={}, queue_soft_limit={}, baseline_non_empty={}, baseline_approved={}",
+                "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, ram_lfe_email_accounts={}, ram_lfe_email_policy={}, ram_lfe_program={}, submit_parallelism={}, queue_soft_limit={}, max_avg_secs_per_block={max_avg_secs_per_block:.3}, baseline_non_empty={}, baseline_approved={}",
                 network.peers().len(),
                 target_tps,
                 duration_secs,
@@ -1874,8 +1925,8 @@ async fn run_realistic_30tps_localnet(
                 "expected at least {target_blocks} final non-empty blocks for {duration_secs}s at {target_tps} TPS; produced {produced_blocks} (baseline={baseline_non_empty}, load_end_min_non_empty={load_end_min_non_empty}, final_min_non_empty={min_non_empty})"
             );
             ensure!(
-                load_avg_secs_per_block <= 3.0,
-                "average block interval during load exceeded 3s: load_avg_secs_per_block={load_avg_secs_per_block:.3}, load_end_produced_blocks={load_end_produced_blocks}, load_elapsed={load_end_elapsed:?}"
+                load_avg_secs_per_block <= max_avg_secs_per_block,
+                "average block interval during load exceeded {max_avg_secs_per_block:.3}s: load_avg_secs_per_block={load_avg_secs_per_block:.3}, load_end_produced_blocks={load_end_produced_blocks}, load_elapsed={load_end_elapsed:?}"
             );
             ensure!(
                 min_approved >= target_approved,
@@ -4824,6 +4875,26 @@ async fn realistic_30tps_load_kind_parses_email_mode_and_defaults_to_transfer() 
 }
 
 #[test]
+fn realistic_load_metadata_stamps_unique_sequence() {
+    let sequence_key = Name::from_str("tx_sequence").expect("tx_sequence metadata key");
+    let first = realistic_load_metadata(7);
+    let second = realistic_load_metadata(8);
+
+    assert_eq!(
+        first.get(&sequence_key).map(ToString::to_string).as_deref(),
+        Some("7")
+    );
+    assert_eq!(
+        second
+            .get(&sequence_key)
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("8")
+    );
+    assert_ne!(first, second);
+}
+
+#[test]
 fn realistic_npos_fee_funding_instruction_chunks_target_fee_asset() {
     let accounts = realistic_transfer_accounts(3, 7);
     let chunks = realistic_npos_fee_funding_instruction_chunks(&accounts);
@@ -5953,6 +6024,8 @@ fn write_throughput_artifacts(
 
     let metrics_dir = run_dir.join("metrics");
     fs::create_dir_all(&metrics_dir).wrap_err("create metrics dir")?;
+    let logs_dir = run_dir.join("logs");
+    fs::create_dir_all(&logs_dir).wrap_err("create logs dir")?;
 
     for snapshot in &artifacts.warmup_metrics {
         let path = metrics_dir.join(format!("{}-warmup.prom", snapshot.peer));
@@ -6287,18 +6360,30 @@ fn write_throughput_artifacts(
         .iter()
         .map(|peer| {
             let mut map = Map::new();
+            let copied_stdout = copy_peer_log_into_artifacts(&logs_dir, peer, "stdout");
+            let copied_stderr = copy_peer_log_into_artifacts(&logs_dir, peer, "stderr");
             map.insert("index".to_string(), Value::from(peer.index));
             map.insert("mnemonic".to_string(), Value::String(peer.mnemonic.clone()));
-            let stdout = peer
-                .stdout_log
-                .as_ref()
-                .map_or(Value::Null, |path| Value::String(path.clone()));
-            let stderr = peer
-                .stderr_log
-                .as_ref()
-                .map_or(Value::Null, |path| Value::String(path.clone()));
-            map.insert("stdout_log".to_string(), stdout);
-            map.insert("stderr_log".to_string(), stderr);
+            map.insert(
+                "stdout_log".to_string(),
+                copied_stdout.map_or(Value::Null, Value::String),
+            );
+            map.insert(
+                "stderr_log".to_string(),
+                copied_stderr.map_or(Value::Null, Value::String),
+            );
+            map.insert(
+                "stdout_log_original".to_string(),
+                peer.stdout_log
+                    .as_ref()
+                    .map_or(Value::Null, |path| Value::String(path.clone())),
+            );
+            map.insert(
+                "stderr_log_original".to_string(),
+                peer.stderr_log
+                    .as_ref()
+                    .map_or(Value::Null, |path| Value::String(path.clone())),
+            );
             Value::Object(map)
         })
         .collect();
@@ -6320,6 +6405,51 @@ fn write_throughput_artifacts(
         .wrap_err_with(|| format!("write {}", summary_path.display()))?;
 
     Ok(run_dir)
+}
+
+fn copy_peer_log_into_artifacts(
+    logs_dir: &Path,
+    peer: &PeerLogInfo,
+    stream: &'static str,
+) -> Option<String> {
+    let source = match stream {
+        "stdout" => peer.stdout_log.as_ref(),
+        "stderr" => peer.stderr_log.as_ref(),
+        _ => None,
+    }?;
+    let source_path = Path::new(source);
+    if !source_path.is_file() {
+        return Some(source.clone());
+    }
+    let file_name = peer_log_artifact_file_name(peer.index, &peer.mnemonic, stream);
+    let dest = logs_dir.join(file_name);
+    if let Err(err) = fs::copy(source_path, &dest) {
+        eprintln!(
+            "failed to copy peer {stream} log for {} from {} to {}: {err:?}",
+            peer.mnemonic,
+            source_path.display(),
+            dest.display()
+        );
+        return Some(source.clone());
+    }
+    Some(dest.to_string_lossy().to_string())
+}
+
+fn peer_log_artifact_file_name(index: u64, mnemonic: &str, stream: &str) -> String {
+    let mut sanitized: String = mnemonic
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        sanitized.push_str("peer");
+    }
+    format!("{index}-{sanitized}-{stream}.log")
 }
 
 #[derive(Clone, Debug, Default)]

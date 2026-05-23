@@ -3368,13 +3368,12 @@ impl Actor {
                 highest_qc.phase == Phase::Commit
                     && highest_qc.height.saturating_add(1) == vote.height
                     && self.latest_committed_qc() == Some(highest_qc)
-                    && self
-                        .cached_new_view_qc_extends_committed_frontier(
-                            vote.height,
-                            vote.view,
-                            highest_qc,
-                        )
-                        .is_none()
+                    && !self.cached_new_view_qc_extends_committed_frontier(
+                        vote.height,
+                        existing.view.saturating_add(1),
+                        vote.view,
+                        highest_qc,
+                    )
             }
             None => true,
         }

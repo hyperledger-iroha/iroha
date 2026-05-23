@@ -11728,6 +11728,12 @@ impl SumeragiHandle {
                         message::CertifiedBlockFetch::Response(response) => {
                             (response.height, response.view, response.block.hash())
                         }
+                        message::CertifiedBlockFetch::Proof(proof) => {
+                            (proof.height, proof.view, proof.block_hash)
+                        }
+                        message::CertifiedBlockFetch::Body(body) => {
+                            (body.height, body.view, body.block.hash())
+                        }
                     };
                     iroha_logger::warn!(
                         height,

@@ -14,8 +14,11 @@ use iroha_data_model::consensus::{
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
 
-const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 4_096;
+const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 128;
 const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 4;
+// Recovery views prioritize chain movement over queue draining; large recovery
+// batches can outlive the view that is supposed to repair the slot.
+const RECOVERY_PROPOSAL_MAX_TRANSACTIONS: usize = 32;
 
 pub(super) const fn should_seed_frontier_backup_transport(
     da_enabled: bool,
@@ -865,6 +868,22 @@ impl Actor {
         (max_tx_target, max_in_block, fast_tx_capped)
     }
 
+    pub(super) fn cap_tx_budget_for_recovery_view(
+        queue_len: usize,
+        max_tx_target: usize,
+        view: u64,
+    ) -> (usize, NonZeroUsize, bool) {
+        let recovery_capped = view > 0 && max_tx_target > RECOVERY_PROPOSAL_MAX_TRANSACTIONS;
+        let target = if recovery_capped {
+            RECOVERY_PROPOSAL_MAX_TRANSACTIONS
+        } else {
+            max_tx_target
+        };
+        let max_in_block =
+            NonZeroUsize::new(queue_len.min(target).max(1)).expect("non-zero by construction");
+        (target, max_in_block, recovery_capped)
+    }
+
     pub(super) fn fast_finality_cap_applies(
         commit_time_ms: u64,
         effective_commit_time_ms: u64,
@@ -964,6 +983,8 @@ impl Actor {
         let mut ivm_transactions_deferred = 0usize;
         let scan_budget = scan_budget.max(1);
         let committed_nexus = state.nexus_snapshot();
+        let multilane_lookahead =
+            committed_nexus.enabled && committed_nexus.uses_multilane_catalogs();
         if self.queue.reconfigure_nexus_with_state_if_needed(
             &committed_nexus,
             state,
@@ -1001,7 +1022,12 @@ impl Actor {
                     break;
                 }
             }
-            let fetch_cap = NonZeroUsize::new(remaining_budget).expect("non-zero by construction");
+            let fetch_cap = if multilane_lookahead {
+                remaining_budget
+            } else {
+                remaining_budget.min(remaining_slots)
+            };
+            let fetch_cap = NonZeroUsize::new(fetch_cap).expect("non-zero by construction");
             let mut fetched = Vec::new();
             self.queue
                 .get_transactions_for_block_with_state(state, fetch_cap, &mut fetched);
@@ -2244,8 +2270,10 @@ impl Actor {
             return Ok(false);
         }
 
+        let preflight_elapsed_ms = now.elapsed().as_millis();
         let queue_len = self.queue.queued_len();
         let mut tx_guards = Vec::new();
+        let tx_select_started_at = Instant::now();
         let (
             _block_digest,
             conf_features,
@@ -2308,14 +2336,17 @@ impl Actor {
                         digest,
                     )
                 };
-            let (max_tx_target, max_in_block, fast_tx_capped) = Self::max_tx_budget_for_commit_time(
-                queue_len,
-                block_max_param.get(),
-                self.config.block.max_transactions,
-                self.config.block.fast_finality_max_transactions,
-                commit_time_ms,
-                effective_commit_time_ms,
-            );
+            let (max_tx_target, _max_in_block, fast_tx_capped) =
+                Self::max_tx_budget_for_commit_time(
+                    queue_len,
+                    block_max_param.get(),
+                    self.config.block.max_transactions,
+                    self.config.block.fast_finality_max_transactions,
+                    commit_time_ms,
+                    effective_commit_time_ms,
+                );
+            let (max_tx_target, max_in_block, recovery_tx_capped) =
+                Self::cap_tx_budget_for_recovery_view(queue_len, max_tx_target, view);
             let fast_gas_limit_per_block = self.config.block.fast_gas_limit_per_block;
             let proposal_gas_limit = Self::cap_gas_limit_for_fast_commit(
                 base_gas_limit,
@@ -2348,6 +2379,7 @@ impl Actor {
                 proposal_gas_limit = proposal_gas_limit.map(NonZeroU64::get),
                 fast_gas_capped,
                 fast_tx_capped,
+                recovery_tx_capped,
                 "proposal assembly budget"
             );
             // Bound queue scanning to keep proposal assembly from stalling under sustained load.
@@ -2393,7 +2425,9 @@ impl Actor {
                 deferred_accumulator,
             )
         };
+        let tx_select_ms = tx_select_started_at.elapsed().as_millis();
 
+        let tx_prepare_started_at = Instant::now();
         let (
             filtered_guards,
             filtered_transactions,
@@ -2573,7 +2607,9 @@ impl Actor {
             &mut routing_plan_batch,
             &mut tx_sizes,
         );
+        let tx_prepare_ms = tx_prepare_started_at.elapsed().as_millis();
 
+        let native_precheck_started_at = Instant::now();
         if let Err(reason) =
             self.native_amx_receipts_for_batch(&tx_batch, &routing_plan_batch, proposal_height)
         {
@@ -2604,6 +2640,7 @@ impl Actor {
             );
             return Ok(false);
         }
+        let native_precheck_ms = native_precheck_started_at.elapsed().as_millis();
 
         if tx_batch.is_empty() {
             tx_guards.clear();
@@ -2646,6 +2683,7 @@ impl Actor {
                 .cloned()
                 .zip(routing_plan_batch.iter().cloned())
                 .collect();
+        let previous_roster_started_at = Instant::now();
         let previous_roster_evidence = prev_block.as_deref().and_then(|parent| {
             previous_roster_evidence_for_parent(
                 self.state.as_ref(),
@@ -2655,6 +2693,7 @@ impl Actor {
                 parent,
             )
         });
+        let previous_roster_ms = previous_roster_started_at.elapsed().as_millis();
         let mut removed_for_chunk_cap: Vec<(
             AcceptedTransaction<'static>,
             crate::queue::RoutingPlan,
@@ -2663,6 +2702,11 @@ impl Actor {
             AcceptedTransaction<'static>,
             crate::queue::RoutingPlan,
         )> = Vec::new();
+        let mut last_sidecar_ms = 0_u128;
+        let mut last_block_build_ms = 0_u128;
+        let mut last_payload_encode_ms = 0_u128;
+        let mut last_frontier_wire_ms = 0_u128;
+        let block_loop_started_at = Instant::now();
         let assembly_result: Result<()> = (|| {
             if tx_sizes.len() < tx_batch.len() {
                 for tx in tx_batch.iter().skip(tx_sizes.len()) {
@@ -2687,6 +2731,7 @@ impl Actor {
                 block_hash,
                 block_created_frame_len,
             ) = loop {
+                let sidecar_started_at = Instant::now();
                 let nexus = self.state.nexus_snapshot();
                 let nexus_enabled = nexus.enabled;
                 let lane_config = nexus.lane_config.clone();
@@ -2985,7 +3030,9 @@ impl Actor {
                         BlockExecutionContextBundle::new(execution_context),
                     ));
                 }
+                last_sidecar_ms = sidecar_started_at.elapsed().as_millis();
 
+                let block_build_started_at = Instant::now();
                 let new_block = builder
                     .with_confidential_features(conf_features)
                     .sign_with_index(
@@ -3003,7 +3050,10 @@ impl Actor {
                     );
                 }
                 let block_hash = signed_block.hash();
+                last_block_build_ms = block_build_started_at.elapsed().as_millis();
+                let payload_encode_started_at = Instant::now();
                 let payload_bytes = block_payload_bytes(&signed_block);
+                last_payload_encode_ms = payload_encode_started_at.elapsed().as_millis();
                 if da_enabled {
                     let total_chunks =
                         rbc::chunk_count(payload_bytes.len(), self.config.rbc.chunk_max_bytes);
@@ -3035,6 +3085,7 @@ impl Actor {
                         }
                     }
                 }
+                let frontier_wire_started_at = Instant::now();
                 let payload_hash = Hash::new(&payload_bytes);
                 let proposal = Self::build_consensus_proposal(
                     &signed_block,
@@ -3119,6 +3170,7 @@ impl Actor {
                     }
                     continue;
                 }
+                last_frontier_wire_ms = frontier_wire_started_at.elapsed().as_millis();
 
                 break (
                     signed_block,
@@ -3133,6 +3185,7 @@ impl Actor {
                     frame_len,
                 );
             };
+            let block_loop_ms = block_loop_started_at.elapsed().as_millis();
 
             let elapsed = now.elapsed();
             let base_stale_window = self
@@ -3159,6 +3212,16 @@ impl Actor {
                     stale_window_ms = stale_window.as_millis(),
                     tx_count = transactions_for_plan.len(),
                     block_hash = %block_hash,
+                    preflight_elapsed_ms,
+                    tx_select_ms,
+                    tx_prepare_ms,
+                    native_precheck_ms,
+                    previous_roster_ms,
+                    block_loop_ms,
+                    sidecar_ms = last_sidecar_ms,
+                    block_build_ms = last_block_build_ms,
+                    payload_encode_ms = last_payload_encode_ms,
+                    frontier_wire_ms = last_frontier_wire_ms,
                     "aborting stale proposal assembly before broadcast"
                 );
                 return Err(eyre!(
@@ -3563,6 +3626,15 @@ impl Actor {
     pub(super) fn proposal_backpressure_at(&mut self, now: Instant) -> ProposalBackpressure {
         self.subsystems.propose.backpressure_gate.refresh();
         let mut queue_state = self.subsystems.propose.backpressure_gate.state();
+        let queue_pressure = self.queue.pressure_snapshot();
+        if queue_pressure.saturated_by_age && !queue_pressure.saturated_by_count {
+            // Age-only pressure means transactions have waited too long; consensus should keep
+            // proposing instead of treating that condition as a reason to wait even longer.
+            queue_state = BackpressureState::Healthy {
+                queued: queue_state.queued(),
+                capacity: queue_state.capacity(),
+            };
+        }
         let blocking_pending = self.blocking_pending_blocks_len_with_progress(now);
         let queue_depths = status::worker_queue_depth_snapshot();
         let consensus_queue_backpressure = consensus_queue_backpressure(
@@ -4627,7 +4699,11 @@ impl Actor {
                 .filter(|pending| {
                     !pending.aborted && pending.height == height && pending.view == view_idx
                 })
-                .map(|pending| pending.progress_age(now))
+                .map(|pending| {
+                    pending
+                        .progress_age(now)
+                        .max(now.saturating_duration_since(pending.inserted_at))
+                })
                 .max();
             let cached_pending_present = cached_wait_age.is_some();
             if !cached_pending_present

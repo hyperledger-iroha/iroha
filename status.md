@@ -2,6 +2,841 @@
 
 Last updated: 2026-05-23
 
+## 2026-05-23 Sumeragi native AMX journal replay formal slice
+
+- Added `docs/formal/sumeragi/SumeragiNativeAmxJournalReplay.tla`, a bounded
+  TLA+ model for native AMX queue-plan journal replay across restart.
+- The model checks that replay preserves full native AMX routing plans,
+  participant ordering/deduplication, plan digests, entrypoints, and gossip
+  payloads; exact digest tombstones cannot remove a re-admitted plan with the
+  same transaction hash; unsupported record versions are ignored; repeated puts
+  keep the last record; compaction rewrites exactly live records; and torn
+  length/payload tails preserve the last complete record.
+- Formal CI now runs `native-amx-journal-fast` plus expected-failure mutations
+  for dropped native plans, native-to-single collapse, single-to-native replay,
+  participant loss/reordering/dedup failure, digest/entrypoint/gossip payload
+  corruption, hash-only tombstones, ignored exact tombstones, unsupported-version
+  replay, first-put-wins replacement, compaction live/removed record mistakes,
+  torn-tail retention, and complete-prefix loss during tail repair.
+- Focused validation is pending in this worktree.
+
+## 2026-05-23 Sumeragi native AMX attestation gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiNativeAmxAttestationGate.tla`, a bounded
+  TLA+ model for native AMX proposer-side prepare/commit attestation gating.
+- The model checks that non-AMX plans emit no receipt, empty BLS-capable rosters
+  fail closed, prepare quorum is required before commit requests, every
+  participant leg needs both prepare and commit QCs before receipt sealing,
+  invalid duplicate/wrong-body/outsider vote sets cannot build QCs, vote
+  projection is deterministic in validator-set order, and retried bodies plus
+  distinct participant legs stay separated in the vote cache.
+- Formal CI now runs `native-amx-attestation-fast` plus expected-failure
+  mutations for sealing non-AMX or empty-roster receipts, skipped prepare/commit
+  requests, commit-before-prepare requests, redundant prepare retries,
+  prepare-only/commit-only/partial multi-leg receipts, duplicate or malformed
+  vote acceptance, outsider signer acceptance, arrival-order bitmap projection,
+  retried-body cache collapse, and participant-leg cache collapse.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-attestation-fast`
+  - all 17 `native-amx-attestation-bug-*` expected-failure modes
+  - `cargo test -p iroha_core --lib native_amx -- --nocapture`
+  - `cargo fmt --all --check`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - targeted trailing-whitespace scan and `git diff --check`
+
+## 2026-05-23 Sumeragi block-sync recovery gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiBlockSyncRecoveryGate.tla`, a bounded
+  TLA+ model for BlockSyncUpdate recovery admission into the BlockCreated owner
+  path.
+- The model checks that stale-view updates require a missing-block request or
+  commit evidence, payload-only repair cannot steal authoritative owner state or
+  clear stale commit inflight, certified commit-QC repair revives aborted
+  placeholders and preserves QC evidence, sparse next-height and vote-only
+  frontier updates track missing commit-QC repair, and unvalidated commit-QC
+  sidecars cannot promote lock/highest-QC state.
+- Formal CI now runs `block-sync-recovery-fast` plus expected-failure mutations
+  for stale-without-request acceptance, requested-stale drop, future
+  unrequested acceptance, payload-only aborted revival, commit-QC aborted
+  retention, skipped vote/certified ownership, payload-only owner steal, raw
+  conflict activation, dropped commit-QC marker, skipped missing-QC tracking,
+  stale request retention, stale inflight clearing/retention mistakes, and
+  unvalidated-QC promotion.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-recovery-fast`
+  - all 15 `block-sync-recovery-bug-*` expected-failure modes
+  - `cargo test -p iroha_core --lib block_sync_update_accepts_stale_view_when_missing_block_requested -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_drops_stale_view_without_missing_request -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_keeps_aborted_next_height_payload_sparse_without_commit_evidence -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_revives_aborted_next_height_payload_with_commit_qc -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_tracks_missing_commit_qc_for_next_height_sparse_payload_recovery -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_tracks_missing_qc_for_unknown_frontier_vote_only_update -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_commit_qc_bypasses_stale_commit_inflight_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_same_height_conflict_with_block_quorum_stays_passive_without_certified_evidence -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_drops_unrequested_future_height_beyond_active_frontier_lanes -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_does_not_advance_qc_for_unvalidated_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_payload_with_cached_commit_qc_supersedes_lock_conflicting_stale_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_accepts_stale_exact_frontier_payload_repair_with_da -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_accepts_stale_view_with_commit_votes -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_accepts_stale_view_with_commit_qc -- --nocapture`
+  - `cargo fmt --all --check`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - targeted trailing-whitespace scan and `git diff --check`
+
+## 2026-05-23 Sumeragi commit-evidence replay gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiCommitEvidenceReplayGate.tla`, a bounded
+  TLA+ model for known-block commit-evidence replay through
+  `maybe_replay_known_block_commit_evidence(...)` and
+  `PendingBlock::should_replay_commit_evidence(...)`.
+- The model checks that inactive pending blocks, cooldown hits, zero-evidence
+  states, and local-only targets cannot emit replay traffic; first evidence,
+  vote-count progress, commit-QC progress, view progress, and stalled positive
+  evidence after cooldown may replay; vote evidence uses `QcVote`, cached
+  commit-QC evidence uses `CommitCert`, payload fallback is never used, and
+  explicit targets exclude local/duplicate peers.
+- Formal CI now runs `commit-evidence-replay-fast` plus expected-failure
+  mutations for inactive replay, cooldown bypass, no-target replay, skipped
+  first/progress/stalled replay, zero-evidence replay, vote payload fallback,
+  commit-QC-as-votes replay, dropped commit-QC replay, local targets, and
+  duplicate targets.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-evidence-replay-fast`
+  - all 12 `commit-evidence-replay-bug-*` expected-failure modes
+  - `cargo test -p iroha_core --lib commit_evidence_replay_advances_on_progress -- --nocapture`
+  - `cargo test -p iroha_core --lib known_block_commit_evidence_replay_retries_stalled_commit_evidence_after_cooldown -- --nocapture`
+  - `cargo test -p iroha_core --lib known_block_commit_evidence_replay_skips_during_cooldown -- --nocapture`
+  - `cargo test -p iroha_core --lib known_block_commit_evidence_replay_returns_false_for_local_only_explicit_targets -- --nocapture`
+  - `cargo test -p iroha_core --lib known_block_commit_evidence_replay_deduplicates_explicit_vote_targets -- --nocapture`
+  - `cargo test -p iroha_core --lib known_block_commit_qc_replay_targets_snapshot_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib known_block_commit_qc_replay_returns_false_for_local_only_explicit_targets -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_evidence_replay_cooldown_does_not_fallback_to_payload -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - targeted trailing-whitespace scan and `git diff --check`
+
+## 2026-05-23 Sumeragi commit-pipeline recovery gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiCommitPipelineRecoveryGate.tla`, a
+  bounded TLA+ model for the adapter-side commit-pipeline recovery decision
+  after a pending block has local validation and commit-vote evidence.
+- The model checks that cached commit-vote quorums are aggregated into a local
+  commit QC before peer missing-QC recovery, the pending commit-QC marker is
+  preserved, peer recovery is armed only for stale valid local-vote candidates
+  that still extend the committed tip, and near-quorum vote rebroadcast uses
+  quorum missing-signer targets instead of collector subsets.
+- Formal CI now runs `commit-pipeline-recovery-fast` plus expected-failure
+  mutations for skipped local QC formation, recovery despite local quorum,
+  premature/no-local-vote/with-QC/missing-data/invalid/off-tip recovery,
+  skipped missing-QC request, dropped commit-QC marker, skipped quorum
+  retransmit, collector-target retransmit, empty-vote rebroadcast, and
+  post-QC rebroadcast.
+- Fixed a missing `background_log` test binding in the nearby quorum-reschedule
+  bridge test so `iroha_core --lib` bridge validation compiles.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-recovery-fast`
+  - all 14 `commit-pipeline-recovery-bug-*` expected-failure modes
+  - `cargo test -p iroha_core --lib commit_pipeline_rebroadcasts_cached_votes_to_quorum_retransmit_targets -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_pipeline_arms_missing_commit_qc_recovery_for_stalled_local_vote -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_pipeline_forms_local_commit_qc_before_missing_commit_qc_recovery -- --nocapture`
+  - `cargo test -p iroha_core --lib missing_quorum_stale_respects_timeout_and_vote_count -- --nocapture`
+  - `cargo test -p iroha_core --lib prevote_quorum_stale_requires_phase_and_timeout -- --nocapture`
+  - `cargo fmt --all --check`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - targeted trailing-whitespace scan and `git diff --check`
+
+## 2026-05-23 Sumeragi pure engine validation-result gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineValidationResultGate.tla`, a
+  bounded TLA+ model for the pure `ConsensusEngine` validation-result
+  boundary.
+- The model checks that only the exact current in-flight validation result can
+  mutate consensus state, successful validation clears ownership without
+  emitting outputs, invalid validation advances the view with the correct
+  `NewView` vote and `AdvanceView` output, and stale/superseded callbacks
+  cannot drop pending finality or overwrite committed state.
+- Formal CI now runs `engine-validation-result-fast` plus expected-failure
+  mutations for wrong round/hash, no in-flight owner, superseded callbacks,
+  current-result rejection, retained validation ownership, valid-result output,
+  missing invalid-result view/vote/output transitions, wrong post-invalid
+  phase, incorrect highest-QC subject/binding, dropped pending finality, and
+  committed-state overwrite.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-validation-result-fast`
+  - all 18 `engine-validation-result-bug-*` expected-failure modes
+  - `cargo test -p iroha_core --lib validation_result -- --nocapture`
+  - `cargo test -p iroha_core --lib invalid_validation_new_view_vote_uses_highest_qc_subject -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiEngineValidationResultGate.tla docs/formal/sumeragi/SumeragiEngineValidationResultGate_*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-23 Sumeragi pure engine NewView-QC gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineNewViewQcGate.tla`, a bounded
+  TLA+ model for the pure `ConsensusEngine` NewView certificate boundary.
+- The model checks that NewView QCs must match height, epoch, validator set,
+  and quorum policy, must carry a strictly newer view, must reject
+  incompatible carried highest-QC evidence, and must emit `AdvanceView`, return
+  to proposal phase, clear in-flight validation, preserve pending finality, and
+  update highest-QC state monotonically when accepted.
+- Formal CI now runs `engine-new-view-fast` plus expected-failure mutations for
+  wrong context, wrong quorum policy, stale/same view, incompatible highest-QC
+  evidence, safe-certificate rejection, missing `AdvanceView`, wrong phase,
+  retained validation state, dropped pending finality, lower-QC overwrite, and
+  missing improving highest-QC records.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-accept-wrong-context`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-accept-wrong-quorum`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-accept-stale-view`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-accept-incompatible-highest`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-reject-safe-no-highest`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-reject-safe-improving-highest`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-reject-safe-lower-highest`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-skip-advance-output`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-wrong-phase`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-keep-validation`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-drop-pending-finality`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-overwrite-lower-highest`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-bug-skip-highest-record`
+  - `cargo test -p iroha_core new_view -- --nocapture`
+  - `cargo test -p iroha_core --lib pending_finality_survives_timeout_and_view_change_noise -- --nocapture`
+  - `cargo test -p iroha_core --lib tick_binds_highest_qc_and_clears_inflight_validation -- --nocapture`
+  - `cargo test -p iroha_core --lib certificates_with_wrong_view_or_quorum_policy_are_ignored -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+
+## 2026-05-23 Sumeragi pure engine payload-availability gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEnginePayloadAvailabilityGate.tla`, a
+  bounded TLA+ model for the pure `ConsensusEngine` payload-availability
+  adapter boundary.
+- The model checks that payload availability is recorded but cannot finalize a
+  block without a pending commit QC, that only the exact pending
+  `BlockSubject` can commit, that payload-hash/parent/unrelated-block
+  mismatches preserve pending finality, and that exact payload recovery clears
+  pending finality and returns the engine to proposal phase.
+- Formal CI now runs `engine-payload-fast` plus expected-failure mutations for
+  missing availability records, payload-only commits, mismatched-payload
+  commits, dropped pending finality on mismatch, rejected matching payloads,
+  stale pending finality after commit, and wrong post-commit phase.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-bug-skip-available-record`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-bug-commit-without-pending`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-bug-commit-mismatched-payload`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-bug-drop-pending-on-mismatch`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-bug-reject-matching-payload`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-bug-keep-pending-after-commit`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-bug-wrong-phase-after-commit`
+  - `cargo test -p iroha_core --lib commit_qc_waits_for_payload_before_finality -- --nocapture`
+  - `cargo test -p iroha_core --lib pending_finality_ignores_payload_hash_mismatch_until_exact_payload_arrives -- --nocapture`
+  - `cargo test -p iroha_core --lib payload_availability_without_commit_qc_never_finalizes -- --nocapture`
+  - `cargo test -p iroha_core --lib pending_finality_rejects_payload_hash_and_subject_replays_without_dropping_qc -- --nocapture`
+  - `cargo test -p iroha_core --lib pending_commit_qc_replays_and_conflicts_do_not_refetch_payload -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+
+## 2026-05-23 Sumeragi pure engine committed-block gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineCommittedBlockGate.tla`, a
+  bounded TLA+ model for the pure `ConsensusEngine` committed-block
+  notification gate.
+- The model checks that fresh committed-block notifications record the height,
+  only fresh boundary reconfiguration notifications activate validator-set
+  changes, duplicate same-height notifications are idempotent, and conflicting
+  same-height notifications cannot overwrite committed state or activate a
+  validator set.
+- `ConsensusEngine::on_committed_block(...)` now returns early for any already
+  committed height, making duplicate reconfiguration notifications explicit
+  no-ops instead of re-emitting activation.
+- Formal CI now runs `engine-committed-block-fast` plus expected-failure
+  mutations for skipped fresh commit records, rejected boundary activation,
+  activation without a boundary, non-boundary activation, duplicate record,
+  duplicate activation, conflicting record, conflicting activation, and
+  conflicting overwrite.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-bug-skip-fresh-record`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-bug-reject-boundary-activation`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-bug-activate-without-boundary`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-bug-activate-non-boundary`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-bug-record-duplicate`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-bug-activate-duplicate`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-bug-record-conflict`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-bug-activate-conflict`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-bug-overwrite-conflict`
+  - `cargo test -p iroha_core --lib duplicate_committed_block_notification_does_not_reactivate_reconfiguration -- --nocapture`
+  - `cargo test -p iroha_core --lib committed_block_notifications_do_not_overwrite_conflicting_height -- --nocapture`
+  - `cargo test -p iroha_core --lib conflicting_committed_block_notification_cannot_activate_reconfiguration -- --nocapture`
+  - `cargo test -p iroha_core --lib reconfiguration_activates_only_after_old_set_finality -- --nocapture`
+  - `cargo test -p iroha_core --lib reconfiguration_with_non_boundary_activation_is_not_activated -- --nocapture`
+  - `cargo fmt -p iroha_core`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+
+## 2026-05-23 Sumeragi pure engine tick gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineTickGate.tla`, a bounded TLA+
+  model for the pure `ConsensusEngine` pacemaker tick gate.
+- The model checks that every tick advances the local view, emits both a
+  `NewView` vote and `AdvanceView` output, returns the engine to proposal
+  phase, clears in-flight proposal validation, preserves pending finality, and
+  binds highest-QC state into the `NewView` vote subject and highest-QC field
+  when present.
+- Formal CI now runs `engine-tick-fast` plus expected-failure mutations for
+  missing round advance, missing `NewView` vote, missing `AdvanceView` output,
+  wrong post-tick phase, retained validation state, dropped pending finality,
+  wrong highest/zero subject selection, omitted highest-QC binding, and
+  spurious highest-QC binding when no highest QC exists.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-bug-skip-round-advance`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-bug-skip-new-view-vote`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-bug-skip-advance-output`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-bug-wrong-phase`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-bug-keep-validation`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-bug-drop-pending-finality`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-bug-use-zero-despite-highest`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-bug-use-highest-without-highest`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-bug-omit-highest-binding`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-bug-bind-highest-without-highest`
+  - `cargo test -p iroha_core --lib tick_binds_highest_qc_and_clears_inflight_validation -- --nocapture`
+  - `cargo test -p iroha_core --lib timeout_clears_inflight_validation_before_late_failure_arrives -- --nocapture`
+  - `cargo test -p iroha_core --lib pending_finality_survives_timeout_and_view_change_noise -- --nocapture`
+  - `cargo test -p iroha_core --lib prepare_and_commit_qcs_from_previous_view_are_ignored_after_timeout -- --nocapture`
+  - `cargo test -p iroha_core --lib invalid_validation_new_view_vote_uses_highest_qc_subject -- --nocapture`
+  - `cargo fmt -p iroha_core`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+  - `rg -n "[[:blank:]]+$" docs/formal/sumeragi/SumeragiEngineTickGate.tla docs/formal/sumeragi/SumeragiEngineTickGate_*.cfg` (no matches)
+
+## 2026-05-23 Sumeragi pure engine proposal-ingress gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineProposalGate.tla`, a bounded
+  TLA+ model for the pure `ConsensusEngine` proposal-ingress gate.
+- The model checks that proposals are accepted only in proposal phase, must
+  match the current height, epoch, validator set, and view, must carry only
+  round-compatible highest-QC evidence, and must satisfy the current lock; safe
+  unlocked, locked-subject, and strictly-higher-QC unlock cases remain live.
+- Accepted proposals must request validation, sign a prepare vote, and enter
+  prepare phase; ignored proposals must emit nothing and leave phase unchanged.
+- Formal CI now runs `engine-proposal-fast` plus expected-failure mutations for
+  wrong phase, wrong round context, incompatible highest QC, locked conflicts
+  without/equal/lower QC unlock evidence, rejecting each safe case, and missing
+  validation, prepare-vote, or prepare-phase outputs.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-wrong-phase`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-wrong-round`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-incompatible-highest`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-locked-conflict-no-qc`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-locked-conflict-equal-qc`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-locked-conflict-lower-qc`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-reject-unlocked`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-reject-locked-subject`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-reject-higher-qc`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-skip-validation`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-skip-prepare-vote`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-bug-skip-prepare-phase`
+  - `cargo test -p iroha_core --lib proposals_with_wrong_round_context_are_ignored -- --nocapture`
+  - `cargo test -p iroha_core --lib proposals_are_ignored_outside_proposal_phase -- --nocapture`
+  - `cargo test -p iroha_core --lib locked_qc_blocks_unsafe_prepare_votes -- --nocapture`
+  - `cargo test -p iroha_core --lib conflicting_proposal_requires_strictly_higher_qc_to_unlock -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_with_incompatible_highest_qc_cannot_unlock_conflicting_lock -- --nocapture`
+  - `cargo fmt -p iroha_core`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+  - `rg -n "[[:blank:]]+$" docs/formal/sumeragi/SumeragiEngineProposalGate.tla docs/formal/sumeragi/SumeragiEngineProposalGate_*.cfg` (no matches)
+
+## 2026-05-23 Sumeragi pure engine commit-QC gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineCommitQcGate.tla`, a bounded
+  TLA+ model for the pure `ConsensusEngine` commit-QC finality gate.
+- The model checks that commit-QC certificates must match the current height,
+  epoch, validator set, view, and quorum policy; committed-height,
+  pending-finality replay, and pending-finality conflict cases are ignored;
+  payload-available QCs finalize immediately; missing-payload QCs fetch instead
+  of finalizing; and accepted commit QCs record highest-QC state.
+- Formal CI now runs `engine-commit-fast` plus expected-failure mutations for
+  wrong context, wrong quorum policy, stale view, committed height,
+  pending-finality replay/conflict, committing without payload, fetching despite
+  available payload, rejecting available/missing-payload safe cases, and missing
+  highest-QC recording.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-bug-wrong-context`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-bug-wrong-quorum-policy`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-bug-stale-view`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-bug-committed-height`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-bug-pending-replay`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-bug-pending-conflict`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-bug-commit-without-payload`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-bug-fetch-despite-payload`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-bug-reject-available`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-bug-reject-missing-payload`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-bug-missing-highest-record`
+  - `cargo test -p iroha_core --lib commit_qc_waits_for_payload_before_finality -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_qcs_with_wrong_round_context_are_ignored -- --nocapture`
+  - `cargo test -p iroha_core --lib payload_availability_without_commit_qc_never_finalizes -- --nocapture`
+  - `cargo test -p iroha_core --lib pending_commit_qc_replays_and_conflicts_do_not_refetch_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib committed_commit_qc_replay_does_not_emit_duplicate_finality -- --nocapture`
+  - `cargo test -p iroha_core --lib conflicting_blocks_cannot_both_commit_at_same_height -- --nocapture`
+  - `cargo test -p iroha_core --lib certificates_with_wrong_view_or_quorum_policy_are_ignored -- --nocapture`
+  - `cargo test -p iroha_core --lib prepare_and_commit_qcs_from_previous_view_are_ignored_after_timeout -- --nocapture`
+  - `cargo fmt -p iroha_core`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+  - `rg -n "[[:blank:]]+$" docs/formal/sumeragi/SumeragiEngineCommitQcGate.tla docs/formal/sumeragi/SumeragiEngineCommitQcGate_*.cfg` (no matches)
+
+## 2026-05-23 Sumeragi pure engine prepare-QC gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEnginePrepareQcGate.tla`, a bounded
+  TLA+ model for the pure `ConsensusEngine` prepare-QC to commit-vote gate.
+- The model checks that prepare-QC certificates must match the current height,
+  epoch, validator set, view, and quorum policy; committed-height, replayed,
+  conflicting, and pending-finality prepare QCs do not emit commit votes; and
+  accepted prepare QCs record both locked-QC and highest-QC state.
+- Formal CI now runs `engine-prepare-fast` plus expected-failure mutations for
+  wrong context, wrong quorum policy, stale view, committed height, prepare-QC
+  replay, conflicting prepare QC, pending finality, safe rejection, and missing
+  lock/highest-QC recording.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-bug-wrong-context`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-bug-wrong-quorum-policy`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-bug-stale-view`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-bug-committed-height`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-bug-replay-prepare`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-bug-conflicting-prepare`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-bug-pending-finality`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-bug-reject-safe`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-bug-missing-lock-record`
+  - `cargo test -p iroha_core --lib prepare_qcs_with_wrong_round_context_are_ignored -- --nocapture`
+  - `cargo test -p iroha_core --lib prepare_qc_for_committed_height_is_ignored -- --nocapture`
+  - `cargo test -p iroha_core --lib prepare_qc_during_pending_finality_does_not_emit_commit_vote -- --nocapture`
+  - `cargo test -p iroha_core --lib prepare_qc_replays_and_conflicts_do_not_emit_extra_commit_votes -- --nocapture`
+  - `cargo test -p iroha_core --lib certificates_with_wrong_view_or_quorum_policy_are_ignored -- --nocapture`
+  - `cargo test -p iroha_core --lib prepare_and_commit_qcs_from_previous_view_are_ignored_after_timeout -- --nocapture`
+  - `cargo test -p iroha_core --lib locked_qc_blocks_unsafe_prepare_votes -- --nocapture`
+  - `cargo fmt -p iroha_core`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+  - `rg -n "[[:blank:]]+$" docs/formal/sumeragi/SumeragiEnginePrepareQcGate.tla docs/formal/sumeragi/SumeragiEnginePrepareQcGate_*.cfg` (no matches)
+
+## 2026-05-23 Sumeragi proposal assembly-gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiProposalAssemblyGate.tla`, a bounded
+  TLA+ model for the live proposer-side assembly gate.
+- The model checks that observers and non-leaders cannot assemble proposals,
+  active same-height local vote conflicts, pending vote verification, missing
+  highest-QC payloads, non-extending highest QCs, split vote-lock evidence, and
+  committed-edge conflicts defer assembly, while stale retired vote history,
+  new-view supersession, regressed highest-QC locked fallback, and locked-chain
+  extension remain allowed.
+- Formal CI now runs `proposal-fast` plus expected-failure mutations for
+  observer assembly, active local-vote conflicts, pending vote verification,
+  missing highest-QC payloads, non-extending highest-QC branches, split vote
+  locks, committed-edge conflicts, and rejecting safe, stale-retired, or locked
+  fallback candidates.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-bug-observer`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-bug-active-vote-conflict`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-bug-pending-vote-verification`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-bug-missing-highest-qc`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-bug-non-extending-highest`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-bug-split-vote-lock`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-bug-committed-edge-conflict`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-bug-reject-safe`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-bug-reject-stale-retired`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-bug-reject-locked-fallback`
+  - `cargo test -p iroha_core --lib observer_assemble_proposal_returns_false -- --nocapture`
+  - `cargo test -p iroha_core --lib assemble_proposal_defers_when_candidate_conflicts_with_local_vote_history -- --nocapture`
+  - `cargo test -p iroha_core --lib assemble_proposal_allows_stale_retired_prior_view_local_vote_history -- --nocapture`
+  - `cargo test -p iroha_core --lib assemble_proposal_defers_while_same_height_vote_verification_is_pending -- --nocapture`
+  - `cargo test -p iroha_core --lib assemble_proposal_defers_when_highest_qc_block_missing -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_uses_locked_qc_when_selected_highest_qc_regresses -- --nocapture`
+  - `cargo test -p iroha_core --lib assemble_proposal_reanchors_lock_lag_highest_qc_catchup -- --nocapture`
+  - `cargo test -p iroha_core --lib assemble_proposal_suppresses_committed_edge_highest_qc_conflict -- --nocapture`
+  - `cargo test -p iroha_core --lib fresh_proposal_defers_when_split_same_height_votes_make_new_branch_non_viable -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+  - `rg -n "[[:blank:]]+$" docs/formal/sumeragi/SumeragiProposalAssemblyGate.tla docs/formal/sumeragi/SumeragiProposalAssemblyGate_*.cfg` (no matches)
+
+## 2026-05-23 Sumeragi precommit vote-gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiPrecommitVoteGate.tla`, a bounded TLA+
+  model for the live local precommit vote-emission gate.
+- The model checks that precommit signing requires validated pending-block
+  state and local voting-topology membership; rejects duplicate same-slot
+  votes, unsuperseded same-height conflicts, older-branch quorum-completion
+  escapes, locked same-height conflicts, missing locked payloads at the same or
+  older view, and non-extending locked-chain candidates; and preserves the
+  intended allowed cases for superseded conflicts, newer-view quorum
+  completion, newer-view missing-lock override, and locked-chain extension.
+- Formal CI now runs `precommit-fast` plus expected-failure mutations for
+  invalid-validation emission, observer/out-of-topology emission, duplicate
+  emission, unsuperseded conflict emission, older-branch quorum-completion
+  emission, locked-conflict emission, missing locked-payload emission,
+  non-extending locked-chain emission, and rejecting safe candidates.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-bug-invalid-validation`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-bug-observer`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-bug-duplicate`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-bug-unsuperseded-conflict`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-bug-older-quorum-completion`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-bug-locked-conflict`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-bug-missing-locked-payload`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-bug-non-extending-lock`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-bug-reject-safe`
+  - `cargo test -p iroha_core --lib emit_precommit_vote_requires_validated_pending -- --nocapture`
+  - `cargo test -p iroha_core --lib precommit_vote_rejects_newer_view_after_conflict -- --nocapture`
+  - `cargo test -p iroha_core --lib precommit_vote_allows_newer_conflict_when_local_vote_completes_quorum -- --nocapture`
+  - `cargo test -p iroha_core --lib precommit_vote_rejects_older_conflict_even_when_local_vote_would_complete_quorum -- --nocapture`
+  - `cargo test -p iroha_core --lib precommit_vote_skips_when_block_conflicts_with_locked_chain -- --nocapture`
+  - `cargo test -p iroha_core --lib precommit_vote_allows_when_block_extends_locked_chain -- --nocapture`
+  - `cargo test -p iroha_core --lib emit_precommit_vote_requests_missing_locked_payload_before_skipping -- --nocapture`
+  - `cargo test -p iroha_core --lib emit_precommit_vote_allows_newer_view_when_locked_payload_missing -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+  - `rg -n "[[:blank:]]+$" docs/formal/sumeragi/SumeragiPrecommitVoteGate.tla docs/formal/sumeragi/SumeragiPrecommitVoteGate_*.cfg` (no matches)
+
+## 2026-05-23 Sumeragi commit-root consistency formal slice
+
+- Added `docs/formal/sumeragi/SumeragiCommitRootConsistency.tla`, a bounded
+  TLA+ model for commit-QC execution-root consistency.
+- The model checks that commit votes are filtered into one same-root group
+  before quorum evaluation, permissioned mode selects the largest same-root
+  signer group with a deterministic low-root tie-break, NPoS mode selects the
+  heaviest same-root stake group with the same tie-break, wrong-context votes
+  cannot help satisfy quorum, and QC validation rejects root mismatches between
+  signer votes and the QC.
+- Formal CI now runs `commit-roots-fast` plus expected-failure mutations for
+  mixed-root signer counting, wrong-context vote counting, high-root tie
+  selection, NPoS stake weight being ignored, under-quorum root acceptance, and
+  validation accepting mismatched roots.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-roots-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-roots-bug-mix-root-signers`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-roots-bug-count-wrong-context`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-roots-bug-tie-high-root`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-roots-bug-stake-ignores-weight`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-roots-bug-under-quorum-accept`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-roots-bug-validate-mismatched-roots`
+  - `cargo test -p iroha_core --lib commit_root_signers -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_qc_against_votes_rejects_state_root_mismatch -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+  - `rg -n "[[:blank:]]+$" docs/formal/sumeragi/SumeragiCommitRootConsistency.tla docs/formal/sumeragi/SumeragiCommitRootConsistency_*.cfg` (no matches)
+
+## 2026-05-23 Sumeragi QC signer-bitmap formal slice
+
+- Added `docs/formal/sumeragi/SumeragiQcSignerBitmap.tla`, a bounded TLA+
+  model for QC signer-bitmap admission.
+- The model checks that bitmap length mismatches and out-of-topology signer
+  bits fail closed, only indices inside the voting validator set count toward
+  quorum, observer or padding indices cannot satisfy quorum on behalf of
+  voting validators, and accepted signer evidence matches the voting-set quorum
+  predicate.
+- Formal CI now runs `qc-signers-fast` plus expected-failure mutations for
+  counting observer/padding signers, ignoring bitmap length, ignoring
+  out-of-bounds signer bits, and accepting one signer below quorum.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signers-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signers-bug-count-observers`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signers-bug-ignore-bitmap-length`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signers-bug-ignore-out-of-bounds`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signers-bug-under-quorum-accept`
+  - `cargo test -p iroha_core --lib voting_ -- --nocapture`
+  - `cargo test -p iroha_core --lib bitmap_count_matches_min_votes_for_commit -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_qc_against_votes_rejects_ -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+  - `rg -n "[[:blank:]]+$" docs/formal/sumeragi/SumeragiRbcDeliverQuorum.tla docs/formal/sumeragi/SumeragiRbcDeliverQuorum_*.cfg docs/formal/sumeragi/SumeragiQcSignerBitmap.tla docs/formal/sumeragi/SumeragiQcSignerBitmap_*.cfg` (no matches)
+
+## 2026-05-23 Sumeragi RBC deliver-quorum formal slice
+
+- Added `docs/formal/sumeragi/SumeragiRbcDeliverQuorum.tla`, a bounded TLA+
+  model for the RBC deliver-quorum gate.
+- The model checks that the default deliver threshold is computed from the
+  deduplicated topology using Sumeragi commit-quorum arithmetic, the debug
+  force-one path uses threshold one, READY counting uses distinct senders, and
+  duplicate READY observations cannot trigger delivery before quorum.
+- Formal CI now runs `rbc-fast` plus expected-failure mutations for duplicate
+  READY counting, under-quorum delivery, missing `+1` in the commit quorum for
+  larger topologies, and ignoring the force-one debug path.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-bug-duplicate-ready`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-bug-under-quorum-deliver`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-bug-wrong-commit-formula`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-bug-force-one-ignored`
+  - `cargo test -p iroha_core --lib rbc_deliver_quorum -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+  - `rg -n "[[:blank:]]+$" docs/formal/sumeragi/SumeragiRbcDeliverQuorum.tla docs/formal/sumeragi/SumeragiRbcDeliverQuorum_*.cfg` (no matches)
+
+## 2026-05-23 Sumeragi quorum-policy formal slice
+
+- Added `docs/formal/sumeragi/SumeragiQuorumPolicy.tla`, a bounded TLA+ model
+  for fail-closed permissioned and NPoS quorum-policy arithmetic.
+- The model checks that permissioned quorum requires
+  `floor(2 * validators / 3) + 1` signers and rejects signer counts above the
+  active validator count; NPoS quorum requires signed stake to strictly exceed
+  two thirds of total stake and rejects missing/negative stake, zero/negative
+  total stake, exact two-thirds stake, over-total stake, and arithmetic
+  overflow.
+- Formal CI now runs `quorum-fast` plus expected-failure mutations for
+  under-threshold count acceptance, over-validator count acceptance,
+  exact-two-thirds stake acceptance, over-total stake acceptance, invalid stake
+  input acceptance, and overflow acceptance.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-bug-count-under-threshold`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-bug-count-over-validators`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-bug-stake-exact-two-thirds`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-bug-stake-over-total`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-bug-stake-invalid-input`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-bug-stake-overflow`
+  - `cargo test -p iroha_data_model quorum_policy_enforces_strict_supermajority_boundaries -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+
+## 2026-05-23 Sumeragi highest-QC selection formal slice
+
+- Added `docs/formal/sumeragi/SumeragiHighestQcSelection.tla`, a bounded TLA+
+  model for deterministic highest-QC selection from new-view evidence.
+- The model checks that only `NewView` certificates contribute embedded
+  highest-QC evidence; selected QCs match the reference maximum by height,
+  view, phase rank, and subject hash; and two replicas observing the same
+  certificate set in different orders select the same QC.
+- Formal CI now runs `highest-fast` plus expected-failure mutations for
+  height-priority loss, phase-rank loss, missing subject tie-breaks, and
+  accidental inclusion of non-new-view certificates.
+- Strengthened the pure-engine bridge test
+  `new_view_certificate_selects_highest_qc_deterministically` with phase-rank
+  and subject tie-break order-independence assertions.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh highest-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh highest-bug-height-priority`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh highest-bug-phase-rank`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh highest-bug-subject-tie`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh highest-bug-non-new-view`
+  - `cargo test -p iroha_core --lib new_view_certificate_selects_highest_qc_deterministically -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::engine -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+
+## 2026-05-23 Sumeragi certificate-admission formal slice
+
+- Added `docs/formal/sumeragi/SumeragiCertificateAdmission.tla`, a bounded
+  TLA+ model for fail-closed certificate admission before certificate evidence
+  mutates consensus state.
+- The model checks that wrong-context certificates, stale prepare/commit
+  certificates after view advance, future-height certificates, and
+  certificates for already committed heights cannot mutate lock, phase,
+  pending-finality, or committed-height state.
+- Formal CI now runs `admission-fast` plus expected-failure mutations for
+  wrong-context certificate acceptance, stale prepare/commit acceptance,
+  future-height certificate acceptance, and already-committed-height
+  certificate acceptance.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh admission-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh admission-bug-wrong-context`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh admission-bug-stale-prepare-commit`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh admission-bug-future-height`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh admission-bug-committed-height`
+  - `cargo test -p iroha_core --lib sumeragi::engine -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+
+## 2026-05-23 Sumeragi validation-gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiValidationGate.tla`, a bounded TLA+
+  model for asynchronous proposal-validation callback ownership.
+- The model checks that unknown validation results, completed-result replays,
+  and timeout-stale failures cannot advance the view; timeout clears the
+  in-flight validation owner; and one invalid current validation result cannot
+  advance the same proposal twice.
+- Formal CI now runs `validation-fast` plus expected-failure mutations for
+  unknown-result advance, completed-result replay advance, timeout retaining
+  the in-flight owner, and duplicate invalid-result advance.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh validation-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh validation-bug-unknown-result`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh validation-bug-completed-replay`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh validation-bug-timeout-inflight`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh validation-bug-invalid-replay`
+  - `cargo test -p iroha_core --lib sumeragi::engine -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+
+## 2026-05-23 Sumeragi view-change formal slice
+
+- Added `docs/formal/sumeragi/SumeragiViewChangeSafety.tla`, a bounded TLA+
+  model for new-view acceptance, highest-QC monotonicity, locked-proposal
+  safety, and conflicting prepare-QC lock overwrite rejection.
+- The model checks that accepted new-view certificates do not rewind the local
+  view, stale new-view certificates cannot update state, highest-QC tracking
+  never regresses below accepted evidence, locked validators reject unsafe
+  conflicting proposals, and same-height conflicting prepare evidence cannot
+  overwrite an existing lock at the same or lower rank.
+- Formal CI now runs `view-change-fast` plus expected-failure mutations for
+  stale new-view acceptance, unsafe proposal acceptance, lock overwrite, and
+  highest-QC regression.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh view-change-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh view-change-bug-stale-new-view`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh view-change-bug-unsafe-proposal`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh view-change-bug-lock-overwrite`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh view-change-bug-highest-regression`
+  - `cargo test -p iroha_core --lib sumeragi::engine -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check`
+
+## 2026-05-23 Sumeragi certified-recovery formal slice
+
+- Added `docs/formal/sumeragi/SumeragiCertifiedRecovery.tla`, a bounded TLA+
+  model for commit-QC finality when the matching block payload arrives later
+  through certified recovery.
+- The model checks that pending finality is anchored to an observed commit QC,
+  finality requires an exact matching payload, mismatched payload responses do
+  not satisfy pending finality, and a committed height cannot later accept a
+  conflicting same-height subject.
+- Formal CI now runs `recovery-fast` plus expected-failure mutations for
+  commit-without-payload, mismatched-payload acceptance, and conflicting
+  finality.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh recovery-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh recovery-bug-commit-without-payload`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh recovery-bug-mismatched-payload`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh recovery-bug-conflicting-finality`
+  - `cargo test -p iroha_core --lib sumeragi::engine -- --nocapture`
+  - `cargo test -p iroha_core --lib certified_block_fetch -- --nocapture`
+
+## 2026-05-23 Sumeragi fork-safety formal slice
+
+- Added `docs/formal/sumeragi/SumeragiForkSafety.tla`, a two-branch bounded
+  TLA+ model that states same-height finality directly as
+  `NoConflictingCommitCertificates`.
+- The model covers honest/Byzantine commit signer sets, permissioned count
+  quorum, NPoS-style stake quorum, locked-QC branch gating, honest single-vote
+  discipline, and a double-sign/lock-gate mutation that must produce a
+  counterexample.
+- Formal CI now runs `fork-fast`, `fork-npos`, and the
+  `fork-bug-double-sign` expected-failure mutation through
+  `scripts/formal/sumeragi_apalache.sh`.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fork-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fork-npos`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fork-bug-double-sign`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `cargo test -p iroha_core --lib sumeragi::engine -- --nocapture`
+  - `git diff --check`
+
+## 2026-05-23 Sumeragi validator-set transition formal slice
+
+- Added `docs/formal/sumeragi/SumeragiValidatorSetTransition.tla`, a bounded
+  TLA+ model for one scheduled validator-set change.
+- The model proves that activation requires old-set finality at the boundary
+  block, new-set certificates cannot appear before activation, old-set
+  certificates stop before the activation height, mixed-set certificates are
+  rejected, and no height can be committed by multiple validator-set
+  certificates.
+- Formal CI now runs `reconfig-fast` plus expected-failure mutations for
+  premature activation, premature new-set certificates, and mixed-set
+  certificates.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh reconfig-fast`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh reconfig-bug-premature-activation`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh reconfig-bug-premature-new-cert`
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh reconfig-bug-mixed-cert`
+  - `cargo test -p iroha_core --lib reconfiguration_activates_only_after_old_set_finality -- --nocapture`
+  - `cargo test -p iroha_core --lib pending_roster_activation_applies_at_activation_height_during_catchup -- --nocapture`
+
+## 2026-05-23 Sumeragi V1 adversarial coverage
+
+- Hardened the pure consensus engine against stale new-view certificates and
+  unrelated or replayed validation callbacks, and added unit coverage for those
+  fail-closed paths. The engine also now suppresses duplicate/conflicting
+  prepare-QC commit votes, duplicate pending commit-QC fetches, conflicting
+  pending finality QCs, duplicate finality output after commit, and late
+  validation failures after timeout. Additional engine coverage rejects
+  previous-view prepare/commit QCs after timeout, enforces that conflicting
+  proposals need a strictly higher unlock QC, routes invalid-proposal new-view
+  votes through the highest-QC subject, and ignores non-boundary validator-set
+  reconfiguration activation.
+- Quorum policy checks now reject impossible signer counts above the active
+  validator count and signed stake above total stake, with boundary tests for
+  small permissioned sets, `u32::MAX` validator counts, fractional exact
+  two-thirds stake, missing stake, malformed totals, zero validator sets, and
+  arithmetic overflow. The stake tests now include high-precision fractional
+  exact-boundary and just-over-boundary cases.
+- Certified block fetch validation gained negative coverage for empty
+  certificate parts, checkpoint mismatches, and body height/view mismatches.
+  Adapter coverage now also drops body companions without proof, mismatched
+  body/proof subjects, and malformed proof companions before they cache a
+  commit QC. Proof-specific validation now rejects mismatched block hashes,
+  QC height/view mismatches, and non-commit QCs.
+- Additional adversarial cases now reject incompatible carried highest-QC
+  evidence on proposals and new-view certificates, including future heights,
+  future same-height views, and wrong epochs. Pending finality now has coverage
+  proving that a payload with the right block hash but wrong payload hash does
+  not clear the pending `CommitQC`; finality applies only when the exact payload
+  arrives. Certified-fetch validation also mutates checkpoint roots and
+  validator rosters, and the adapter-level response path proves malformed
+  responses do not cache QCs or materialize pending blocks.
+- A further negative-test pass covers accepted new-view certificates that carry
+  lower QC evidence, pending finality across timeout and later view-change
+  traffic, conflicting committed-block notifications that attempt to smuggle a
+  reconfiguration, checkpoint signature/hash/rechain mutations, and malformed
+  certified-fetch bodies delivered after an otherwise valid proof companion.
+- The latest adversarial pass rejects proposal-carried highest QCs that are
+  incompatible even before a local lock exists, proves commit QCs and committed
+  block notifications supersede stale invalid validation callbacks, clears
+  pending finality after storage reports the block committed, and drops
+  certified-fetch requests whose authenticated sender differs from the claimed
+  requester without sending response traffic.
+- Additional follow-up coverage now proves conflicting commit QCs also
+  supersede stale validation callbacks, conflicting same-height storage
+  finality retires the old pending finality fetch without allowing a late
+  payload to commit, unrelated-height storage notifications do not clear
+  pending finality, and certified-fetch bodies with a matching block hash but
+  wrong view are ignored after a valid proof.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib sumeragi::engine -- --nocapture`
+  - `cargo test -p iroha_core sumeragi -- --nocapture`
+  - `cargo test -p iroha_data_model consensus`
+  - `cargo test -p iroha_core --lib certified_block_fetch -- --nocapture`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `cargo clippy -p iroha_core -p iroha_data_model --all-targets -- -D warnings`
+
+## 2026-05-23 Sumeragi V1 final validation sweep
+
+- Full filtered Sumeragi integration validation now passes after the
+  status-endpoint smoke fixture gained deterministic manifest hashes for the
+  explicit Nexus dataspace IDs used by that test.
+- Strict workspace clippy surfaced only mechanical lint fallout outside the
+  consensus behavior path. The fixes group the native-AMX consensus test helper
+  arguments, split the Kagami localnet quorum assertions into a helper, and
+  apply the suggested SoraFS orchestrator `is_none_or`/`is_some_and` and
+  redundant-conversion cleanups.
+- No new crates were added and `Cargo.lock` remains untouched.
+- Final validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - stale old-vNext symbol search across Sumeragi/core/docs showed only
+    historical `status.md` notes and no live code hits
+  - `cargo test -p iroha_data_model consensus`
+  - `cargo test -p iroha_core --lib sumeragi -- --nocapture`
+  - `cargo test -p integration_tests sumeragi_status_json_endpoint_decodes_to_wire_end_to_end -- --nocapture`
+  - `cargo test -p integration_tests sumeragi_ -- --nocapture`
+  - `cargo test -p iroha_kagami localnet_npos_validator_roster_and_quorum_match_peer_count -- --nocapture`
+  - `cargo test -p sorafs_orchestrator --test sorafs_cli deploy_failed_peer_exits_nonzero_and_writes_receipt_details -- --nocapture`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo build --workspace`
+
 ## 2026-05-23 Certified block recovery simplification
 
 - Added the Norito-encoded `BlockMessage::CertifiedBlockFetch` request/response
@@ -23,6 +858,17 @@ Last updated: 2026-05-23
   - `cargo fmt --all`
   - `cargo test -p iroha_core certified_block_fetch --lib -- --nocapture`
   - `cargo check -p irohad --bin irohad`
+
+## 2026-05-23 Nexus template manifest hashes
+
+- `defaults/nexus/config.toml`, `configs/soranexus/nexus/config.toml`, and
+  `configs/soranexus/taira/config.toml` now include manifest-derived hashes for
+  the bundled `governance` and `zk` dataspaces, keeping the templates aligned
+  with the Nexus config parser requirement that non-universal dataspaces
+  advertise a 32-byte `manifest_hash`.
+- Focused validation passed:
+  - `cargo test -p iroha_config --test fixtures nexus_profile_template_enables_multilane_defaults -- --nocapture`
+  - `cargo test -p irohad nexus_profile -- --nocapture`
 
 ## 2026-05-23 Sumeragi V1 canonical engine slice
 
@@ -115,6 +961,9 @@ Last updated: 2026-05-23
   prepare/commit requests from proposal assembly, and deterministically projects
   participant votes into validator-set order to build the AMX QC bitmap plus
   BLS aggregate for block receipts.
+- The native AMX vote cache now scopes duplicate signer rejection to the exact
+  attestation body, so retries at a new planned coordinator height collect fresh
+  votes without stale cross-body aggregation.
 - Torii transaction submit proxy routing-plan drift now fails fast with
   `409 Conflict` and `routing_plan_mismatch`, including both ingress and
   receiver plan digests. Signed-query/read route drift remains warning-only.
@@ -132,6 +981,9 @@ Last updated: 2026-05-23
   journal is installed. `irohad` installs and replays this journal by default
   under the Kura storage directory, discarding committed, expired, malformed, and
   stale-plan entries and following the Kura fsync mode for durability.
+- Queue plan journal open now truncates incomplete trailing frames from torn
+  appends before installing the append handle, and queue `clear_all` appends
+  remove tombstones before dropping in-memory plans.
 - Queue routing now exposes a first-class `RoutingPlan` with single-route and
   native AMX variants. Mixed native transaction targets retain their
   participant dataspaces and build deterministic coordinator/participant route

@@ -20,6 +20,8 @@ pub struct PinPolicyConstraints {
     pub max_retention_epoch: Option<u64>,
     /// Allowed storage classes. When omitted, any storage class is accepted.
     pub allowed_storage_classes: Option<BTreeSet<StorageClass>>,
+    /// Whether a manifest must carry council signatures.
+    pub require_council_signatures: bool,
 }
 
 impl Default for PinPolicyConstraints {
@@ -29,6 +31,7 @@ impl Default for PinPolicyConstraints {
             max_replicas_ceiling: None,
             max_retention_epoch: None,
             allowed_storage_classes: None,
+            require_council_signatures: false,
         }
     }
 }
@@ -83,7 +86,7 @@ pub fn validate_manifest(
         Some(&manifest.chunking.aliases),
     )?;
     validate_pin_policy(&manifest.pin_policy, policy)?;
-    validate_governance(&manifest.governance)?;
+    validate_governance(&manifest.governance, policy.require_council_signatures)?;
 
     Ok(())
 }
@@ -200,8 +203,11 @@ pub fn validate_pin_policy(
     Ok(())
 }
 
-fn validate_governance(proofs: &GovernanceProofs) -> Result<(), ManifestValidationError> {
-    if proofs.council_signatures.is_empty() {
+fn validate_governance(
+    proofs: &GovernanceProofs,
+    require_council_signatures: bool,
+) -> Result<(), ManifestValidationError> {
+    if require_council_signatures && proofs.council_signatures.is_empty() {
         return Err(ManifestValidationError::MissingCouncilSignature);
     }
     Ok(())
@@ -241,6 +247,7 @@ mod tests {
             max_replicas_ceiling: Some(5),
             max_retention_epoch: Some(20),
             allowed_storage_classes: None,
+            require_council_signatures: false,
         }
     }
 
@@ -261,11 +268,11 @@ mod tests {
 
         let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
 
-        matches!(
+        assert!(matches!(
             err,
             ManifestValidationError::UnknownChunkerProfile { profile_id }
             if profile_id == u32::MAX
-        );
+        ));
     }
 
     #[test]
@@ -275,24 +282,27 @@ mod tests {
 
         let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
 
-        matches!(
+        assert!(matches!(
             err,
             ManifestValidationError::ChunkerDescriptorMismatch {
                 field,
                 ..
             } if field == "semver"
-        );
+        ));
     }
 
     #[test]
     fn rejects_alias_without_canonical() {
         let mut manifest = manifest_with_defaults();
         manifest.chunking.aliases.clear();
-        manifest.chunking.aliases.push("sorafs.sf1".to_string());
+        manifest.chunking.aliases.push("sorafs-sf1".to_string());
 
         let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
 
-        matches!(err, ManifestValidationError::MissingCanonicalAlias { .. });
+        assert!(matches!(
+            err,
+            ManifestValidationError::MissingCanonicalAlias { .. }
+        ));
     }
 
     #[test]
@@ -307,24 +317,39 @@ mod tests {
                 max_replicas_ceiling: Some(5),
                 max_retention_epoch: Some(20),
                 allowed_storage_classes: None,
+                require_council_signatures: false,
             },
         )
         .expect_err("should fail");
-        matches!(
+        assert!(matches!(
             err,
             ManifestValidationError::MinReplicasTooLow { required, found }
             if required == 1 && found == 0
-        );
+        ));
     }
 
     #[test]
-    fn rejects_missing_signatures() {
+    fn accepts_missing_signatures_by_default() {
         let mut manifest = manifest_with_defaults();
         manifest.governance.council_signatures.clear();
 
-        let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
+        validate_manifest(&manifest, &default_constraints())
+            .expect("should allow permissionless pins");
+    }
 
-        matches!(err, ManifestValidationError::MissingCouncilSignature);
+    #[test]
+    fn rejects_missing_signatures_when_required() {
+        let mut manifest = manifest_with_defaults();
+        manifest.governance.council_signatures.clear();
+        let mut constraints = default_constraints();
+        constraints.require_council_signatures = true;
+
+        let err = validate_manifest(&manifest, &constraints).expect_err("should fail");
+
+        assert!(matches!(
+            err,
+            ManifestValidationError::MissingCouncilSignature
+        ));
     }
 
     #[test]
@@ -355,9 +380,13 @@ mod tests {
                 max_replicas_ceiling: Some(5),
                 max_retention_epoch: None,
                 allowed_storage_classes: None,
+                require_council_signatures: false,
             },
         )
         .expect_err("policy should fail");
-        matches!(err, ManifestValidationError::MinReplicasTooLow { .. });
+        assert!(matches!(
+            err,
+            ManifestValidationError::MinReplicasTooLow { .. }
+        ));
     }
 }

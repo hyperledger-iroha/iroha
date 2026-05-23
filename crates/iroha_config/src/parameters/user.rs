@@ -1403,6 +1403,12 @@ pub struct SorafsPinPolicyConstraints {
     /// Allowed storage classes (case-insensitive). `None` permits any class.
     #[config(env = "GOV_SORAFS_PIN_POLICY_ALLOWED_STORAGE_CLASSES")]
     pub allowed_storage_classes: Option<AlgorithmListConfig>,
+    /// Require council signatures on pin manifests. Public SoraFS pins are permissionless by default.
+    #[config(
+        env = "GOV_SORAFS_PIN_POLICY_REQUIRE_COUNCIL_SIGNATURES",
+        default = "crate::parameters::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES"
+    )]
+    pub require_council_signatures: bool,
 }
 
 impl Default for SorafsPinPolicyConstraints {
@@ -1415,6 +1421,8 @@ impl Default for SorafsPinPolicyConstraints {
             max_retention_epoch:
                 crate::parameters::defaults::governance::sorafs_pin_policy::MAX_RETENTION_EPOCH,
             allowed_storage_classes: None,
+            require_council_signatures:
+                crate::parameters::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES,
         }
     }
 }
@@ -1441,6 +1449,7 @@ impl SorafsPinPolicyConstraints {
             max_replicas_ceiling: self.max_replicas_ceiling,
             max_retention_epoch: self.max_retention_epoch,
             allowed_storage_classes,
+            require_council_signatures: self.require_council_signatures,
         }
     }
 }
@@ -19479,6 +19488,9 @@ pub struct SorafsDiscovery {
     /// Optional governance admission configuration.
     #[config(nested)]
     pub admission: SorafsAdmissionConfig,
+    /// Optional config-backed publish peer discovery hints.
+    #[config(nested)]
+    pub publish: SorafsPublishDiscoveryConfig,
 }
 
 impl Default for SorafsDiscovery {
@@ -19487,6 +19499,7 @@ impl Default for SorafsDiscovery {
             discovery_enabled: super::defaults::torii::SORAFS_DISCOVERY_ENABLED,
             known_capabilities: super::defaults::torii::sorafs_known_capabilities(),
             admission: SorafsAdmissionConfig::default(),
+            publish: SorafsPublishDiscoveryConfig::default(),
         }
     }
 }
@@ -19497,6 +19510,35 @@ impl SorafsDiscovery {
             discovery_enabled: self.discovery_enabled,
             known_capabilities: self.known_capabilities,
             admission: self.admission.into_actual(),
+            publish: self.publish.parse(),
+        }
+    }
+}
+
+/// Config-backed publish peer discovery hints for SoraFS deploy clients.
+#[derive(Debug, ReadConfig, Clone, Default, norito::JsonDeserialize)]
+pub struct SorafsPublishDiscoveryConfig {
+    /// Public gateway base URL used for post-deploy verification.
+    #[config(env = "TORII_SORAFS_PUBLISH_GATEWAY_BASE_URL")]
+    pub gateway_base_url: Option<String>,
+    /// Torii URLs that deploy clients should pin to after paid registration.
+    #[config(default = "Vec::<String>::new()")]
+    pub pin_torii_urls: Vec<String>,
+}
+
+impl SorafsPublishDiscoveryConfig {
+    fn parse(self) -> actual::SorafsPublishDiscovery {
+        actual::SorafsPublishDiscovery {
+            gateway_base_url: self
+                .gateway_base_url
+                .map(|url| url.trim().trim_end_matches('/').to_string())
+                .filter(|url| !url.is_empty()),
+            pin_torii_urls: self
+                .pin_torii_urls
+                .into_iter()
+                .map(|url| url.trim().trim_end_matches('/').to_string())
+                .filter(|url| !url.is_empty())
+                .collect(),
         }
     }
 }
@@ -20282,6 +20324,58 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
         assert!(
             onboarding.alias_auto_renew_subscription_domain.is_none(),
             "subscription domain remains optional"
+        );
+    }
+
+    #[test]
+    fn sorafs_publish_discovery_defaults_empty() {
+        let actual = load_root(base_table());
+        assert!(
+            actual
+                .torii
+                .sorafs_discovery
+                .publish
+                .gateway_base_url
+                .is_none()
+        );
+        assert!(
+            actual
+                .torii
+                .sorafs_discovery
+                .publish
+                .pin_torii_urls
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn sorafs_publish_discovery_config_parses() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(
+            r#"
+[discovery.publish]
+gateway_base_url = "https://taira.sora.org/"
+pin_torii_urls = [
+  "https://taira-validator-1.sora.org/",
+  "https://taira-validator-2.sora.org",
+]
+"#,
+        )
+        .expect("parse sorafs publish discovery");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let actual = load_root(table);
+        let publish = actual.torii.sorafs_discovery.publish;
+        assert_eq!(
+            publish.gateway_base_url.as_deref(),
+            Some("https://taira.sora.org")
+        );
+        assert_eq!(
+            publish.pin_torii_urls,
+            vec![
+                "https://taira-validator-1.sora.org".to_string(),
+                "https://taira-validator-2.sora.org".to_string()
+            ]
         );
     }
 

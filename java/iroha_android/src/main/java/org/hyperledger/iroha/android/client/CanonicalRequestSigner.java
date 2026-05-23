@@ -5,9 +5,7 @@ import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.PrivateKey;
 import java.security.SecureRandom;
-import java.security.Signature;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -141,40 +139,41 @@ public final class CanonicalRequestSigner {
   }
 
   /**
-   * Build the top-level fields required for single-signature body auth.
+   * Build the top-level fields required for single-signature body auth with callback signing.
    */
   public static Map<String, Object> buildBodySignatureFields(
       final String method,
       final URI uri,
       final Map<String, Object> bodyFields,
-      final String accountId,
-      final PrivateKey privateKey) {
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final long timestampMs,
+      final String nonce) {
+    if (canonicalAuth == null) {
+      throw new IllegalArgumentException("canonicalAuth is required");
+    }
     return buildBodySignatureFields(
         method,
         uri,
         bodyFields,
-        accountId,
-        privateKey,
-        System.currentTimeMillis(),
-        randomNonce());
+        canonicalAuth.accountId(),
+        canonicalAuth::sign,
+        timestampMs,
+        nonce);
   }
 
-  /**
-   * Build the top-level fields required for single-signature body auth with explicit freshness.
-   */
-  public static Map<String, Object> buildBodySignatureFields(
+  private static Map<String, Object> buildBodySignatureFields(
       final String method,
       final URI uri,
       final Map<String, Object> bodyFields,
       final String accountId,
-      final PrivateKey privateKey,
+      final CanonicalRequestSignatureProvider signatureProvider,
       final long timestampMs,
       final String nonce) {
     final Map<String, Object> unsigned =
         bodyWithBodyAuthFreshness(bodyFields, accountId, timestampMs, nonce);
     final byte[] message =
         canonicalBodyAuthSignatureMessage(method, uri, unsigned, timestampMs, nonce);
-    final byte[] signatureBytes = signEd25519(privateKey, message);
+    final byte[] signatureBytes = signCanonicalMessage(signatureProvider, message);
     final Map<String, Object> fields = new LinkedHashMap<>();
     fields.put(BODY_ACCOUNT_ID, accountId);
     fields.put(BODY_TIMESTAMP_MS, timestampMs);
@@ -190,14 +189,12 @@ public final class CanonicalRequestSigner {
       final String method,
       final URI uri,
       final Map<String, Object> bodyFields,
-      final String accountId,
-      final PrivateKey privateKey,
+      final ToriiCanonicalRequestAuth canonicalAuth,
       final long timestampMs,
       final String nonce) {
     final Map<String, Object> body = new LinkedHashMap<>(bodyFields);
     body.remove(BODY_WITNESS_BASE64);
-    body.putAll(
-        buildBodySignatureFields(method, uri, body, accountId, privateKey, timestampMs, nonce));
+    body.putAll(buildBodySignatureFields(method, uri, body, canonicalAuth, timestampMs, nonce));
     return body;
   }
 
@@ -226,14 +223,12 @@ public final class CanonicalRequestSigner {
       final String method,
       final URI uri,
       final byte[] body,
-      final String accountId,
-      final PrivateKey privateKey) {
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     return buildHeaders(
         method,
         uri,
         body,
-        accountId,
-        privateKey,
+        canonicalAuth,
         System.currentTimeMillis(),
         randomNonce());
   }
@@ -245,22 +240,39 @@ public final class CanonicalRequestSigner {
       final String method,
       final URI uri,
       final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final long timestampMs,
+      final String nonce) {
+    if (canonicalAuth == null) {
+      throw new IllegalArgumentException("canonicalAuth is required");
+    }
+    return buildHeaders(
+        method,
+        uri,
+        body,
+        canonicalAuth.accountId(),
+        canonicalAuth::sign,
+        timestampMs,
+        nonce);
+  }
+
+  private static Map<String, String> buildHeaders(
+      final String method,
+      final URI uri,
+      final byte[] body,
       final String accountId,
-      final PrivateKey privateKey,
+      final CanonicalRequestSignatureProvider signatureProvider,
       final long timestampMs,
       final String nonce) {
     if (accountId == null || accountId.trim().isEmpty()) {
       throw new IllegalArgumentException("accountId is required");
-    }
-    if (privateKey == null) {
-      throw new IllegalArgumentException("privateKey is required");
     }
     if (nonce == null || nonce.trim().isEmpty()) {
       throw new IllegalArgumentException("nonce is required");
     }
     final byte[] message =
         canonicalRequestSignatureMessage(method, uri, body, timestampMs, nonce);
-    final byte[] signatureBytes = signEd25519(privateKey, message);
+    final byte[] signatureBytes = signCanonicalMessage(signatureProvider, message);
     final Map<String, String> headers = new HashMap<>();
     headers.put(HEADER_ACCOUNT, accountId);
     headers.put(HEADER_SIGNATURE, Base64.getEncoder().encodeToString(signatureBytes));
@@ -289,15 +301,16 @@ public final class CanonicalRequestSigner {
     return body;
   }
 
-  private static byte[] signEd25519(final PrivateKey privateKey, final byte[] message) {
-    try {
-      final Signature signer = Signature.getInstance("Ed25519");
-      signer.initSign(privateKey);
-      signer.update(message);
-      return signer.sign();
-    } catch (Exception ex) {
-      throw new IllegalStateException("failed to sign canonical request", ex);
+  private static byte[] signCanonicalMessage(
+      final CanonicalRequestSignatureProvider signatureProvider, final byte[] message) {
+    if (signatureProvider == null) {
+      throw new IllegalArgumentException("signatureProvider is required");
     }
+    final byte[] signature = signatureProvider.sign(message);
+    if (signature == null || signature.length == 0) {
+      throw new IllegalStateException("canonical request signature is empty");
+    }
+    return signature;
   }
 
   private static String randomNonce() {

@@ -549,6 +549,13 @@ struct QueueAdmissionNotification {
     dataspace_id: DataSpaceId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GossipEntryState {
+    Pending,
+    Committed,
+    Other,
+}
+
 #[cfg(feature = "telemetry")]
 #[derive(Clone, Copy, Debug)]
 struct TxTeuInfo {
@@ -2087,7 +2094,15 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         self.gossip_batch_inner(
             n,
-            |_, tx_ref| self.is_pending(tx_ref, state_view),
+            |_, tx_ref| {
+                if self.is_expired(tx_ref.as_accepted()) {
+                    GossipEntryState::Other
+                } else if tx_ref.is_in_blockchain(state_view) {
+                    GossipEntryState::Committed
+                } else {
+                    GossipEntryState::Pending
+                }
+            },
             |hash, tx_ref| self.refresh_routing_plan_with_view(hash, tx_ref, state_view),
             backpressure_telemetry,
         )
@@ -2105,8 +2120,13 @@ impl Queue {
         self.gossip_batch_inner(
             n,
             |hash, tx_ref| {
-                !self.is_expired(tx_ref.as_accepted())
-                    && committed_transactions.get(&hash).is_none()
+                if self.is_expired(tx_ref.as_accepted()) {
+                    GossipEntryState::Other
+                } else if committed_transactions.get(&hash).is_some() {
+                    GossipEntryState::Committed
+                } else {
+                    GossipEntryState::Pending
+                }
             },
             |hash, tx_ref| self.refresh_routing_plan_with_state(hash, tx_ref, state),
             backpressure_telemetry,
@@ -2116,12 +2136,12 @@ impl Queue {
     fn gossip_batch_inner<F, R>(
         &self,
         n: u32,
-        mut is_pending: F,
+        mut entry_state: F,
         mut refresh_routing: R,
         backpressure_telemetry: Option<&StateTelemetry>,
     ) -> Vec<GossipBatchEntry>
     where
-        F: FnMut(SignedTxHash, &CheckedTransaction<'static>) -> bool,
+        F: FnMut(SignedTxHash, &CheckedTransaction<'static>) -> GossipEntryState,
         R: FnMut(
             SignedTxHash,
             &CheckedTransaction<'static>,
@@ -2134,42 +2154,49 @@ impl Queue {
                 continue;
             };
             let tx_ref = tx_arc.as_ref();
-            if is_pending(hash, tx_ref) {
-                let routing_plan = match refresh_routing(hash, tx_ref) {
-                    Ok(routing_plan) => routing_plan,
-                    Err(err) => {
-                        warn!(
-                            tx = %hash,
-                            reason = %err,
-                            reason_label = err.as_label(),
-                            "dropping queued transaction before gossip due to unresolved route"
-                        );
-                        self.reject_queued_transaction_for_unresolved_route(
-                            hash,
-                            err.to_string(),
-                            backpressure_telemetry,
-                        );
-                        continue;
+            match entry_state(hash, tx_ref) {
+                GossipEntryState::Pending => {
+                    let routing_plan = match refresh_routing(hash, tx_ref) {
+                        Ok(routing_plan) => routing_plan,
+                        Err(err) => {
+                            warn!(
+                                tx = %hash,
+                                reason = %err,
+                                reason_label = err.as_label(),
+                                "dropping queued transaction before gossip due to unresolved route"
+                            );
+                            self.reject_queued_transaction_for_unresolved_route(
+                                hash,
+                                err.to_string(),
+                                backpressure_telemetry,
+                            );
+                            continue;
+                        }
+                    };
+                    let routing = routing_plan.coordinator_route();
+                    let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
+                        Arc::clone(entry.value())
+                    } else {
+                        let payload = Self::encode_gossip_payload(tx_ref.as_accepted());
+                        self.tx_gossip_payloads.insert(hash, Arc::clone(&payload));
+                        payload
+                    };
+                    // Deep clone to produce an owned AcceptedTransaction for gossip
+                    batch.push(GossipBatchEntry {
+                        tx: tx_ref.as_accepted().clone(),
+                        routing,
+                        routing_plan,
+                        payload,
+                    });
+                    if batch.len() >= n as usize {
+                        break;
                     }
-                };
-                let routing = routing_plan.coordinator_route();
-                let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
-                    Arc::clone(entry.value())
-                } else {
-                    let payload = Self::encode_gossip_payload(tx_ref.as_accepted());
-                    self.tx_gossip_payloads.insert(hash, Arc::clone(&payload));
-                    payload
-                };
-                // Deep clone to produce an owned AcceptedTransaction for gossip
-                batch.push(GossipBatchEntry {
-                    tx: tx_ref.as_accepted().clone(),
-                    routing,
-                    routing_plan,
-                    payload,
-                });
-                if batch.len() >= n as usize {
-                    break;
                 }
+                GossipEntryState::Committed => {
+                    drop(tx_arc);
+                    self.remove_committed_hashes([hash], backpressure_telemetry);
+                }
+                GossipEntryState::Other => {}
             }
         }
         batch
@@ -3578,12 +3605,40 @@ impl Queue {
     ///
     /// Used when a peer is removed from the topology so it stops advertising stale transactions.
     pub fn clear_all(&self) {
+        let _guard = self.push_remove_lock.lock();
         while let Some(hash) = self.tx_hashes.pop() {
             if self.txs.remove(&hash).is_some() {
                 self.untrack_active_transaction();
             }
             self.routing_decisions.remove(&hash);
-            self.routing_plans.remove(&hash);
+            if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                self.record_plan_journal_remove(hash, &plan);
+                let _ = routing_ledger::take_plan(&hash);
+            } else if let Some(plan) = routing_ledger::take_plan(&hash) {
+                self.record_plan_journal_remove(hash, &plan);
+            }
+            let _ = routing_ledger::take(&hash);
+            self.removed_hashes.remove(&hash);
+        }
+        let remaining_plans = self
+            .routing_plans
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().clone()))
+            .collect::<Vec<_>>();
+        for (hash, plan) in remaining_plans {
+            self.record_plan_journal_remove(hash, &plan);
+            let _ = routing_ledger::take(&hash);
+            let _ = routing_ledger::take_plan(&hash);
+        }
+        let remaining_hashes = self
+            .txs
+            .iter()
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        for hash in remaining_hashes {
+            if self.txs.remove(&hash).is_some() {
+                self.untrack_active_transaction();
+            }
             let _ = routing_ledger::take(&hash);
             let _ = routing_ledger::take_plan(&hash);
             self.removed_hashes.remove(&hash);
@@ -7341,6 +7396,110 @@ pub mod tests {
     }
 
     #[test]
+    fn queue_plan_journal_tombstones_clear_all_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(tx, &state, plan, None)
+            .expect("push with plan");
+        assert!(queue.txs.contains_key(&hash));
+
+        queue.clear_all();
+        assert!(!queue.txs.contains_key(&hash));
+        drop(queue);
+
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install tombstoned journal"),
+            0
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay tombstoned journal");
+        assert_eq!(summary.records, 0);
+        assert!(!replay_queue.txs.contains_key(&hash));
+    }
+
+    #[test]
+    fn queue_plan_journal_tombstones_clear_all_inflight_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let state = Arc::new(State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue = Arc::new(Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router.clone(),
+            &[],
+        ));
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(tx, &state, plan, None)
+            .expect("push with plan");
+
+        let mut expired = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state.view(), &mut expired)
+            .expect("in-flight guard");
+        assert!(queue.txs.contains_key(&hash));
+        assert!(queue.tx_hashes.is_empty());
+
+        queue.clear_all();
+        drop(guard);
+        drop(queue);
+
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install tombstoned journal"),
+            0
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay tombstoned journal");
+        assert_eq!(summary.records, 0);
+        assert!(!replay_queue.txs.contains_key(&hash));
+    }
+
+    #[test]
     fn push_wakes_sumeragi_when_configured() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -8224,7 +8383,7 @@ pub mod tests {
     }
 
     #[test]
-    fn gossip_batch_with_state_skips_committed_entries() {
+    fn gossip_batch_with_state_removes_committed_entries() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -8247,6 +8406,9 @@ pub mod tests {
             batch.is_empty(),
             "committed transaction must not be selected for gossip"
         );
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        assert!(!queue.current_backpressure().is_saturated());
     }
 
     #[tokio::test]

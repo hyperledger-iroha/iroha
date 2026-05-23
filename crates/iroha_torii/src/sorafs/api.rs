@@ -1861,6 +1861,37 @@ pub(crate) async fn handle_get_sorafs_providers(State(state): State<SharedAppSta
     JsonBody(response).into_response()
 }
 
+pub(crate) async fn handle_get_sorafs_storage_peers(
+    State(state): State<SharedAppState>,
+) -> Response {
+    let publish = &state.sorafs_publish_discovery;
+    let mut response = Map::new();
+    response.insert("source".into(), Value::from("config"));
+    response.insert(
+        "gateway_base_url".into(),
+        publish
+            .gateway_base_url
+            .as_ref()
+            .map_or(Value::Null, |url| Value::from(url.clone())),
+    );
+    response.insert(
+        "pin_torii_urls".into(),
+        Value::Array(
+            publish
+                .pin_torii_urls
+                .iter()
+                .cloned()
+                .map(Value::from)
+                .collect(),
+        ),
+    );
+    response.insert(
+        "count".into(),
+        Value::from(publish.pin_torii_urls.len() as u64),
+    );
+    JsonBody(Value::Object(response)).into_response()
+}
+
 pub(crate) async fn handle_post_sorafs_provider_advert(
     State(state): State<SharedAppState>,
     body: Bytes,
@@ -9605,6 +9636,40 @@ mod advert_tests {
     };
 
     #[tokio::test]
+    async fn sorafs_storage_peer_discovery_returns_configured_publish_urls() {
+        let mut state = mk_app_state_for_tests();
+        Arc::get_mut(&mut state)
+            .expect("unique app state")
+            .sorafs_publish_discovery = iroha_config::parameters::actual::SorafsPublishDiscovery {
+            gateway_base_url: Some("https://taira.sora.org".to_string()),
+            pin_torii_urls: vec![
+                "https://taira-validator-1.sora.org".to_string(),
+                "https://taira-validator-2.sora.org".to_string(),
+            ],
+        };
+
+        let response = handle_get_sorafs_storage_peers(State(state)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read peer discovery response");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode JSON");
+        assert_eq!(
+            value.get("gateway_base_url").and_then(Value::as_str),
+            Some("https://taira.sora.org")
+        );
+        let urls = value
+            .get("pin_torii_urls")
+            .and_then(Value::as_array)
+            .expect("pin URL array");
+        assert_eq!(urls.len(), 2);
+        assert_eq!(
+            urls.first().and_then(Value::as_str),
+            Some("https://taira-validator-1.sora.org")
+        );
+    }
+
+    #[tokio::test]
     async fn proof_stream_potr_streams_recorded_receipts() {
         let mut state = mk_app_state_for_tests();
         let (node, _dir) = sorafs_node_with_temp_storage();
@@ -11689,26 +11754,16 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_pin_accepts_paid_record_without_legacy_pin_token() {
-        use iroha_config::parameters::actual::SorafsStoragePin as PinCfg;
-
+    async fn storage_pin_accepts_paid_record_without_council_signature() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app)
             .unwrap_or_else(|_| panic!("unique app state for pin policy mutation"));
         let (node, _dir) = sorafs_node_with_temp_storage();
         inner.sorafs_node = node;
-        inner.trusted_proxy_nets = Arc::new(crate::limits::parse_cidrs(&["127.0.0.0/8".into()]));
-
-        let mut pin_cfg = PinCfg {
-            require_token: true,
-            ..Default::default()
-        };
-        pin_cfg.allow_cidrs = vec!["203.0.113.0/24".to_string()];
-        inner.sorafs_pin_policy =
-            sorafs::PinSubmissionPolicy::from_config(&pin_cfg).expect("valid pin policy");
 
         let payload = vec![0x44; 64];
-        let manifest = manifest_for_payload(0x44, &payload);
+        let mut manifest = manifest_for_payload(0x44, &payload);
+        manifest.governance.council_signatures.clear();
         let request = StoragePinRequestDto {
             manifest_b64: base64::engine::general_purpose::STANDARD
                 .encode(norito::to_bytes(&manifest).expect("encode manifest")),

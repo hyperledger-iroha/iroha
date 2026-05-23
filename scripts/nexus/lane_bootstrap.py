@@ -32,6 +32,7 @@ class LaneBootstrapConfig:
     lane_id: int
     dataspace_alias: str
     dataspace_id: int
+    dataspace_manifest_hash: str
     governance_module: str
     settlement_handle: str
     description: Optional[str]
@@ -261,6 +262,7 @@ def parse_args(argv: Optional[Sequence[str]]) -> LaneBootstrapConfig:
         )
 
     dataspace_id = compute_dataspace_id(args)
+    dataspace_manifest_hash = compute_dataspace_manifest_hash(args, dataspace_id)
 
     output_dir = Path(args.output_dir).expanduser().resolve()
     slug = slugify_alias(args.lane_alias, args.lane_id)
@@ -275,6 +277,7 @@ def parse_args(argv: Optional[Sequence[str]]) -> LaneBootstrapConfig:
         lane_id=args.lane_id,
         dataspace_alias=args.dataspace_alias,
         dataspace_id=dataspace_id,
+        dataspace_manifest_hash=dataspace_manifest_hash,
         governance_module=args.governance_module,
         settlement_handle=args.settlement_handle,
         description=args.description,
@@ -394,6 +397,7 @@ def build_catalog_snippet(config: LaneBootstrapConfig, slug: str) -> str:
             "[[nexus.dataspace_catalog]]",
             f'alias = "{config.dataspace_alias}"',
             f"id = {config.dataspace_id}",
+            f'manifest_hash = "{config.dataspace_manifest_hash}"',
         ]
     )
     if config.dataspace_description:
@@ -457,6 +461,7 @@ def build_summary(
         "lane_alias": config.lane_alias,
         "dataspace_alias": config.dataspace_alias,
         "dataspace_id": config.dataspace_id,
+        "dataspace_manifest_hash": config.dataspace_manifest_hash,
         "slug": slug,
         "kura_segment": kura_segment,
         "merge_segment": merge_segment,
@@ -584,14 +589,27 @@ def compute_dataspace_id(args: argparse.Namespace) -> int:
     if args.dataspace_id is not None:
         return args.dataspace_id
     if args.dataspace_hash:
-        digest = args.dataspace_hash.strip().lower()
-        if digest.startswith("0x"):
-            digest = digest[2:]
-        if len(digest) != 64:
-            raise ValueError("--dataspace-hash must contain 32 bytes (64 hex chars)")
-        data = bytes.fromhex(digest)
+        data = bytes.fromhex(normalize_dataspace_hash(args.dataspace_hash))
         return int.from_bytes(data[:8], "little")
     return args.lane_id
+
+
+def compute_dataspace_manifest_hash(args: argparse.Namespace, dataspace_id: int) -> str:
+    """Return the canonical 32-byte manifest hash persisted in catalog snippets."""
+    if args.dataspace_hash:
+        return normalize_dataspace_hash(args.dataspace_hash)
+    return dataspace_id.to_bytes(8, "little").hex() + ("00" * 24)
+
+
+def normalize_dataspace_hash(raw_hash: str) -> str:
+    """Normalize a CLI dataspace hash to lowercase 32-byte hex."""
+    digest = raw_hash.strip().lower()
+    if digest.startswith("0x"):
+        digest = digest[2:]
+    if len(digest) != 64:
+        raise ValueError("--dataspace-hash must contain 32 bytes (64 hex chars)")
+    bytes.fromhex(digest)
+    return digest
 
 
 def resolve_out_path(base: Path, override: Optional[str], default_name: str) -> Path:

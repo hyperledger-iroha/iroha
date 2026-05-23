@@ -6,7 +6,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.KeyPairGenerator;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -24,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.JsonEncoder;
@@ -2011,10 +2011,15 @@ public final class OfflineNoteV2Test {
     final OfflineNoteV2IssuerDeviceBinding binding =
         new OfflineNoteV2IssuerDeviceBinding("device-1", offlinePublicKey, bindingJson);
     final OfflineIssuerExecutor executor = new OfflineIssuerExecutor(certificateJson);
-    final java.security.KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final List<byte[]> signedMessages = new ArrayList<>();
     final ToriiOfflineNoteV2IssuerClient client =
         new ToriiOfflineNoteV2IssuerClient(
-            new ToriiCanonicalRequestAuth(accountId, keyPair.getPrivate()),
+            new ToriiCanonicalRequestAuth(
+                accountId,
+                message -> {
+                  signedMessages.add(Arrays.copyOf(message, message.length));
+                  return fakeIssuerSignature(message);
+                }),
             (chainId, requestAccountId, requestAssetDefinitionId) -> binding,
             (chainId, requestAccountId, requestAssetDefinitionId, operation, lineageId, proofAmount) -> {
               final Map<String, Object> proof = new LinkedHashMap<>();
@@ -2076,7 +2081,19 @@ public final class OfflineNoteV2Test {
     assertEquals("", string(refillBody, "local_state_hash"), "refill local state hash");
     assertEquals("attestation-key-1", string(refillBody, "attestation_key_id"), "refill attestation key");
     assertEquals("auth-refill-1", string(refillBody, "nonce"), "refill nonce");
-    assertTrue(!string(refillBody, "signature_base64").isBlank(), "refill body signature");
+    assertEquals(2L, signedMessages.size(), "issuer body auth signing count");
+    final byte[] refillMessage =
+        CanonicalRequestSigner.canonicalBodyAuthSignatureMessage(
+            "POST",
+            executor.requests.get(0).uri(),
+            refillBody,
+            1_700_000_000_000L,
+            "auth-refill-1");
+    assertTrue(Arrays.equals(refillMessage, signedMessages.get(0)), "refill body auth message");
+    assertEquals(
+        Base64.getEncoder().encodeToString(fakeIssuerSignature(refillMessage)),
+        string(refillBody, "signature_base64"),
+        "refill body signature");
     assertEquals(
         "nested-device-signature-is-not-body-auth",
         string(obj(refillBody, "device_binding"), "signature_base64"),
@@ -2088,11 +2105,31 @@ public final class OfflineNoteV2Test {
     assertEquals(hex(commitment), string(issueBody, "note_commitment"), "issue commitment");
     assertEquals(0L, longValue(issueBody, "local_revision"), "pre-issue revision");
     assertEquals("0", string(issueBody, "local_balance"), "pre-issue balance");
+    final byte[] issueMessage =
+        CanonicalRequestSigner.canonicalBodyAuthSignatureMessage(
+            "POST",
+            executor.requests.get(1).uri(),
+            issueBody,
+            1_700_000_000_000L,
+            "auth-issue-1");
+    assertTrue(Arrays.equals(issueMessage, signedMessages.get(1)), "issue body auth message");
+    assertEquals(
+        Base64.getEncoder().encodeToString(fakeIssuerSignature(issueMessage)),
+        string(issueBody, "signature_base64"),
+        "issue body signature");
     assertEquals("auth-issue-1", string(issueBody, "nonce"), "issue nonce");
     assertEquals(
         "load", string(obj(issueBody, "device_proof"), "operation"), "issue device proof");
     assertEquals("5", string(obj(issueBody, "device_proof"), "amount"), "issue proof amount");
     obj(issueBody, "lineage_state");
+  }
+
+  private static byte[] fakeIssuerSignature(final byte[] message) {
+    final byte[] signature = new byte[64];
+    for (int index = 0; index < signature.length; index++) {
+      signature[index] = (byte) (message[index % message.length] ^ (index + 17));
+    }
+    return signature;
   }
 
   private static void walletLoadDoesNotBlockIssuerCompletionThread() throws Exception {

@@ -328,6 +328,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::BlockSyncUpdate(_)
                 | BlockMessage::BlockBodyResponse(_)
                 | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Response(_))
+                | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Proof(_))
+                | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Body(_))
                 | BlockMessage::RbcInit(_) => T::ConsensusPayload,
                 BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)

@@ -3482,6 +3482,8 @@ pub mod governance {
         pub const MAX_REPLICAS_CEILING: Option<u16> = Some(5);
         /// Optional maximum retention epoch (inclusive); `None` disables the cap.
         pub const MAX_RETENTION_EPOCH: Option<u64> = None;
+        /// Permissionless public pins do not require council signatures by default.
+        pub const REQUIRE_COUNCIL_SIGNATURES: bool = false;
     }
 
     /// Default SoraFS public pin fee configuration.

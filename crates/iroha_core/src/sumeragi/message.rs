@@ -548,6 +548,10 @@ pub enum CertifiedBlockFetch {
     Request(#[skip_try_from] CertifiedBlockFetchRequest),
     /// Response carrying the certified block and commit proof.
     Response(#[skip_try_from] CertifiedBlockFetchResponse),
+    /// Commit proof companion used when the full certified response exceeds the frame cap.
+    Proof(#[skip_try_from] CertifiedBlockFetchProof),
+    /// Block body companion used when the full certified response exceeds the frame cap.
+    Body(#[skip_try_from] CertifiedBlockFetchBody),
 }
 
 /// Request the exact certified block for a known commit QC subject.
@@ -582,6 +586,36 @@ pub struct CertifiedBlockFetchResponse {
     pub stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
 }
 
+/// Proof companion for an exact certified block fetch response.
+#[derive(Debug, Clone, Decode, Encode)]
+pub struct CertifiedBlockFetchProof {
+    /// Height certified by the commit QC.
+    pub height: u64,
+    /// View certified by the commit QC.
+    pub view: u64,
+    /// Hash of the certified block.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Commit QC that certifies `block_hash`.
+    pub commit_qc: iroha_data_model::consensus::Qc,
+    /// Validator checkpoint aligned to `commit_qc`.
+    pub validator_checkpoint: iroha_data_model::consensus::ValidatorSetCheckpoint,
+    /// Optional stake snapshot aligned to the validator set.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
+}
+
+/// Body companion for an exact certified block fetch response.
+#[derive(Debug, Clone, Decode, Encode)]
+pub struct CertifiedBlockFetchBody {
+    /// Height of the certified block.
+    pub height: u64,
+    /// View of the certified block.
+    pub view: u64,
+    /// Full block body for the certified subject.
+    pub block: SignedBlock,
+}
+
 /// Validation error for a malformed certified block response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CertifiedBlockFetchValidationError {
@@ -611,40 +645,82 @@ impl CertifiedBlockFetchResponse {
         if header.view_change_index() != self.view {
             return Err(CertifiedBlockFetchValidationError::ViewMismatch);
         }
-        if !matches!(self.commit_qc.phase, super::consensus::Phase::Commit)
-            || self.commit_qc.aggregate.signers_bitmap.is_empty()
-            || self.commit_qc.aggregate.bls_aggregate_signature.is_empty()
-        {
-            return Err(CertifiedBlockFetchValidationError::Uncertified);
+        validate_certified_fetch_proof_parts(
+            self.height,
+            self.view,
+            self.block.hash(),
+            &self.commit_qc,
+            &self.validator_checkpoint,
+        )
+    }
+}
+
+impl CertifiedBlockFetchProof {
+    /// Validate that the proof self-certifies the carried block hash.
+    pub fn validate_subject(&self) -> Result<(), CertifiedBlockFetchValidationError> {
+        validate_certified_fetch_proof_parts(
+            self.height,
+            self.view,
+            self.block_hash,
+            &self.commit_qc,
+            &self.validator_checkpoint,
+        )
+    }
+}
+
+impl CertifiedBlockFetchBody {
+    /// Validate that the body matches the carried height/view.
+    pub fn validate_subject(&self) -> Result<(), CertifiedBlockFetchValidationError> {
+        let header = self.block.header();
+        if header.height().get() != self.height {
+            return Err(CertifiedBlockFetchValidationError::HeightMismatch);
         }
-        if self.commit_qc.subject_block_hash != self.block.hash() {
-            return Err(CertifiedBlockFetchValidationError::BlockHashMismatch);
-        }
-        if self.commit_qc.height != self.height {
-            return Err(CertifiedBlockFetchValidationError::QcHeightMismatch);
-        }
-        if self.commit_qc.view != self.view {
-            return Err(CertifiedBlockFetchValidationError::QcViewMismatch);
-        }
-        if self.validator_checkpoint.height != self.height
-            || self.validator_checkpoint.view != self.view
-            || self.validator_checkpoint.block_hash != self.commit_qc.subject_block_hash
-            || self.validator_checkpoint.chain_order_hash != self.commit_qc.chain_order_hash
-            || self.validator_checkpoint.rechain_seq != self.commit_qc.rechain_seq
-            || self.validator_checkpoint.parent_state_root != self.commit_qc.parent_state_root
-            || self.validator_checkpoint.post_state_root != self.commit_qc.post_state_root
-            || self.validator_checkpoint.validator_set != self.commit_qc.validator_set
-            || self.validator_checkpoint.signers_bitmap != self.commit_qc.aggregate.signers_bitmap
-            || self.validator_checkpoint.bls_aggregate_signature
-                != self.commit_qc.aggregate.bls_aggregate_signature
-            || self.validator_checkpoint.validator_set_hash != self.commit_qc.validator_set_hash
-            || self.validator_checkpoint.validator_set_hash_version
-                != self.commit_qc.validator_set_hash_version
-        {
-            return Err(CertifiedBlockFetchValidationError::CheckpointMismatch);
+        if header.view_change_index() != self.view {
+            return Err(CertifiedBlockFetchValidationError::ViewMismatch);
         }
         Ok(())
     }
+}
+
+fn validate_certified_fetch_proof_parts(
+    height: u64,
+    view: u64,
+    block_hash: HashOf<BlockHeader>,
+    commit_qc: &iroha_data_model::consensus::Qc,
+    validator_checkpoint: &iroha_data_model::consensus::ValidatorSetCheckpoint,
+) -> Result<(), CertifiedBlockFetchValidationError> {
+    if !matches!(commit_qc.phase, super::consensus::Phase::Commit)
+        || commit_qc.aggregate.signers_bitmap.is_empty()
+        || commit_qc.aggregate.bls_aggregate_signature.is_empty()
+    {
+        return Err(CertifiedBlockFetchValidationError::Uncertified);
+    }
+    if commit_qc.subject_block_hash != block_hash {
+        return Err(CertifiedBlockFetchValidationError::BlockHashMismatch);
+    }
+    if commit_qc.height != height {
+        return Err(CertifiedBlockFetchValidationError::QcHeightMismatch);
+    }
+    if commit_qc.view != view {
+        return Err(CertifiedBlockFetchValidationError::QcViewMismatch);
+    }
+    if validator_checkpoint.height != height
+        || validator_checkpoint.view != view
+        || validator_checkpoint.block_hash != commit_qc.subject_block_hash
+        || validator_checkpoint.chain_order_hash != commit_qc.chain_order_hash
+        || validator_checkpoint.rechain_seq != commit_qc.rechain_seq
+        || validator_checkpoint.parent_state_root != commit_qc.parent_state_root
+        || validator_checkpoint.post_state_root != commit_qc.post_state_root
+        || validator_checkpoint.validator_set != commit_qc.validator_set
+        || validator_checkpoint.signers_bitmap != commit_qc.aggregate.signers_bitmap
+        || validator_checkpoint.bls_aggregate_signature
+            != commit_qc.aggregate.bls_aggregate_signature
+        || validator_checkpoint.validator_set_hash != commit_qc.validator_set_hash
+        || validator_checkpoint.validator_set_hash_version != commit_qc.validator_set_hash_version
+    {
+        return Err(CertifiedBlockFetchValidationError::CheckpointMismatch);
+    }
+    Ok(())
 }
 
 impl From<&SignedBlock> for BlockSyncUpdate {
@@ -867,6 +943,27 @@ mod tests {
         }
     }
 
+    fn sample_certified_block_fetch_proof(seed: u8) -> CertifiedBlockFetchProof {
+        let response = sample_certified_block_fetch_response(seed);
+        CertifiedBlockFetchProof {
+            height: response.height,
+            view: response.view,
+            block_hash: response.block.hash(),
+            commit_qc: response.commit_qc,
+            validator_checkpoint: response.validator_checkpoint,
+            stake_snapshot: response.stake_snapshot,
+        }
+    }
+
+    fn sample_certified_block_fetch_body(seed: u8) -> CertifiedBlockFetchBody {
+        let response = sample_certified_block_fetch_response(seed);
+        CertifiedBlockFetchBody {
+            height: response.height,
+            view: response.view,
+            block: response.block,
+        }
+    }
+
     fn sample_exec_witness_msg(seed: u8) -> consensus::ExecWitnessMsg {
         consensus::ExecWitnessMsg {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -1086,6 +1183,20 @@ mod tests {
     }
 
     #[test]
+    fn certified_block_fetch_proof_accepts_matching_block_qc_and_checkpoint() {
+        let proof = sample_certified_block_fetch_proof(28);
+
+        assert_eq!(proof.validate_subject(), Ok(()));
+    }
+
+    #[test]
+    fn certified_block_fetch_body_accepts_matching_height_and_view() {
+        let body = sample_certified_block_fetch_body(29);
+
+        assert_eq!(body.validate_subject(), Ok(()));
+    }
+
+    #[test]
     fn certified_block_fetch_response_rejects_mismatched_hash() {
         let mut response = sample_certified_block_fetch_response(22);
         response.commit_qc.subject_block_hash =
@@ -1119,6 +1230,13 @@ mod tests {
             qc_view_mismatch.validate_subject(),
             Err(CertifiedBlockFetchValidationError::QcViewMismatch)
         );
+
+        let mut qc_height_mismatch = sample_certified_block_fetch_response(38);
+        qc_height_mismatch.commit_qc.height = qc_height_mismatch.commit_qc.height.saturating_add(1);
+        assert_eq!(
+            qc_height_mismatch.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::QcHeightMismatch)
+        );
     }
 
     #[test]
@@ -1129,6 +1247,167 @@ mod tests {
         assert_eq!(
             response.validate_subject(),
             Err(CertifiedBlockFetchValidationError::Uncertified)
+        );
+    }
+
+    #[test]
+    fn certified_block_fetch_response_rejects_empty_certificate_parts() {
+        let mut empty_bitmap = sample_certified_block_fetch_response(32);
+        empty_bitmap.commit_qc.aggregate.signers_bitmap.clear();
+        assert_eq!(
+            empty_bitmap.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::Uncertified)
+        );
+
+        let mut empty_signature = sample_certified_block_fetch_response(33);
+        empty_signature
+            .commit_qc
+            .aggregate
+            .bls_aggregate_signature
+            .clear();
+        assert_eq!(
+            empty_signature.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::Uncertified)
+        );
+    }
+
+    #[test]
+    fn certified_block_fetch_proof_rejects_checkpoint_mismatch() {
+        let mut proof = sample_certified_block_fetch_proof(34);
+        proof.validator_checkpoint.signers_bitmap.push(0xff);
+
+        assert_eq!(
+            proof.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
+        );
+    }
+
+    #[test]
+    fn certified_block_fetch_proof_rejects_mismatched_or_uncertified_qc() {
+        let mut block_hash_mismatch = sample_certified_block_fetch_proof(39);
+        block_hash_mismatch.commit_qc.subject_block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x39; Hash::LENGTH]));
+        assert_eq!(
+            block_hash_mismatch.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::BlockHashMismatch)
+        );
+
+        let mut height_mismatch = sample_certified_block_fetch_proof(40);
+        height_mismatch.commit_qc.height = height_mismatch.commit_qc.height.saturating_add(1);
+        assert_eq!(
+            height_mismatch.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::QcHeightMismatch)
+        );
+
+        let mut view_mismatch = sample_certified_block_fetch_proof(41);
+        view_mismatch.commit_qc.view = view_mismatch.commit_qc.view.saturating_add(1);
+        assert_eq!(
+            view_mismatch.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::QcViewMismatch)
+        );
+
+        let mut uncertified = sample_certified_block_fetch_proof(42);
+        uncertified.commit_qc.phase = consensus::Phase::Prepare;
+        assert_eq!(
+            uncertified.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::Uncertified)
+        );
+    }
+
+    #[test]
+    fn certified_block_fetch_response_rejects_checkpoint_mismatch() {
+        let mut response = sample_certified_block_fetch_response(37);
+        response.validator_checkpoint.validator_set_hash_version = response
+            .validator_checkpoint
+            .validator_set_hash_version
+            .saturating_add(1);
+
+        assert_eq!(
+            response.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
+        );
+    }
+
+    #[test]
+    fn certified_block_fetch_rejects_checkpoint_root_and_roster_mutations() {
+        let mut chain_order = sample_certified_block_fetch_response(43);
+        chain_order.validator_checkpoint.chain_order_hash = Hash::prehashed([0x43; Hash::LENGTH]);
+        assert_eq!(
+            chain_order.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
+        );
+
+        let mut state_root = sample_certified_block_fetch_proof(44);
+        state_root.validator_checkpoint.post_state_root = Hash::prehashed([0x44; Hash::LENGTH]);
+        assert_eq!(
+            state_root.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
+        );
+
+        let mut roster = sample_certified_block_fetch_response(45);
+        let extra = KeyPair::from_seed(vec![45; 32], Algorithm::Ed25519);
+        roster
+            .validator_checkpoint
+            .validator_set
+            .push(PeerId::from(extra.public_key().clone()));
+        assert_eq!(
+            roster.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
+        );
+    }
+
+    #[test]
+    fn certified_block_fetch_rejects_checkpoint_signature_and_hash_mutations() {
+        let mut parent_root = sample_certified_block_fetch_response(46);
+        parent_root.validator_checkpoint.parent_state_root = Hash::prehashed([0x46; Hash::LENGTH]);
+        assert_eq!(
+            parent_root.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
+        );
+
+        let mut rechain_seq = sample_certified_block_fetch_proof(47);
+        rechain_seq.validator_checkpoint.rechain_seq = rechain_seq
+            .validator_checkpoint
+            .rechain_seq
+            .saturating_add(1);
+        assert_eq!(
+            rechain_seq.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
+        );
+
+        let mut aggregate_signature = sample_certified_block_fetch_response(48);
+        aggregate_signature
+            .validator_checkpoint
+            .bls_aggregate_signature
+            .push(0xff);
+        assert_eq!(
+            aggregate_signature.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
+        );
+
+        let mut validator_set_hash = sample_certified_block_fetch_proof(49);
+        validator_set_hash.validator_checkpoint.validator_set_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x49; Hash::LENGTH]));
+        assert_eq!(
+            validator_set_hash.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::CheckpointMismatch)
+        );
+    }
+
+    #[test]
+    fn certified_block_fetch_body_rejects_mismatched_height_and_view() {
+        let mut height_mismatch = sample_certified_block_fetch_body(35);
+        height_mismatch.height = height_mismatch.height.saturating_add(1);
+        assert_eq!(
+            height_mismatch.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::HeightMismatch)
+        );
+
+        let mut view_mismatch = sample_certified_block_fetch_body(36);
+        view_mismatch.view = view_mismatch.view.saturating_add(1);
+        assert_eq!(
+            view_mismatch.validate_subject(),
+            Err(CertifiedBlockFetchValidationError::ViewMismatch)
         );
     }
 
@@ -1145,9 +1424,17 @@ mod tests {
             },
         ));
         let response = BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Response(response));
+        let proof = BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Proof(
+            sample_certified_block_fetch_proof(30),
+        ));
+        let body = BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Body(
+            sample_certified_block_fetch_body(31),
+        ));
 
         let request_roundtrip = roundtrip_cached_block_message_over_network_message(request);
         let response_roundtrip = roundtrip_cached_block_message_over_network_message(response);
+        let proof_roundtrip = roundtrip_cached_block_message_over_network_message(proof);
+        let body_roundtrip = roundtrip_cached_block_message_over_network_message(body);
 
         assert!(matches!(
             request_roundtrip,
@@ -1163,6 +1450,22 @@ mod tests {
                 if matches!(
                     wire.as_message(),
                     BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Response(_))
+                )
+        ));
+        assert!(matches!(
+            proof_roundtrip,
+            crate::NetworkMessage::SumeragiBlock(wire)
+                if matches!(
+                    wire.as_message(),
+                    BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Proof(_))
+                )
+        ));
+        assert!(matches!(
+            body_roundtrip,
+            crate::NetworkMessage::SumeragiBlock(wire)
+                if matches!(
+                    wire.as_message(),
+                    BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Body(_))
                 )
         ));
     }

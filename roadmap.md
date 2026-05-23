@@ -93,8 +93,18 @@ Kotlin, Java, Swift, and JavaScript.
 
 **Next checkpoints:** Sumeragi V1 adapter integration, certified-block
 recovery soak coverage, peer-gap and DA/RBC tail-latency reductions,
-restarted-peer replay coverage, and updated operator runbooks when defaults
-change.
+restarted-peer replay coverage, broader formal coverage beyond the current
+commit-path, frontier, fork-safety, quorum-policy, RBC deliver-quorum,
+QC signer-bitmap admission, commit-root consistency, commit-pipeline recovery
+gate, commit-evidence replay gate, block-sync recovery gate, precommit
+vote-emission gate, native AMX attestation gate, native AMX queue-journal
+replay gate, proposal assembly gate, pure engine tick gate, pure engine
+NewView-QC gate, pure engine proposal-ingress gate, pure engine prepare-QC
+gate, pure engine commit-QC gate, pure engine committed-block gate, pure engine
+payload-availability gate, pure engine validation-result gate,
+reconfiguration, certified-recovery, view-change, validation-callback,
+certificate-admission, and highest-QC selection bounded models, and updated
+operator runbooks when defaults change.
 
 ## Community and Governance
 
