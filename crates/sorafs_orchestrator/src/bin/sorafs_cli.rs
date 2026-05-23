@@ -7534,6 +7534,10 @@ fn build_pin_register_payload(
         "chunk_digest_sha3_256_hex".into(),
         Value::from(hex_encode(chunk_digest_sha3)),
     );
+    map.insert(
+        "content_length".into(),
+        Value::from(manifest.content_length),
+    );
     map.insert("submitted_epoch".into(), Value::from(submitted_epoch));
 
     if let Some(alias) = alias {
@@ -7899,6 +7903,10 @@ mod tests {
         assert_eq!(
             payload["authority"].as_str().expect("authority literal"),
             authority_literal
+        );
+        assert_eq!(
+            payload["content_length"].as_u64().expect("content length"),
+            manifest.content_length
         );
     }
 
