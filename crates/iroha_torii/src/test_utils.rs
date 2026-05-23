@@ -1275,6 +1275,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             bridge_proof_max_past_age_blocks: defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
             bridge_proof_max_future_drift_blocks:
                 defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+            sccp_allow_unready_transparent_proofs: false,
             poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
             kaigi_roster_join_vk: None,

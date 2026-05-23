@@ -10013,6 +10013,10 @@ async fn handler_zk_ivm_derive(
         ))
     })?
     .map_err(|msg| {
+        iroha_logger::warn!(
+            error = %msg,
+            "failed to derive IVM proved executable payload"
+        );
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(msg),
         ))

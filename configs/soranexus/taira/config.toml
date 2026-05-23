@@ -161,6 +161,9 @@ enabled = true
 [confidential]
 enabled = true
 
+[zk]
+sccp_allow_unready_transparent_proofs = true
+
 [zk.halo2]
 enabled = true
 

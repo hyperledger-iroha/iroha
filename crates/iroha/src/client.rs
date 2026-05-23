@@ -12773,7 +12773,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_vk_json(&self, backend: &str, name: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/zk/vk/{backend}/{name}"));
+        let url = join_torii_url_with_path_segments(&self.torii_url, "v1/zk/vk", &[backend, name]);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -14702,11 +14702,24 @@ pub(crate) fn join_torii_url(url: &Url, path: &str) -> Url {
     url.join(path).expect("Valid URI")
 }
 
+fn join_torii_url_with_path_segments(url: &Url, path: &str, segments: &[&str]) -> Url {
+    let mut url = join_torii_url(url, path);
+    {
+        let mut path_segments = url
+            .path_segments_mut()
+            .expect("Torii url must be a base URL");
+        for segment in segments {
+            path_segments.push(segment);
+        }
+    }
+    url
+}
+
 #[cfg(test)]
 mod url_join_tests {
     use url::Url;
 
-    use super::join_torii_url;
+    use super::{join_torii_url, join_torii_url_with_path_segments};
 
     #[test]
     fn join_prover_reports_paths() {
@@ -14725,6 +14738,18 @@ mod url_join_tests {
         let base = Url::parse("http://localhost:8080/api/").unwrap();
         let u = join_torii_url(&base, "v1/zk/vote/tally");
         assert_eq!(u.as_str(), "http://localhost:8080/api/v1/zk/vote/tally");
+    }
+
+    #[test]
+    fn join_vk_path_encodes_slash_containing_backend_segment() {
+        let base = Url::parse("http://localhost:8080/api/").unwrap();
+        let u =
+            join_torii_url_with_path_segments(&base, "v1/zk/vk", &["halo2/ipa", "ivm_execution"]);
+
+        assert_eq!(
+            u.as_str(),
+            "http://localhost:8080/api/v1/zk/vk/halo2%2Fipa/ivm_execution"
+        );
     }
 }
 

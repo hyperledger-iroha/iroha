@@ -2103,6 +2103,7 @@ fn minimal_config_snapshot() {
                 bridge_proof_max_range_len: 4096,
                 bridge_proof_max_past_age_blocks: 0,
                 bridge_proof_max_future_drift_blocks: 0,
+                sccp_allow_unready_transparent_proofs: false,
                 poseidon_params_id: None,
                 pedersen_params_id: None,
                 kaigi_roster_join_vk: None,

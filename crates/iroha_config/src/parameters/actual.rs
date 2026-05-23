@@ -7740,6 +7740,8 @@ pub struct Zk {
     pub bridge_proof_max_past_age_blocks: u64,
     /// Maximum future drift (in blocks) a bridge proof's end height may lead the current block (0 = unlimited).
     pub bridge_proof_max_future_drift_blocks: u64,
+    /// Allow SCCP transparent proof consumption for lanes whose destination verifiers are not production-ready.
+    pub sccp_allow_unready_transparent_proofs: bool,
     /// Poseidon parameter set identifier to embed into policies (if any).
     pub poseidon_params_id: Option<u32>,
     /// Pedersen parameter set identifier to embed into policies (if any).

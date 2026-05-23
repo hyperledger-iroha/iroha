@@ -1723,6 +1723,13 @@ pub fn sccp_manifest_is_production_ready(manifest: &SccpProofManifestV1) -> bool
     manifest.production_ready
 }
 
+pub fn sccp_manifest_allows_transparent_proofs(
+    manifest: &SccpProofManifestV1,
+    allow_unready: bool,
+) -> bool {
+    sccp_manifest_is_production_ready(manifest) || allow_unready
+}
+
 pub fn sccp_message_payload_kind_keys_v1() -> Vec<String> {
     vec![
         "asset_register".to_owned(),
@@ -2062,7 +2069,20 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_signer(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
 ) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_counterparty_proof_job_from_bundle_internal(bundle, None, Some(signer))
+    build_sccp_counterparty_proof_job_from_bundle_internal(bundle, None, Some(signer), false)
+}
+
+pub fn build_sccp_counterparty_proof_job_from_bundle_with_signer_allow_unready(
+    bundle: &NexusSccpMessageProofV1,
+    signer: &KeyPair,
+    allow_unready: bool,
+) -> Option<SccpCounterpartyProofJobV1> {
+    build_sccp_counterparty_proof_job_from_bundle_internal(
+        bundle,
+        None,
+        Some(signer),
+        allow_unready,
+    )
 }
 
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer(
@@ -2074,26 +2094,49 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_an
         bundle,
         Some(destination_binding),
         Some(signer),
+        false,
+    )
+}
+
+pub fn build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer_allow_unready(
+    bundle: &NexusSccpMessageProofV1,
+    destination_binding: &SccpDestinationBindingV1,
+    signer: &KeyPair,
+    allow_unready: bool,
+) -> Option<SccpCounterpartyProofJobV1> {
+    build_sccp_counterparty_proof_job_from_bundle_internal(
+        bundle,
+        Some(destination_binding),
+        Some(signer),
+        allow_unready,
     )
 }
 
 pub fn build_sccp_counterparty_proof_job_from_bundle(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_counterparty_proof_job_from_bundle_internal(bundle, None, None)
+    build_sccp_counterparty_proof_job_from_bundle_internal(bundle, None, None, false)
+}
+
+pub fn build_sccp_counterparty_proof_job_from_bundle_allow_unready(
+    bundle: &NexusSccpMessageProofV1,
+    allow_unready: bool,
+) -> Option<SccpCounterpartyProofJobV1> {
+    build_sccp_counterparty_proof_job_from_bundle_internal(bundle, None, None, allow_unready)
 }
 
 fn build_sccp_counterparty_proof_job_from_bundle_internal(
     bundle: &NexusSccpMessageProofV1,
     platform_destination_binding: Option<&SccpDestinationBindingV1>,
     signer: Option<&KeyPair>,
+    allow_unready: bool,
 ) -> Option<SccpCounterpartyProofJobV1> {
     if !verify_message_bundle_structure(bundle) {
         return None;
     }
     let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
     let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
-    if !sccp_manifest_is_production_ready(&manifest) {
+    if !sccp_manifest_allows_transparent_proofs(&manifest, allow_unready) {
         return None;
     }
     let chain_family = sccp_transparent_chain_family_for_domain(counterparty_domain)?;
@@ -2107,6 +2150,7 @@ fn build_sccp_counterparty_proof_job_from_bundle_internal(
         &proof_bytes,
         platform_destination_binding,
         signer,
+        allow_unready,
     )?;
 
     Some(SccpCounterpartyProofJobV1 {
@@ -2790,6 +2834,24 @@ pub fn build_sccp_counterparty_submission_package_with_signer(
         proof_bytes,
         None,
         Some(signer),
+        false,
+    )
+}
+
+pub fn build_sccp_counterparty_submission_package_with_signer_allow_unready(
+    bundle: &NexusSccpMessageProofV1,
+    manifest: &SccpProofManifestV1,
+    proof_bytes: &[u8],
+    signer: &KeyPair,
+    allow_unready: bool,
+) -> Option<SccpCounterpartySubmissionPackageV1> {
+    build_sccp_counterparty_submission_package_internal(
+        bundle,
+        manifest,
+        proof_bytes,
+        None,
+        Some(signer),
+        allow_unready,
     )
 }
 
@@ -2806,6 +2868,25 @@ pub fn build_sccp_counterparty_submission_package_with_destination_binding_and_s
         proof_bytes,
         Some(destination_binding),
         Some(signer),
+        false,
+    )
+}
+
+pub fn build_sccp_counterparty_submission_package_with_destination_binding_and_signer_allow_unready(
+    bundle: &NexusSccpMessageProofV1,
+    manifest: &SccpProofManifestV1,
+    proof_bytes: &[u8],
+    destination_binding: &SccpDestinationBindingV1,
+    signer: &KeyPair,
+    allow_unready: bool,
+) -> Option<SccpCounterpartySubmissionPackageV1> {
+    build_sccp_counterparty_submission_package_internal(
+        bundle,
+        manifest,
+        proof_bytes,
+        Some(destination_binding),
+        Some(signer),
+        allow_unready,
     )
 }
 
@@ -2814,7 +2895,30 @@ pub fn build_sccp_counterparty_submission_package(
     manifest: &SccpProofManifestV1,
     proof_bytes: &[u8],
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
-    build_sccp_counterparty_submission_package_internal(bundle, manifest, proof_bytes, None, None)
+    build_sccp_counterparty_submission_package_internal(
+        bundle,
+        manifest,
+        proof_bytes,
+        None,
+        None,
+        false,
+    )
+}
+
+pub fn build_sccp_counterparty_submission_package_allow_unready(
+    bundle: &NexusSccpMessageProofV1,
+    manifest: &SccpProofManifestV1,
+    proof_bytes: &[u8],
+    allow_unready: bool,
+) -> Option<SccpCounterpartySubmissionPackageV1> {
+    build_sccp_counterparty_submission_package_internal(
+        bundle,
+        manifest,
+        proof_bytes,
+        None,
+        None,
+        allow_unready,
+    )
 }
 
 fn build_sccp_counterparty_submission_package_internal(
@@ -2823,8 +2927,9 @@ fn build_sccp_counterparty_submission_package_internal(
     proof_bytes: &[u8],
     destination_binding: Option<&SccpDestinationBindingV1>,
     signer: Option<&KeyPair>,
+    allow_unready: bool,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
-    if !sccp_manifest_is_production_ready(manifest) {
+    if !sccp_manifest_allows_transparent_proofs(manifest, allow_unready) {
         return None;
     }
     let public_inputs = sccp_message_transparent_public_inputs(bundle)?;
@@ -3265,7 +3370,15 @@ pub fn build_nexus_sccp_message_transparent_proof_with_signer(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
-    build_nexus_sccp_message_transparent_proof_internal(bundle, None, Some(signer))
+    build_nexus_sccp_message_transparent_proof_internal(bundle, None, Some(signer), false)
+}
+
+pub fn build_nexus_sccp_message_transparent_proof_with_signer_allow_unready(
+    bundle: &NexusSccpMessageProofV1,
+    signer: &KeyPair,
+    allow_unready: bool,
+) -> Option<NexusSccpMessageTransparentProofV1> {
+    build_nexus_sccp_message_transparent_proof_internal(bundle, None, Some(signer), allow_unready)
 }
 
 pub fn build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer(
@@ -3277,23 +3390,46 @@ pub fn build_nexus_sccp_message_transparent_proof_with_destination_binding_and_s
         bundle,
         Some(destination_binding),
         Some(signer),
+        false,
+    )
+}
+
+pub fn build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer_allow_unready(
+    bundle: &NexusSccpMessageProofV1,
+    destination_binding: &SccpDestinationBindingV1,
+    signer: &KeyPair,
+    allow_unready: bool,
+) -> Option<NexusSccpMessageTransparentProofV1> {
+    build_nexus_sccp_message_transparent_proof_internal(
+        bundle,
+        Some(destination_binding),
+        Some(signer),
+        allow_unready,
     )
 }
 
 pub fn build_nexus_sccp_message_transparent_proof(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
-    build_nexus_sccp_message_transparent_proof_internal(bundle, None, None)
+    build_nexus_sccp_message_transparent_proof_internal(bundle, None, None, false)
+}
+
+pub fn build_nexus_sccp_message_transparent_proof_allow_unready(
+    bundle: &NexusSccpMessageProofV1,
+    allow_unready: bool,
+) -> Option<NexusSccpMessageTransparentProofV1> {
+    build_nexus_sccp_message_transparent_proof_internal(bundle, None, None, allow_unready)
 }
 
 fn build_nexus_sccp_message_transparent_proof_internal(
     bundle: &NexusSccpMessageProofV1,
     platform_destination_binding: Option<&SccpDestinationBindingV1>,
     signer: Option<&KeyPair>,
+    allow_unready: bool,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
     let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
     let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
-    if !sccp_manifest_is_production_ready(&manifest) {
+    if !sccp_manifest_allows_transparent_proofs(&manifest, allow_unready) {
         return None;
     }
     let public_inputs = sccp_message_transparent_public_inputs(bundle)?;
@@ -3304,6 +3440,7 @@ fn build_nexus_sccp_message_transparent_proof_internal(
         &proof_bytes,
         platform_destination_binding,
         signer,
+        allow_unready,
     )?;
     Some(NexusSccpMessageTransparentProofV1 {
         version: 1,
@@ -3481,6 +3618,13 @@ fn verify_sccp_evm_submission_package(
 pub fn verify_nexus_sccp_message_transparent_proof_structure(
     proof: &NexusSccpMessageTransparentProofV1,
 ) -> bool {
+    verify_nexus_sccp_message_transparent_proof_structure_allow_unready(proof, false)
+}
+
+pub fn verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
+    proof: &NexusSccpMessageTransparentProofV1,
+    allow_unready: bool,
+) -> bool {
     if proof.version != 1
         || proof.local_domain != SCCP_DOMAIN_SORA
         || proof.proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1
@@ -3492,7 +3636,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure(
     let Some(manifest) = sccp_proof_manifest_for_domain(proof.counterparty_domain) else {
         return false;
     };
-    if !sccp_manifest_is_production_ready(&manifest)
+    if !sccp_manifest_allows_transparent_proofs(&manifest, allow_unready)
         || proof.security_model != manifest.security_model
         || proof.anchor_governance != manifest.anchor_governance
         || proof.destination_binding != manifest.destination_binding
@@ -3518,6 +3662,16 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure(
                     &manifest,
                     &proof.proof_bytes,
                 )
+                .or_else(|| {
+                    allow_unready.then(|| {
+                        build_sccp_counterparty_submission_package_allow_unready(
+                            &proof.bundle,
+                            &manifest,
+                            &proof.proof_bytes,
+                            true,
+                        )
+                    })?
+                })
                 .is_some_and(|expected_submission_package| {
                     expected_submission_package == proof.submission_package
                 }),
@@ -4563,8 +4717,16 @@ pub fn recover_nexus_sccp_message_transparent_proof(
     backend: &str,
     proof_bytes: &[u8],
 ) -> Option<NexusSccpMessageTransparentProofV1> {
+    recover_nexus_sccp_message_transparent_proof_allow_unready(backend, proof_bytes, false)
+}
+
+pub fn recover_nexus_sccp_message_transparent_proof_allow_unready(
+    backend: &str,
+    proof_bytes: &[u8],
+    allow_unready: bool,
+) -> Option<NexusSccpMessageTransparentProofV1> {
     let proof = decode_nexus_sccp_message_transparent_proof(proof_bytes)?;
-    (verify_nexus_sccp_message_transparent_proof_structure(&proof)
+    (verify_nexus_sccp_message_transparent_proof_structure_allow_unready(&proof, allow_unready)
         && proof.message_backend == backend)
         .then_some(proof)
 }
