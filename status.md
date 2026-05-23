@@ -2,6 +2,17 @@
 
 Last updated: 2026-05-23
 
+## 2026-05-23 Confidential default policy hash alignment
+
+- Aligned `iroha_data_model::confidential::DEFAULT_ZK_CONSENSUS_POLICY_HASH`
+  with the hash computed by `iroha_core` from the bundled default ZK config, so
+  block builders and state validation agree on the default confidential feature
+  digest.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core default_zk_policy_hash_uses_default_zk_config --lib -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --lib`
+
 ## 2026-05-23 Nexus lane commitment fixture refresh
 
 - Regenerated the deterministic Nexus lane commitment JSON and Norito `.to`

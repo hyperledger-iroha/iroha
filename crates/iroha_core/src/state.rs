@@ -48977,6 +48977,10 @@ mod tests {
             default_zk_consensus_policy_hash(),
             compute_zk_consensus_policy_hash(&default_zk_config())
         );
+        assert_eq!(
+            iroha_data_model::confidential::DEFAULT_ZK_CONSENSUS_POLICY_HASH,
+            default_zk_consensus_policy_hash()
+        );
     }
 
     #[test]
