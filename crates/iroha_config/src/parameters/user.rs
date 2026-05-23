@@ -1403,6 +1403,12 @@ pub struct SorafsPinPolicyConstraints {
     /// Allowed storage classes (case-insensitive). `None` permits any class.
     #[config(env = "GOV_SORAFS_PIN_POLICY_ALLOWED_STORAGE_CLASSES")]
     pub allowed_storage_classes: Option<AlgorithmListConfig>,
+    /// Require council signatures on pin manifests. Public SoraFS pins are permissionless by default.
+    #[config(
+        env = "GOV_SORAFS_PIN_POLICY_REQUIRE_COUNCIL_SIGNATURES",
+        default = "crate::parameters::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES"
+    )]
+    pub require_council_signatures: bool,
 }
 
 impl Default for SorafsPinPolicyConstraints {
@@ -1415,6 +1421,8 @@ impl Default for SorafsPinPolicyConstraints {
             max_retention_epoch:
                 crate::parameters::defaults::governance::sorafs_pin_policy::MAX_RETENTION_EPOCH,
             allowed_storage_classes: None,
+            require_council_signatures:
+                crate::parameters::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES,
         }
     }
 }
@@ -1441,6 +1449,7 @@ impl SorafsPinPolicyConstraints {
             max_replicas_ceiling: self.max_replicas_ceiling,
             max_retention_epoch: self.max_retention_epoch,
             allowed_storage_classes,
+            require_council_signatures: self.require_council_signatures,
         }
     }
 }

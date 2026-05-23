@@ -7511,6 +7511,8 @@ pub struct SorafsPinPolicyConstraints {
     pub max_retention_epoch: Option<u64>,
     /// Allowed storage classes for replicas; `None` permits any class.
     pub allowed_storage_classes: Option<BTreeSet<SorafsStorageClass>>,
+    /// Whether manifest validation requires council signatures.
+    pub require_council_signatures: bool,
 }
 
 impl Default for SorafsPinPolicyConstraints {
@@ -7522,6 +7524,8 @@ impl Default for SorafsPinPolicyConstraints {
             max_retention_epoch:
                 super::defaults::governance::sorafs_pin_policy::MAX_RETENTION_EPOCH,
             allowed_storage_classes: None,
+            require_council_signatures:
+                super::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES,
         }
     }
 }

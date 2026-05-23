@@ -345,5 +345,10 @@ policy_jury_size = 25
 oversight_committee_size = 7
 fma_committee_size = 5
 
+[gov.sorafs_pin_policy]
+# Public SoraFS pinning is permissionless and fee-gated; do not require
+# governance/council signatures on user-submitted manifests.
+require_council_signatures = false
+
 [gov.sorafs_telemetry]
 submitters = ["testuﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T"]

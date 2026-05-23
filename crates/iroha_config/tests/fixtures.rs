@@ -2258,6 +2258,7 @@ fn minimal_config_snapshot() {
                     max_replicas_ceiling: None,
                     max_retention_epoch: None,
                     allowed_storage_classes: None,
+                    require_council_signatures: false,
                 },
                 sorafs_pin_fee_asset_id: AssetDefinitionId {
                     aid_bytes: [

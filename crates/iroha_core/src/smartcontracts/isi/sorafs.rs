@@ -64,6 +64,7 @@ pub fn manifest_pin_policy_constraints_from_config(
         max_replicas_ceiling: config.max_replicas_ceiling,
         max_retention_epoch: config.max_retention_epoch,
         allowed_storage_classes,
+        require_council_signatures: config.require_council_signatures,
     }
 }
 
@@ -1312,12 +1313,14 @@ mod pin_policy_tests {
             max_replicas_ceiling: Some(4),
             max_retention_epoch: Some(10),
             allowed_storage_classes: Some(allowed.clone()),
+            require_council_signatures: true,
         };
 
         let constraints = manifest_pin_policy_constraints_from_config(&config);
         assert_eq!(constraints.min_replicas_floor, 2);
         assert_eq!(constraints.max_replicas_ceiling, Some(4));
         assert_eq!(constraints.max_retention_epoch, Some(10));
+        assert!(constraints.require_council_signatures);
         let produced = constraints
             .allowed_storage_classes
             .expect("allowed storage classes propagated");
