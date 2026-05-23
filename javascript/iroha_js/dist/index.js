@@ -341,7 +341,7 @@ export { decodeReplicationOrder, SorafsGatewayFetchError, sorafsGatewayFetch } f
 export {
   queryOracleFeeds,
   queryOracleFeedHistory,
-  getLatestSoraSwapOracleAttestation,
+  getLatestDefiOracleAttestation,
 } from "./soracles.js";
 export { ConnectRetryPolicy } from "./connectRetryPolicy.js";
 

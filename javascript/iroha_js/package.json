@@ -10,6 +10,14 @@
       "import": "./dist/index.js",
       "types": "./index.d.ts"
     },
+    "./address": {
+      "import": "./dist/address.js",
+      "types": "./index.d.ts"
+    },
+    "./instruction-builders": {
+      "import": "./dist/instructionBuilders.js",
+      "types": "./index.d.ts"
+    },
     "./torii": "./dist/toriiClient.js",
     "./norito": "./dist/norito.js",
     "./canonical-request": {
@@ -32,6 +40,12 @@
   },
   "typesVersions": {
     "*": {
+      "address": [
+        "./index.d.ts"
+      ],
+      "instruction-builders": [
+        "./index.d.ts"
+      ],
       "torii": [
         "./index.d.ts"
       ],
