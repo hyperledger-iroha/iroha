@@ -843,6 +843,10 @@ fn minimal_config_snapshot() {
                             envelopes_dir: "tests/fixtures/sorafs_admission",
                         },
                     ),
+                    publish: SorafsPublishDiscovery {
+                        gateway_base_url: None,
+                        pin_torii_urls: [],
+                    },
                 },
                 sorafs_storage: SorafsStorage {
                     enabled: false,
