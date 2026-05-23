@@ -49,21 +49,27 @@ enum CommittedQcDecision {
     Drop,
 }
 
+#[allow(dead_code)]
+#[derive(Debug)]
+struct CommitRootGroupTrace {
+    parent_state_root: Hash,
+    post_state_root: Hash,
+    signers: Vec<ValidatorIndex>,
+    peers: Vec<String>,
+}
+
 /// For small committees, worker handoff can dominate the aggregate verification cost.
 /// Keep verification inline to avoid unnecessary queueing latency on the hot path.
 const QC_VERIFY_INLINE_ROSTER_MAX: usize = 8;
 
-pub(super) fn select_commit_root_signers(
+fn commit_root_signer_groups(
     accepted_votes: &BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
     block_hash: HashOf<BlockHeader>,
     height: u64,
     view: u64,
     epoch: u64,
     signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
-) -> (BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize) {
-    if signers.is_empty() {
-        return (BTreeSet::new(), 0);
-    }
+) -> BTreeMap<(Hash, Hash), BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> {
     let mut groups: BTreeMap<(Hash, Hash), BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> =
         BTreeMap::new();
     for signer in signers {
@@ -83,6 +89,52 @@ pub(super) fn select_commit_root_signers(
             .or_default()
             .insert(*signer);
     }
+    groups
+}
+
+fn commit_root_group_traces(
+    groups: &BTreeMap<(Hash, Hash), BTreeSet<crate::sumeragi::consensus::ValidatorIndex>>,
+    signature_topology: &super::network_topology::Topology,
+) -> Vec<CommitRootGroupTrace> {
+    groups
+        .iter()
+        .map(|((parent_state_root, post_state_root), group)| {
+            let signers = group.iter().copied().collect::<Vec<_>>();
+            let peers = group
+                .iter()
+                .map(|signer| {
+                    signature_topology
+                        .as_ref()
+                        .get(*signer as usize)
+                        .map_or_else(
+                            || format!("<missing-validator-index:{signer}>"),
+                            |peer| format!("{peer}"),
+                        )
+                })
+                .collect::<Vec<_>>();
+            CommitRootGroupTrace {
+                parent_state_root: *parent_state_root,
+                post_state_root: *post_state_root,
+                signers,
+                peers,
+            }
+        })
+        .collect()
+}
+
+pub(super) fn select_commit_root_signers(
+    accepted_votes: &BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+) -> (BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize) {
+    if signers.is_empty() {
+        return (BTreeSet::new(), 0);
+    }
+    let groups =
+        commit_root_signer_groups(accepted_votes, block_hash, height, view, epoch, signers);
     let group_count = groups.len();
     let mut selected: Option<(
         &(Hash, Hash),
@@ -157,26 +209,8 @@ pub(super) fn select_commit_root_signers_by_stake(
     if signers.is_empty() {
         return Ok((BTreeSet::new(), 0));
     }
-    let mut groups: BTreeMap<(Hash, Hash), BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> =
-        BTreeMap::new();
-    for signer in signers {
-        let Some(vote) = accepted_votes.get(signer) else {
-            continue;
-        };
-        if vote.phase != crate::sumeragi::consensus::Phase::Commit
-            || vote.block_hash != block_hash
-            || vote.height != height
-            || vote.view != view
-            || vote.epoch != epoch
-        {
-            continue;
-        }
-        groups
-            .entry((vote.parent_state_root, vote.post_state_root))
-            .or_default()
-            .insert(*signer);
-    }
-
+    let groups =
+        commit_root_signer_groups(accepted_votes, block_hash, height, view, epoch, signers);
     let group_count = groups.len();
     let mut selected: Option<(
         &(Hash, Hash),
@@ -3935,6 +3969,19 @@ impl Actor {
                     return;
                 }
             };
+            let root_group_traces = (root_groups > 1).then(|| {
+                commit_root_group_traces(
+                    &commit_root_signer_groups(
+                        &snapshot.accepted_votes,
+                        block_hash,
+                        height,
+                        view,
+                        epoch,
+                        &snapshot.signers,
+                    ),
+                    &signature_topology,
+                )
+            });
             snapshot.retain_signers(filtered, signature_topology.as_ref().len());
             if root_groups > 1 && snapshot.signers.len() < valid_signers {
                 warn!(
@@ -3945,6 +3992,7 @@ impl Actor {
                     selected_signers = snapshot.signers.len(),
                     valid_signers,
                     required,
+                    root_group_traces = ?root_group_traces.unwrap_or_default(),
                     "commit votes split across execution roots; selected root signer set for QC"
                 );
             }
