@@ -19566,6 +19566,7 @@ impl State {
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
                 bridge_proof_max_future_drift_blocks:
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+                sccp_allow_unready_transparent_proofs: false,
                 poseidon_params_id:
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:
@@ -24513,6 +24514,7 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
         bridge_proof_max_future_drift_blocks:
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+        sccp_allow_unready_transparent_proofs: false,
         poseidon_params_id: iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
         kaigi_roster_join_vk: None,
@@ -24739,6 +24741,11 @@ pub fn compute_zk_consensus_policy_hash(
         &mut h,
         "bridge_proof_max_future_drift_blocks",
         zk_config.bridge_proof_max_future_drift_blocks,
+    );
+    zk_policy_put_bool(
+        &mut h,
+        "sccp_allow_unready_transparent_proofs",
+        zk_config.sccp_allow_unready_transparent_proofs,
     );
     zk_policy_put_option_u32(&mut h, "poseidon_params_id", zk_config.poseidon_params_id);
     zk_policy_put_option_u32(&mut h, "pedersen_params_id", zk_config.pedersen_params_id);
@@ -34121,6 +34128,7 @@ pub(crate) mod deserialize {
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
             bridge_proof_max_future_drift_blocks:
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+            sccp_allow_unready_transparent_proofs: false,
             poseidon_params_id:
                 iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id:

@@ -2,6 +2,21 @@
 
 Last updated: 2026-05-23
 
+## 2026-05-23 SCCP IVM-proved helper replay fix
+
+- `gov_instruction` now publishes the generated `RecordSccpMessage` literal TLV
+  into the IVM INPUT region before invoking
+  `SMARTCONTRACT_EXECUTE_INSTRUCTION`, so derived/replayed SCCP IVM-proved
+  helper bytecode passes pointer-ABI TLV validation.
+- The shared VK lookup client now appends backend and name as encoded URL path
+  segments, so slash-containing backends such as `halo2/ipa` resolve
+  idempotently through `/v1/zk/vk/halo2%2Fipa/...`.
+- Focused validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/bin/gov_instruction.rs crates/iroha/src/client.rs`
+  - `CARGO_TARGET_DIR=target/codex-review-fixes CARGO_BUILD_JOBS=2 cargo test -p iroha_cli --bin gov_instruction -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-review-fixes CARGO_BUILD_JOBS=2 cargo test -p iroha url_join_tests -- --nocapture`
+  - `cargo fmt --all --check`
+
 ## 2026-05-23 Nexus template manifest hashes
 
 - `defaults/nexus/config.toml`, `configs/soranexus/nexus/config.toml`, and

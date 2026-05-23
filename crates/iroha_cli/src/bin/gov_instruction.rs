@@ -9,6 +9,7 @@ use iroha::{
     client::Client,
     config::{Config, LoadPath},
     data_model::{
+        account::address::ChainDiscriminantGuard,
         isi::{
             InstructionBox, bridge::RecordSccpMessage, decode_instruction_from_pair,
             governance::RegisterCitizen, verifying_keys,
@@ -99,6 +100,45 @@ enum Command {
     },
     /// Record an SCCP transfer through proof-gated `Executable::IvmProved` admission.
     RecordSccpTransferIvmProved {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long, default_value = "ivm_execution")]
+        vk_name: String,
+        #[arg(long)]
+        gas_asset_id: Option<String>,
+        #[arg(long, default_value_t = DEFAULT_IVM_GAS_LIMIT)]
+        gas_limit: u64,
+        #[arg(long, default_value_t = DEFAULT_MAX_CYCLES)]
+        max_cycles: u64,
+        #[arg(long)]
+        source_domain: u32,
+        #[arg(long)]
+        dest_domain: u32,
+        #[arg(long)]
+        nonce: u64,
+        #[arg(long)]
+        asset_home_domain: u32,
+        #[arg(long)]
+        asset_id_codec: u8,
+        #[arg(long)]
+        asset_id: String,
+        #[arg(long)]
+        amount: u128,
+        #[arg(long)]
+        sender_codec: u8,
+        #[arg(long)]
+        sender: String,
+        #[arg(long)]
+        recipient_codec: u8,
+        #[arg(long)]
+        recipient: String,
+        #[arg(long)]
+        route_id_codec: u8,
+        #[arg(long)]
+        route_id: String,
+    },
+    /// Build the JSON body used for `/v1/zk/ivm/derive` without submitting it.
+    BuildSccpTransferIvmDeriveRequest {
         #[arg(long)]
         config: PathBuf,
         #[arg(long, default_value = "ivm_execution")]
@@ -237,6 +277,7 @@ fn build_record_instruction_program(
     let tlv = norito_tlv(instruction)?;
     let mut code = Vec::new();
     emit_addi(&mut code, 10, 0, i64::from(LITERAL_DATA_START));
+    push_syscall(&mut code, ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)?;
     push_syscall(
         &mut code,
         ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
@@ -300,9 +341,19 @@ fn ensure_ivm_execution_vk(
             record,
         })])
         .sign(config.key_pair.private_key());
-    let hash = client
-        .submit_transaction_blocking(&tx)
-        .wrap_err("failed to submit IVM execution VK registration")?;
+    let hash = match client.submit_transaction_blocking(&tx) {
+        Ok(hash) => hash,
+        Err(err) => {
+            let message = err.to_string();
+            if message.contains("Repeated instruction")
+                || message.contains("Repetition of `Register` for id `VerifyingKey")
+            {
+                eprintln!("ivm_execution_vk_existing={}", id.name);
+                return Ok(id);
+            }
+            return Err(err).wrap_err("failed to submit IVM execution VK registration");
+        }
+    };
     eprintln!("ivm_execution_vk_registered={hash}");
     Ok(id)
 }
@@ -313,6 +364,7 @@ fn ivm_request_value(
     metadata: &Metadata,
     bytecode: &IvmBytecode,
 ) -> Result<norito::json::Value> {
+    let _chain_discriminant = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
     let mut object = norito::json::Map::new();
     object.insert("vk_ref".to_owned(), norito::json::to_value(vk_ref)?);
     object.insert(
@@ -435,6 +487,56 @@ fn submit_sccp_transfer_ivm_proved(
     output.insert("message_id".to_owned(), message_id.into());
     output.insert("tx_hash".to_owned(), tx_hash.to_string().into());
     output.insert("vk_name".to_owned(), vk_name.into());
+    print_json_value(&norito::json::Value::Object(output))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_sccp_transfer_ivm_derive_request(
+    config_path: PathBuf,
+    vk_name: String,
+    gas_asset_id: Option<String>,
+    gas_limit: u64,
+    max_cycles: u64,
+    source_domain: u32,
+    dest_domain: u32,
+    nonce: u64,
+    asset_home_domain: u32,
+    asset_id_codec: u8,
+    asset_id: String,
+    amount: u128,
+    sender_codec: u8,
+    sender: String,
+    recipient_codec: u8,
+    recipient: String,
+    route_id_codec: u8,
+    route_id: String,
+) -> Result<()> {
+    let config = load_config(&config_path)?;
+    let vk_ref = ivm_execution_vk_id(&vk_name);
+    let (message_id, payload_bytes) = record_sccp_transfer_payload_bytes(
+        source_domain,
+        dest_domain,
+        nonce,
+        asset_home_domain,
+        asset_id_codec,
+        asset_id,
+        amount,
+        sender_codec,
+        sender,
+        recipient_codec,
+        recipient,
+        route_id_codec,
+        route_id,
+    )?;
+    let instruction = InstructionBox::from(RecordSccpMessage::new(payload_bytes));
+    let program = build_record_instruction_program(&instruction, max_cycles)?;
+    let bytecode = IvmBytecode::from_compiled(program);
+    let metadata = tx_metadata(gas_asset_id.as_deref(), gas_limit)?;
+    let request = ivm_request_value(&vk_ref, &config, &metadata, &bytecode)?;
+
+    let mut output = norito::json::Map::new();
+    output.insert("message_id".to_owned(), message_id.into());
+    output.insert("request".to_owned(), request);
     print_json_value(&norito::json::Value::Object(output))
 }
 
@@ -604,6 +706,45 @@ fn main() -> Result<()> {
             route_id_codec,
             route_id,
         )?,
+        Command::BuildSccpTransferIvmDeriveRequest {
+            config,
+            vk_name,
+            gas_asset_id,
+            gas_limit,
+            max_cycles,
+            source_domain,
+            dest_domain,
+            nonce,
+            asset_home_domain,
+            asset_id_codec,
+            asset_id,
+            amount,
+            sender_codec,
+            sender,
+            recipient_codec,
+            recipient,
+            route_id_codec,
+            route_id,
+        } => build_sccp_transfer_ivm_derive_request(
+            config,
+            vk_name,
+            gas_asset_id,
+            gas_limit,
+            max_cycles,
+            source_domain,
+            dest_domain,
+            nonce,
+            asset_home_domain,
+            asset_id_codec,
+            asset_id,
+            amount,
+            sender_codec,
+            sender,
+            recipient_codec,
+            recipient,
+            route_id_codec,
+            route_id,
+        )?,
     }
     Ok(())
 }
@@ -611,6 +752,131 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    use iroha::data_model::{ChainId, account::AccountId};
+    use iroha_config::parameters::{
+        actual::SorafsRolloutPhase,
+        defaults::{
+            sorafs::gateway::{DEFAULT_ANONYMITY_POLICY, DEFAULT_ROLLOUT_PHASE},
+            torii,
+        },
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use sorafs_manifest::alias_cache::AliasCachePolicy;
+    use sorafs_orchestrator::AnonymityPolicy;
+    use url::Url;
+
+    fn default_alias_cache_policy() -> AliasCachePolicy {
+        AliasCachePolicy::new(
+            Duration::from_secs(torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
+            Duration::from_secs(torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
+            Duration::from_secs(torii::SORAFS_ALIAS_HARD_EXPIRY_SECS),
+            Duration::from_secs(torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS),
+            Duration::from_secs(torii::SORAFS_ALIAS_REVOCATION_TTL_SECS),
+            Duration::from_secs(torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS),
+            Duration::from_secs(torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS),
+            Duration::from_secs(torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
+        )
+    }
+
+    fn default_anonymity_policy() -> AnonymityPolicy {
+        AnonymityPolicy::parse(DEFAULT_ANONYMITY_POLICY).unwrap_or(AnonymityPolicy::GuardPq)
+    }
+
+    fn default_rollout_phase() -> SorafsRolloutPhase {
+        SorafsRolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
+    }
+
+    fn test_config_with_chain_discriminant(chain_discriminant: u16) -> Config {
+        let key_pair = KeyPair::from_seed(vec![42u8; 32], Algorithm::Ed25519);
+        let account = AccountId::new(key_pair.public_key().clone());
+        Config {
+            chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+            account,
+            account_chain_discriminant: chain_discriminant,
+            key_pair,
+            basic_auth: None,
+            torii_api_url: Url::parse("http://127.0.0.1/").expect("valid url"),
+            torii_api_version: iroha::config::default_torii_api_version(),
+            torii_api_min_proof_version: iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
+                .to_string(),
+            torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
+            transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
+            transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
+            connect_queue_root: iroha::config::default_connect_queue_root(),
+            soracloud_http_witness_file: None,
+            sorafs_alias_cache: default_alias_cache_policy(),
+            sorafs_anonymity_policy: default_anonymity_policy(),
+            sorafs_rollout_phase: default_rollout_phase(),
+        }
+    }
+
+    #[test]
+    fn ivm_request_value_uses_config_chain_discriminant_for_authority() {
+        let config = test_config_with_chain_discriminant(369);
+        let metadata = tx_metadata(None, 50_000_000).expect("metadata");
+        let program = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            ..Default::default()
+        }
+        .encode();
+        let request = ivm_request_value(
+            &ivm_execution_vk_id("ivm_execution"),
+            &config,
+            &metadata,
+            &IvmBytecode::from_compiled(program),
+        )
+        .expect("request");
+        let authority = request
+            .as_object()
+            .and_then(|object| object.get("authority"))
+            .and_then(norito::json::Value::as_str)
+            .expect("authority string");
+
+        assert!(
+            authority.starts_with("test"),
+            "expected Taira/testnet I105 prefix, got {authority}"
+        );
+        let _chain_discriminant = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+        let parsed = AccountId::parse_encoded(authority)
+            .expect("authority should parse under config discriminant")
+            .into_account_id();
+        assert_eq!(parsed, config.account);
+    }
+
+    #[test]
+    fn record_instruction_program_publishes_literal_tlv_before_execute_instruction() {
+        let instruction = InstructionBox::from(RecordSccpMessage::new(vec![0xCA, 0xFE]));
+        let program =
+            build_record_instruction_program(&instruction, DEFAULT_MAX_CYCLES).expect("program");
+        let parsed = ivm::ProgramMetadata::parse(&program).expect("valid IVM metadata");
+        let code = &program[parsed.code_offset..];
+
+        let mut syscalls = Vec::new();
+        for word_bytes in code.chunks_exact(4) {
+            let word = u32::from_le_bytes(word_bytes.try_into().expect("word-sized chunk"));
+            let (op, syscall) = ivm::encoding::wide::decode_sys(word);
+            if op == ivm::instruction::wide::system::SCALL {
+                syscalls.push(u32::from(syscall));
+            }
+        }
+
+        assert_eq!(
+            syscalls,
+            vec![
+                ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+                ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+            ]
+        );
+        let halt = u32::from_le_bytes(
+            code[code.len() - 4..]
+                .try_into()
+                .expect("program ends with a full word"),
+        );
+        assert_eq!(halt, ivm::encoding::wide::encode_halt());
+    }
 
     #[test]
     fn record_sccp_transfer_payload_rejects_noncanonical_evm_recipient() {

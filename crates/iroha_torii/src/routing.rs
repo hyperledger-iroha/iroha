@@ -135,12 +135,12 @@ use iroha_sccp::{
     NexusSccpBurnProofV1, NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
     SccpCounterpartyProofJobV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
     SccpNormalizedCodecValueV1, SccpOpenVerifyEnvelopeSummaryV1, SccpPayloadProjectionV1,
-    SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof,
-    build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer,
-    build_nexus_sccp_message_transparent_proof_with_signer,
-    build_sccp_counterparty_proof_job_from_bundle,
-    build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer,
-    build_sccp_counterparty_proof_job_from_bundle_with_signer,
+    SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof_allow_unready,
+    build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer_allow_unready,
+    build_nexus_sccp_message_transparent_proof_with_signer_allow_unready,
+    build_sccp_counterparty_proof_job_from_bundle_allow_unready,
+    build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer_allow_unready,
+    build_sccp_counterparty_proof_job_from_bundle_with_signer_allow_unready,
     build_sccp_message_transparent_inner_proof_from_artifact,
     build_sccp_message_transparent_open_verify_summary_from_bundle, burn_message_id,
     canonical_burn_payload_bytes, canonical_sccp_payload_bytes, commitment_leaf_hash,
@@ -5553,6 +5553,7 @@ fn parse_sccp_fixed_hex<const N: usize>(label: &str, value: &str) -> Result<[u8;
 fn sccp_evm_destination_binding_for_bundle(
     bundle: &NexusSccpMessageProofV1,
     fields: &SccpEvmDestinationQuery,
+    allow_unready: bool,
 ) -> Result<Option<iroha_sccp::SccpDestinationBindingV1>> {
     let manifest = sccp_message_manifest_for_bundle(bundle)?;
     let has_any = sccp_evm_destination_fields_present(fields);
@@ -5568,8 +5569,11 @@ fn sccp_evm_destination_binding_for_bundle(
         }
         return Ok(None);
     }
-    if !manifest.production_ready {
+    if !manifest.production_ready && !allow_unready {
         return Ok(None);
+    }
+    if !manifest.production_ready && !has_any {
+        return Ok(Some(manifest.destination_binding.clone()));
     }
     let (Some(network_id_hex), Some(verifier_address_hex), Some(bridge_address_hex)) = (
         fields.network_id_hex.as_deref(),
@@ -6215,7 +6219,11 @@ fn sccp_message_manifest_for_bundle(
 fn sccp_message_lane_disabled_message(
     bundle: &NexusSccpMessageProofV1,
     target: &str,
+    allow_unready: bool,
 ) -> Option<String> {
+    if allow_unready {
+        return None;
+    }
     let manifest = sccp_message_manifest_for_bundle(bundle).ok()?;
     (!manifest.production_ready).then(|| {
         let reason = manifest
@@ -6232,8 +6240,9 @@ fn sccp_message_proof_build_error_message(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
     target: &str,
+    allow_unready: bool,
 ) -> String {
-    if let Some(message) = sccp_message_lane_disabled_message(bundle, target) {
+    if let Some(message) = sccp_message_lane_disabled_message(bundle, target, allow_unready) {
         return message;
     }
     let mut message = format!("failed to build SCCP {target}");
@@ -6252,6 +6261,7 @@ fn bridge_proof_from_sccp_message_bundle(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
     evm_destination: Option<&iroha_sccp::SccpDestinationBindingV1>,
+    allow_unready: bool,
 ) -> Result<iroha_data_model::bridge::BridgeProof> {
     if !verify_message_bundle_structure(bundle) {
         return Err(conversion_error(
@@ -6259,29 +6269,49 @@ fn bridge_proof_from_sccp_message_bundle(
         ));
     }
     if let Some(message) =
-        sccp_message_lane_disabled_message(bundle, "transparent proof consumption")
+        sccp_message_lane_disabled_message(bundle, "transparent proof consumption", allow_unready)
     {
         return Err(conversion_error(message));
     }
+    let fallback_destination_binding = if allow_unready && evm_destination.is_none() {
+        let manifest = sccp_message_manifest_for_bundle(bundle)?;
+        (!manifest.production_ready
+            && matches!(
+                manifest.verifier_target,
+                iroha_sccp::SccpProofVerifierTargetV1::EvmContract
+            ))
+        .then_some(manifest.destination_binding)
+    } else {
+        None
+    };
+    let evm_destination = evm_destination.or(fallback_destination_binding.as_ref());
     let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof).ok_or_else(|| {
         conversion_error("SCCP message bundle finality proof could not be decoded".to_owned())
     })?;
     let (backend, manifest_hash, _) = sccp_message_backend_descriptor(&bundle.payload)?;
     let artifact = if let Some(destination_binding) = evm_destination {
-        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer(
+        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer_allow_unready(
             bundle,
             destination_binding,
             signer,
+            allow_unready,
         )
     } else {
-        build_nexus_sccp_message_transparent_proof_with_signer(bundle, signer)
-            .or_else(|| build_nexus_sccp_message_transparent_proof(bundle))
+        build_nexus_sccp_message_transparent_proof_with_signer_allow_unready(
+            bundle,
+            signer,
+            allow_unready,
+        )
+        .or_else(|| {
+            build_nexus_sccp_message_transparent_proof_allow_unready(bundle, allow_unready)
+        })
     }
     .ok_or_else(|| {
         conversion_error(sccp_message_proof_build_error_message(
             bundle,
             signer,
             "transparent proof artifact",
+            allow_unready,
         ))
     })?;
     let proof_bytes = to_bytes(&artifact).map_err(|err| {
@@ -6647,6 +6677,7 @@ mod sccp_message_backend_tests {
                 verifier_address_hex: Some(format!("0x{}", "22".repeat(20))),
                 bridge_address_hex: Some(format!("0x{}", "33".repeat(20))),
             },
+            false,
         )
         .expect_err("non-EVM lane must reject EVM deployment fields");
 
@@ -7087,7 +7118,7 @@ mod sccp_message_backend_tests {
             b"iroha:torii:routing:test:evm-attestor".to_vec(),
             Algorithm::Secp256k1,
         );
-        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None)
+        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, false)
             .expect_err("disabled lane should reject bridge proof generation");
         assert!(conversion_message(&err).is_some_and(|message| message.contains("is disabled")));
     }
@@ -7640,26 +7671,37 @@ pub async fn handle_v1_sccp_message_proof_artifact(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
-    let evm_destination = sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination)?;
-    if let Some(message) = sccp_message_lane_disabled_message(&bundle, "proof artifact generation")
+    let allow_unready = state.zk_snapshot().sccp_allow_unready_transparent_proofs;
+    let evm_destination =
+        sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination, allow_unready)?;
+    if let Some(message) =
+        sccp_message_lane_disabled_message(&bundle, "proof artifact generation", allow_unready)
     {
         return Err(sccp_bad_request(message));
     }
     let artifact = if let Some(destination_binding) = evm_destination.as_ref() {
-        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer(
+        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer_allow_unready(
             &bundle,
             destination_binding,
             signer,
+            allow_unready,
         )
     } else {
-        build_nexus_sccp_message_transparent_proof_with_signer(&bundle, signer)
-            .or_else(|| build_nexus_sccp_message_transparent_proof(&bundle))
+        build_nexus_sccp_message_transparent_proof_with_signer_allow_unready(
+            &bundle,
+            signer,
+            allow_unready,
+        )
+        .or_else(|| {
+            build_nexus_sccp_message_transparent_proof_allow_unready(&bundle, allow_unready)
+        })
     }
     .ok_or_else(|| {
         sccp_internal_error(sccp_message_proof_build_error_message(
             &bundle,
             signer,
             "proof artifact",
+            allow_unready,
         ))
     })?;
     let artifact_json = sccp_artifact_json_value(&artifact)?;
@@ -7685,25 +7727,35 @@ pub async fn handle_v1_sccp_message_proof_job(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
-    let evm_destination = sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination)?;
-    if let Some(message) = sccp_message_lane_disabled_message(&bundle, "proof job generation") {
+    let allow_unready = state.zk_snapshot().sccp_allow_unready_transparent_proofs;
+    let evm_destination =
+        sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination, allow_unready)?;
+    if let Some(message) =
+        sccp_message_lane_disabled_message(&bundle, "proof job generation", allow_unready)
+    {
         return Err(sccp_bad_request(message));
     }
     let job = if let Some(destination_binding) = evm_destination.as_ref() {
-        build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer(
+        build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer_allow_unready(
             &bundle,
             destination_binding,
             signer,
+            allow_unready,
         )
     } else {
-        build_sccp_counterparty_proof_job_from_bundle_with_signer(&bundle, signer)
-            .or_else(|| build_sccp_counterparty_proof_job_from_bundle(&bundle))
+        build_sccp_counterparty_proof_job_from_bundle_with_signer_allow_unready(
+            &bundle,
+            signer,
+            allow_unready,
+        )
+        .or_else(|| build_sccp_counterparty_proof_job_from_bundle_allow_unready(&bundle, allow_unready))
     }
     .ok_or_else(|| {
         sccp_internal_error(sccp_message_proof_build_error_message(
             &bundle,
             signer,
             "normalized proof job",
+            allow_unready,
         ))
     })?;
     let job_json = sccp_job_json_value(&job)?;
@@ -13326,6 +13378,7 @@ pub async fn handle_post_bridge_proof_submit(
         ));
     }
 
+    let allow_unready = state.zk_snapshot().sccp_allow_unready_transparent_proofs;
     let (proof_kind, bridge_proof, counterparty_domain, counterparty_chain) =
         match (burn_bundle.as_ref(), message_bundle.as_ref()) {
             (Some(bundle), None) => {
@@ -13341,14 +13394,18 @@ pub async fn handle_post_bridge_proof_submit(
             (None, Some(bundle)) => {
                 let (counterparty_domain, counterparty_chain) =
                     sccp_counterparty_for_message_payload(&bundle.payload)?;
-                let evm_destination =
-                    sccp_evm_destination_binding_for_bundle(bundle, &evm_destination_fields)?;
+                let evm_destination = sccp_evm_destination_binding_for_bundle(
+                    bundle,
+                    &evm_destination_fields,
+                    allow_unready,
+                )?;
                 (
                     "message",
                     bridge_proof_from_sccp_message_bundle(
                         bundle,
                         signer,
                         evm_destination.as_ref(),
+                        allow_unready,
                     )?,
                     counterparty_domain,
                     counterparty_chain.to_owned(),
@@ -13554,7 +13611,9 @@ pub async fn handle_post_bridge_message_submit(
     let (counterparty_domain, counterparty_chain) =
         sccp_counterparty_for_message_payload(&message_bundle.payload)?;
     let message_id_hex = hex::encode(message_bundle.commitment.message_id);
-    let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle, signer, None)?;
+    let allow_unready = state.zk_snapshot().sccp_allow_unready_transparent_proofs;
+    let bridge_proof =
+        bridge_proof_from_sccp_message_bundle(&message_bundle, signer, None, allow_unready)?;
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;
     let manifest_hash_hex = hex::encode(bridge_proof.manifest_hash);

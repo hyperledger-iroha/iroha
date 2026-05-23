@@ -6964,8 +6964,10 @@ pub mod isi {
         artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if !iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(artifact)
-            || !iroha_sccp::verify_message_bundle_structure(&artifact.bundle)
+        if !iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
+            artifact,
+            state_transaction.zk.sccp_allow_unready_transparent_proofs,
+        ) || !iroha_sccp::verify_message_bundle_structure(&artifact.bundle)
         {
             return Err(invalid_bridge_proof(
                 "SCCP transparent message proof failed structural verification",
@@ -7081,9 +7083,10 @@ pub mod isi {
                     }
                     backend if backend.starts_with("sccp/stark-fri-v1/") => {
                         let Some(artifact) =
-                            iroha_sccp::recover_nexus_sccp_message_transparent_proof(
+                            iroha_sccp::recover_nexus_sccp_message_transparent_proof_allow_unready(
                                 backend,
                                 &tp.proof.bytes,
+                                state_transaction.zk.sccp_allow_unready_transparent_proofs,
                             )
                         else {
                             return Err(invalid_bridge_proof(

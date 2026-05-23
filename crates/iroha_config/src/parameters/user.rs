@@ -3901,6 +3901,9 @@ pub struct Zk {
         default = "defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS"
     )]
     pub bridge_proof_max_future_drift_blocks: u64,
+    /// Allow SCCP transparent proof consumption for lanes whose destination verifiers are not production-ready.
+    #[config(env = "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS", default = "false")]
+    pub sccp_allow_unready_transparent_proofs: bool,
     /// Poseidon parameter set identifier to embed into confidential policies (if any).
     #[config(env = "ZK_POSEIDON_PARAMS_ID")]
     pub poseidon_params_id: Option<u32>,
@@ -3933,6 +3936,7 @@ impl Zk {
             bridge_proof_max_range_len: self.bridge_proof_max_range_len,
             bridge_proof_max_past_age_blocks: self.bridge_proof_max_past_age_blocks,
             bridge_proof_max_future_drift_blocks: self.bridge_proof_max_future_drift_blocks,
+            sccp_allow_unready_transparent_proofs: self.sccp_allow_unready_transparent_proofs,
             poseidon_params_id: self.poseidon_params_id,
             pedersen_params_id: self.pedersen_params_id,
             kaigi_roster_join_vk: self.kaigi_roster_join_vk.map(VerifyingKeyRef::parse),
