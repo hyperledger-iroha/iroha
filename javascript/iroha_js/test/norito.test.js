@@ -306,6 +306,23 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
   assert.equal((inner.flags & 0x02) !== 0, true);
 });
 
+test("native multisig proposal DTO preserves native instruction frames without JS schema entries", () => {
+  const request = {
+    multisig_account_alias: "cbdc@hbl.sbp",
+    signer_account_id: ACCOUNT_ID,
+    instructions: [
+      {
+        Unregister: {
+          Domain: "wonderland.sora",
+        },
+      },
+    ],
+  };
+
+  const body = Buffer.from(noritoEncodeMultisigProposeRequest(request));
+  assert.ok(body.length > 32);
+});
+
 baseTest("noritoEncodeInstruction requires native binding for unsupported instruction JSON", () => {
   const instruction = {
     Log: {

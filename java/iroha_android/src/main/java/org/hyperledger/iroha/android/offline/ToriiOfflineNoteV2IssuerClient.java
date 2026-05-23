@@ -87,6 +87,7 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
   }
 
   public ToriiOfflineNoteV2IssuerClient(
+      final ToriiCanonicalRequestAuth canonicalAuth,
       final OfflineNoteV2IssuerDeviceBindingProvider deviceBindingProvider,
       final OfflineNoteV2IssuerDeviceProofProvider deviceProofProvider,
       final HttpTransportExecutor executor,
@@ -97,7 +98,7 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
       final LongSupplier clock,
       final OfflineNoteV2IdGenerator nonceGenerator) {
     this(
-        null,
+        canonicalAuth,
         deviceBindingProvider,
         deviceProofProvider,
         executor,
@@ -122,7 +123,7 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
       final LongSupplier clock,
       final OfflineNoteV2IdGenerator nonceGenerator,
       final boolean idempotencyKeysEnabled) {
-    this.canonicalAuth = canonicalAuth;
+    this.canonicalAuth = Objects.requireNonNull(canonicalAuth, "canonicalAuth");
     this.deviceBindingProvider =
         Objects.requireNonNull(deviceBindingProvider, "deviceBindingProvider");
     this.deviceProofProvider = deviceProofProvider;
@@ -161,7 +162,7 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
       final String accountId,
       final String assetDefinitionId,
       final String amount) {
-    if (canonicalAuth != null && !canonicalAuth.accountId().equals(accountId)) {
+    if (!canonicalAuth.accountId().equals(accountId)) {
       return failedFuture(
           new IllegalArgumentException("canonical auth accountId must match wallet accountId"));
     }
@@ -382,9 +383,6 @@ public final class ToriiOfflineNoteV2IssuerClient implements OfflineNoteV2Issuer
 
   private byte[] signedBody(
       final String method, final URI target, final Map<String, Object> bodyFields) {
-    if (canonicalAuth == null) {
-      return JsonEncoder.encode(bodyFields).getBytes(StandardCharsets.UTF_8);
-    }
     final long timestampMs =
         canonicalAuth.timestampMs() == null ? clock.getAsLong() : canonicalAuth.timestampMs();
     final String nonce =

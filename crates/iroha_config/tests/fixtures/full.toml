@@ -117,6 +117,8 @@ capacity_per_user = 65_536
 transaction_time_to_live_ms = 100
 expired_cull_interval_ms = 1_000
 expired_cull_batch = 256
+plan_journal_enabled = true
+plan_journal_max_bytes = 67_108_864
 
 [snapshot]
 mode = "read_write"

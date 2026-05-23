@@ -36,6 +36,10 @@ name = "nexus_and_streaming"
 path = "tests/nexus_and_streaming.rs"
 
 [[test]]
+name = "native_amx_routing"
+path = "tests/native_amx_routing.rs"
+
+[[test]]
 name = "torii_load_profile"
 path = "tests/torii_load_profile.rs"
 

@@ -61,6 +61,8 @@ use std::{
 
 use iroha_config::parameters::actual::{ConsensusMode, SumeragiNpos};
 use iroha_crypto::{HashOf, KeyPair, MerkleTree, PublicKey};
+#[cfg(test)]
+use iroha_data_model::block::consensus::NativeAmxAttestationBodyV1;
 #[cfg(feature = "bls")]
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
@@ -69,7 +71,8 @@ use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::{
         consensus::{
-            LaneBlockCommitment, LaneSettlementReceipt, NativeAmxLegRecord, NativeAmxReceipt,
+            LaneBlockCommitment, LaneSettlementReceipt, NativeAmxAttestationQcV1,
+            NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt,
         },
         *,
     },
@@ -457,48 +460,226 @@ struct LaneSettlementBuilder {
     source_counts: BTreeMap<AssetDefinitionId, u64>,
 }
 
-fn native_amx_receipt_for_transaction(
-    tx: &SignedTransaction,
-    tx_hash: HashOf<SignedTransaction>,
+#[cfg(test)]
+fn native_amx_full_signers_bitmap(roster_len: usize) -> Vec<u8> {
+    let mut signers_bitmap = vec![0_u8; roster_len.div_ceil(8)];
+    for idx in 0..roster_len {
+        signers_bitmap[idx / 8] |= 1_u8 << (idx % 8);
+    }
+    signers_bitmap
+}
+
+fn validate_native_amx_receipt_against_plan(
+    receipt: &NativeAmxReceipt,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    plan: &crate::queue::RoutingPlan,
+    expected_source_id: [u8; iroha_crypto::Hash::LENGTH],
     block_height: u64,
-    decision: crate::queue::RoutingDecision,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
     world: &impl WorldReadOnly,
-) -> Option<NativeAmxReceipt> {
-    if decision.dataspace_id != iroha_data_model::nexus::DataSpaceId::UNIVERSAL {
-        return None;
+) -> Result<(), String> {
+    if receipt.version != 1 {
+        return Err(format!(
+            "unsupported native AMX receipt version {}",
+            receipt.version
+        ));
+    }
+    if receipt.source_id != expected_source_id {
+        return Err("native AMX receipt source transaction mismatch".to_owned());
+    }
+    let coordinator = plan.coordinator_route();
+    if receipt.lane_id != coordinator.lane_id || receipt.dataspace_id != coordinator.dataspace_id {
+        return Err("native AMX receipt coordinator route mismatch".to_owned());
+    }
+    if receipt.block_height != block_height {
+        return Err(format!(
+            "native AMX receipt block height mismatch: expected {block_height}, got {}",
+            receipt.block_height
+        ));
+    }
+    if receipt.plan_digest != plan.digest() {
+        return Err("native AMX receipt plan digest mismatch".to_owned());
+    }
+    let crate::queue::RoutingPlan::NativeAmx(native_plan) = plan else {
+        return Err("native AMX receipt attached to single-route plan".to_owned());
+    };
+
+    let expected_participants = native_plan
+        .participants
+        .iter()
+        .map(|leg| (leg.route.lane_id, leg.route.dataspace_id))
+        .collect::<BTreeSet<_>>();
+    let mut seen_participants = BTreeSet::new();
+    for leg in &receipt.legs {
+        let participant = (leg.lane_id, leg.dataspace_id);
+        if !expected_participants.contains(&participant) {
+            return Err(format!(
+                "native AMX receipt has unexpected participant lane {} dataspace {}",
+                leg.lane_id.as_u32(),
+                leg.dataspace_id.as_u64()
+            ));
+        }
+        if !seen_participants.insert(participant) {
+            return Err(format!(
+                "native AMX receipt duplicates participant lane {} dataspace {}",
+                leg.lane_id.as_u32(),
+                leg.dataspace_id.as_u64()
+            ));
+        }
+        validate_native_amx_attestation_qc(
+            receipt,
+            leg,
+            &leg.prepare_qc,
+            NativeAmxPhase::Prepare,
+            entrypoint_hash,
+            dataspace_catalog,
+            world,
+        )?;
+        validate_native_amx_attestation_qc(
+            receipt,
+            leg,
+            &leg.commit_qc,
+            NativeAmxPhase::Commit,
+            entrypoint_hash,
+            dataspace_catalog,
+            world,
+        )?;
+    }
+    if seen_participants != expected_participants {
+        return Err("native AMX receipt is missing participant leg".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn validate_native_amx_attestation_qc(
+    receipt: &NativeAmxReceipt,
+    leg: &NativeAmxLegRecord,
+    qc: &NativeAmxAttestationQcV1,
+    expected_phase: NativeAmxPhase,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &impl WorldReadOnly,
+) -> Result<(), String> {
+    let body = &qc.body;
+    if body.source_id != receipt.source_id {
+        return Err("native AMX attestation source transaction mismatch".to_owned());
+    }
+    if body.tx_entrypoint_hash != entrypoint_hash {
+        return Err("native AMX attestation entrypoint hash mismatch".to_owned());
+    }
+    if body.plan_digest != receipt.plan_digest {
+        return Err("native AMX attestation plan digest mismatch".to_owned());
+    }
+    if body.phase != expected_phase {
+        return Err("native AMX attestation phase mismatch".to_owned());
+    }
+    if body.coordinator_lane_id != receipt.lane_id
+        || body.coordinator_dataspace_id != receipt.dataspace_id
+    {
+        return Err("native AMX attestation coordinator route mismatch".to_owned());
+    }
+    if body.participant_lane_id != leg.lane_id || body.participant_dataspace_id != leg.dataspace_id
+    {
+        return Err("native AMX attestation participant route mismatch".to_owned());
+    }
+    if body.planned_coordinator_block_height != receipt.block_height {
+        return Err("native AMX attestation planned height mismatch".to_owned());
+    }
+    if qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
+        return Err(format!(
+            "native AMX attestation validator-set hash version mismatch: {}",
+            qc.validator_set_hash_version
+        ));
+    }
+    if qc.validator_set_hash != HashOf::new(&qc.validator_set) {
+        return Err("native AMX attestation validator-set hash mismatch".to_owned());
+    }
+    let Some(dataspace) = dataspace_catalog
+        .entries()
+        .iter()
+        .find(|entry| entry.id == leg.dataspace_id)
+    else {
+        return Err(format!(
+            "native AMX attestation participant dataspace {} is unknown",
+            leg.dataspace_id.as_u64()
+        ));
+    };
+    let minimum_committee = usize::try_from(
+        dataspace
+            .fault_tolerance
+            .saturating_mul(3)
+            .saturating_add(1),
+    )
+    .unwrap_or(usize::MAX);
+    if qc.validator_set.len() < minimum_committee {
+        return Err(format!(
+            "native AMX attestation validator set too small: expected at least {minimum_committee}, got {}",
+            qc.validator_set.len()
+        ));
     }
 
-    let accepted = crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
-    let participants =
-        native_amx_participant_dataspaces_with_world(&accepted, dataspace_catalog, world);
-    let participant_legs: Vec<_> = participants
-        .into_iter()
-        .filter(|dataspace| *dataspace != iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
-        .collect();
-    if participant_legs.len() < 2 {
-        return None;
+    let expected_bitmap_len = qc.validator_set.len().div_ceil(8);
+    if qc.signers_bitmap.len() != expected_bitmap_len {
+        return Err(format!(
+            "native AMX attestation signer bitmap length mismatch: expected {expected_bitmap_len}, got {}",
+            qc.signers_bitmap.len()
+        ));
     }
-
-    let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
-    source_id.copy_from_slice(tx_hash.as_ref());
-    let legs = participant_legs
-        .into_iter()
-        .map(|dataspace_id| NativeAmxLegRecord {
-            dataspace_id,
-            prepared: true,
-            committed: true,
-        })
-        .collect();
-
-    Some(NativeAmxReceipt {
-        version: 1,
-        source_id,
-        lane_id: decision.lane_id,
-        dataspace_id: decision.dataspace_id,
-        block_height,
-        legs,
-    })
+    let mut signer_count = 0usize;
+    let mut signer_keys = Vec::new();
+    let mut signer_pops = Vec::new();
+    for (byte_index, byte) in qc.signers_bitmap.iter().copied().enumerate() {
+        if byte == 0 {
+            continue;
+        }
+        let base = byte_index * 8;
+        for bit in 0..8 {
+            if byte & (1_u8 << bit) == 0 {
+                continue;
+            }
+            let signer_index = base + bit;
+            if signer_index >= qc.validator_set.len() {
+                return Err(format!(
+                    "native AMX attestation signer index {signer_index} exceeds validator set size {}",
+                    qc.validator_set.len()
+                ));
+            }
+            signer_count = signer_count.saturating_add(1);
+            let signer = &qc.validator_set[signer_index];
+            if signer.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal {
+                return Err("native AMX attestation signer is not a BLS normal key".to_owned());
+            }
+            let Some(pop) =
+                crate::state::live_consensus_key_pop_for_peer(world, signer, receipt.block_height)
+            else {
+                return Err(
+                    "native AMX attestation signer missing live BLS proof-of-possession".to_owned(),
+                );
+            };
+            signer_keys.push(signer.public_key());
+            signer_pops.push(pop);
+        }
+    }
+    let required_quorum =
+        crate::sumeragi::network_topology::commit_quorum_from_len(qc.validator_set.len()).max(1);
+    if signer_count < required_quorum {
+        return Err(format!(
+            "native AMX attestation quorum not met: expected {required_quorum}, got {signer_count}"
+        ));
+    }
+    if qc.bls_aggregate_signature.is_empty() {
+        return Err("native AMX attestation aggregate signature missing".to_owned());
+    }
+    let signer_pop_refs = signer_pops.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        &body.signature_preimage(),
+        &qc.bls_aggregate_signature,
+        &signer_keys,
+        &signer_pop_refs,
+    )
+    .map_err(|_| "native AMX attestation aggregate signature invalid".to_owned())?;
+    Ok(())
 }
 
 fn lane_relay_envelopes_for_block(
@@ -730,8 +911,7 @@ use crate::{
     },
     prelude::*,
     queue::{
-        evaluate_policy_with_catalog_and_world, native_amx_participant_dataspaces_with_world,
-        resolve_routing_decision, routing_ledger,
+        evaluate_policy_plan_with_catalog_and_world, resolve_routing_decision, routing_ledger,
     },
     smartcontracts::isi::triggers::{set::SetReadOnly, specialized::LoadedActionTrait},
     state::{
@@ -5873,9 +6053,9 @@ pub(crate) mod valid {
                 })?;
 
                 let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
-                    Cow::Owned(entrypoint),
+                    Cow::Owned(entrypoint.clone()),
                 );
-                let decision = evaluate_policy_with_catalog_and_world(
+                let plan = evaluate_policy_plan_with_catalog_and_world(
                     &nexus.routing_policy,
                     &nexus.lane_catalog,
                     &nexus.dataspace_catalog,
@@ -5887,6 +6067,7 @@ pub(crate) mod valid {
                         "execution context routing cannot be resolved at index {idx}: {err}"
                     ))
                 })?;
+                let decision = plan.coordinator_route();
                 let derived_decision =
                     crate::queue::RoutingDecision::new(decision.lane_id, decision.dataspace_id);
                 if derived_decision != committed_decision {
@@ -5897,6 +6078,56 @@ pub(crate) mod valid {
                         context.lane_id.as_u32(),
                         context.dataspace_id.as_u64(),
                     )));
+                }
+                if context.routing_plan_digest != plan.digest() {
+                    return Err(Self::execution_context_error(format!(
+                        "execution context routing plan digest mismatch at index {idx}: expected {}, got {}",
+                        plan.digest(),
+                        context.routing_plan_digest,
+                    )));
+                }
+                let expected_legs = crate::queue::execution_context_legs_for_routing_plan(&plan);
+                if context.routing_plan_legs != expected_legs {
+                    return Err(Self::execution_context_error(format!(
+                        "execution context routing plan legs mismatch at index {idx}"
+                    )));
+                }
+                match (&plan, context.native_amx_receipt.as_ref()) {
+                    (crate::queue::RoutingPlan::NativeAmx(_), Some(receipt)) => {
+                        let Some(source_tx) = Self::signed_transaction_from_entrypoint(&entrypoint)
+                        else {
+                            return Err(Self::execution_context_error(format!(
+                                "native AMX receipt at index {idx} is not attached to a signed transaction"
+                            )));
+                        };
+                        let mut expected_source_id = [0u8; iroha_crypto::Hash::LENGTH];
+                        expected_source_id.copy_from_slice(source_tx.hash().as_ref());
+                        validate_native_amx_receipt_against_plan(
+                            receipt,
+                            context.entrypoint_hash,
+                            &plan,
+                            expected_source_id,
+                            block.header().height().get(),
+                            &nexus.dataspace_catalog,
+                            state.world(),
+                        )
+                        .map_err(|err| {
+                            Self::execution_context_error(format!(
+                                "native AMX receipt invalid at index {idx}: {err}"
+                            ))
+                        })?;
+                    }
+                    (crate::queue::RoutingPlan::NativeAmx(_), None) => {
+                        return Err(Self::execution_context_error(format!(
+                            "native AMX receipt missing at index {idx}"
+                        )));
+                    }
+                    (_, Some(_)) => {
+                        return Err(Self::execution_context_error(format!(
+                            "native AMX receipt attached to single-route context at index {idx}"
+                        )));
+                    }
+                    (_, None) => {}
                 }
             }
 
@@ -6788,15 +7019,15 @@ pub(crate) mod valid {
                     let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                         Cow::Borrowed(entrypoint),
                     );
-                    match evaluate_policy_with_catalog_and_world(
+                    match evaluate_policy_plan_with_catalog_and_world(
                         routing_policy,
                         lane_catalog,
                         dataspace_catalog,
                         &accepted,
                         &state_block.world,
                     ) {
-                        Ok(decision) => {
-                            decisions.push(decision);
+                        Ok(plan) => {
+                            decisions.push(plan.coordinator_route());
                             errors.push(None);
                         }
                         Err(err) => {
@@ -7164,7 +7395,7 @@ pub(crate) mod valid {
             #[cfg(not(feature = "telemetry"))]
             let fraud_telemetry: Option<&()> = None;
             let dataspace_catalog = state_block.nexus.dataspace_catalog.clone();
-            let lane_catalog = &state_block.nexus.lane_catalog;
+            let lane_catalog = state_block.nexus.lane_catalog.clone();
             let routing_policy = &state_block.nexus.routing_policy;
             let fraud_cfg = &state_block.fraud_monitoring;
             let cache_cap = state_block.pipeline.stateless_cache_cap;
@@ -7198,13 +7429,14 @@ pub(crate) mod valid {
                                     let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                         Cow::Borrowed(*tx),
                                     );
-                                    evaluate_policy_with_catalog_and_world(
+                                    evaluate_policy_plan_with_catalog_and_world(
                                         routing_policy,
-                                        lane_catalog,
+                                        &lane_catalog,
                                         &dataspace_catalog,
                                         &accepted,
                                         &state_block.world,
                                     )
+                                    .map(|plan| plan.coordinator_route())
                                 })
                                 .collect()
                         })
@@ -7214,13 +7446,14 @@ pub(crate) mod valid {
                                 let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                     Cow::Borrowed(*tx),
                                 );
-                                evaluate_policy_with_catalog_and_world(
+                                evaluate_policy_plan_with_catalog_and_world(
                                     routing_policy,
-                                    lane_catalog,
+                                    &lane_catalog,
                                     &dataspace_catalog,
                                     &accepted,
                                     &state_block.world,
                                 )
+                                .map(|plan| plan.coordinator_route())
                             })
                             .collect()
                     }
@@ -7229,13 +7462,14 @@ pub(crate) mod valid {
                         .map(|tx| {
                             let accepted =
                                 crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
-                            evaluate_policy_with_catalog_and_world(
+                            evaluate_policy_plan_with_catalog_and_world(
                                 routing_policy,
-                                lane_catalog,
+                                &lane_catalog,
                                 &dataspace_catalog,
                                 &accepted,
                                 &state_block.world,
                             )
+                            .map(|plan| plan.coordinator_route())
                         })
                         .collect()
                 };
@@ -8519,6 +8753,23 @@ pub(crate) mod valid {
                 .nexus
                 .fees
                 .lane_relay_burn_receipts_active_at(block.header().height().get());
+            let mut native_amx_receipts_by_hash: BTreeMap<
+                HashOf<SignedTransaction>,
+                NativeAmxReceipt,
+            > = block
+                .execution_context()
+                .map(|bundle| {
+                    block
+                        .external_entrypoints_cloned()
+                        .zip(bundle.external.iter())
+                        .filter_map(|(entrypoint, context)| {
+                            let receipt = context.native_amx_receipt.clone()?;
+                            let signed = Self::signed_transaction_from_entrypoint(&entrypoint)?;
+                            Some((signed.hash(), receipt))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
 
             let mut lane_settlement_builders: BTreeMap<
                 (LaneId, DataSpaceId),
@@ -8622,14 +8873,9 @@ pub(crate) mod valid {
                             decision.dataspace_id,
                         ));
                     }
-                    if let Some(receipt) = native_amx_receipt_for_transaction(
-                        txs[idx],
-                        prepared_txs[idx].metadata.signed_hash,
-                        block.header().height().get(),
-                        *decision,
-                        &dataspace_catalog,
-                        &state_block.world,
-                    ) {
+                    if let Some(receipt) =
+                        native_amx_receipts_by_hash.remove(&prepared_txs[idx].metadata.signed_hash)
+                    {
                         let builder = lane_settlement_builders
                             .entry((decision.lane_id, decision.dataspace_id))
                             .or_default();
@@ -8749,7 +8995,9 @@ pub(crate) mod valid {
                     let mut committed_per_lane: BTreeMap<LaneId, u64> = BTreeMap::new();
                     for (idx, tx) in txs.iter().enumerate() {
                         let hash = prepared_txs[idx].metadata.signed_hash;
-                        if let Some(routing) = routing_ledger::get(&hash) {
+                        if let Some(routing) =
+                            routing_ledger::get_plan(&hash).map(|plan| plan.coordinator_route())
+                        {
                             let teu = estimate_transaction_teu(tx);
                             committed_per_lane
                                 .entry(routing.lane_id)
@@ -17227,6 +17475,7 @@ mod event {
                 .map(move |(idx, tx)| {
                     let hash = tx.hash();
                     let routing = routing_ledger::take(&hash).unwrap_or_default();
+                    let _ = routing_ledger::take_plan(&hash);
                     let status = block.error(idx).map_or_else(
                         || TransactionStatus::Approved,
                         |error| TransactionStatus::Rejected(Box::new(error.clone())),
@@ -17853,7 +18102,7 @@ mod tests {
     use core::time::Duration;
     use std::{borrow::Cow, num::NonZeroU64};
 
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair, Signature, bls_normal_aggregate_signatures};
     use iroha_data_model::{
         errors::AmxStage,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
@@ -17916,6 +18165,147 @@ mod tests {
         .expect("dataspace catalog")
     }
 
+    fn native_amx_test_world_with_keys() -> (World, Vec<KeyPair>) {
+        let world = World::new();
+        let keypairs = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal))
+            .collect::<Vec<_>>();
+        let mut world_block = world.block();
+        {
+            let mut peers = world_block.peers_mut_for_testing().transaction();
+            for keypair in &keypairs {
+                peers.push(PeerId::new(keypair.public_key().clone()));
+            }
+            peers.apply();
+        }
+        for keypair in &keypairs {
+            let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                .expect("generate BLS proof-of-possession");
+            let id = crate::state::derive_validator_key_id(keypair.public_key());
+            let record = iroha_data_model::consensus::ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: keypair.public_key().clone(),
+                pop: Some(pop),
+                activation_height: 0,
+                expiry_height: None,
+                hsm: None,
+                replaces: None,
+                status: iroha_data_model::consensus::ConsensusKeyStatus::Active,
+            };
+            world_block
+                .consensus_keys
+                .insert(id.clone(), record.clone());
+            let pk = record.public_key.to_string();
+            let mut by_pk = world_block
+                .consensus_keys_by_pk
+                .get(&pk)
+                .cloned()
+                .unwrap_or_default();
+            if !by_pk.contains(&id) {
+                by_pk.push(id);
+            }
+            world_block.consensus_keys_by_pk.insert(pk, by_pk);
+        }
+        world_block.commit();
+        (world, keypairs)
+    }
+
+    fn signed_native_amx_attestation_qc(
+        phase: NativeAmxPhase,
+        source_id: [u8; iroha_crypto::Hash::LENGTH],
+        tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
+        plan_digest: iroha_crypto::Hash,
+        coordinator: crate::queue::RoutingDecision,
+        participant: crate::queue::RoutingDecision,
+        block_height: u64,
+        keypairs: &[KeyPair],
+    ) -> NativeAmxAttestationQcV1 {
+        let validator_set = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        let body = NativeAmxAttestationBodyV1 {
+            source_id,
+            tx_entrypoint_hash,
+            plan_digest,
+            phase,
+            coordinator_lane_id: coordinator.lane_id,
+            coordinator_dataspace_id: coordinator.dataspace_id,
+            participant_lane_id: participant.lane_id,
+            participant_dataspace_id: participant.dataspace_id,
+            planned_coordinator_block_height: block_height,
+        };
+        let preimage = body.signature_preimage();
+        let signatures = keypairs
+            .iter()
+            .map(|keypair| {
+                Signature::new(keypair.private_key(), &preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let bls_aggregate_signature =
+            bls_normal_aggregate_signatures(&signature_refs).expect("aggregate AMX signatures");
+        NativeAmxAttestationQcV1 {
+            body,
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set,
+            signers_bitmap: native_amx_full_signers_bitmap(keypairs.len()),
+            bls_aggregate_signature,
+        }
+    }
+
+    fn signed_native_amx_receipt(
+        source_id: [u8; iroha_crypto::Hash::LENGTH],
+        tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
+        routing_plan: &crate::queue::RoutingPlan,
+        block_height: u64,
+        keypairs: &[KeyPair],
+    ) -> NativeAmxReceipt {
+        let crate::queue::RoutingPlan::NativeAmx(plan) = routing_plan else {
+            panic!("test expects native AMX plan");
+        };
+        let coordinator = plan.coordinator.route;
+        let legs = plan
+            .participants
+            .iter()
+            .map(|leg| NativeAmxLegRecord {
+                lane_id: leg.route.lane_id,
+                dataspace_id: leg.route.dataspace_id,
+                prepare_qc: signed_native_amx_attestation_qc(
+                    NativeAmxPhase::Prepare,
+                    source_id,
+                    tx_entrypoint_hash,
+                    routing_plan.digest(),
+                    coordinator,
+                    leg.route,
+                    block_height,
+                    keypairs,
+                ),
+                commit_qc: signed_native_amx_attestation_qc(
+                    NativeAmxPhase::Commit,
+                    source_id,
+                    tx_entrypoint_hash,
+                    routing_plan.digest(),
+                    coordinator,
+                    leg.route,
+                    block_height,
+                    keypairs,
+                ),
+            })
+            .collect();
+        NativeAmxReceipt {
+            version: 1,
+            source_id,
+            plan_digest: routing_plan.digest(),
+            lane_id: coordinator.lane_id,
+            dataspace_id: coordinator.dataspace_id,
+            block_height,
+            legs,
+        }
+    }
     fn signed_domain_registration_tx(
         domains: &[(&str, &str)],
     ) -> (SignedTransaction, HashOf<SignedTransaction>) {
@@ -17939,136 +18329,145 @@ mod tests {
     }
 
     #[test]
-    fn native_amx_receipt_records_participant_dataspace_legs() {
+    fn native_amx_receipt_validation_accepts_signed_participant_qcs() {
         let paynet = DataSpaceId::new(7);
         let cbuae = DataSpaceId::new(8);
         let (tx, tx_hash) =
             signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
         let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
-        let world = World::new();
+        let routing_plan = crate::queue::RoutingPlan::native_amx(
+            crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+            vec![
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(2), cbuae),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let (world, keypairs) = native_amx_test_world_with_keys();
         let world_view = world.view();
-
-        let receipt = native_amx_receipt_for_transaction(
-            &tx,
-            tx_hash,
+        let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
+        source_id.copy_from_slice(tx_hash.as_ref());
+        let receipt = signed_native_amx_receipt(
+            source_id,
+            tx.hash_as_entrypoint(),
+            &routing_plan,
             42,
-            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            &keypairs,
+        );
+
+        validate_native_amx_receipt_against_plan(
+            &receipt,
+            tx.hash_as_entrypoint(),
+            &routing_plan,
+            source_id,
+            42,
             &dataspace_catalog,
             &world_view,
         )
-        .expect("mixed dataspace transaction should produce native AMX receipt");
+        .expect("signed AMX QCs should validate");
 
         assert_eq!(receipt.version, 1);
         assert_eq!(receipt.source_id.as_slice(), tx_hash.as_ref());
-        assert_eq!(receipt.lane_id, LaneId::SINGLE);
-        assert_eq!(receipt.dataspace_id, DataSpaceId::UNIVERSAL);
+        assert_eq!(receipt.lane_id, LaneId::new(1));
+        assert_eq!(receipt.dataspace_id, paynet);
+        assert_eq!(receipt.plan_digest, routing_plan.digest());
         assert_eq!(receipt.block_height, 42);
         assert_eq!(
             receipt
                 .legs
                 .iter()
-                .map(|leg| (leg.dataspace_id, leg.prepared, leg.committed))
+                .map(|leg| {
+                    (
+                        leg.dataspace_id,
+                        leg.prepare_qc.body.phase,
+                        leg.commit_qc.body.phase,
+                    )
+                })
                 .collect::<Vec<_>>(),
-            vec![(paynet, true, true), (cbuae, true, true)]
+            vec![
+                (paynet, NativeAmxPhase::Prepare, NativeAmxPhase::Commit),
+                (cbuae, NativeAmxPhase::Prepare, NativeAmxPhase::Commit)
+            ]
         );
     }
 
     #[test]
-    fn native_amx_receipt_skips_non_universal_route() {
+    fn native_amx_receipt_validation_rejects_malformed_qcs() {
         let paynet = DataSpaceId::new(7);
         let cbuae = DataSpaceId::new(8);
         let (tx, tx_hash) =
             signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
         let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
-        let world = World::new();
+        let routing_plan = crate::queue::RoutingPlan::native_amx(
+            crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+            vec![
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(2), cbuae),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let (world, keypairs) = native_amx_test_world_with_keys();
         let world_view = world.view();
+        let entrypoint_hash = tx.hash_as_entrypoint();
+        let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
+        source_id.copy_from_slice(tx_hash.as_ref());
+        let receipt =
+            signed_native_amx_receipt(source_id, entrypoint_hash, &routing_plan, 42, &keypairs);
+        let validate = |receipt: &NativeAmxReceipt| {
+            validate_native_amx_receipt_against_plan(
+                receipt,
+                entrypoint_hash,
+                &routing_plan,
+                source_id,
+                42,
+                &dataspace_catalog,
+                &world_view,
+            )
+        };
 
-        let receipt = native_amx_receipt_for_transaction(
-            &tx,
-            tx_hash,
-            42,
-            crate::queue::RoutingDecision::new(LaneId::SINGLE, paynet),
-            &dataspace_catalog,
-            &world_view,
-        );
-
+        let mut missing_leg = receipt.clone();
+        missing_leg.legs.pop();
         assert!(
-            receipt.is_none(),
-            "non-universal routing must not emit native AMX receipts"
-        );
-    }
-
-    #[test]
-    fn native_amx_receipt_skips_single_participant_universal_route() {
-        let paynet = DataSpaceId::new(7);
-        let cbuae = DataSpaceId::new(8);
-        let (tx, tx_hash) = signed_domain_registration_tx(&[("merchant", "paynet")]);
-        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
-        let world = World::new();
-        let world_view = world.view();
-
-        let receipt = native_amx_receipt_for_transaction(
-            &tx,
-            tx_hash,
-            42,
-            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            &dataspace_catalog,
-            &world_view,
+            validate(&missing_leg)
+                .expect_err("missing leg must fail")
+                .contains("missing participant leg")
         );
 
+        let mut wrong_phase = receipt.clone();
+        wrong_phase.legs[0].prepare_qc.body.phase = NativeAmxPhase::Commit;
         assert!(
-            receipt.is_none(),
-            "single-participant universal routes must not emit native AMX receipts"
-        );
-    }
-
-    #[test]
-    fn native_amx_receipt_skips_unknown_dataspace_alias() {
-        let paynet = DataSpaceId::new(7);
-        let cbuae = DataSpaceId::new(8);
-        let (tx, tx_hash) =
-            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "rogue")]);
-        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
-        let world = World::new();
-        let world_view = world.view();
-
-        let receipt = native_amx_receipt_for_transaction(
-            &tx,
-            tx_hash,
-            42,
-            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            &dataspace_catalog,
-            &world_view,
+            validate(&wrong_phase)
+                .expect_err("wrong phase must fail")
+                .contains("phase mismatch")
         );
 
+        let mut wrong_digest = receipt.clone();
+        let mut digest = [0_u8; iroha_crypto::Hash::LENGTH];
+        digest[0] = 0x42;
+        digest[iroha_crypto::Hash::LENGTH - 1] = 0x01;
+        wrong_digest.legs[0].prepare_qc.body.plan_digest = Hash::prehashed(digest);
         assert!(
-            receipt.is_none(),
-            "unknown dataspace aliases must not create synthetic native AMX receipt legs"
-        );
-    }
-
-    #[test]
-    fn native_amx_receipt_deduplicates_repeated_participant_dataspaces() {
-        let paynet = DataSpaceId::new(7);
-        let cbuae = DataSpaceId::new(8);
-        let (tx, tx_hash) =
-            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "paynet")]);
-        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
-        let world = World::new();
-        let world_view = world.view();
-
-        let receipt = native_amx_receipt_for_transaction(
-            &tx,
-            tx_hash,
-            42,
-            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            &dataspace_catalog,
-            &world_view,
+            validate(&wrong_digest)
+                .expect_err("wrong digest must fail")
+                .contains("plan digest mismatch")
         );
 
+        let mut bad_bitmap = receipt;
+        bad_bitmap.legs[0].prepare_qc.signers_bitmap.push(0);
         assert!(
-            receipt.is_none(),
-            "repeated references to one dataspace must not be counted as multi-leg native AMX"
+            validate(&bad_bitmap)
+                .expect_err("bad signer bitmap must fail")
+                .contains("signer bitmap length mismatch")
         );
     }
 

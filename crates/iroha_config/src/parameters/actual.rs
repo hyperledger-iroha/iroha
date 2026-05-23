@@ -2483,6 +2483,10 @@ pub struct Queue {
     pub expired_cull_interval: Duration,
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub expired_cull_batch: NonZeroUsize,
+    /// Whether local pending transaction routing plans are journaled for restart replay.
+    pub plan_journal_enabled: bool,
+    /// Maximum queue-plan journal size before atomic compaction is considered.
+    pub plan_journal_max_bytes: u64,
 }
 
 /// Nexus staking configuration (public lanes).
@@ -4435,6 +4439,8 @@ impl Default for Queue {
             capacity_per_user: defaults::queue::CAPACITY_PER_USER,
             expired_cull_interval: defaults::queue::EXPIRED_CULL_INTERVAL,
             expired_cull_batch: defaults::queue::EXPIRED_CULL_BATCH,
+            plan_journal_enabled: defaults::queue::PLAN_JOURNAL_ENABLED,
+            plan_journal_max_bytes: defaults::queue::PLAN_JOURNAL_MAX_BYTES,
         }
     }
 }

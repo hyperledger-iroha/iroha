@@ -61,7 +61,7 @@ Per-lane summary stored with every block:
 - Ordered `receipts` vector.
 - Ordered `nexus_fee_receipts` vector for lane-relay-burn XOR gas settlement.
 - Ordered `native_amx_receipts` vector. Each entry records the source
-  transaction id, universal coordinator lane/dataspace/height, and the
+  transaction id, coordinator lane/dataspace/height, routing plan digest, and the
   per-dataspace legs that prepared and committed for a native cross-dataspace
   transaction.
 
@@ -104,7 +104,7 @@ applied (`applied`) or missing/expired/insufficient/disabled during validation.
    The settlement façade (`SettlementEngine`, `SettlementAccumulator`) records a `PendingSettlement` per transaction. Each record stores the TWAP inputs, liquidity profile, timestamps, and XOR amounts so it can later become a `LaneSettlementReceipt`.
 
 2. **Seal receipts into the block.**  
-   During `BlockBuilder::finalize`, each `(lane_id, dataspace_id)` pair drains its accumulator. The builder instantiates a `LaneBlockCommitment`, copies the receipt list, accumulates totals, stores optional swap metadata (via `SwapEvidence`), and appends native AMX prepare/commit receipts for universal-coordinator transactions that touch multiple non-universal dataspaces. The resulting vector is pushed to the Sumeragi status slot (`crates/iroha_core/src/sumeragi/status.rs`) so Torii and telemetry can expose it immediately.
+   During `BlockBuilder::finalize`, each `(lane_id, dataspace_id)` pair drains its accumulator. The builder instantiates a `LaneBlockCommitment`, copies the receipt list, accumulates totals, stores optional swap metadata (via `SwapEvidence`), and appends native AMX prepare/commit receipts only when the proposer supplies participant-committee QCs for every planned native AMX leg. Those QCs sign the source transaction, coordinator route, participant route, planned height, and routing-plan digest, and are sealed into the external execution context before proposal broadcast. Assembly no longer synthesizes coordinator-only receipts; without collected participant evidence, the proposal path defers/requeues the transaction until collection succeeds. The resulting vector is pushed to the Sumeragi status slot (`crates/iroha_core/src/sumeragi/status.rs`) so Torii and telemetry can expose it immediately.
    Before sealing, proposal assembly scans a bounded window of routed queue
    entries and applies slot-rotated lane interleaving. This keeps the current
    global block path from starving later lanes when the block slot count is

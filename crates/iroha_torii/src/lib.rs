@@ -229,7 +229,7 @@ use iroha_core::{
     kura::Kura,
     prelude::*,
     query::store::LiveQueryStoreHandle,
-    queue::{self, Queue, RoutingDecision},
+    queue::{self, Queue, RoutingDecision, RoutingPlan},
     soracloud_runtime::{
         SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
         SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1, SharedSoracloudRuntime,
@@ -249,7 +249,7 @@ use iroha_core::{
         ToriiHostedHttpProxyRequestV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1,
         ToriiProxyRequestV2, ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
         ToriiReadFanoutMergeV1, ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1,
-        ToriiRouteHintV1,
+        ToriiRouteHintV1, ToriiRoutingPlanHintV1,
     },
     tx::{
         AcceptTransactionFail, DecodedVersionedSignedTransaction, SignatureRejectionCode,
@@ -12453,6 +12453,40 @@ fn effective_proxy_routing_decision(
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProxyRoutingPlanMismatch {
+    ingress_digest: Hash,
+    receiver_digest: Hash,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn validate_proxy_routing_plan(
+    request_kind: &'static str,
+    resolved_plan: RoutingPlan,
+    ingress_hint: RoutingPlan,
+) -> Result<RoutingPlan, ProxyRoutingPlanMismatch> {
+    if resolved_plan != ingress_hint {
+        let receiver_digest = resolved_plan.digest();
+        let ingress_digest = ingress_hint.digest();
+        iroha_logger::warn!(
+            request_kind,
+            resolved_digest = %receiver_digest,
+            ingress_digest = %ingress_digest,
+            resolved_lane = resolved_plan.coordinator_route().lane_id.as_u32(),
+            resolved_dataspace = resolved_plan.coordinator_route().dataspace_id.as_u64(),
+            ingress_lane = ingress_hint.coordinator_route().lane_id.as_u32(),
+            ingress_dataspace = ingress_hint.coordinator_route().dataspace_id.as_u64(),
+            "Torii proxy receiver rejected a different routing plan than the ingress hint"
+        );
+        return Err(ProxyRoutingPlanMismatch {
+            ingress_digest,
+            receiver_digest,
+        });
+    }
+    Ok(resolved_plan)
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn effective_proxy_signed_query_routing_decision(
     resolved_route: RoutingDecision,
     ingress_hint: RoutingDecision,
@@ -18916,14 +18950,15 @@ where
 async fn execute_torii_transaction_via_proxy(
     app: &SharedAppState,
     transaction: TransactionEntrypoint,
-    routing_decision: RoutingDecision,
+    routing_plan: RoutingPlan,
 ) -> Response {
+    let routing_decision = routing_plan.coordinator_route();
     execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
         ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
-            expected_route: ToriiRouteHintV1::from(routing_decision),
+            expected_plan: ToriiRoutingPlanHintV1::from(routing_plan),
         },
     )
     .await
@@ -21073,10 +21108,11 @@ async fn execute_incoming_torii_proxy_request(
     match proxy_request.request.clone() {
         ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
-            expected_route,
+            expected_plan,
         } => {
             let entrypoint_hash = transaction.hash();
             let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
+            let ingress_plan = RoutingPlan::from(expected_plan);
             match routing::accept_transaction_for_ingress(
                 app.chain_id.clone(),
                 app.state.clone(),
@@ -21085,42 +21121,52 @@ async fn execute_incoming_torii_proxy_request(
             ) {
                 Ok(accepted_tx) => match app
                     .queue
-                    .route_with_state(&accepted_tx, app.state.as_ref())
+                    .route_plan_with_state(&accepted_tx, app.state.as_ref())
                 {
-                    Ok(routing_decision) => {
-                        let routing_decision = effective_proxy_routing_decision(
-                            "submit_transaction",
-                            routing_decision,
-                            expected_route.into(),
-                        );
-                        if !should_execute_route_locally(app, routing_decision) {
-                            forward_incoming_torii_proxy_request_from_sender(
-                                app,
-                                immediate_sender_peer_id.as_ref(),
-                                routing_decision,
-                                &proxy_request_context,
-                            )
-                            .await
-                        } else {
-                            match routing::push_accepted_transaction_for_ingress_with_routing(
-                                app.queue.clone(),
-                                app.state.clone(),
-                                accepted_tx,
-                                Some(routing_decision),
-                            ) {
-                                Ok(_) => transaction_submission_response(
-                                    app.as_ref(),
-                                    entrypoint_hash,
-                                    signed_transaction_hash,
+                    Ok(routing_plan) => match validate_proxy_routing_plan(
+                        "submit_transaction",
+                        routing_plan,
+                        ingress_plan,
+                    ) {
+                        Ok(routing_plan) => {
+                            let routing_decision = routing_plan.coordinator_route();
+                            if !should_execute_route_locally(app, routing_decision) {
+                                forward_incoming_torii_proxy_request_from_sender(
+                                    app,
+                                    immediate_sender_peer_id.as_ref(),
                                     routing_decision,
-                                    "proxy",
-                                    false,
-                                    utils::current_response_format(),
-                                ),
-                                Err(error) => error.into_response(),
+                                    &proxy_request_context,
+                                )
+                                .await
+                            } else {
+                                match routing::push_accepted_transaction_for_ingress_with_routing_plan(
+                                    app.queue.clone(),
+                                    app.state.clone(),
+                                    accepted_tx,
+                                    Some(routing_plan),
+                                ) {
+                                    Ok(_) => transaction_submission_response(
+                                        app.as_ref(),
+                                        entrypoint_hash,
+                                        signed_transaction_hash,
+                                        routing_decision,
+                                        "proxy",
+                                        false,
+                                        utils::current_response_format(),
+                                    ),
+                                    Err(error) => error.into_response(),
+                                }
                             }
                         }
-                    }
+                        Err(error) => torii_proxy_error_response(
+                            StatusCode::CONFLICT,
+                            "routing_plan_mismatch",
+                            format!(
+                                "routing plan mismatch: ingress digest {}, receiver digest {}",
+                                error.ingress_digest, error.receiver_digest
+                            ),
+                        ),
+                    },
                     Err(error) => routing_resolve_error_to_torii_error(app, error).into_response(),
                 },
                 Err(error) => error.into_response(),
@@ -29682,24 +29728,25 @@ async fn handler_post_transaction(
         })??
     };
     #[allow(unused_variables)]
-    let routing_decision = app
+    let routing_plan = app
         .queue
-        .route_with_state(&accepted_tx, app.state.as_ref())
+        .route_plan_with_state(&accepted_tx, app.state.as_ref())
         .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
+    let routing_decision = routing_plan.coordinator_route();
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     if !should_execute_route_locally(app.as_ref(), routing_decision) {
         return Ok(execute_torii_transaction_via_proxy(
             &app,
             accepted_tx.entrypoint().clone(),
-            routing_decision,
+            routing_plan,
         )
         .await);
     }
-    let routing_decision = routing::push_accepted_transaction_for_ingress_with_routing(
+    let routing_decision = routing::push_accepted_transaction_for_ingress_with_routing_plan(
         app.queue.clone(),
         app.state.clone(),
         accepted_tx,
-        Some(routing_decision),
+        Some(routing_plan),
     )?;
     let response = transaction_submission_response(
         app.as_ref(),
@@ -29767,24 +29814,25 @@ async fn handler_post_transaction_entrypoint(
     let entrypoint_hash = accepted_tx.hash_as_entrypoint();
     let signed_transaction_hash = accepted_tx.external().map(SignedTransaction::hash);
     #[allow(unused_variables)]
-    let routing_decision = app
+    let routing_plan = app
         .queue
-        .route_with_state(&accepted_tx, app.state.as_ref())
+        .route_plan_with_state(&accepted_tx, app.state.as_ref())
         .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
+    let routing_decision = routing_plan.coordinator_route();
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     if !should_execute_route_locally(app.as_ref(), routing_decision) {
         return Ok(execute_torii_transaction_via_proxy(
             &app,
             accepted_tx.entrypoint().clone(),
-            routing_decision,
+            routing_plan,
         )
         .await);
     }
-    let routing_decision = routing::push_accepted_transaction_for_ingress_with_routing(
+    let routing_decision = routing::push_accepted_transaction_for_ingress_with_routing_plan(
         app.queue.clone(),
         app.state.clone(),
         accepted_tx,
-        Some(routing_decision),
+        Some(routing_plan),
     )?;
     let response = transaction_submission_response(
         app.as_ref(),
@@ -30386,10 +30434,11 @@ async fn handler_post_transactions_batch(
                 if precheck.single_ed25519_prechecked {
                     stateless_cache_warm.push(accepted_tx.clone());
                 }
-                let routing_decision = app
+                let routing_plan = app
                     .queue
-                    .route_with_state(&accepted_tx, app.state.as_ref())
+                    .route_plan_with_state(&accepted_tx, app.state.as_ref())
                     .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
+                let routing_decision = routing_plan.coordinator_route();
                 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
                 if !should_execute_route_locally_cached(
                     app.as_ref(),
@@ -30401,10 +30450,10 @@ async fn handler_post_transactions_batch(
                         message: "batched transaction submission currently accepts only transactions routed to the receiving Torii node".to_owned(),
                     });
                 }
-                accepted.push((accepted_tx, routing_decision));
+                accepted.push((accepted_tx, routing_plan));
             }
             let accepted_count = accepted.len();
-            routing::push_accepted_transactions_for_ingress_with_routing(
+            routing::push_accepted_transactions_for_ingress_with_routing_plans(
                 app.queue.clone(),
                 app.state.clone(),
                 accepted,
@@ -31012,7 +31061,7 @@ async fn handler_pipeline_transaction_status(
     .await?;
 
     let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
-    if let Some(route) = queue::routing_hint(&hash) {
+    if let Some(route) = queue::routing_plan_hint(&hash).map(|plan| plan.coordinator_route()) {
         let hinted = execute_torii_single_route_read(
             &app,
             route,
@@ -43702,7 +43751,7 @@ pub(crate) mod tests_runtime_handlers {
         .sign(keypair.private_key());
         let submit_request = ToriiProxyRequestKindV1::SubmitTransaction {
             transaction: iroha_data_model::transaction::TransactionEntrypoint::External(tx),
-            expected_route: ToriiRouteHintV1::from(route),
+            expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(route)),
         };
         assert_eq!(
             super::torii_proxy_attempt_timeout(&submit_request),
@@ -43716,16 +43765,34 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[test]
+    fn validate_proxy_routing_plan_rejects_receiver_recomputed_plan() {
+        let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let resolved_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
+        let ingress_plan = RoutingPlan::single(ingress_hint);
+        let resolved_plan = RoutingPlan::single(resolved_route);
+
+        let err =
+            super::validate_proxy_routing_plan("submit_transaction", resolved_plan, ingress_plan)
+                .expect_err("submit proxy must reject routing-plan drift");
+
+        assert_eq!(
+            err.ingress_digest,
+            RoutingPlan::single(ingress_hint).digest()
+        );
+        assert_eq!(
+            err.receiver_digest,
+            RoutingPlan::single(resolved_route).digest()
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
     fn effective_proxy_routing_decision_prefers_receiver_recomputed_route() {
         let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let resolved_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
 
         assert_eq!(
-            super::effective_proxy_routing_decision(
-                "submit_transaction",
-                resolved_route,
-                ingress_hint
-            ),
+            super::effective_proxy_routing_decision("verified_query", resolved_route, ingress_hint),
             resolved_route
         );
     }
