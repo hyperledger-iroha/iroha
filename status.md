@@ -1,6 +1,66 @@
 # Status
 
-Last updated: 2026-05-21
+Last updated: 2026-05-23
+
+## 2026-05-23 Sumeragi V1 canonical engine slice
+
+- Added first-release Sumeragi V1 DTOs (`RoundId`, `ValidatorSetId`,
+  `QuorumPolicy`, `BlockSubject`, `Vote`, `Certificate`, `PayloadRequest`,
+  `PayloadResponse`) with Norito `PROTO_VERSION = 1`.
+- Introduced a pure `sumeragi::engine::ConsensusEngine` covering locked-QC
+  prepare safety, deterministic highest-QC selection, pending finality until
+  local payload availability, and epoch-boundary validator-set activation.
+- Added the canonical `/v1/sumeragi/status` V1 view (`height`, `view`,
+  `phase`, leader index, locked/highest QC, pending finality,
+  validator-set id, quorum policy, and payload/RBC status) to both JSON and
+  Norito status responses.
+- Quarantined non-canonical control frames at live Sumeragi ingress/broadcast
+  boundaries so they are recorded as rejected V1 status evidence instead of
+  driving consensus state.
+- Tightened quorum rules to strict supermajority: permissioned
+  `floor(2n / 3) + 1`, and NPoS stake `signed_stake * 3 > total_stake * 2`
+  with missing or zero stake failing closed.
+- Genesis consensus metadata now recomputes first-release V1 wire metadata
+  instead of preserving stale or external handshake declarations, and checked-in
+  genesis manifests advertise `wire_proto_versions: [1]`.
+- Compatibility lint fallout discovered by full workspace validation was fixed
+  in `fastpq_prover`, `iroha_sccp`, `iroha_kagami`, `mochi-core`, and status
+  roundtrip fixtures without adding new dependencies or editing `Cargo.lock`.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `cargo test -p iroha_data_model canonical_v1_status_wire_roundtrip_codec --lib -- --nocapture`
+  - `cargo test -p iroha_data_model canonical_v1_consensus_types_roundtrip_codec --lib -- --nocapture`
+  - `cargo test -p iroha_data_model quorum_policy_enforces_strict_supermajority_boundaries --lib -- --nocapture`
+  - `cargo test -p iroha_data_model --test consensus_roundtrip sumeragi_wire_status_roundtrip -- --nocapture`
+  - `cargo test -p iroha_data_model consensus -- --nocapture`
+  - `cargo test -p iroha_genesis with_consensus_meta --lib -- --nocapture`
+  - `cargo test -p iroha_genesis consensus_handshake_metadata --lib -- --nocapture`
+  - `cargo test -p iroha_torii --lib status_snapshot_json_includes_canonical_v1_state -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::engine -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi -- --nocapture`
+  - `cargo test -p iroha_core sumeragi -- --nocapture`
+  - `cargo test -p iroha_core --lib consensus_message_handling_labels_include_new_variants -- --nocapture`
+  - `cargo test -p iroha_core --lib selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint -- --nocapture`
+  - `cargo test -p iroha_core --lib stake_quorum_reached_for_peers_falls_back_without_stake_records -- --nocapture`
+  - `cargo test -p iroha --lib get_sumeragi_status_prefers_norito_and_handles_json -- --nocapture`
+  - `cargo test -p iroha --lib sumeragi_status_wire_roundtrip_to_json_preserves_fields -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_mode_cutover::staged_cutover_recomputes_consensus_fingerprint -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_mode_cutover::permissioned_to_npos_cutover_switches_mode_at_activation_height -- --nocapture`
+  - `cargo test -p integration_tests sumeragi_kagami_localnet::kagami_localnet_bootstrap_produces_blocks -- --nocapture`
+  - `cargo test -p integration_tests sumeragi_ -- --nocapture`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo build --workspace`
+
+## 2026-05-22 Council persistence permission bootstrap
+
+- Test-network built-in genesis now grants ALICE `CanManageParliament`, so
+  SORA governance fixtures that persist fallback councils under the default
+  authority satisfy the council-persistence gate.
+- Focused validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_test_network genesis_grants_alice_bootstrap_management_permissions`
 
 ## 2026-05-21 CLI smoke offline-command config recovery
 
@@ -1423,6 +1483,8 @@ Last updated: 2026-05-21
   valid cursor, permanent paged failures (`Expired`/`CursorDone`) evict the
   dead cursor and release live-query capacity plus per-authority quota,
   transient paged failures remain resident, retryable, and quota-consuming,
+  non-advancing paged continuations are treated as terminal `CursorDone`
+  failures and release the live-query slot before attackers can spin a cursor,
   exhausted paged starts do not consume capacity or quota, dropped paged cursors
   release capacity and quota without invoking replay work, paged starts still
   enforce live-query-store capacity, explicit pagination limits do not force
@@ -1449,14 +1511,11 @@ Last updated: 2026-05-21
   `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo test
   -p iroha_core --lib arc_ -- --nocapture`,
   `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo check
-  -p iroha_torii --tests` (passes with an unrelated dirty-worktree warning in
-  `crates/iroha_core/src/smartcontracts/isi/sns.rs`), and
+  -p iroha_torii --tests`, and
   `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-query-api-check cargo clippy
   -p iroha_core --all-targets -- -D warnings` are green.
-  `rustfmt --edition 2024 --check` on the touched query files and
-  `git diff --check` are also green; package/workspace-wide `cargo fmt
-  --check` is blocked by unrelated existing format diffs in other dirty
-  workspace files.
+  `rustfmt --edition 2024 --check` on the touched query and compile-unblocker
+  files, `cargo fmt --all --check`, and `git diff --check` are also green.
 
 ## 2026-05-18 ZK adversarial negative coverage follow-up
 
@@ -1957,7 +2016,16 @@ Last updated: 2026-05-21
   unique binding points at a different dataspace, preventing cross-dataspace
   credits outside the universal AMX coordinator. The transfer-batch execution
   surface has matching negative coverage for that same cross-dataspace credit
-  attempt, plus explicit empty-batch rejection coverage.
+  attempt, plus explicit empty-batch rejection coverage. Lower-level transfer
+  policy coverage now rejects an explicitly dataspace-scoped destination asset
+  id when it points outside the current non-universal route.
+- Global XOR-like asset writes now have public-instruction negative coverage for
+  non-authoritative non-universal routes: mint, transparent transfer, and burn
+  all reject before mutating balances unless the route is the asset home
+  dataspace or the universal AMX coordinator. Transparent transfer preparation
+  now also checks the global-asset route before implicit receiver admission, so
+  a rejected private-route transfer cannot leave behind an auto-created receiver
+  account.
 - Query tests now use explicit `#[tokio::test]` on async cases instead of
   shadowing the builtin `#[test]` attribute, keeping sync negative tests
   compilable under `iroha_core --lib`.
@@ -1987,7 +2055,13 @@ Last updated: 2026-05-21
   --nocapture`, `CARGO_INCREMENTAL=0
   CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core --lib
   transfer_restricted_asset_uses_destination_dataspace_binding_and_policy --
-  --nocapture`, and `CARGO_INCREMENTAL=0
+  --nocapture`, `CARGO_INCREMENTAL=0
+  CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core --lib
+  global_asset_rejects -- --nocapture`,
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p
+  iroha_core --lib
+  transfer_policy_rejects_explicit_destination_scope_outside_non_universal_route
+  -- --nocapture`, and `CARGO_INCREMENTAL=0
   CARGO_TARGET_DIR=/tmp/iroha-codex-cross-ds cargo test -p iroha_core --lib
   collect_unsorted_bounded_page_rejects_returned_offset_at_limit_without_reading
   -- --nocapture`. Full workspace testing remains a long-corridor follow-up.

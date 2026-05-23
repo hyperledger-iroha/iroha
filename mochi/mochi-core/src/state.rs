@@ -811,6 +811,7 @@ fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
         QueryOutputBatchBox::OracleDispute(_) => "OracleDispute",
         QueryOutputBatchBox::OracleChangeProposal(_) => "OracleChangeProposal",
         QueryOutputBatchBox::TwitterBindingRecord(_) => "TwitterBindingRecord",
+        QueryOutputBatchBox::DefiOracleAttestation(_) => "DefiOracleAttestation",
         QueryOutputBatchBox::AssetEscrowRecord(_) => "AssetEscrowRecord",
         QueryOutputBatchBox::AnonymousAssetEscrowRecord(_) => "AnonymousAssetEscrowRecord",
     }

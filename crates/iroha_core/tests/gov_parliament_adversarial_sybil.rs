@@ -652,7 +652,9 @@ fn wealthy_non_members_cannot_open_referendum_without_sortition_capture() {
     )
     .expect_err("non-member rules approval must fail");
     assert!(
-        err_rules.to_string().contains("only seated members"),
+        err_rules
+            .to_string()
+            .contains("only seated parliament members"),
         "unexpected rules error: {err_rules:?}"
     );
     let err_agenda = approve(
@@ -664,7 +666,9 @@ fn wealthy_non_members_cannot_open_referendum_without_sortition_capture() {
     )
     .expect_err("non-member agenda approval must fail");
     assert!(
-        err_agenda.to_string().contains("only seated members"),
+        err_agenda
+            .to_string()
+            .contains("only seated parliament members"),
         "unexpected agenda error: {err_agenda:?}"
     );
 

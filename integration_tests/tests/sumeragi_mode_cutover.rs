@@ -363,7 +363,7 @@ async fn wait_for_epoch_length_quorum(
 
 async fn advance_to_height_quorum(
     clients: &[Client],
-    submitter: &Client,
+    _submitter: &Client,
     target_height: u64,
     quorum: usize,
     log_prefix: &str,
@@ -371,6 +371,7 @@ async fn advance_to_height_quorum(
     let mut last_observed = Vec::new();
     let mut heights = Vec::new();
     let mut last_submitted_seed = 0;
+    let mut last_submit_errors = Vec::new();
 
     for attempt in 0..HEIGHT_POLL_LIMIT {
         last_observed.clear();
@@ -395,7 +396,21 @@ async fn advance_to_height_quorum(
         let highest = heights.iter().flatten().copied().max().unwrap_or_default();
         let seed_height = highest.saturating_add(1).min(target_height).max(1);
         if attempt == 0 || seed_height > last_submitted_seed || attempt % 10 == 0 {
-            submitter.submit(Log::new(Level::INFO, format!("{log_prefix} {seed_height}")))?;
+            let mut accepted = 0usize;
+            last_submit_errors.clear();
+            for (idx, client) in clients.iter().enumerate() {
+                match client.submit(Log::new(
+                    Level::INFO,
+                    format!("{log_prefix} {seed_height} attempt {attempt} peer {idx}"),
+                )) {
+                    Ok(_) => accepted = accepted.saturating_add(1),
+                    Err(err) => last_submit_errors.push(err.to_string()),
+                }
+            }
+            ensure!(
+                accepted > 0,
+                "{log_prefix}: no peer accepted height seed {seed_height}; last submit errors {last_submit_errors:?}"
+            );
             last_submitted_seed = seed_height;
         }
         sleep(HEIGHT_POLL_DELAY).await;

@@ -2676,7 +2676,7 @@ pub enum ConsensusMessageKind {
     FetchPendingBlock,
     /// Consensus control-flow evidence.
     Evidence,
-    /// Experimental vNext consensus control messages.
+    /// Non-canonical consensus control messages rejected by V1 ingress.
     VNext,
 }
 
@@ -2705,7 +2705,7 @@ impl ConsensusMessageKind {
             ConsensusMessageKind::RbcDeliver => "rbc_deliver",
             ConsensusMessageKind::FetchPendingBlock => "fetch_pending_block",
             ConsensusMessageKind::Evidence => "evidence",
-            ConsensusMessageKind::VNext => "vnext",
+            ConsensusMessageKind::VNext => "non_canonical_consensus",
         }
     }
 }
@@ -9528,7 +9528,10 @@ mod tests {
             "fetch_pending_block"
         );
         assert_eq!(super::ConsensusMessageKind::Evidence.as_str(), "evidence");
-        assert_eq!(super::ConsensusMessageKind::VNext.as_str(), "vnext");
+        assert_eq!(
+            super::ConsensusMessageKind::VNext.as_str(),
+            "non_canonical_consensus"
+        );
 
         assert_eq!(
             super::ConsensusMessageReason::MissingHighestQc.as_str(),

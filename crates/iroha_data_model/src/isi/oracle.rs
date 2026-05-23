@@ -122,7 +122,7 @@ isi! {
 }
 
 isi! {
-    /// Submit a native Soracles attestation carrying DeFi ABI-compatible oracle bytes.
+    /// Submit a native Soracles attestation carrying `DeFi` ABI-compatible oracle bytes.
     pub struct SubmitDefiOracleAttestation {
         /// Attestation payload and compatibility signature.
         pub attestation: DefiOracleAttestation,

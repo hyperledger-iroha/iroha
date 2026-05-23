@@ -2,7 +2,7 @@
 //!
 //! This module defines canonical, Norito-encoded types for QC voting
 //! (prepare/commit/new-view), evidence, and consensus helpers.
-//! It is used by the actor and related tooling.
+//! It is used by the consensus adapters and related tooling.
 //!
 //! Mode separation (permissioned vs `NPoS`) is runtime-selectable via config/WSV.
 //! Build artifacts no longer hard‑code consensus mode; peers validate mode
@@ -22,17 +22,17 @@ use iroha_config::parameters::actual::{
 #[cfg(test)]
 use iroha_crypto::HashOf;
 pub use iroha_data_model::block::consensus::{
-    CertPhase, ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind,
-    EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height, NPOS_TAG, NposGenesisParams,
-    PERMISSIONED_TAG, PROTO_VERSION, Proposal, Qc, QcAggregate, QcRef, QcVote, RbcChunk,
-    RbcChunkRequest, RbcDeliver, RbcInit, RbcInitRequest, RbcReady, RbcReadySignature, Reconfig,
-    ValidatorIndex, View, VrfCommit, VrfReveal, default_chain_order_hash,
+    BlockSubject, CertPhase, Certificate, ConsensusBlockHeader, ConsensusGenesisParams, Evidence,
+    EvidenceKind, EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height, NPOS_TAG,
+    NposGenesisParams, PERMISSIONED_TAG, PROTO_VERSION, PayloadRequest, PayloadResponse, Proposal,
+    Qc, QcAggregate, QcRef, QcVote, QuorumPolicy, RbcChunk, RbcChunkRequest, RbcDeliver, RbcInit,
+    RbcInitRequest, RbcReady, RbcReadySignature, Reconfig, RoundId, ValidatorIndex, ValidatorSetId,
+    View, VrfCommit, VrfReveal, default_chain_order_hash,
 };
 
-// Transitional aliases to reduce churn while the QC terminology is removed.
 /// Commit-certificate phase (prepare/commit/new-view).
 pub type Phase = CertPhase;
-/// QC vote used for certificate aggregation.
+/// Runtime adapter vote used for certificate aggregation.
 pub type Vote = QcVote;
 /// Reference to a QC header carried in hints.
 pub type QcHeaderRef = QcRef;
@@ -55,7 +55,7 @@ pub use iroha_data_model::block::consensus::{BlockMultiproof, ReadNode, TxReadSp
 /// Build the canonical preimage for a QC vote signature under the given chain and mode tag.
 pub fn vote_preimage(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 * 4 + 8 * 6 + 3);
-    let domain = consensus_domain(chain_id, "Vote", b"v2", mode_tag);
+    let domain = consensus_domain(chain_id, "Vote", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(v.block_hash.as_ref().as_ref());
     out.extend_from_slice(v.parent_state_root.as_ref());
@@ -133,7 +133,7 @@ pub fn consensus_domain(
 ) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
     let mut hasher = Blake2b512::new();
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, b"iroha2-consensus/v2");
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, b"iroha-sumeragi-consensus/v1");
     iroha_crypto::blake2::digest::Update::update(
         &mut hasher,
         chain_id.clone().into_inner().as_bytes(),
@@ -616,11 +616,11 @@ mod tests {
         let vote_preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
         assert_eq!(
             &vote_preimage[..32],
-            &consensus_domain(&chain, "Vote", b"v2", PERMISSIONED_TAG)
+            &consensus_domain(&chain, "Vote", b"v1", PERMISSIONED_TAG)
         );
         assert_ne!(
             &vote_preimage[..32],
-            &consensus_domain(&chain, "Vote", b"v1", PERMISSIONED_TAG)
+            &consensus_domain(&chain, "Vote", b"legacy-v2", PERMISSIONED_TAG)
         );
 
         let vrf_commit = VrfCommit {

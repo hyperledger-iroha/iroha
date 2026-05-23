@@ -2361,113 +2361,6 @@ fn collect_manual_set_parameters(transactions: &[RawGenesisTx]) -> Vec<Parameter
     manual
 }
 
-#[derive(Debug, Clone)]
-struct ConsensusHandshakeMetadata {
-    mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
-    bls_domain: String,
-    wire_proto_versions: Vec<u32>,
-    consensus_fingerprint: String,
-}
-
-fn parse_consensus_handshake_metadata_from_payload(
-    payload: &norito::json::Value,
-) -> Option<ConsensusHandshakeMetadata> {
-    let mode = payload
-        .get("mode")
-        .and_then(norito::json::Value::as_str)
-        .and_then(|mode| match mode {
-            "Permissioned" => {
-                Some(iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned)
-            }
-            "Npos" => Some(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos),
-            _ => None,
-        })?;
-    let bls_domain = payload
-        .get("bls_domain")
-        .and_then(norito::json::Value::as_str)?
-        .to_string();
-    let wire_proto_versions = payload
-        .get("wire_proto_versions")
-        .and_then(norito::json::Value::as_array)
-        .and_then(|versions| {
-            versions
-                .iter()
-                .map(|version| version.as_u64().and_then(|value| u32::try_from(value).ok()))
-                .collect::<Option<Vec<_>>>()
-        })?;
-    let consensus_fingerprint = payload
-        .get("consensus_fingerprint")
-        .and_then(norito::json::Value::as_str)?
-        .to_string();
-
-    if wire_proto_versions.is_empty() {
-        return None;
-    }
-
-    let fp_hex = consensus_fingerprint.trim_start_matches("0x");
-    let mut fp = [0u8; 32];
-    if hex::decode_to_slice(fp_hex, &mut fp).is_err() {
-        return None;
-    }
-
-    Some(ConsensusHandshakeMetadata {
-        mode,
-        bls_domain,
-        wire_proto_versions,
-        consensus_fingerprint,
-    })
-}
-
-fn parse_consensus_handshake_metadata(
-    transactions: &[RawGenesisTx],
-) -> Option<ConsensusHandshakeMetadata> {
-    for tx in transactions {
-        for instruction in &tx.instructions {
-            let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() else {
-                continue;
-            };
-            let Parameter::Custom(custom) = set_param.inner() else {
-                continue;
-            };
-            if custom.id() != &consensus_metadata::handshake_meta_id() {
-                continue;
-            }
-            let payload = match custom
-                .payload()
-                .try_into_any_norito::<norito::json::Value>()
-            {
-                Ok(payload) => payload,
-                Err(_) => continue,
-            };
-            if let Some(metadata) = parse_consensus_handshake_metadata_from_payload(&payload) {
-                return Some(metadata);
-            }
-        }
-
-        if let Some(parameters) = &tx.parameters {
-            let Some(custom) = parameters
-                .custom()
-                .get(&consensus_metadata::handshake_meta_id())
-            else {
-                continue;
-            };
-
-            let payload: norito::json::Value = match custom
-                .payload()
-                .try_into_any_norito::<norito::json::Value>()
-            {
-                Ok(payload) => payload,
-                Err(_) => continue,
-            };
-            if let Some(metadata) = parse_consensus_handshake_metadata_from_payload(&payload) {
-                return Some(metadata);
-            }
-        }
-    }
-
-    None
-}
-
 fn is_consensus_handshake_metadata_instruction(instruction: &InstructionBox) -> bool {
     instruction
         .as_any()
@@ -2715,14 +2608,26 @@ impl RawGenesisTransaction {
             .get(&npos_param_id)
             .and_then(SumeragiNposParameters::from_custom_parameter);
 
-        let mode_hint = sumeragi.next_mode();
-        let mode = self.consensus_mode.or(mode_hint).unwrap_or_else(|| {
-            if npos_payload.is_some() {
-                SumeragiConsensusMode::Npos
-            } else {
-                SumeragiConsensusMode::Permissioned
-            }
-        });
+        let staged_next_mode = sumeragi.next_mode();
+        let mode = self
+            .consensus_mode
+            .or_else(|| {
+                if sumeragi.mode_activation_height().is_some() {
+                    staged_next_mode.map(|next| match next {
+                        SumeragiConsensusMode::Permissioned => SumeragiConsensusMode::Npos,
+                        SumeragiConsensusMode::Npos => SumeragiConsensusMode::Permissioned,
+                    })
+                } else {
+                    staged_next_mode
+                }
+            })
+            .unwrap_or_else(|| {
+                if npos_payload.is_some() {
+                    SumeragiConsensusMode::Npos
+                } else {
+                    SumeragiConsensusMode::Permissioned
+                }
+            });
 
         let (mode_tag, default_bls_domain) = match mode {
             SumeragiConsensusMode::Permissioned => (
@@ -2806,9 +2711,7 @@ impl RawGenesisTransaction {
         if self.bls_domain.is_none() {
             self.bls_domain = Some(bls_domain);
         }
-        if self.wire_proto_versions.is_empty() {
-            self.wire_proto_versions = vec![iroha_data_model::block::consensus::PROTO_VERSION];
-        }
+        self.wire_proto_versions = vec![iroha_data_model::block::consensus::PROTO_VERSION];
         self.consensus_fingerprint = Some(format!("0x{}", hex::encode(fp)));
         self
     }
@@ -3182,6 +3085,49 @@ mod tests2 {
             handshake_mode.as_deref(),
             Some("Permissioned"),
             "handshake metadata should reflect configured mode before activation",
+        );
+    }
+
+    #[test]
+    fn with_consensus_meta_treats_staged_next_mode_as_future_mode() {
+        let chain = ChainId::from("iroha:test:implicit-staged-handshake");
+        let mut params = Parameters::default();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
+            SumeragiConsensusMode::Npos,
+        )));
+        params.set_parameter(Parameter::Sumeragi(
+            SumeragiParameter::ModeActivationHeight(7),
+        ));
+        params.set_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ));
+
+        let manifest = RawGenesisTransaction {
+            chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+            executor: None,
+            ivm_dir: IvmPath::default(),
+            transactions: vec![RawGenesisTx {
+                parameters: Some(params),
+                ..RawGenesisTx::default()
+            }],
+            consensus_mode: None,
+            bls_domain: None,
+            wire_proto_versions: vec![],
+            consensus_fingerprint: None,
+            crypto: ManifestCrypto::default(),
+        }
+        .with_consensus_meta();
+
+        assert_eq!(
+            manifest.consensus_mode,
+            Some(SumeragiConsensusMode::Permissioned),
+            "staged NPoS reconfiguration must not change the genesis active mode"
+        );
+        assert_eq!(
+            manifest.bls_domain.as_deref(),
+            Some("bls-iroha2:permissioned-sumeragi:v1"),
+            "staged NPoS reconfiguration should keep the permissioned BLS domain before activation"
         );
     }
 
@@ -4172,14 +4118,26 @@ mod tests2 {
             let npos_payload = custom
                 .get(&npos_param_id)
                 .and_then(SumeragiNposParameters::from_custom_parameter);
-            let mode_hint = sumeragi.next_mode();
-            let mode = tx.consensus_mode.or(mode_hint).unwrap_or_else(|| {
-                if npos_payload.is_some() {
-                    SumeragiConsensusMode::Npos
-                } else {
-                    SumeragiConsensusMode::Permissioned
-                }
-            });
+            let staged_next_mode = sumeragi.next_mode();
+            let mode = tx
+                .consensus_mode
+                .or_else(|| {
+                    if sumeragi.mode_activation_height().is_some() {
+                        staged_next_mode.map(|next| match next {
+                            SumeragiConsensusMode::Permissioned => SumeragiConsensusMode::Npos,
+                            SumeragiConsensusMode::Npos => SumeragiConsensusMode::Permissioned,
+                        })
+                    } else {
+                        staged_next_mode
+                    }
+                })
+                .unwrap_or_else(|| {
+                    if npos_payload.is_some() {
+                        SumeragiConsensusMode::Npos
+                    } else {
+                        SumeragiConsensusMode::Permissioned
+                    }
+                });
 
             let resolved_npos = match (mode, npos_payload) {
                 (SumeragiConsensusMode::Npos, Some(npos)) => Some(npos),
@@ -4694,19 +4652,10 @@ impl RawGenesisTransaction {
     /// Fails if `self.executor` path fails to load [`Executor`].
     #[allow(clippy::too_many_lines)]
     pub fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
-        let explicit_handshake_meta = parse_consensus_handshake_metadata(&self.transactions);
-        let mut manifest = self.with_consensus_meta();
-        if let Some(handshake_meta) = explicit_handshake_meta {
-            manifest.consensus_mode = Some(handshake_meta.mode);
-            manifest.bls_domain = Some(handshake_meta.bls_domain);
-            manifest.wire_proto_versions = handshake_meta.wire_proto_versions;
-            manifest.consensus_fingerprint = Some(handshake_meta.consensus_fingerprint);
-        }
-
-        // Recompute generated fields only when no valid injected handshake metadata
-        // is present.
-        // (Injected values are intentionally preserved so test-network overrides are
-        // not accidentally discarded.)
+        // Always recompute generated fields. Sumeragi V1 is the only first-release
+        // wire protocol, so stale or externally injected handshake metadata must not
+        // survive into the signed genesis block.
+        let manifest = self.with_consensus_meta();
 
         manifest
             .crypto
@@ -6119,7 +6068,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_preserves_valid_consensus_handshake_metadata() -> Result<()> {
+    fn parse_recomputes_explicit_consensus_handshake_metadata() -> Result<()> {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta-preserve-valid");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
@@ -6193,7 +6142,9 @@ mod tests {
                 .get("wire_proto_versions")
                 .and_then(norito::json::Value::as_array)
                 .expect("wire_proto_versions should be encoded"),
-            &vec![norito::json::Value::Number(7u64.into())]
+            &vec![norito::json::Value::Number(
+                u64::from(iroha_data_model::block::consensus::PROTO_VERSION).into()
+            )]
         );
         assert_eq!(
             payload
@@ -6205,13 +6156,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_preserves_explicit_consensus_handshake_metadata_with_external_fingerprint()
-    -> Result<()> {
+    fn parse_replaces_explicit_consensus_handshake_metadata_with_external_fingerprint() -> Result<()>
+    {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta-preserve-external-fingerprint");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw()
             .with_consensus_meta();
+        let expected_fingerprint = manifest
+            .consensus_fingerprint
+            .clone()
+            .expect("consensus fingerprint expected");
         let external_fingerprint =
             "0x1111111111111111111111111111111111111111111111111111111111111111";
         let explicit_param = Parameter::Custom(CustomParameter::new(
@@ -6263,13 +6218,19 @@ mod tests {
             payload
                 .get("consensus_fingerprint")
                 .and_then(norito::json::Value::as_str),
+            Some(expected_fingerprint.as_str())
+        );
+        assert_ne!(
+            payload
+                .get("consensus_fingerprint")
+                .and_then(norito::json::Value::as_str),
             Some(external_fingerprint)
         );
         Ok(())
     }
 
     #[test]
-    fn parse_preserves_valid_consensus_handshake_metadata_in_parameters() -> Result<()> {
+    fn parse_recomputes_explicit_consensus_handshake_metadata_in_parameters() -> Result<()> {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta-preserve-valid-params");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
@@ -6344,7 +6305,9 @@ mod tests {
                 .get("wire_proto_versions")
                 .and_then(norito::json::Value::as_array)
                 .expect("wire_proto_versions should be encoded"),
-            &vec![norito::json::Value::Number(7u64.into())]
+            &vec![norito::json::Value::Number(
+                u64::from(iroha_data_model::block::consensus::PROTO_VERSION).into()
+            )]
         );
         assert_eq!(
             payload

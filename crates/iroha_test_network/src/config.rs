@@ -48,6 +48,7 @@ use iroha_executor_data_model::permission::{
     asset::{CanMintAssetWithDefinition, CanTransferAssetWithDefinition},
     domain::{CanRegisterDomain, CanUnregisterDomain},
     executor::CanUpgradeExecutor,
+    governance::CanManageParliament,
     parameter::CanSetParameters,
     peer::CanManagePeers,
     role::CanManageRoles,
@@ -557,6 +558,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         )),
         InstructionBox::from(Grant::account_permission(
             Permission::new("CanManageSoracloud".into(), Json::new(())),
+            alice_id.clone(),
+        )),
+        InstructionBox::from(Grant::account_permission(
+            CanManageParliament,
             alice_id.clone(),
         )),
         InstructionBox::from(Grant::account_permission(
@@ -1884,7 +1889,7 @@ mod tests {
     }
 
     #[test]
-    fn genesis_grants_alice_soracloud_management_permission() {
+    fn genesis_grants_alice_bootstrap_management_permissions() {
         use iroha_data_model::{isi::GrantBox, transaction::Executable};
 
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -1895,7 +1900,8 @@ mod tests {
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
         let block = genesis(Vec::new(), topology, vec![entry]);
-        let mut saw_permission = false;
+        let mut saw_soracloud_permission = false;
+        let mut saw_parliament_permission = false;
         for tx in block.0.transactions_vec() {
             let Executable::Instructions(instrs) = tx.instructions() else {
                 continue;
@@ -1906,17 +1912,23 @@ mod tests {
                     continue;
                 };
                 if grant.destination == *ALICE_ID && grant.object.name() == "CanManageSoracloud" {
-                    saw_permission = true;
-                    break;
+                    saw_soracloud_permission = true;
+                }
+                if grant.destination == *ALICE_ID && grant.object.name() == "CanManageParliament" {
+                    saw_parliament_permission = true;
                 }
             }
-            if saw_permission {
+            if saw_soracloud_permission && saw_parliament_permission {
                 break;
             }
         }
         assert!(
-            saw_permission,
+            saw_soracloud_permission,
             "default test-network genesis should grant ALICE_ID CanManageSoracloud"
+        );
+        assert!(
+            saw_parliament_permission,
+            "default test-network genesis should grant ALICE_ID CanManageParliament"
         );
     }
 

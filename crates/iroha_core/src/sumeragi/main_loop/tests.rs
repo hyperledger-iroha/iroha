@@ -62929,6 +62929,7 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
     ];
     let stakes = [2_u64, 1_u64, 1_u64];
     let mut roster = Vec::new();
@@ -63019,18 +63020,20 @@ fn stake_quorum_reached_for_peers_falls_back_without_stake_records() {
     let mut strong = BTreeSet::new();
     strong.insert(roster[0].clone());
     strong.insert(roster[1].clone());
+    strong.insert(roster[2].clone());
     assert!(
         super::stake_snapshot::stake_quorum_reached_for_peers(&view, &roster, &strong)
             .expect("stake quorum computed"),
-        "2/3 roster should satisfy quorum when no stake records exist"
+        "3/4 roster should satisfy strict quorum when no stake records exist"
     );
 
     let mut weak = BTreeSet::new();
     weak.insert(roster[0].clone());
+    weak.insert(roster[1].clone());
     assert!(
         !super::stake_snapshot::stake_quorum_reached_for_peers(&view, &roster, &weak)
             .expect("stake quorum computed"),
-        "1/3 roster should not satisfy quorum when no stake records exist"
+        "1/2 roster should not satisfy strict quorum when no stake records exist"
     );
 }
 
@@ -63724,7 +63727,7 @@ fn selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint() {
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE1; Hash::LENGTH]));
     let topology = super::network_topology::Topology::new(roster.clone());
-    let signers: BTreeSet<ValidatorIndex> = [0_usize, 1]
+    let signers: BTreeSet<ValidatorIndex> = [0_usize, 1, 2]
         .into_iter()
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index"))
         .collect();
@@ -114140,6 +114143,55 @@ async fn emit_new_view_vote_allows_without_higher_view_quorum() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn emit_new_view_vote_allows_when_higher_view_has_only_f_plus_one_support() {
+    let mut harness = test_actor_harness(7).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let view = 0u64;
+    let higher_view = view.saturating_add(1);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let view_change_required = topology.min_votes_for_view_change();
+    let commit_required = topology.min_votes_for_commit();
+    assert!(
+        view_change_required.saturating_add(1) < commit_required,
+        "test requires f+1 support plus local vote to remain below commit quorum"
+    );
+
+    for peer in topology
+        .as_ref()
+        .iter()
+        .filter(|peer| *peer != actor.common_config.peer.id())
+        .take(view_change_required)
+    {
+        actor.subsystems.propose.new_view_tracker.record(
+            height,
+            higher_view,
+            peer.clone(),
+            committed_qc,
+        );
+    }
+
+    assert!(
+        actor.emit_new_view_vote(height, view, committed_qc, &topology),
+        "f+1 future-view support must not block the local timeout vote for the current view"
+    );
+    assert!(
+        actor
+            .vote_log
+            .values()
+            .any(|vote| vote.phase == Phase::NewView && vote.height == height && vote.view == view),
+        "local NEW_VIEW vote for the current view should be recorded"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn emit_new_view_vote_skips_when_higher_view_quorum_exists() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -114152,7 +114204,7 @@ async fn emit_new_view_vote_skips_when_higher_view_quorum_exists() {
     let view = 0u64;
     let higher_view = view.saturating_add(1);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let required = topology.min_votes_for_view_change();
+    let required = topology.min_votes_for_commit();
 
     for peer in topology.as_ref().iter().take(required) {
         actor.subsystems.propose.new_view_tracker.record(
@@ -114209,6 +114261,161 @@ async fn emit_new_view_vote_skips_when_local_already_voted_higher_view() {
             vote.phase == Phase::NewView && vote.height == height && vote.view == lower_view
         }),
         "lower view vote should not be recorded after higher view vote"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn future_new_view_f_plus_one_support_does_not_emit_non_installable_vote() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.gating.future_view_window = 8;
+    let mut harness = test_actor_harness_with_config(7, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: view.latest_block_hash().expect("committed block hash"),
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+        phase: Phase::Commit,
+    };
+    drop(view);
+
+    let height = highest_qc.height.saturating_add(1);
+    let local_view = 1_u64;
+    let future_view = 3_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let view_change_required = topology.min_votes_for_view_change();
+    let commit_required = topology.min_votes_for_commit();
+    assert!(
+        view_change_required.saturating_add(1) < commit_required,
+        "test requires f+1 support plus local vote to remain below commit quorum"
+    );
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, future_view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        future_view,
+        consensus_mode,
+        &signature_topology,
+    );
+    let local_peer = actor.common_config.peer.id().clone();
+    let remote_signers: Vec<_> = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, peer)| {
+            (peer != &local_peer).then(|| ValidatorIndex::try_from(idx).expect("signer fits"))
+        })
+        .take(commit_required.saturating_sub(1))
+        .collect();
+    assert_eq!(
+        remote_signers.len(),
+        commit_required.saturating_sub(1),
+        "test requires enough remote signers to leave only the local vote missing"
+    );
+    let epoch = actor.epoch_for_height(height);
+
+    for remote_signer in remote_signers.iter().take(view_change_required).copied() {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::NewView,
+            block_hash: highest_qc.subject_block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: future_view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+            highest_qc: Some(highest_qc),
+            signer: remote_signer,
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view_with_seed(
+            &mut vote,
+            &actor.common_config.chain,
+            &topology,
+            &harness.key_pairs,
+            mode_tag,
+            prf_seed,
+        );
+        actor.handle_vote(vote);
+    }
+
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(local_view),
+        "f+1 future NEW_VIEW support must not move the local pacemaker"
+    );
+    assert!(
+        !actor.stored_votes().any(|vote| {
+            vote.phase == Phase::NewView
+                && vote.height == height
+                && vote.view == future_view
+                && actor
+                    .vote_signer_peer(vote)
+                    .as_ref()
+                    .is_some_and(|peer| peer == &local_peer)
+        }),
+        "the local validator must not echo a future view before its signature makes the view installable"
+    );
+
+    let completing_signer = remote_signers
+        .get(view_change_required)
+        .copied()
+        .expect("one more remote signer should complete the local-signature threshold");
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash: highest_qc.subject_block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: future_view,
+        epoch,
+        chain_order_hash,
+        rechain_seq,
+        highest_qc: Some(highest_qc),
+        signer: completing_signer,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &actor.common_config.chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+    actor.handle_vote(vote);
+
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(future_view),
+        "one-short future NEW_VIEW support should be completed and installed by the local vote"
+    );
+    assert!(
+        actor.stored_votes().any(|vote| {
+            vote.phase == Phase::NewView
+                && vote.height == height
+                && vote.view == future_view
+                && actor
+                    .vote_signer_peer(vote)
+                    .as_ref()
+                    .is_some_and(|peer| peer == &local_peer)
+        }),
+        "the local validator should sign once its vote completes an installable future view"
     );
 
     harness.shutdown.send();
@@ -117873,7 +118080,7 @@ async fn precommit_vote_allows_newer_conflict_when_local_vote_completes_quorum()
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_allows_older_conflict_when_local_vote_completes_quorum() {
+async fn precommit_vote_rejects_older_conflict_even_when_local_vote_would_complete_quorum() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -117955,7 +118162,7 @@ async fn precommit_vote_allows_older_conflict_when_local_vote_completes_quorum()
     );
 
     assert!(
-        actor.emit_precommit_vote(
+        !actor.emit_precommit_vote(
             older_hash,
             height,
             older_view,
@@ -117965,12 +118172,16 @@ async fn precommit_vote_allows_older_conflict_when_local_vote_completes_quorum()
             None,
             roots,
         ),
-        "older-view precommit should be allowed when it completes the candidate quorum"
+        "older-view precommit must be rejected even when the local vote would complete quorum"
     );
     let after = actor.commit_vote_quorum_status_for_block_detail(older_hash, height, older_view);
     assert!(
-        after.quorum_reached,
-        "local vote should complete the older-view commit quorum"
+        !after.quorum_reached,
+        "local vote must not complete the older-view commit quorum"
+    );
+    assert_eq!(
+        after.vote_count, before.vote_count,
+        "rejected older-view local vote must not be recorded"
     );
 
     harness.shutdown.send();

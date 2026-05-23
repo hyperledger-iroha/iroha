@@ -10694,6 +10694,7 @@ pub mod collectors;
 pub mod consensus;
 pub mod da;
 pub mod election;
+pub mod engine;
 pub mod epoch;
 pub mod epoch_report;
 pub(crate) mod evidence;

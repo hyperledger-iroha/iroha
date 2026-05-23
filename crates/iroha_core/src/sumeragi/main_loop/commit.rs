@@ -5523,7 +5523,7 @@ impl Actor {
                 height,
                 conflict.view,
             ) || self.same_height_has_recoverable_qc(height);
-            let candidate_completes_quorum = conflict.view != view
+            let candidate_completes_quorum = conflict.view < view
                 && !new_view_qc_supersedes
                 && !stale_vote_can_rotate
                 && !conflict_has_recoverable_qc
@@ -5915,7 +5915,7 @@ impl Actor {
             );
             return false;
         }
-        let required = topology.min_votes_for_view_change();
+        let required = topology.min_votes_for_commit();
         if let Some(higher_view) = self
             .subsystems
             .propose
@@ -5937,7 +5937,7 @@ impl Actor {
                     view,
                     higher_view,
                     signer = local_idx,
-                    "skipping NEW_VIEW vote: higher view quorum already observed"
+                    "skipping NEW_VIEW vote: higher view commit quorum already observed"
                 );
                 return false;
             }

@@ -9139,6 +9139,18 @@ mod tests {
     }
 
     #[test]
+    fn status_error_is_connection_refused_ignores_nested_non_refusal_io_errors() {
+        let report = Err::<(), Report>(Report::from(std::io::Error::new(
+            ErrorKind::AddrInUse,
+            "address already in use",
+        )))
+        .wrap_err("client status probe failed")
+        .unwrap_err();
+
+        assert!(!status_error_is_connection_refused(&report));
+    }
+
+    #[test]
     fn status_error_is_torii_query_backpressure_detects_status_throttle() {
         let report = eyre!(
             "Norito decode failed: Unexpected status response; status: 429 Too Many Requests; response body: Reached the limit of parallel queries"
@@ -9168,6 +9180,15 @@ mod tests {
     #[test]
     fn status_error_is_torii_query_backpressure_ignores_limit_phrase_without_429() {
         let report = eyre!("Reached the limit of parallel queries while validating locally");
+
+        assert!(!status_error_is_torii_query_backpressure(&report));
+    }
+
+    #[test]
+    fn status_error_is_torii_query_backpressure_ignores_split_status_and_limit_causes() {
+        let report = Err::<(), Report>(eyre!("Reached the limit of parallel queries"))
+            .wrap_err("Unexpected status response; status: 429 Too Many Requests")
+            .unwrap_err();
 
         assert!(!status_error_is_torii_query_backpressure(&report));
     }
@@ -9243,6 +9264,15 @@ mod tests {
     fn torii_request_error_is_transient_ignores_http_context_without_transport_failure() {
         let report = eyre!(
             "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: validation rejected duplicate domain"
+        );
+
+        assert!(!torii_request_error_is_transient(&report));
+    }
+
+    #[test]
+    fn torii_request_error_is_transient_ignores_backpressure_phrase_without_status() {
+        let report = eyre!(
+            "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: Reached the limit of parallel queries"
         );
 
         assert!(!torii_request_error_is_transient(&report));

@@ -64,7 +64,7 @@ pub enum BlockMessage {
     QcVote(#[skip_try_from] super::consensus::QcVote),
     /// Commit certificate (Prepare/Commit/NewView) aggregating BLS signatures.
     Qc(#[skip_try_from] super::consensus::Qc),
-    /// Experimental Sumeragi vNext control message.
+    /// Non-canonical consensus control frame rejected by V1 ingress.
     VNext(#[skip_try_from] super::vnext::ConsensusMessage),
 }
 

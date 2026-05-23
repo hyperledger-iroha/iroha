@@ -2465,7 +2465,18 @@ fn decode_sccp_evm_attestation_envelope(payload: &[u8]) -> Option<SccpEvmAttesta
     let signatures_len = read_be_usize(&payload[offset + 24..offset + 32])?;
     let signatures_start = offset + 32;
     let signatures_end = signatures_start.checked_add(signatures_len)?;
-    if signatures_end > payload.len() || signatures_len % 65 != 0 {
+    let padded_len = signatures_len
+        .checked_add(31)?
+        .checked_div(32)?
+        .checked_mul(32)?;
+    let padded_end = signatures_start.checked_add(padded_len)?;
+    if padded_end != payload.len()
+        || signatures_end > padded_end
+        || signatures_len % 65 != 0
+        || payload[signatures_end..padded_end]
+            .iter()
+            .any(|byte| *byte != 0)
+    {
         return None;
     }
     let signatures = payload[signatures_start..signatures_end]
@@ -4591,8 +4602,14 @@ pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityP
         return false;
     }
 
-    for public_key in &qc.validator_public_keys {
+    for (idx, public_key) in qc.validator_public_keys.iter().enumerate() {
         if public_key.is_empty() {
+            return false;
+        }
+        if qc.validator_public_keys[..idx]
+            .iter()
+            .any(|known| known == public_key)
+        {
             return false;
         }
     }
@@ -4727,7 +4744,7 @@ fn iroha_consensus_domain(
     mode_tag: &str,
 ) -> H256 {
     let mut hasher = Blake2bVar::new(32).expect("fixed hash length");
-    hasher.update(b"iroha2-consensus/v2");
+    hasher.update(b"iroha-sumeragi-consensus/v1");
     hasher.update(chain_id.as_bytes());
     hasher.update(mode_tag.as_bytes());
     hasher.update(&IROHA_CONSENSUS_PROTO_VERSION_V1.to_be_bytes());
@@ -5240,15 +5257,15 @@ mod tests {
         let valid = sample_burn_bundle(11).payload;
         assert!(verify_burn_payload_structure(&valid));
 
-        let mut payload = valid.clone();
+        let mut payload = valid;
         payload.version = 2;
         assert!(!verify_burn_payload_structure(&payload));
 
-        let mut payload = valid.clone();
+        let mut payload = valid;
         payload.source_domain = 0xFFFF_FFFE;
         assert!(!verify_burn_payload_structure(&payload));
 
-        let mut payload = valid.clone();
+        let mut payload = valid;
         payload.dest_domain = payload.source_domain;
         assert!(!verify_burn_payload_structure(&payload));
 
@@ -6706,6 +6723,19 @@ mod tests {
     }
 
     #[test]
+    fn finality_proof_structure_rejects_duplicate_validator_keys() {
+        let commitment_root = [0x8C; 32];
+        let mut proof = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
+            .expect("decode proof");
+        proof.commit_qc.validator_public_keys =
+            vec!["validator-1".to_owned(), "validator-1".to_owned()];
+        proof.commit_qc.validator_set_pops = vec![vec![0xAA], vec![0xBB]];
+        proof.commit_qc.signers_bitmap = vec![0b0000_0011];
+
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+    }
+
+    #[test]
     fn finality_proof_structure_rejects_version_key_and_bitmap_edges() {
         let commitment_root = [0x8A; 32];
         let valid = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
@@ -6790,7 +6820,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::similar_names)]
+    #[allow(clippy::similar_names, clippy::too_many_lines)]
     fn codec_validation_accepts_chain_specific_v1_formats() {
         assert!(validate_evm_hex_codec(
             b"0x52908400098527886E0F7030069857D2E4169EE7"
@@ -6920,7 +6950,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::similar_names)]
+    #[allow(clippy::similar_names, clippy::too_many_lines)]
     fn codec_validation_rejects_malformed_chain_specific_v1_formats() {
         assert!(!validate_evm_hex_codec(
             b"0x52908400098527886e0f7030069857d2e4169ee7"
@@ -7610,6 +7640,24 @@ mod tests {
     }
 
     #[test]
+    fn evm_attestation_envelope_decoder_rejects_noncanonical_padding_and_tail() {
+        let (_manifest, proof) = sample_valid_evm_submission_proof(68);
+        let payload = evm_payload_from_proof(&proof);
+        assert!(decode_sccp_evm_attestation_envelope(&payload.proof_bytes).is_some());
+
+        let mut non_zero_padding = payload.proof_bytes.clone();
+        let padding_byte = non_zero_padding
+            .last_mut()
+            .expect("sample signature envelope should include ABI padding");
+        *padding_byte = 0x01;
+        assert!(decode_sccp_evm_attestation_envelope(&non_zero_padding).is_none());
+
+        let mut trailing_zero_word = payload.proof_bytes;
+        trailing_zero_word.extend_from_slice(&[0u8; 32]);
+        assert!(decode_sccp_evm_attestation_envelope(&trailing_zero_word).is_none());
+    }
+
+    #[test]
     fn evm_attestation_envelope_codec_rejects_version_overread_and_bad_signature_shapes() {
         let (_manifest, proof) = sample_valid_evm_submission_proof(62);
         let payload = evm_payload_from_proof(&proof);
@@ -7734,6 +7782,65 @@ mod tests {
         assert!(!verify_sccp_evm_submission_package(
             &manifest,
             &destination_hash_replay
+        ));
+    }
+
+    #[test]
+    fn evm_submission_package_verifier_rejects_decoded_envelope_only_replays() {
+        let (manifest, proof) = sample_valid_evm_submission_proof(66);
+        let valid_payload = evm_payload_from_proof(&proof);
+
+        let mut source_domain_replay = proof.clone();
+        let mut payload = valid_payload;
+        let mut envelope = payload.attestation.clone();
+        envelope.source_domain = SCCP_DOMAIN_BSC;
+        payload.proof_bytes =
+            encode_sccp_evm_attestation_envelope(&envelope).expect("encode envelope");
+        replace_evm_payload(&mut source_domain_replay, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &source_domain_replay
+        ));
+
+        let mut native_proof_hash_replay = proof;
+        let mut payload = evm_payload_from_proof(&native_proof_hash_replay);
+        let mut envelope = payload.attestation.clone();
+        envelope.native_proof_hash[0] ^= 0x01;
+        payload.proof_bytes =
+            encode_sccp_evm_attestation_envelope(&envelope).expect("encode envelope");
+        replace_evm_payload(&mut native_proof_hash_replay, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &native_proof_hash_replay
+        ));
+    }
+
+    #[test]
+    fn evm_submission_package_verifier_rejects_top_level_and_bundle_replays() {
+        let (manifest, proof) = sample_valid_evm_submission_proof(67);
+
+        let mut public_input_replay = proof.clone();
+        public_input_replay.public_inputs.message_id[0] ^= 0x01;
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &public_input_replay
+        ));
+
+        let mut bundle_payload_replay = proof.clone();
+        match &mut bundle_payload_replay.bundle.payload {
+            SccpPayloadV1::Transfer(payload) => payload.amount += 1,
+            _ => panic!("sample proof must use transfer payload"),
+        }
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &bundle_payload_replay
+        ));
+
+        let mut finality_replay = proof;
+        finality_replay.bundle.finality_proof = sample_finality_proof([0xCC; 32]);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &finality_replay
         ));
     }
 

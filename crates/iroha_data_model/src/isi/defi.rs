@@ -6,7 +6,7 @@ use super::*;
 use crate::rwa::RwaId;
 
 isi! {
-    /// Submit a solver-fillable DeFi intent.
+    /// Submit a solver-fillable `DeFi` intent.
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -55,7 +55,7 @@ isi! {
 }
 
 isi! {
-    /// Register a DeFi tokenized or async vault.
+    /// Register a `DeFi` tokenized or async vault.
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -97,7 +97,7 @@ isi! {
 }
 
 isi! {
-    /// Register a bonded DeFi service operator.
+    /// Register a bonded `DeFi` service operator.
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -223,7 +223,7 @@ isi! {
 }
 
 isi! {
-    /// Register an RWA-backed DeFi market.
+    /// Register an RWA-backed `DeFi` market.
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -233,7 +233,7 @@ isi! {
         pub market_id: Name,
         /// Native RWA lot associated with the market.
         pub lot_id: RwaId,
-        /// Share asset used by DeFi routes.
+        /// Share asset used by `DeFi` routes.
         pub share_asset: AssetDefinitionId,
         /// Controller account for compliance and redemption actions.
         pub controller: AccountId,
@@ -413,7 +413,7 @@ impl_into_box! {
 impl crate::seal::Instruction for DeFiInstructionBox {}
 
 impl DeFiInstructionBox {
-    /// Stable wire identifier for boxed DeFi instructions.
+    /// Stable wire identifier for boxed `DeFi` instructions.
     pub const WIRE_ID: &'static str = "iroha.defi";
 }
 

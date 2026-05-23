@@ -490,7 +490,7 @@ pub fn commit_quorum_from_len(len: usize) -> usize {
     if len <= 3 {
         return len;
     }
-    len.saturating_mul(2).saturating_add(1) / 3
+    len.saturating_mul(2) / 3 + 1
 }
 
 /// Compute the redundant send fan-out (r) for a topology of the given length.
@@ -1168,7 +1168,7 @@ mod tests {
             (2, 2, vec![1]),
             (3, 3, vec![2]),
             (4, 3, vec![2, 3]),
-            (5, 3, vec![2, 3]),
+            (5, 4, vec![3, 4]),
         ];
 
         for (len, expected_min, expected_collectors) in cases {
@@ -1207,10 +1207,10 @@ mod tests {
     }
 
     #[test]
-    fn commit_quorum_len6_is_four() {
+    fn commit_quorum_len6_is_five() {
         let topology = test_topology(6);
-        assert_eq!(commit_quorum_from_len(6), 4);
-        assert_eq!(topology.min_votes_for_commit(), 4);
+        assert_eq!(commit_quorum_from_len(6), 5);
+        assert_eq!(topology.min_votes_for_commit(), 5);
     }
 
     #[test]
@@ -1426,10 +1426,10 @@ mod tests {
 
     #[test]
     fn redundant_send_r_floor_bumps_to_quorum() {
-        // N = 5 => min_votes_for_commit = 3.
+        // N = 5 => min_votes_for_commit = 4.
         let peers = test_peers(5);
         let topology = Topology::new(peers);
-        assert_eq!(topology.redundant_send_r_floor(2), 3);
+        assert_eq!(topology.redundant_send_r_floor(2), 4);
         assert_eq!(topology.redundant_send_r_floor(6), 6);
     }
 

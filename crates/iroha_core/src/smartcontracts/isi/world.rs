@@ -4338,6 +4338,34 @@ pub mod isi {
         Ok(())
     }
 
+    fn ensure_unique_council_roster(
+        members: &[AccountId],
+        alternates: &[AccountId],
+    ) -> Result<(), Error> {
+        let mut members_seen = BTreeSet::new();
+        for member in members {
+            if !members_seen.insert(member) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "council roster contains duplicate member".into(),
+                ));
+            }
+        }
+        let mut alternates_seen = BTreeSet::new();
+        for alternate in alternates {
+            if members_seen.contains(alternate) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "council roster account cannot be both member and alternate".into(),
+                ));
+            }
+            if !alternates_seen.insert(alternate) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "council roster contains duplicate alternate".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     impl Execute for gov::EnactReferendum {
         fn execute(
             self,
@@ -4917,7 +4945,22 @@ pub mod isi {
                 "referendum already closed".into(),
             ));
         }
+        if referendum.status != crate::state::GovernanceReferendumStatus::Proposed {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "referendum already left parliament stage".into(),
+            ));
+        }
         let now_h = state_transaction._curr_block.height().get();
+        if now_h > referendum.h_end {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "referendum window elapsed for parliament ballots".into(),
+            ));
+        }
+        if !required_parliament_bodies(&proposal.kind).contains(&body) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "parliament body is not required for this proposal".into(),
+            ));
+        }
         let (bodies, epoch, persist_epoch_bodies) =
             if resolve_governance_approval_mode(state_transaction)
                 == GovernanceApprovalMode::ParliamentSortitionJit
@@ -5006,6 +5049,16 @@ pub mod isi {
                 "parliament roster missing for requested body".into(),
             ));
         };
+        if roster.body != body {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "parliament roster body mismatch".into(),
+            ));
+        }
+        if roster.epoch != epoch {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "parliament body roster epoch mismatch".into(),
+            ));
+        }
         if roster.members.is_empty() {
             return Err(InstructionExecutionError::InvariantViolation(
                 "parliament roster empty for requested body".into(),
@@ -5257,6 +5310,7 @@ pub mod isi {
             let citizen_cfg = &state_transaction.gov.citizen_service;
             let current_height = state_transaction._curr_block.height().get();
 
+            ensure_unique_council_roster(&self.members, &self.alternates)?;
             if state_transaction.gov.citizenship_bond_amount > 0 {
                 process_council_members(
                     &self.members,

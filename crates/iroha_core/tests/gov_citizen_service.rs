@@ -23,20 +23,27 @@ use iroha_executor_data_model::permission::governance::{
     CanManageParliament, CanRecordCitizenService,
 };
 use iroha_primitives::numeric::Numeric;
-use iroha_test_samples::{ALICE_ID, BOB_ID};
+use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
 fn build_world(def_id: &AssetDefinitionId) -> World {
     let alice_id = ALICE_ID.clone();
     let bob_id = BOB_ID.clone();
+    let carpenter_id = CARPENTER_ID.clone();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&alice_id);
     let alice_account = iroha_data_model::account::Account::new(alice_id.clone()).build(&alice_id);
     let escrow_account = iroha_data_model::account::Account::new(bob_id.clone()).build(&bob_id);
+    let carpenter_account =
+        iroha_data_model::account::Account::new(carpenter_id.clone()).build(&carpenter_id);
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),
+        Numeric::new(1_000, 0),
+    );
+    let carpenter_asset = Asset::new(
+        AssetId::new(def_id.clone(), CARPENTER_ID.clone()),
         Numeric::new(1_000, 0),
     );
     let escrow_asset = Asset::new(
@@ -46,9 +53,9 @@ fn build_world(def_id: &AssetDefinitionId) -> World {
 
     World::with_assets(
         [domain],
-        [alice_account, escrow_account],
+        [alice_account, escrow_account, carpenter_account],
         [asset_def],
-        [alice_asset, escrow_asset],
+        [alice_asset, carpenter_asset, escrow_asset],
         [],
     )
 }
@@ -75,12 +82,16 @@ fn configure_state(def_id: &AssetDefinitionId, seat_cooldown_blocks: u64) -> Sta
     state
 }
 
-#[test]
-fn council_persist_enforces_service_discipline() {
-    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+fn xor_definition_id() -> AssetDefinitionId {
+    iroha_data_model::asset::AssetDefinitionId::new(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
-    );
+    )
+}
+
+#[test]
+fn council_persist_enforces_service_discipline() {
+    let def_id: AssetDefinitionId = xor_definition_id();
     // Seat cap when cooldown is disabled.
     let seat_err = {
         let state = configure_state(&def_id, 0);
@@ -182,11 +193,498 @@ fn council_persist_enforces_service_discipline() {
 }
 
 #[test]
-fn citizen_service_outcome_slashes_after_free_decline() {
-    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
+fn council_persist_requires_manage_permission_before_mutating_state() {
+    let def_id: AssetDefinitionId = xor_definition_id();
+    let state = configure_state(&def_id, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+
+    RegisterCitizen {
+        owner: ALICE_ID.clone(),
+        amount: 25,
+    }
+    .execute(&ALICE_ID, &mut tx)
+    .expect("citizen bond succeeds");
+
+    let before = tx
+        .world
+        .citizens()
+        .get(&*ALICE_ID)
+        .cloned()
+        .expect("citizen record stored");
+    let err = PersistCouncilForEpoch {
+        epoch: 1,
+        members: vec![ALICE_ID.clone()],
+        alternates: Vec::new(),
+        verified: 0,
+        candidates_count: 1,
+        derived_by: CouncilDerivationKind::Fallback,
+    }
+    .execute(&ALICE_ID, &mut tx)
+    .expect_err("permissionless council persist must fail");
+    assert!(
+        format!("{err:?}").contains("CanManageParliament"),
+        "unexpected permission error: {err:?}"
     );
+    let after = tx
+        .world
+        .citizens()
+        .get(&*ALICE_ID)
+        .cloned()
+        .expect("citizen record still stored");
+    assert_eq!(
+        before, after,
+        "failed council persistence must not consume seat quota or set cooldown"
+    );
+    assert!(
+        tx.world.council().get(&1).is_none(),
+        "permissionless persist must not write council state"
+    );
+    assert!(
+        tx.world.parliament_bodies().get(&1).is_none(),
+        "permissionless persist must not derive body rosters"
+    );
+}
+
+#[test]
+fn council_persist_rejects_unregistered_and_underbonded_roster_entries() {
+    let def_id: AssetDefinitionId = xor_definition_id();
+
+    let unregistered_err = {
+        let state = configure_state(&def_id, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .expect("grant parliament management permission");
+        let err = PersistCouncilForEpoch {
+            epoch: 1,
+            members: vec![ALICE_ID.clone()],
+            alternates: Vec::new(),
+            verified: 0,
+            candidates_count: 1,
+            derived_by: CouncilDerivationKind::Fallback,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect_err("unregistered member must fail");
+        assert!(tx.world.council().get(&1).is_none());
+        err
+    };
+    assert!(
+        format!("{unregistered_err:?}").contains("registered citizens"),
+        "unexpected unregistered-member error: {unregistered_err:?}"
+    );
+
+    let underbonded_member_err = {
+        let state = configure_state(&def_id, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        RegisterCitizen {
+            owner: ALICE_ID.clone(),
+            amount: 19,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect("underbonded citizen registration succeeds");
+        Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .expect("grant parliament management permission");
+        let err = PersistCouncilForEpoch {
+            epoch: 1,
+            members: vec![ALICE_ID.clone()],
+            alternates: Vec::new(),
+            verified: 0,
+            candidates_count: 1,
+            derived_by: CouncilDerivationKind::Fallback,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect_err("underbonded member must fail");
+        let record = tx
+            .world
+            .citizens()
+            .get(&*ALICE_ID)
+            .cloned()
+            .expect("citizen record stored");
+        assert_eq!(record.amount, 19);
+        assert_eq!(record.seats_in_epoch, 0);
+        assert!(tx.world.council().get(&1).is_none());
+        err
+    };
+    assert!(
+        format!("{underbonded_member_err:?}").contains("bond floor"),
+        "unexpected underbonded-member error: {underbonded_member_err:?}"
+    );
+
+    let underbonded_alternate_err = {
+        let state = configure_state(&def_id, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        RegisterCitizen {
+            owner: ALICE_ID.clone(),
+            amount: 25,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect("member bond succeeds");
+        RegisterCitizen {
+            owner: CARPENTER_ID.clone(),
+            amount: 10,
+        }
+        .execute(&CARPENTER_ID, &mut tx)
+        .expect("alternate citizen registration succeeds");
+        Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .expect("grant parliament management permission");
+        let err = PersistCouncilForEpoch {
+            epoch: 1,
+            members: vec![ALICE_ID.clone()],
+            alternates: vec![CARPENTER_ID.clone()],
+            verified: 0,
+            candidates_count: 2,
+            derived_by: CouncilDerivationKind::Fallback,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect_err("underbonded alternate must fail");
+        assert!(
+            tx.world.council().get(&1).is_none(),
+            "failed alternate validation must not write council state"
+        );
+        err
+    };
+    assert!(
+        format!("{underbonded_alternate_err:?}").contains("bond floor"),
+        "unexpected underbonded-alternate error: {underbonded_alternate_err:?}"
+    );
+}
+
+#[test]
+fn council_persist_rejects_duplicate_or_overlapping_roster_entries_without_seat_use() {
+    let def_id: AssetDefinitionId = xor_definition_id();
+
+    {
+        let state = configure_state(&def_id, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        RegisterCitizen {
+            owner: ALICE_ID.clone(),
+            amount: 25,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect("citizen bond succeeds");
+        Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .expect("grant parliament management permission");
+
+        let err = PersistCouncilForEpoch {
+            epoch: 1,
+            members: vec![ALICE_ID.clone(), ALICE_ID.clone()],
+            alternates: Vec::new(),
+            verified: 0,
+            candidates_count: 1,
+            derived_by: CouncilDerivationKind::Fallback,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect_err("duplicate member must fail");
+        assert!(
+            format!("{err:?}").contains("duplicate member"),
+            "unexpected duplicate-member error: {err:?}"
+        );
+        let record = tx
+            .world
+            .citizens()
+            .get(&*ALICE_ID)
+            .cloned()
+            .expect("citizen record stored");
+        assert_eq!(record.seats_in_epoch, 0);
+        assert!(tx.world.council().get(&1).is_none());
+        assert!(tx.world.parliament_bodies().get(&1).is_none());
+    }
+
+    {
+        let state = configure_state(&def_id, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        RegisterCitizen {
+            owner: ALICE_ID.clone(),
+            amount: 25,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect("citizen bond succeeds");
+        Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .expect("grant parliament management permission");
+
+        let err = PersistCouncilForEpoch {
+            epoch: 1,
+            members: vec![ALICE_ID.clone()],
+            alternates: vec![ALICE_ID.clone()],
+            verified: 0,
+            candidates_count: 1,
+            derived_by: CouncilDerivationKind::Fallback,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect_err("member/alternate overlap must fail");
+        assert!(
+            format!("{err:?}").contains("both member and alternate"),
+            "unexpected overlap error: {err:?}"
+        );
+        let record = tx
+            .world
+            .citizens()
+            .get(&*ALICE_ID)
+            .cloned()
+            .expect("citizen record stored");
+        assert_eq!(record.seats_in_epoch, 0);
+        assert!(tx.world.council().get(&1).is_none());
+        assert!(tx.world.parliament_bodies().get(&1).is_none());
+    }
+
+    {
+        let state = configure_state(&def_id, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        RegisterCitizen {
+            owner: ALICE_ID.clone(),
+            amount: 25,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect("member bond succeeds");
+        RegisterCitizen {
+            owner: CARPENTER_ID.clone(),
+            amount: 25,
+        }
+        .execute(&CARPENTER_ID, &mut tx)
+        .expect("alternate bond succeeds");
+        Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .expect("grant parliament management permission");
+
+        let err = PersistCouncilForEpoch {
+            epoch: 1,
+            members: vec![ALICE_ID.clone()],
+            alternates: vec![CARPENTER_ID.clone(), CARPENTER_ID.clone()],
+            verified: 0,
+            candidates_count: 2,
+            derived_by: CouncilDerivationKind::Fallback,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect_err("duplicate alternate must fail");
+        assert!(
+            format!("{err:?}").contains("duplicate alternate"),
+            "unexpected duplicate-alternate error: {err:?}"
+        );
+        for account_id in [&*ALICE_ID, &*CARPENTER_ID] {
+            let record = tx
+                .world
+                .citizens()
+                .get(account_id)
+                .cloned()
+                .expect("citizen record stored");
+            assert_eq!(record.seats_in_epoch, 0);
+        }
+        assert!(tx.world.council().get(&1).is_none());
+        assert!(tx.world.parliament_bodies().get(&1).is_none());
+    }
+}
+
+#[test]
+fn citizen_registration_rejects_authority_mismatch_without_bond_transfer() {
+    let def_id: AssetDefinitionId = xor_definition_id();
+    let state = configure_state(&def_id, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+
+    let err = RegisterCitizen {
+        owner: ALICE_ID.clone(),
+        amount: 10,
+    }
+    .execute(&BOB_ID, &mut tx)
+    .expect_err("non-owner must not register citizen bond for another account");
+    assert!(
+        format!("{err:?}").contains("owner must equal authority"),
+        "unexpected authority-mismatch error: {err:?}"
+    );
+    assert!(
+        tx.world.citizens().get(&*ALICE_ID).is_none(),
+        "authority mismatch must not create a citizen record"
+    );
+
+    let alice_asset_id = AssetId::new(def_id.clone(), ALICE_ID.clone());
+    let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
+    assert_eq!(
+        **tx.world
+            .asset_mut(&alice_asset_id)
+            .expect("alice asset present"),
+        Numeric::new(1_000, 0),
+        "failed registration must not withdraw from the owner's account"
+    );
+    assert_eq!(
+        **tx.world
+            .asset_mut(&escrow_asset_id)
+            .expect("escrow asset present"),
+        Numeric::new(0, 0),
+        "failed registration must not deposit escrow collateral"
+    );
+}
+
+#[test]
+fn citizen_bond_decrease_is_rejected_without_releasing_collateral() {
+    let def_id: AssetDefinitionId = xor_definition_id();
+    let state = configure_state(&def_id, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+
+    RegisterCitizen {
+        owner: ALICE_ID.clone(),
+        amount: 25,
+    }
+    .execute(&ALICE_ID, &mut tx)
+    .expect("initial citizen bond succeeds");
+
+    let err = RegisterCitizen {
+        owner: ALICE_ID.clone(),
+        amount: 20,
+    }
+    .execute(&ALICE_ID, &mut tx)
+    .expect_err("bond reduction must fail");
+    assert!(
+        format!("{err:?}").contains("cannot decrease"),
+        "unexpected bond-decrease error: {err:?}"
+    );
+
+    let record = tx
+        .world
+        .citizens()
+        .get(&*ALICE_ID)
+        .cloned()
+        .expect("citizen record stored");
+    assert_eq!(record.amount, 25);
+    let alice_asset_id = AssetId::new(def_id.clone(), ALICE_ID.clone());
+    let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
+    assert_eq!(
+        **tx.world
+            .asset_mut(&alice_asset_id)
+            .expect("alice asset present"),
+        Numeric::new(975, 0),
+        "rejected bond decrease must not refund owner funds"
+    );
+    assert_eq!(
+        **tx.world
+            .asset_mut(&escrow_asset_id)
+            .expect("escrow asset present"),
+        Numeric::new(25, 0),
+        "rejected bond decrease must keep the original collateral locked"
+    );
+}
+
+#[test]
+fn service_outcome_rejections_do_not_mutate_citizen_bond_or_counters() {
+    let def_id: AssetDefinitionId = xor_definition_id();
+
+    {
+        let state = configure_state(&def_id, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        RegisterCitizen {
+            owner: ALICE_ID.clone(),
+            amount: 25,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect("citizen bond succeeds");
+        let before = tx
+            .world
+            .citizens()
+            .get(&*ALICE_ID)
+            .cloned()
+            .expect("citizen record stored");
+
+        let err = RecordCitizenServiceOutcome {
+            owner: ALICE_ID.clone(),
+            epoch: 1,
+            role: "council".to_string(),
+            event: CitizenServiceEvent::NoShow,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect_err("service record without permission must fail");
+        assert!(
+            format!("{err:?}").contains("CanRecordCitizenService"),
+            "unexpected permission error: {err:?}"
+        );
+        let after = tx
+            .world
+            .citizens()
+            .get(&*ALICE_ID)
+            .cloned()
+            .expect("citizen record still stored");
+        assert_eq!(
+            before, after,
+            "permissionless service outcome must not slash or update counters"
+        );
+    }
+
+    {
+        let state = configure_state(&def_id, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        RegisterCitizen {
+            owner: ALICE_ID.clone(),
+            amount: 10,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect("minimum citizen bond succeeds");
+        let perm: Permission = CanRecordCitizenService {
+            owner: ALICE_ID.clone(),
+        }
+        .into();
+        Grant::account_permission(perm, ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .expect("grant service discipline permission");
+
+        let err = RecordCitizenServiceOutcome {
+            owner: ALICE_ID.clone(),
+            epoch: 1,
+            role: "council".to_string(),
+            event: CitizenServiceEvent::NoShow,
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .expect_err("underbonded citizen must not be slashed for a role they cannot serve");
+        assert!(
+            format!("{err:?}").contains("below role requirement"),
+            "unexpected underbonded service error: {err:?}"
+        );
+        let record = tx
+            .world
+            .citizens()
+            .get(&*ALICE_ID)
+            .cloned()
+            .expect("citizen record stored");
+        assert_eq!(record.amount, 10);
+        assert_eq!(record.no_show_strikes, 0);
+        let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
+        assert_eq!(
+            **tx.world
+                .asset_mut(&escrow_asset_id)
+                .expect("escrow asset present"),
+            Numeric::new(10, 0),
+            "failed underbonded service record must not slash collateral"
+        );
+    }
+}
+
+#[test]
+fn citizen_service_outcome_slashes_after_free_decline() {
+    let def_id: AssetDefinitionId = xor_definition_id();
     let world = build_world(&def_id);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

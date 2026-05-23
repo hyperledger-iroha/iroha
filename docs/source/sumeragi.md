@@ -1,19 +1,44 @@
-## Sumeragi: Current Implementation (v1)
+## Sumeragi Consensus V1
 
-For a granular view of the remaining migration work, see
-[`sumeragi_npos_task_breakdown.md`](sumeragi_npos_task_breakdown.md).
+Sumeragi V1 is Iroha's first-release deterministic BFT consensus protocol.
+Permissioned and NPoS deployments use the same state machine; they differ only
+in how the active validator set is sourced and how quorum is calculated.
 
 Overview
-- Roles and rotation: the ordered topology partitions peers into roles — `Leader`, `ValidatingPeer`, `ProxyTail`, and `SetBValidator`. Before each leader selection, the roster is canonicalized by sorting peer IDs to keep ordering deterministic across nodes. In permissioned mode the roster is deterministically shuffled per block height using PRF(seed, height) (seeded by the epoch PRF/VRF state), and view changes rotate the shuffled topology to advance the leader; previous-block-hash rotation is no longer used for leader selection. In NPoS mode the active validator roster is canonicalized (sorted) before PRF leader selection so signer indices remain consistent across peers, and the PRF-derived leader index rotates the view-aligned topology so signatures and collectors agree on who is index 0. `rotated_for_prev_block_hash(prev_hash)` in `network_topology.rs` remains as a legacy deterministic helper.
-- Fault tolerance and quorum: for validator roster size `n`, the runtime derives `f = floor((n-1)/3)` and uses commit quorum `2f+1` for `n >= 4` (see `commit_quorum_from_len` in `network_topology.rs`); for `n <= 3` the quorum is `n` (all validators). Set A is always `min_votes_for_commit()`; to change `f`, adjust the validator roster size via `trusted_peers` or the NPoS stake roster.
+- State machine: each height/view moves through Proposal, Prepare, Commit, and
+  local finality. Validators prepare-vote once for a valid proposal satisfying
+  the locked-QC rule, a PrepareQC updates the lock and authorizes Commit votes,
+  and a CommitQC finalizes only when the block payload is locally available.
+- Roles and rotation: validator ordering, leader selection, timeout cadence, and
+  quorum policy derive only from chain state and configuration. Telemetry never
+  changes signed consensus decisions.
+- Fault tolerance and quorum: permissioned mode uses strict count
+  supermajority `floor(2n / 3) + 1`; for `n <= 3` this naturally requires all
+  validators. NPoS mode uses strict stake supermajority
+  `signed_stake * 3 > total_stake * 2`; missing stake, arithmetic overflow, and
+  zero total stake fail closed. Set A is always `min_votes_for_commit()`; adjust
+  the validator roster via `trusted_peers` or the NPoS stake roster.
 - K‑collector mode: per height/view, the topology designates K collectors via PRF selection from the canonical roster, excluding the leader. When a PRF seed is unavailable, the system falls back to the wraparound slice starting at `proxy_tail_index()` (inclusive), skipping the leader and filling at least the commit quorum size (bounded by non-leader peers). Setting K=1 selects a single PRF collector; when PRF is unavailable the fallback still fills at least the commit quorum (starting at the proxy tail). Validators can also send commit votes to a small parallel topology fanout (`collectors.parallel_topology_fanout`) to reduce collector hop latency.
-- Commit certificates: validators sign the block header and send a `CommitVote` to the deterministic collector set (PRF-selected, excluding the leader); when collectors are disabled or local-only, votes fall back to the full commit topology. Any collector that reaches quorum (2f+1 in permissioned mode, or ≥2/3 total stake in NPoS) gossips a `CommitCertificate`; peers commit on the certificate + payload. Prepare/NewView certificates and availability evidence remain for pacemaker/telemetry but do not gate commit.
+- Certificates: proposals carry height, view, epoch, validator-set id, parent
+  block, block hash, payload hash, and highest QC. Prepare, Commit, and NewView
+  certificates are Norito-encoded with `PROTO_VERSION = 1`. A timeout emits
+  NewView; the next leader proposes from the highest QC certified by the
+  new-view quorum.
+- Reconfiguration: permissioned/NPoS changes are epoch-boundary validator-set
+  changes. The old validator set finalizes the reconfiguration block, and the
+  new validator set starts at the next height. Mid-round mode flips are not a
+  protocol transition.
+- DA/RBC: RBC is deterministic payload transport and repair. Finality requires
+  a local payload, not DA quorum evidence. If a CommitQC arrives before payload,
+  the node stores pending finality and fetches the payload until it can apply
+  the block.
 
 ### Safety and Liveness (Proof Sketch)
 
-This is a proof sketch for the current v1 implementation (not a formal proof).
-It summarizes the invariants enforced by the code paths in
-`crates/iroha_core/src/sumeragi/main_loop/{proposal_handlers,commit,qc,votes}.rs`.
+This is a proof sketch for Sumeragi V1 (not a formal proof). The pure state
+machine is modeled in `crates/iroha_core/src/sumeragi/engine.rs`; networking,
+workers, storage, and telemetry are adapters around the deterministic
+transitions.
 
 Assumptions (both modes)
 - Partial synchrony after GST (eventual bounded message delays).
@@ -22,8 +47,10 @@ Assumptions (both modes)
 - Payload dissemination eventually succeeds (BlockCreated + block sync and/or RBC).
 
 Safety (permissioned)
-- Quorum intersection: for `n = 3f+1`, the commit quorum is `2f+1`; any two quorums intersect
-  in at least `f+1` validators, so at least one honest validator is in the intersection.
+- Quorum intersection: permissioned quorums use `floor(2n / 3) + 1`; any two
+  quorums intersect in more than one third of the validator set, so at least
+  one honest validator is in the intersection when fewer than one third are
+  Byzantine.
 - Single-vote rule: a validator records at most one commit vote per `(height, view, epoch)` and
   will not sign a conflicting block at the same height/view (see `emit_precommit_vote`).
 - Locked-QC rule: a validator only accepts proposals and emits votes that extend the locked
@@ -33,9 +60,9 @@ Safety (permissioned)
   validator to sign both branches, which is excluded by the single-vote + locked-QC rules.
 
 Safety (NPoS)
-- Quorum is defined by stake: a commit QC requires ≥2/3 of total stake in the active roster
+- Quorum is defined by stake: a commit QC requires >2/3 of total stake in the active roster
   (`stake_quorum_reached_for_peers`).
-- If <1/3 of stake is Byzantine, any two ≥2/3 stake quorums intersect in >1/3 stake that must
+- If <1/3 of stake is Byzantine, any two >2/3 stake quorums intersect in >1/3 stake that must
   include honest validators.
 - The same single-vote and locked-QC rules apply, so honest stake will not sign conflicting
   branches at the same height/view, ruling out two conflicting commit certificates.
@@ -44,14 +71,14 @@ Liveness (permissioned)
 - The pacemaker advances views on timeouts and missing-payload/validation failures; view
   changes are monotonically increasing for a height (see `trigger_view_change_with_cause`).
 - Once the network is synchronous and an honest leader is selected for a view, proposals and
-  commit votes propagate to collectors/topology; `2f+1` votes produce a commit QC and the
-  block is committed when the payload is available.
+  commit votes propagate to collectors/topology; `floor(2n / 3) + 1` votes produce a commit QC
+  and the block is committed when the payload is available.
 - If payloads are missing, block sync/RBC recovery retries; persistent failure triggers a view
   change, ensuring the protocol does not stall on a single leader or payload.
 
 Liveness (NPoS)
-- The pacemaker logic is the same, but commit QCs require ≥2/3 stake; liveness holds when
-  ≥2/3 of stake (by the active roster) is online and able to exchange votes.
+- The pacemaker logic is the same, but commit QCs require >2/3 stake; liveness holds when
+  more than two thirds of stake (by the active roster) is online and able to exchange votes.
 - Deterministic PRF leader selection plus view changes ensure that an honest leader is
   eventually chosen after GST, allowing a commit QC to form.
 
@@ -81,7 +108,7 @@ consensus_mode = "npos"
 
 [sumeragi.collectors]
 k = 3
-redundant_send_r = 3 # example for 4 validators (2f+1)
+redundant_send_r = 3 # example strict supermajority for 4 validators
 
 [sumeragi.npos]
 epoch_length_blocks = 7200
@@ -154,7 +181,7 @@ accepts traffic:
   - `sumeragi_epoch_length_blocks`, `sumeragi_epoch_commit_deadline_offset`, `sumeragi_epoch_reveal_deadline_offset` — confirm the node loaded the intended VRF schedule.
   - `sumeragi_prf_epoch_seed_hex` — last seed published by the VRF pipeline (pairs with `/v1/sumeragi/status.prf_epoch_seed`).
   - `sumeragi_npos_collector_selected_total` and `sumeragi_npos_collector_assignments_by_idx{collector_idx}` — sanity check collector rotation.
-- `sumeragi_da_gate_block_total{reason}` and `sumeragi_rbc_da_reschedule_total` — monitor DA availability warnings on missing local payloads; reschedule counters are legacy and should remain zero now that DA is advisory.
+- `sumeragi_da_gate_block_total{reason}` and `sumeragi_rbc_da_reschedule_total` — monitor DA availability warnings on missing local payloads; reschedule counters should remain zero now that DA is advisory.
   - `sumeragi_missing_block_fetch_total{outcome}` plus `sumeragi_missing_block_fetch_target_total{target="signers|topology|none"}` confirm missing-block fetch cadence and whether signer targeting fell back to the full topology.
   - `sumeragi_rbc_store_pressure`, `sumeragi_rbc_backpressure_deferrals_total`, `sumeragi_rbc_persist_drops_total`, `sumeragi_rbc_store_evictions_total`, and the per‑dataspace gauges (`sumeragi_rbc_dataspace_*`) — highlight on‑disk RBC congestion.
   - `mode_tag`, `staged_mode_tag`, `staged_mode_activation_height`, and `mode_activation_lag_blocks` (also exposed via `/v1/sumeragi/status`) surface staged flips; non-zero lag means the activation height passed but the runtime mode hasn’t flipped yet and should trigger an alert.
@@ -215,7 +242,7 @@ Node Roles (config)
   - Note: Set B validators remain in the topology and are full validators; they are not the `observer` role.
 
 Validator Key Requirements
-- Validators must use BLS-Normal public keys and present a proof-of-possession (PoP). In NPoS, the consensus roster is filtered to the active public-lane validator set whenever stake records are available (including after commit-topology updates); if the commit topology omits active validators, the roster is widened with the active set before PoP filtering so the full validator set participates. When no active validators are present it falls back to `trusted_peers` after filtering out peers without BLS-Normal keys (the legacy `trusted_peers_bls` mapping no longer exists). If `trusted_peers_pop` is empty, the BLS trusted-peer set remains the validator roster. When `trusted_peers_pop` is present, it defines the validator subset among trusted BLS peers: peers with valid PoPs participate in consensus, while trusted peers without PoPs remain network-trusted observers and are excluded from consensus. Invalid PoP entries are rejected, non-BLS peers are always excluded, and the node `public_key`/`private_key` pair must be BLS-Normal for transport and consensus.
+- Validators must use BLS-Normal public keys and present a proof-of-possession (PoP). In NPoS, the consensus roster is filtered to the active public-lane validator set whenever stake records are available (including after commit-topology updates); if the commit topology omits active validators, the roster is widened with the active set before PoP filtering so the full validator set participates. When no active validators are present it falls back to `trusted_peers` after filtering out peers without BLS-Normal keys. If `trusted_peers_pop` is empty, the BLS trusted-peer set remains the validator roster. When `trusted_peers_pop` is present, it defines the validator subset among trusted BLS peers: peers with valid PoPs participate in consensus, while trusted peers without PoPs remain network-trusted observers and are excluded from consensus. Invalid PoP entries are rejected, non-BLS peers are always excluded, and the node `public_key`/`private_key` pair must be BLS-Normal for transport and consensus.
 - Commit certificates carry a mandatory BLS aggregate signature over same-message signatures, along with a compact signer bitmap. Receivers verify the aggregate signature against the signer set and reject certificates with mismatched aggregates or out-of-range bitmap bits. Explicit votes remain the source of truth for quorum accounting and evidence, but aggregates are no longer advisory.
 - Transaction admission uses `crypto.allowed_signing`/`allowed_curve_ids`; consensus vote signatures do not. Leaving `allowed_signing` at the Ed25519/secp defaults is fine for BLS validators—add `bls_normal` only if you intend to accept BLS-signed transactions. The BLS feature must be compiled in (`--features bls`) and `signature_batch_max_bls` kept > 0 for validator nodes.
 
@@ -234,7 +261,7 @@ Message Flow (steady state)
 
 Commit rule (commit certificate)
 - Each validator tracks `highest_qc`/`locked_qc` certificate references for view-change safety (highest may be Prepare or Commit), but commits are driven by `CommitCertificate`s rather than child certificates.
-- Validators sign the proposed block header and send `CommitVote` to the deterministic collector set; votes fall back to the full commit topology only when collectors are disabled or local-only. Any collector that reaches quorum aggregates `2f+1` signatures (permissioned) or ≥2/3 total stake (NPoS) into a `CommitCertificate` and gossips it.
+- Validators sign the proposed block header and send `CommitVote` to the deterministic collector set; votes fall back to the full commit topology only when collectors are disabled or local-only. Any collector that reaches quorum aggregates `floor(2n / 3) + 1` signatures (permissioned) or >2/3 total stake (NPoS) into a `CommitCertificate` and gossips it.
 - A block finalises when a valid `CommitCertificate` for `(height,hash)` is available **and** the block payload is known locally. Peers that receive the certificate first request the payload via block sync and commit once it arrives.
 - Commit QCs always bind `parent_state_root` and `post_state_root`; there is no separate execution QC gate. When `sumeragi.da.enabled=true`, availability evidence is tracked but does not gate commit.
 
@@ -257,7 +284,7 @@ Deterministic pacing governor (always enabled)
   `effective_pacing_factor_bps` via `/v1/sumeragi/status`.
 
 K / r Parameters
-- Config keys: `sumeragi.collectors.k: usize` (collectors per height; default 1 in config) and `sumeragi.collectors.redundant_send_r: u8` (redundant send fanout; tooling may seed on-chain defaults as `2f+1` from the validator count, and the config fallback is 3 (2f+1 for 4 validators) when parameters are absent).
+- Config keys: `sumeragi.collectors.k: usize` (collectors per height; default 1 in config) and `sumeragi.collectors.redundant_send_r: u8` (redundant send fanout; tooling may seed on-chain defaults from the validator count, and the config fallback is 3 for 4 validators when parameters are absent).
 - On-chain: K and r live in `SumeragiParameters` and are authoritative for collector planning and `ConsensusParams` adverts; config values seed the genesis defaults. When peers advertise different K/r, the node logs a mismatch but keeps the on-chain values.
 - Fallbacks: if `k` yields no collectors, votes fall back to the full commit topology; `redundant_send_r` is clamped to at least the commit quorum size (subject to the available collectors).
 - Determinism: primary/next collector order is a pure function of the canonical roster, PRF seed, and `(height, view)`; when the PRF seed is unavailable the fallback is the wraparound slice starting at `proxy_tail_index()` (skipping the leader) until at least commit quorum size, with no per-node randomness.
@@ -301,11 +328,11 @@ Commit Certificate Content and Rotation Hint
 Observer Fast‑Path (pending certificates)
 - Observers retain commit certificates (phase `Commit`) keyed by block hash; once the matching block body arrives via gossip/RBC they validate and wait for a `CommitCertificate` before finalizing.
 
-Actor Model
-- The Sumeragi main loop owns explicit subcomponents (commit, propose/pacemaker, DA/RBC, VRF, merge/lane relay) with isolated mutable state and focused helpers, while shared consensus state (pending blocks, certificate caches, locks) stays in the core actor.
+Adapter Model
+- The Sumeragi main loop owns network queues, workers, telemetry, payload transport, and storage adapters. Shared consensus decisions belong to the pure V1 state machine: adapters feed inputs such as ticks, proposals, certificates, payload availability, validation results, and committed blocks, then execute the emitted outputs.
 
 Backpressure & Telemetry
-- Scheduler: with `sumeragi.advanced.worker.parallel_ingress = true`, per-queue worker threads feed a ticketed gate (one actor at a time, FIFO by ticket) instead of the single-thread priority mailbox; the priority mailbox (Votes → RBC chunks → blocks → block payloads → consensus control → lane relay → background) with starvation guards (`non_vote_starve_max`, `block_rx_starve_max`) is used only when `parallel_ingress = false`.
+- Scheduler: with `sumeragi.advanced.worker.parallel_ingress = true`, per-queue worker threads feed a ticketed gate (one consensus step at a time, FIFO by ticket) instead of the single-thread priority mailbox; the priority mailbox (Votes → RBC chunks → blocks → block payloads → consensus control → lane relay → background) with starvation guards (`non_vote_starve_max`, `block_rx_starve_max`) is used only when `parallel_ingress = false`.
 - Pre-tick drain is bounded by the next tick deadline (with a tick-min-gap grace when the deadline is immediate) so pacemaker ticks are not delayed by long queue backlogs; remaining messages drain after the tick within the iteration budget.
 - The dedicated tick worker records every tick attempt, including no-progress maintenance ticks, for min-gap throttling; retained RBC sessions outside the active repair window do not by themselves schedule idle ticks.
 - Commit pipeline work runs on the tick path; inbound handlers only request a wakeup so heavy commit processing does not block mailbox drain. The tick path still runs on the max-gap cadence so commits continue without starving message drain.
@@ -334,7 +361,7 @@ consensus_mode = "permissioned"
 
 [sumeragi.collectors]
 k = 3                   # three collectors per height
-redundant_send_r = 3    # example for 4 validators (2f+1)
+redundant_send_r = 3    # example strict supermajority for 4 validators
 
 [sumeragi.advanced.queues]
 votes = 8192             # vote channel capacity (commit votes + RBC READY/DELIVER)
@@ -429,7 +456,7 @@ Notes
 
 Overview
 - Prepare/Commit votes and certificates remain for pacemaker/telemetry and lock tracking; commits are driven by `CommitCertificate`s (proxy‑tail quorum) rather than child certificates. Historical BlockSigned/BlockCommitted frames have been removed.
-- NEW_VIEW gating: the leader proposal is gated in views ≥ 1 by commit quorum (≥ `min_votes_for_commit()`, i.e., 2f+1) NEW_VIEW receipts for the tuple (height, view). View 0 remains optimistic‑propose. The actor tracks deduplicated NEW_VIEW counts and adopts the highest certificate (`highest_qc`) monotonically; on view change it sends NEW_VIEW votes to the view-aligned collector set and always includes the leader, falling back to the full commit topology only when collectors are disabled or local-only to keep quorum formation reliable without N^2 broadcast storms.
+- NEW_VIEW gating: the leader proposal is gated in views ≥ 1 by commit quorum (≥ `min_votes_for_commit()`, strict supermajority) NEW_VIEW receipts for the tuple (height, view). View 0 remains optimistic‑propose. The node tracks deduplicated NEW_VIEW counts and adopts the highest certificate (`highest_qc`) monotonically; on view change it sends NEW_VIEW votes to the view-aligned collector set and always includes the leader, falling back to the full commit topology only when collectors are disabled or local-only to keep quorum formation reliable without N^2 broadcast storms.
 - NEW_VIEW freshness: highest certificate heights that lag the local locked certificate are still accepted and counted toward view-change quorum; the locked‑certificate rule is enforced when proposing or validating blocks, not when tallying view-change receipts.
 - NEW_VIEW stale handling: stale NEW_VIEW frames do not advance the local view, but their highest certificate is still processed to seed missing-block fetch and cache late certificates.
 - NEW_VIEW height sanity: frames are accepted when `height == highest_qc.height + 1` for commit or prepare highest QCs so view changes cannot skip heights.
@@ -453,13 +480,13 @@ Commit rules (scaffold wiring)
 - Payload recovery: nodes that observe availability evidence (RBC `READY` quorum or availability votes) without the payload deterministically fetch it from the certificate signers for `sumeragi.recovery.missing_block_signer_fallback_attempts` attempts, then fall back to the full commit topology (and still fall back immediately when the signer set is empty). Payload hashes are verified before applying the block.
 - Empty commit-topology defers are bounded: proposer/finalize paths now use a staged recovery flow (refresh topology, targeted fetch, bounded wait, then deterministic view-change escalation) and suppress repeated identical defer logs within a cooldown window.
 - Availability timeout on idle views (NPoS/DA-only): pending blocks with `MissingLocalData` log and rebroadcast availability evidence after the availability timeout even if no fresh traffic arrives; while `MissingLocalData` is set, quorum reschedules are deferred until the availability timeout, and `ManifestGuard` remains advisory (warnings only). Permissioned/DA-off paths skip DA availability tracking but still benefit from the prevote-only fallback above.
-- Prepare-only fallback: if only a prepare certificate reaches quorum and no commit votes arrive by the quorum timeout, the actor requeues the block’s transactions, rebroadcasts the block + block-sync update + prepare certificate, resets a highest certificate reference that pointed at the stalled block, and triggers a view change so the next round can propose a fresh block without stalling (applies to both DA-off permissioned runs and DA-off NPoS smoke tests).
+- Prepare-only fallback: if only a prepare certificate reaches quorum and no commit votes arrive by the quorum timeout, the adapter requeues the block’s transactions, rebroadcasts the block + block-sync update + prepare certificate, resets a highest certificate reference that pointed at the stalled block, and triggers a view change so the next round can propose a fresh block without stalling (applies to both DA-off permissioned runs and DA-off NPoS smoke tests).
 - Commit vote lock: once any commit vote is observed at a height, proposal assembly for that height is deferred until the committed block resolves, and quorum reschedules skip requeueing that block’s transactions to avoid conflicting proposals.
 - Aborted pending retention: when a commit inflight timeout or quorum reschedule marks a pending block aborted, the payload is retained for a bounded window (derived from quorum timeout and missing-block fallback attempts) so late commit certificates and missing-block fetches can still finalize; entries are evicted once committed or when the retention window expires without votes or fetches.
 - Timer-driven commit path: if any pending block exists, the pacemaker tick runs `process_commit_candidates` even when no new messages arrive, and message handlers request the tick when commit evidence lands. This keeps quorum timeouts, Kura retries, and DA availability tracking advancing on quiet networks (permissioned and NPoS). Operators can confirm this path via `status_snapshot().commit_pipeline_tick_total` and `sumeragi_commit_pipeline_tick_total{mode,outcome}` (`outcome="active"` when pending blocks existed, `outcome="idle"` otherwise).
 - Tick cadence: when there is no pending consensus work and the transaction queue is empty, ticks are suppressed and the worker sleeps on the wake channel (with a periodic shutdown poll); scheduled tasks (missing‑block retries, quorum reschedule/aborted‑retention windows, RBC rebroadcast/TTL maintenance, idle view‑change timeouts, and commit‑inflight timeouts) drive a next‑deadline sleep instead of fixed‑interval polling; once work appears, ticks are throttled to a block/commit-derived minimum gap while preserving the maximum-gap liveness guarantees, and queued transactions force immediate tick scheduling even when pending blocks exist to keep commit/DA work moving.
 - Worker wake: inbound consensus queues, transaction enqueue paths, and async commit/RBC-persist workers signal a wake channel so the worker blocks until new work or the next tick deadline instead of fixed-interval polling.
-- Kura persistence retry/backoff: when `kura.store_block` returns an error the block stays pending and retries with exponential backoff derived from `sumeragi.persistence.kura_retry_interval_ms`. After `sumeragi.persistence.kura_retry_max_attempts` the actor aborts the payload and requeues its transactions so new proposals can make progress. Status counters (`status_snapshot().kura_store.*`) and telemetry (`sumeragi_kura_store_failures_total{outcome="retry|abort"}`) surface failures for alerting, and WSV remains untouched until persistence succeeds.
+- Kura persistence retry/backoff: when `kura.store_block` returns an error the block stays pending and retries with exponential backoff derived from `sumeragi.persistence.kura_retry_interval_ms`. After `sumeragi.persistence.kura_retry_max_attempts` the storage adapter aborts the payload and requeues its transactions so new proposals can make progress. Status counters (`status_snapshot().kura_store.*`) and telemetry (`sumeragi_kura_store_failures_total{outcome="retry|abort"}`) surface failures for alerting, and WSV remains untouched until persistence succeeds.
   - Gauges `sumeragi_kura_store_last_retry_attempt` and `sumeragi_kura_store_last_retry_backoff_ms` export the most recent retry decision so alerting can page on stuck backoffs or exhausted budgets.
   - `/v1/sumeragi/status.kura_store` mirrors the same snapshot (failures/abort totals plus the last failed height/view/hash) in both JSON and Norito responses so operators can audit persistence stalls without shell access.
   - Staging is atomic: pipeline events and WSV deltas are buffered until `kura.store_block` succeeds. The status surface reports `stage_total`/`stage_last_*` for staged blocks, `rollback_total`/`rollback_last_*` with the last reason (`store_failure` or `state_commit_failure`) when a stage is dropped before WSV apply, and `lock_reset_total`/`lock_reset_last_*` when highest/locked certificates are reset to the latest committed tip after a kura abort.
@@ -501,10 +528,10 @@ Determinism
   delivery typically completes before commit, but commit is not gated on
   availability evidence or local `DELIVER`.
 - DA availability timeout: while availability evidence is still missing
-  (RBC `READY` quorum not met), the actor logs and rebroadcasts
+  (RBC `READY` quorum not met), the adapter logs and rebroadcasts
   availability evidence after the timeout. The reschedule counters
   (`sumeragi_rbc_da_reschedule_total` and `status_snapshot().da_reschedule_total`)
-  are legacy and should remain zero now that DA is advisory. Nodes missing payload
+  should remain zero now that DA is advisory. Nodes missing payload
   fetch it from certificate signers first, then fall back to the full commit topology after
   the configured retry budget.
 - The helpers capture per-peer Prometheus counters and `/v1/sumeragi/rbc/sessions`
@@ -763,15 +790,15 @@ from `network.max_frame_bytes_block_sync`.
 
 #### Adaptive observability
 
-Enable `sumeragi.adaptive_observability` to let the actor temporarily widen
+Enable `sumeragi.adaptive_observability` to let the adapter temporarily widen
 collector fan-out and pacemaker intervals when telemetry shows stalls:
 
 - Trigger sources: certificate latency over `qc_latency_alert_ms` or bursts of missing
   availability warnings when `status.da_gate.missing_local_data_total`
-  advances by `da_reschedule_burst` (legacy name) between ticks.
+  advances by `da_reschedule_burst` between ticks.
 - Mitigation: raise redundant collector fan-out to
   `collector_redundant_r.max(baseline)` and add `pacemaker_extra_ms` to the
-  proposal interval; the actor logs the decision with the measured metrics.
+  proposal interval; the adapter logs the decision with the measured metrics.
 - Reset: once counters stabilise for `cooldown_ms`, the collector limit and
   pacemaker interval snap back to baseline.
 - Defaults: disabled; 400 ms certificate latency threshold, DA burst of 2, +100 ms
@@ -786,7 +813,7 @@ windows:
 1. **Commit window** (`vrf_commit_deadline_offset` blocks) — validators submit
    `VrfCommit` payloads with a hash of their reveal.
 2. **Reveal window** (`vrf_reveal_deadline_offset` blocks) — validators disclose
-   the reveal (`VrfReveal`). The actor verifies it against the prior commit and
+   the reveal (`VrfReveal`). The adapter verifies it against the prior commit and
    records the 32-byte reveal.
 
 The commit/reveal ingestion path is synchronous and deterministic:
@@ -801,14 +828,14 @@ The commit/reveal ingestion path is synchronous and deterministic:
     "reveal_hex": "<0x…>" }`.
 - Torii rate-limits the requests, validates the 32-byte hex payload, and forwards
   the message to the `SumeragiHandle`.
-- The main-loop actor (`handle_vrf_commit`/`handle_vrf_reveal`) checks the local
+- The main-loop adapter (`handle_vrf_commit`/`handle_vrf_reveal`) checks the local
   epoch, window, and commitment binding, then snapshots the in-progress epoch
   state into WSV (`world.vrf_epochs`) for durability and observability.
 - The PRF seed stays fixed for the current epoch; snapshots update participation
   only and do not change leader/collector selection until the next epoch boundary.
 
 When the epoch boundary is reached (block height multiple of
-`epoch_length_blocks`), the actor:
+`epoch_length_blocks`), the adapter:
 
 1. Computes penalties (`committed_no_reveal`, `no_participation`).
 2. Mixes valid reveals into the next epoch seed `S_e`.
@@ -906,7 +933,7 @@ and `/v1/sumeragi/telemetry`’s `vrf` section for dashboards.
   either via `/v1/sumeragi/status` or the Norito payload—to confirm validator alignment
   and identify which peer diverged. Hashes are derived from `(chain_id, height, view,
   epoch, ordered_peer_ids)` using Blake2b-256.
-- Late reveals: validators may submit reveals after the configured window (`vrf_reveal_deadline_offset`) to clear penalties. The actor verifies the reveal against the stored commitment, records it under `late_reveals`, and increments `sumeragi_vrf_reveals_late_total`. Late submissions never remix the epoch seed—only on-time reveals participate in the Blake2b accumulator—but they do remove the validator from the `committed_no_reveal` set. Late entries are persisted in `world.vrf_epochs[*].late_reveals` so operators can audit the height at which the reveal landed.
+- Late reveals: validators may submit reveals after the configured window (`vrf_reveal_deadline_offset`) to clear penalties. The adapter verifies the reveal against the stored commitment, records it under `late_reveals`, and increments `sumeragi_vrf_reveals_late_total`. Late submissions never remix the epoch seed—only on-time reveals participate in the Blake2b accumulator—but they do remove the validator from the `committed_no_reveal` set. Late entries are persisted in `world.vrf_epochs[*].late_reveals` so operators can audit the height at which the reveal landed.
 
 #### VRF alert thresholds
 - Page when `increase(sumeragi_vrf_no_participation_total[epoch_window]) > 0`. Any increment means at least one validator missed both commit and reveal windows for the tracked epoch. Use a window length matching `vrf_commit_deadline_offset + vrf_reveal_deadline_offset` (for the defaults, `epoch_window = 140m` on a one‑second block cadence).
@@ -963,7 +990,7 @@ Build-line policy: v3 uses `sumeragi.da.enabled` (on-chain `SumeragiParameters.d
 
 | Build line | Availability status | Status fields to watch | Typical remediation |
 |------------|-------------|------------------------|---------------------|
-| Iroha v3 (`sumeragi.da.enabled=true`) | Local payload availability (advisory) | `status.da_gate.reason`, `status.da_gate.missing_local_data_total`, `status.da_gate.last_satisfied`, legacy `status.sumeragi.da_reschedule_total` | Verify `BlockCreated` broadcasts and RBC payload recovery, inspect `/v1/sumeragi/status.rbc_store` and RBC backlog for stuck payloads, and restart collectors if quorum cannot form. |
+| Iroha v3 (`sumeragi.da.enabled=true`) | Local payload availability (advisory) | `status.da_gate.reason`, `status.da_gate.missing_local_data_total`, `status.da_gate.last_satisfied`, `status.sumeragi.da_reschedule_total` | Verify `BlockCreated` broadcasts and RBC payload recovery, inspect `/v1/sumeragi/status.rbc_store` and RBC backlog for stuck payloads, and restart collectors if quorum cannot form. |
 
 DA availability transitions also emit structured debug logs when the reason changes or when a requirement is satisfied. The logs carry `reason`, `satisfied`, `da_enabled`, and `delivered` fields so operators can align missing-availability evidence with the corresponding telemetry counters without scraping Prometheus.
 

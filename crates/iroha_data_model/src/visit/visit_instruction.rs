@@ -441,7 +441,7 @@ pub fn visit_rwa_instruction_box<V: Visit + ?Sized>(
 ) {
 }
 
-/// Dispatch grouped DeFi instructions.
+/// Dispatch grouped `DeFi` instructions.
 pub fn visit_defi_instruction_box<V: Visit + ?Sized>(
     _visitor: &mut V,
     _isi: &crate::isi::defi::DeFiInstructionBox,

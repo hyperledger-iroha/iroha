@@ -704,10 +704,10 @@ impl BridgeFinalityVerifier {
     }
 
     const fn min_signatures(len: usize) -> usize {
-        if len > 3 {
-            ((len.saturating_sub(1)) / 3) * 2 + 1
-        } else {
+        if len <= 3 {
             len
+        } else {
+            len.saturating_mul(2) / 3 + 1
         }
     }
 }
@@ -720,7 +720,7 @@ fn consensus_domain(
 ) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
     let mut hasher = Blake2b512::new();
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, b"iroha2-consensus/v2");
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, b"iroha-sumeragi-consensus/v1");
     iroha_crypto::blake2::digest::Update::update(
         &mut hasher,
         chain_id.clone().into_inner().as_bytes(),
@@ -1004,7 +1004,7 @@ mod tests {
         assert_eq!(BridgeFinalityVerifier::min_signatures(1), 1);
         assert_eq!(BridgeFinalityVerifier::min_signatures(3), 3);
         assert_eq!(BridgeFinalityVerifier::min_signatures(4), 3);
-        assert_eq!(BridgeFinalityVerifier::min_signatures(6), 3);
+        assert_eq!(BridgeFinalityVerifier::min_signatures(6), 5);
         assert_eq!(BridgeFinalityVerifier::min_signatures(7), 5);
     }
 

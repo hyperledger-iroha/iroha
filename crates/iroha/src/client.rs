@@ -15113,8 +15113,8 @@ mod tests {
                 SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
                 SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
                 SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
-                SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
-                SumeragiVoteValidationDropStatus,
+                SumeragiStatusWire, SumeragiV1StatusWire, SumeragiValidationRejectStatus,
+                SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropStatus,
             },
         },
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash},
@@ -15257,6 +15257,7 @@ mod tests {
             last_timestamp_ms: 1_724_000_000_123,
         };
         let status = SumeragiStatusWire {
+            canonical: SumeragiV1StatusWire::default(),
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
@@ -18809,6 +18810,7 @@ mod tests {
     ) -> SumeragiStatusWire {
         let block_hash = block_header.hash();
         SumeragiStatusWire {
+            canonical: SumeragiV1StatusWire::default(),
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
@@ -19210,6 +19212,7 @@ mod tests {
             last_timestamp_ms: 1_724_000_000_123,
         };
         let status = SumeragiStatusWire {
+            canonical: SumeragiV1StatusWire::default(),
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,

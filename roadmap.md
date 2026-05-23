@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-05-21
+Last updated: 2026-05-23
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -72,20 +72,23 @@ or ABI behavior.
 multi-input evaluation coverage, and proof/receipt compatibility across Rust,
 Kotlin, Java, Swift, and JavaScript.
 
-## Performance and Operations
+## Consensus, Performance, and Operations
 
 **Status:** active optimization.
 
-- Continue Sumeragi vNext work toward higher applied throughput while
-  preserving deterministic consensus behavior and the hard consensus cadence
-  gates.
+- Wire the canonical Sumeragi V1 pure engine through the live network,
+  validation, payload, telemetry, and storage adapters while preserving
+  deterministic consensus behavior and the hard consensus cadence gates.
+- Keep permissioned and NPoS execution on one state machine; validator-set
+  source and strict quorum math are the only mode differences.
 - Use measured matrix runs, not speculative settings, before accepting higher
   throughput targets.
 - Keep hardware acceleration paths feature-gated with deterministic scalar
   fallbacks.
 
-**Next checkpoints:** peer-gap and DA/RBC tail-latency reductions, restarted-peer
-replay coverage, and updated operator runbooks when defaults change.
+**Next checkpoints:** Sumeragi V1 adapter integration, peer-gap and DA/RBC
+tail-latency reductions, restarted-peer replay coverage, and updated operator
+runbooks when defaults change.
 
 ## Community and Governance
 

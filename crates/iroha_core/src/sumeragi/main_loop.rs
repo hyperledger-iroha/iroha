@@ -388,9 +388,9 @@ const QUORUM_RESCHEDULE_BACKOFF_DIVISOR: u32 = 4;
 const BLOCK_SYNC_WARN_COOLDOWN_FLOOR: Duration = Duration::from_secs(3);
 /// Prevent repeated insufficient-QC warnings for the same block/phase tuple across short intervals.
 const QC_INSUFFICIENT_WARN_COOLDOWN: Duration = Duration::from_secs(3);
-/// Keep recent vNext order-changing certificates in memory for replay/catch-up sidecars.
+/// Keep recent non-canonical order-changing certificates for deterministic sidecar decoding.
 const VNEXT_CERTIFICATE_JOURNAL_CAP: usize = 256;
-/// Bound pre-certificate vNext vote caches by body to keep malformed gossip from growing memory.
+/// Bound non-canonical vote caches by body to keep malformed gossip from growing memory.
 const VNEXT_VOTE_CACHE_CAP: usize = 512;
 /// Cap the number of block-sync quorum-miss warnings emitted per burst window.
 const BLOCK_SYNC_WARN_BURST_CAP: u32 = 3;
@@ -21054,169 +21054,15 @@ impl Actor {
 
     fn handle_vnext_message(&mut self, message: super::vnext::ConsensusMessage) -> Result<()> {
         let (height, view) = self.vnext_message_height_view(&message);
-        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let commit_topology = {
-            let cached = self.state.commit_topology.view();
-            if cached.is_empty() {
-                self.effective_commit_topology()
-            } else {
-                cached.iter().cloned().collect()
-            }
-        };
-        if commit_topology.is_empty() {
-            debug!(
-                ?message,
-                height, view, "dropping vNext message without commit roster"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::VNext,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::RosterMissing,
-            );
-            return Ok(());
-        }
-
-        let topology = super::network_topology::Topology::new(commit_topology.iter().cloned());
-        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
-        let Some(quorum) = self.vnext_quorum_policy(consensus_mode, signature_topology.as_ref())
-        else {
-            debug!(
-                ?message,
-                height,
-                view,
-                ?consensus_mode,
-                "dropping vNext message without a verifiable quorum policy"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::VNext,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::QuorumMissing,
-            );
-            return Ok(());
-        };
-        let Some(critical_prefix_len) =
-            quorum.smallest_satisfying_prefix_len(signature_topology.as_ref())
-        else {
-            debug!(
-                ?message,
-                height,
-                view,
-                ?consensus_mode,
-                "dropping vNext message because no chain-order prefix satisfies quorum"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::VNext,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::QuorumMissing,
-            );
-            return Ok(());
-        };
-        let epoch = self
-            .roster_validation_cache
-            .expected_epoch(height, consensus_mode);
-        let Ok(base_chain_order) = super::vnext::ChainOrder::new(
-            height,
-            view,
-            epoch,
-            0,
-            signature_topology.as_ref().to_vec(),
-            critical_prefix_len,
-            critical_prefix_len,
-        ) else {
-            debug!(
-                ?message,
-                height, view, "dropping vNext message with invalid chain order"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::VNext,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::InvalidPayload,
-            );
-            return Ok(());
-        };
-        let chain_order = self
-            .vnext_rounds
-            .get(&(height, view))
-            .map(|round| round.chain_order.clone())
-            .unwrap_or(base_chain_order);
-
-        let signer_roster = match &message {
-            super::vnext::ConsensusMessage::RechainVote(vote) => {
-                Cow::Owned(vote.new_order.critical_path().to_vec())
-            }
-            super::vnext::ConsensusMessage::RechainCertificate(certificate) => {
-                Cow::Owned(certificate.new_order.critical_path().to_vec())
-            }
-            _ => Cow::Borrowed(chain_order.critical_path()),
-        };
-        let Some(signer_pops) = self.vnext_signer_pops(signer_roster.as_ref()) else {
-            debug!(
-                ?message,
-                height, view, "dropping vNext message without proof-of-possession roster"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::VNext,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::RosterMissing,
-            );
-            return Ok(());
-        };
-        let signer_pop_refs = signer_pops.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let context = super::vnext::VNextIngressContext {
-            chain_id: &self.chain_id,
-            mode_tag,
-            head: chain_order.ordered_validators.first(),
-            signer_roster: signer_roster.as_ref(),
-            signer_pops: &signer_pop_refs,
-            quorum: Some(&quorum),
-            chain_order: Some(&chain_order),
-        };
-        if let Err(error) = message.verify_ingress(&context) {
-            let reason = Self::vnext_drop_reason(error);
-            debug!(
-                ?message,
-                ?error,
-                ?reason,
-                height,
-                view,
-                "dropping invalid experimental vNext message"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::VNext,
-                super::status::ConsensusMessageOutcome::Dropped,
-                reason,
-            );
-            return Ok(());
-        }
-
-        let config = super::vnext::PerformanceFaultConfig::from(&self.config.vnext);
-        let round = self
-            .vnext_rounds
-            .entry((height, view))
-            .or_insert_with(|| VNextRoundState::new(chain_order.clone(), quorum.clone(), config));
-        round.quorum = quorum;
-        round.config = config;
-
-        match message {
-            super::vnext::ConsensusMessage::Suspect(suspect) => {
-                self.handle_vnext_suspect_received(suspect, Self::vnext_now_ms());
-            }
-            super::vnext::ConsensusMessage::RechainProposal(proposal) => {
-                self.handle_vnext_rechain_proposal_received(proposal);
-            }
-            super::vnext::ConsensusMessage::RechainVote(vote) => {
-                self.accept_vnext_rechain_vote(vote);
-            }
-            super::vnext::ConsensusMessage::RechainCertificate(certificate) => {
-                self.handle_vnext_rechain_certificate_received(certificate, Self::vnext_now_ms());
-            }
-            super::vnext::ConsensusMessage::ViewChangeVote(vote) => {
-                self.accept_vnext_view_change_vote(vote);
-            }
-            super::vnext::ConsensusMessage::ViewChangeCertificate(certificate) => {
-                self.handle_vnext_view_change_certificate_received(certificate);
-            }
-        }
+        debug!(
+            ?message,
+            height, view, "dropping non-canonical Sumeragi control frame"
+        );
+        self.record_consensus_message_handling(
+            super::status::ConsensusMessageKind::VNext,
+            super::status::ConsensusMessageOutcome::Dropped,
+            super::status::ConsensusMessageReason::InvalidPayload,
+        );
         Ok(())
     }
 
@@ -22792,9 +22638,10 @@ impl Actor {
     }
 
     fn broadcast_vnext_control_message(&mut self, message: super::vnext::ConsensusMessage) {
-        self.schedule_background(BackgroundRequest::Broadcast {
-            msg: BlockMessageWire::new(BlockMessage::VNext(message)),
-        });
+        debug!(
+            ?message,
+            "suppressing non-canonical Sumeragi control broadcast"
+        );
     }
 
     fn prune_vnext_vote_cache<K: Ord, V>(cache: &mut BTreeMap<K, V>) {

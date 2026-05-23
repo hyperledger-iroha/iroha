@@ -1,9 +1,8 @@
-//! Experimental Sumeragi vNext protocol state.
+//! Quarantined non-canonical Sumeragi control-frame state.
 //!
-//! This module contains the first breaking-branch building blocks for a
-//! replacement consensus core. It deliberately models validation ownership,
-//! performance-fault suspicion, and re-chaining as explicit state instead of
-//! letting timeout recovery fall through to blocking inline validation.
+//! Sumeragi V1 ingress rejects these control frames before they can drive
+//! consensus decisions. The types remain available only so older sidecars and
+//! local diagnostics can be decoded, labelled, and discarded deterministically.
 
 use std::collections::BTreeMap;
 
@@ -19,7 +18,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::{Numeric, NumericSpec};
 use norito::codec::{Decode, Encode};
 
-/// Consensus slot identity used by vNext control messages.
+/// Consensus slot identity carried by non-canonical control messages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SlotId {
     /// Block height.
@@ -32,7 +31,7 @@ pub struct SlotId {
     pub block_hash: HashOf<BlockHeader>,
 }
 
-/// Explicit slot progress state for vNext round tracking.
+/// Explicit slot progress state used by quarantined control-frame diagnostics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SlotState {
     /// No proposal is active for this slot.
@@ -634,7 +633,7 @@ fn stake_quorum_satisfied(total: &Numeric, weights: &[StakeWeight], validators: 
     else {
         return false;
     };
-    signed_scaled >= total_scaled
+    signed_scaled > total_scaled
 }
 
 /// A missed obligation that can justify performance suspicion.
@@ -2070,6 +2069,23 @@ mod tests {
         assert!(!policy.satisfied_by(&validators[..1]));
         assert!(policy.satisfied_by(&validators[..2]));
         assert_eq!(policy.smallest_satisfying_prefix_len(&validators), Some(2));
+
+        let exact_boundary = QuorumPolicy::Stake {
+            total: Numeric::from(3_u64),
+            weights: validators
+                .iter()
+                .cloned()
+                .map(|peer_id| StakeWeight {
+                    peer_id,
+                    weight: Numeric::from(1_u64),
+                })
+                .collect(),
+        };
+        assert!(
+            !exact_boundary.satisfied_by(&validators[..2]),
+            "exact 2/3 stake must fail closed"
+        );
+        assert!(exact_boundary.satisfied_by(&validators));
     }
 
     #[test]

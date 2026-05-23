@@ -3277,7 +3277,7 @@ fn write_start_script(
     )?;
     writeln!(start_file, "import os")?;
     writeln!(start_file, "import subprocess")?;
-    writeln!(start_file, "")?;
+    writeln!(start_file)?;
     writeln!(start_file, "env = os.environ.copy()")?;
     writeln!(start_file, "cmd = [env[\"IROHAD_BIN\"]]")?;
     writeln!(start_file, "if env.get(\"IROHA_SORA_MODE\") == \"1\":")?;
@@ -7198,6 +7198,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn start_and_stop_scripts_are_executable() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let client_account_literal = localnet_client_account_literal(None);
