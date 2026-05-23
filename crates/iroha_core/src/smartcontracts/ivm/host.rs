@@ -7174,6 +7174,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 } else if any_ref.downcast_ref::<DMZk::VerifyProof>().is_some() {
                     // Allow explicit VerifyProof if issued via vendor bridge; pass-through
                     Ok(self.queue_instruction(ib))
+                } else if any_ref
+                    .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+                    .is_some()
+                {
+                    // SCCP message recording is proof-gated at overlay admission; this syscall
+                    // only lets proved IVM execution materialize the standard ISI overlay.
+                    Ok(self.queue_instruction(ib))
                 } else {
                     Err(ivm::VMError::PermissionDenied)
                 }
@@ -12961,6 +12968,27 @@ seiyaku AliasPayout {{
 
         assert_eq!(gas, expected);
         assert_eq!(host.queued, vec![instr_one, instr_two]);
+    }
+
+    #[test]
+    fn execute_instruction_syscall_allows_sccp_record_message() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        let mut vm = ivm::IVM::new(1_000_000);
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![
+                1, 2, 3, 4,
+            ]));
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
+            .expect("SCCP record instruction should be queued");
+
+        assert_eq!(gas, crate::gas::meter_instruction(&instruction));
+        assert_eq!(host.queued, vec![instruction]);
     }
 
     #[test]

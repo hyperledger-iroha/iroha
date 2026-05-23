@@ -12,6 +12,7 @@ cli-orchestrator = [
     "dep:iroha_crypto",
     "dep:sorafs_chunker",
     "dep:sorafs_manifest",
+    "dep:toml",
 ]
 schema-structural = []
 packed-struct = []
@@ -49,6 +50,7 @@ sorafs_chunker = { path = "../sorafs_chunker", optional = true }
 sorafs_manifest = { path = "../sorafs_manifest", optional = true }
 iroha_crypto = { path = "../iroha_crypto", optional = true }
 iroha_config = { path = "../iroha_config", optional = true }
+toml = { workspace = true, optional = true }
 
 [dev-dependencies]
 futures = "0.3.31"
