@@ -716,11 +716,10 @@ mod tests {
     use iroha_data_model::DomainId;
 
     use super::{
-        ACCOUNT_WILDCARD_KEY, ASSET_DEF_WILDCARD_KEY, ASSET_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY,
-        Compiler, CompilerMode, CompilerOptions, ContractFeature, DEFAULT_MAX_CYCLES,
-        GLOBAL_WILDCARD_KEY, NFT_COARSE_KEY, STATE_WILDCARD_KEY, WIDE_IMM_MAX, emit_addi,
+        AUTHORITY_ACCOUNT_KEY, Compiler, CompilerMode, CompilerOptions, ContractFeature,
+        DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY, NFT_COARSE_KEY, WIDE_IMM_MAX, emit_addi,
         emit_load64, emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
-        reserve_pointer_literal_stub, stack_slot_offset_bytes,
+        reserve_pointer_literal_stub, retain_taira_supported_access_key, stack_slot_offset_bytes,
     };
     use crate::{ast::ContractMeta, ir, parser::parse, semantic::analyze};
     use crate::{encoding, instruction, metadata::ProgramMetadata, pointer_abi::PointerType};
@@ -730,6 +729,14 @@ mod tests {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
         })
+    }
+
+    fn assert_taira_supported_access_keys(keys: &[String]) {
+        assert!(
+            keys.iter()
+                .all(|key| retain_taira_supported_access_key(key)),
+            "manifest persisted unsupported Taira access key in {keys:?}"
+        );
     }
 
     fn sample_account_id() -> iroha_data_model::account::AccountId {
@@ -1766,7 +1773,7 @@ seiyaku Test {
     }
 
     #[test]
-    fn manifest_access_set_hints_include_state_wildcard_for_dynamic_state_path() {
+    fn manifest_access_set_hints_omit_state_wildcard_for_dynamic_state_path() {
         let src = r#"
 seiyaku Test {
   kotoage fn read(path: Name) {
@@ -1781,21 +1788,21 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(hints.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
-        assert!(hints.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let read = entrypoints
             .iter()
             .find(|entry| entry.name == "read")
             .expect("read entrypoint");
-        assert!(read.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
-        assert!(read.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert_taira_supported_access_keys(&read.read_keys);
+        assert_taira_supported_access_keys(&read.write_keys);
         assert_eq!(read.access_hints_complete, Some(false));
         assert!(!read.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_include_state_wildcard_for_call_contract() {
+    fn manifest_access_set_hints_omit_state_wildcard_for_call_contract() {
         let src = r#"
 seiyaku Test {
   kotoage fn relay(target: bytes, payload: Json) -> bytes permission(Admin) {
@@ -1810,15 +1817,15 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(hints.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
-        assert!(hints.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let relay = entrypoints
             .iter()
             .find(|entry| entry.name == "relay")
             .expect("relay entrypoint");
-        assert!(relay.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
-        assert!(relay.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert_taira_supported_access_keys(&relay.read_keys);
+        assert_taira_supported_access_keys(&relay.write_keys);
         assert_eq!(relay.access_hints_complete, Some(false));
         assert!(!relay.access_hints_skipped.is_empty());
     }
@@ -2371,7 +2378,7 @@ fn main() {{
     }
 
     #[test]
-    fn manifest_access_set_hints_wildcard_for_alias_shorthand_account_id() {
+    fn manifest_access_set_hints_omit_global_wildcard_for_alias_shorthand_account_id() {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
@@ -2385,22 +2392,23 @@ fn main() {{
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert!(main.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(main.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert_eq!(main.access_hints_complete, Some(false));
-        assert!(!main.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&main.read_keys);
+        assert_taira_supported_access_keys(&main.write_keys);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_wildcard_for_invalid_alias_shorthand_account_id_transfer() {
+    fn manifest_access_set_hints_omit_global_wildcard_for_invalid_alias_shorthand_account_id_transfer()
+     {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
@@ -2414,22 +2422,23 @@ fn main() {{
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert!(main.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(main.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert_eq!(main.access_hints_complete, Some(false));
-        assert!(!main.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&main.read_keys);
+        assert_taira_supported_access_keys(&main.write_keys);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_wildcard_for_domain_qualified_alias_shorthand_account_id() {
+    fn manifest_access_set_hints_omit_global_wildcard_for_domain_qualified_alias_shorthand_account_id()
+     {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
@@ -2443,22 +2452,22 @@ fn main() {{
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(false));
-        assert!(!main.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&main.read_keys);
+        assert_taira_supported_access_keys(&main.write_keys);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_wildcard_for_invalid_domain_qualified_alias_shorthand_account_id_transfer()
+    fn manifest_access_set_hints_omit_global_wildcard_for_invalid_domain_qualified_alias_shorthand_account_id_transfer()
      {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -2473,22 +2482,22 @@ fn main() {{
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(false));
-        assert!(!main.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&main.read_keys);
+        assert_taira_supported_access_keys(&main.write_keys);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_wildcard_for_resolve_account_alias_builtin_transfer() {
+    fn manifest_access_set_hints_omit_global_wildcard_for_resolve_account_alias_builtin_transfer() {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
@@ -2502,22 +2511,23 @@ fn main() {{
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(false));
-        assert!(!main.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&main.read_keys);
+        assert_taira_supported_access_keys(&main.write_keys);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_wildcard_for_invalid_resolve_account_alias_builtin_transfer() {
+    fn manifest_access_set_hints_omit_global_wildcard_for_invalid_resolve_account_alias_builtin_transfer()
+     {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
@@ -2531,22 +2541,22 @@ fn main() {{
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(false));
-        assert!(!main.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&main.read_keys);
+        assert_taira_supported_access_keys(&main.write_keys);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_wildcard_for_domain_qualified_resolve_account_alias_builtin_transfer()
+    fn manifest_access_set_hints_omit_global_wildcard_for_domain_qualified_resolve_account_alias_builtin_transfer()
      {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -2561,22 +2571,22 @@ fn main() {{
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(false));
-        assert!(!main.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&main.read_keys);
+        assert_taira_supported_access_keys(&main.write_keys);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_wildcard_for_invalid_domain_qualified_resolve_account_alias_builtin_transfer()
+    fn manifest_access_set_hints_omit_global_wildcard_for_invalid_domain_qualified_resolve_account_alias_builtin_transfer()
      {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -2591,22 +2601,22 @@ fn main() {{
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(false));
-        assert!(!main.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&main.read_keys);
+        assert_taira_supported_access_keys(&main.write_keys);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_include_coarse_asset_keys_for_dynamic_asset_contract() {
+    fn manifest_access_set_hints_omit_coarse_asset_keys_for_dynamic_asset_contract() {
         let src = r#"
 seiyaku Test {
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
@@ -2621,33 +2631,21 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(hints.read_keys.contains(&ASSET_WILDCARD_KEY.to_string()));
-        assert!(hints.write_keys.contains(&ASSET_WILDCARD_KEY.to_string()));
-        assert!(
-            hints
-                .read_keys
-                .contains(&ASSET_DEF_WILDCARD_KEY.to_string())
-        );
-        assert!(
-            hints
-                .write_keys
-                .contains(&ASSET_DEF_WILDCARD_KEY.to_string())
-        );
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "move")
             .expect("move entrypoint");
-        assert!(!main.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(!main.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert_taira_supported_access_keys(&main.read_keys);
+        assert_taira_supported_access_keys(&main.write_keys);
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_wildcard_for_opaque_host_calls() {
+    fn manifest_access_set_hints_omit_global_wildcard_for_opaque_host_calls() {
         let src = r#"
 seiyaku Test {
   kotoage fn register() permission(Admin) {
@@ -2659,18 +2657,17 @@ seiyaku Test {
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
             .expect("compile manifest");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected access_set_hints");
-        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert!(
+            manifest.access_set_hints.is_none(),
+            "opaque host calls should not persist wildcard-only access hints"
+        );
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let register = entrypoints
             .iter()
             .find(|entry| entry.name == "register")
             .expect("register entrypoint");
-        assert_eq!(register.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(register.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_taira_supported_access_keys(&register.read_keys);
+        assert_taira_supported_access_keys(&register.write_keys);
         assert_eq!(register.access_hints_complete, Some(false));
         assert!(!register.access_hints_skipped.is_empty());
     }
@@ -3519,7 +3516,7 @@ seiyaku Test {
     }
 
     #[test]
-    fn production_accepts_dynamic_asset_definition_transfer_hints() {
+    fn production_accepts_dynamic_asset_definition_transfer_with_stripped_coarse_hints() {
         let src = r#"
 seiyaku Test {
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
@@ -3532,23 +3529,19 @@ seiyaku Test {
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
             .expect("dynamic asset transfers should use coarse asset access hints");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected access_set_hints");
-        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(hints.read_keys.contains(&ASSET_WILDCARD_KEY.to_string()));
-        assert!(hints.write_keys.contains(&ASSET_WILDCARD_KEY.to_string()));
         assert!(
-            hints
-                .read_keys
-                .contains(&ASSET_DEF_WILDCARD_KEY.to_string())
+            manifest.access_set_hints.is_none(),
+            "production should omit coarse wildcard-only access hints"
         );
-        assert!(
-            hints
-                .write_keys
-                .contains(&ASSET_DEF_WILDCARD_KEY.to_string())
-        );
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let move_entry = entrypoints
+            .iter()
+            .find(|entry| entry.name == "move")
+            .expect("move entrypoint");
+        assert_taira_supported_access_keys(&move_entry.read_keys);
+        assert_taira_supported_access_keys(&move_entry.write_keys);
+        assert_eq!(move_entry.access_hints_complete, Some(true));
+        assert!(move_entry.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -3579,7 +3572,8 @@ seiyaku Test {{
             !hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()),
             "fixed asset transfers should not require global write wildcards"
         );
-        assert!(hints.read_keys.contains(&ACCOUNT_WILDCARD_KEY.to_string()));
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
         assert!(
             hints
                 .read_keys
@@ -3627,7 +3621,8 @@ seiyaku Test {{
             .expect("expected access_set_hints");
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(hints.read_keys.contains(&ACCOUNT_WILDCARD_KEY.to_string()));
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
         assert!(
             hints
                 .read_keys
@@ -10120,6 +10115,10 @@ fn insert_state_hint(keys: &mut IndexSet<String>, key: String) {
     }
 }
 
+fn retain_taira_supported_access_key(key: &str) -> bool {
+    key != GLOBAL_WILDCARD_KEY && !key.ends_with(":*")
+}
+
 fn map_base_from_state_key(key: &str) -> Option<String> {
     let rest = key.strip_prefix("state:")?;
     let (base, _) = rest.split_once('/')?;
@@ -10162,6 +10161,14 @@ fn build_access_set_hints(
     }
     for key in writes.iter().cloned() {
         reads.insert(key);
+    }
+    // Public Taira currently rejects wildcard access keys in contract artifacts.
+    // Keep literal keys and dynamic hint metadata, but drop coarse wildcard keys
+    // such as `*`, `state:*`, and `asset:*` from the persisted artifact.
+    reads.retain(|key| retain_taira_supported_access_key(key));
+    writes.retain(|key| retain_taira_supported_access_key(key));
+    if reads.is_empty() && writes.is_empty() {
+        return None;
     }
     let (dynamic_reads, dynamic_writes) =
         collect_dynamic_access_hints(typed, u32::from(dynamic_iter_cap));
@@ -11957,6 +11964,8 @@ fn build_entrypoint_descriptors(
         } else {
             (Vec::new(), Vec::new())
         };
+        reads.retain(|key| retain_taira_supported_access_key(key));
+        writes.retain(|key| retain_taira_supported_access_key(key));
         if include_hints && (reads.is_empty() || writes.is_empty()) {
             let (fallback_reads, fallback_writes) = crate::semantic::function_state_accesses(func);
             if reads.is_empty() && !fallback_reads.is_empty() {
@@ -11965,6 +11974,8 @@ fn build_entrypoint_descriptors(
             if writes.is_empty() && !fallback_writes.is_empty() {
                 writes = fallback_writes.iter().cloned().collect();
             }
+            reads.retain(|key| retain_taira_supported_access_key(key));
+            writes.retain(|key| retain_taira_supported_access_key(key));
         }
         let triggers = triggers_by_name
             .get(func.name.as_str())
