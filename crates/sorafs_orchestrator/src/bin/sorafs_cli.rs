@@ -2,6 +2,7 @@
 #![allow(unexpected_cfgs)]
 
 use std::{
+    collections::BTreeSet,
     convert::TryInto,
     env,
     fmt::Write as FmtWrite,
@@ -527,6 +528,7 @@ fn run() -> Result<(), String> {
                 _ => Err(usage()),
             }
         }
+        "deploy" => deploy(args.collect()),
         "fetch" => fetch_gateway(args.collect()),
         "proof" => {
             let Some(sub) = args.next() else {
@@ -669,6 +671,1025 @@ fn car_pack(raw_args: Vec<String>) -> Result<(), String> {
             input_path.display()
         ))
     }
+}
+
+struct DeployClientConfig {
+    torii_url: Option<String>,
+    public_key: PublicKey,
+    private_key: PrivateKey,
+    chain_discriminant: u16,
+}
+
+struct DeployPackArtifacts {
+    manifest: ManifestV1,
+    manifest_bytes: Vec<u8>,
+    manifest_digest_hex: String,
+    root_cid_hex: String,
+    root_cid_base32: String,
+    chunk_digest_sha3: [u8; 32],
+    payload_bytes: Vec<u8>,
+    storage_files: Option<Vec<StorageFileEntryOwned>>,
+    payload_kind: &'static str,
+    payload_digest_hex: String,
+}
+
+struct StoragePinHttpResponse {
+    endpoint: String,
+    status: StatusCode,
+    response_bytes: Vec<u8>,
+    response_value: Value,
+    already_stored: bool,
+}
+
+impl StoragePinHttpResponse {
+    fn success(&self) -> bool {
+        self.status.is_success() || self.already_stored
+    }
+}
+
+struct PublishPeerDiscovery {
+    gateway_base_url: Option<String>,
+    pin_torii_urls: Vec<String>,
+    status: Option<u16>,
+    error: Option<String>,
+}
+
+fn deploy(raw_args: Vec<String>) -> Result<(), String> {
+    let mut payload_path: Option<PathBuf> = None;
+    let mut client_config_path: Option<PathBuf> = None;
+    let mut torii_url_override: Option<String> = None;
+    let mut name: Option<String> = None;
+    let mut out_dir_override: Option<PathBuf> = None;
+    let mut gateway_base_url_override: Option<String> = None;
+    let mut explicit_pin_torii_urls: Vec<String> = Vec::new();
+    let mut peer_discovery_enabled = true;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        if arg == "--no-peer-discovery" {
+            peer_discovery_enabled = false;
+            continue;
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--payload" => payload_path = Some(PathBuf::from(value)),
+            "--client-config" => client_config_path = Some(PathBuf::from(value)),
+            "--torii-url" => torii_url_override = Some(value.to_string()),
+            "--name" => name = Some(value.to_string()),
+            "--out-dir" => out_dir_override = Some(PathBuf::from(value)),
+            "--gateway-base-url" => gateway_base_url_override = Some(value.to_string()),
+            "--pin-torii-url" => explicit_pin_torii_urls.push(value.to_string()),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli deploy`"
+                ));
+            }
+        }
+    }
+
+    let payload_path = payload_path
+        .ok_or_else(|| "missing required `--payload=PATH` for `sorafs_cli deploy`".to_string())?;
+    let client_config_path = client_config_path.ok_or_else(|| {
+        "missing required `--client-config=PATH` for `sorafs_cli deploy`".to_string()
+    })?;
+    let client_config = load_deploy_client_config(&client_config_path)?;
+    let torii_url = torii_url_override
+        .or(client_config.torii_url.clone())
+        .ok_or_else(|| {
+            "`--torii-url=URL` is required when client config does not define top-level `torii_url`"
+                .to_string()
+        })?;
+    let torii_base_url =
+        Url::parse(&torii_url).map_err(|err| format!("invalid Torii URL `{torii_url}`: {err}"))?;
+    let deploy_name = sanitize_deploy_name(
+        name.as_deref()
+            .or_else(|| payload_path.file_name().and_then(|name| name.to_str()))
+            .unwrap_or("payload"),
+    );
+    let out_dir =
+        out_dir_override.unwrap_or_else(|| PathBuf::from(".sorafs/deploy").join(&deploy_name));
+    fs::create_dir_all(&out_dir).map_err(|err| {
+        format!(
+            "failed to create deploy directory `{}`: {err}",
+            out_dir.display()
+        )
+    })?;
+    let receipt_path = summary_out
+        .clone()
+        .unwrap_or_else(|| out_dir.join(format!("{deploy_name}.deploy.receipt.json")));
+
+    let car_path = out_dir.join(format!("{deploy_name}.car"));
+    let plan_path = out_dir.join(format!("{deploy_name}.plan.json"));
+    let pack_summary_path = out_dir.join(format!("{deploy_name}.pack.json"));
+    let manifest_path = out_dir.join(format!("{deploy_name}.manifest.to"));
+    let manifest_json_path = out_dir.join(format!("{deploy_name}.manifest.json"));
+    let register_response_path = out_dir.join(format!("{deploy_name}.pin-register.response.json"));
+
+    let mut errors: Vec<String> = Vec::new();
+    let client = HttpClient::builder()
+        .build()
+        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
+    let artifacts = build_deploy_artifacts(
+        &payload_path,
+        &car_path,
+        &plan_path,
+        &pack_summary_path,
+        &manifest_path,
+        &manifest_json_path,
+    );
+
+    let mut receipt = Map::new();
+    receipt.insert("name".into(), Value::from(deploy_name.clone()));
+    receipt.insert(
+        "payload_path".into(),
+        Value::from(payload_path.display().to_string()),
+    );
+    receipt.insert(
+        "client_config_path".into(),
+        Value::from(client_config_path.display().to_string()),
+    );
+    receipt.insert("torii_url".into(), Value::from(torii_url.clone()));
+    receipt.insert("out_dir".into(), Value::from(out_dir.display().to_string()));
+    receipt.insert(
+        "receipt_path".into(),
+        Value::from(receipt_path.display().to_string()),
+    );
+
+    let artifacts = match artifacts {
+        Ok(artifacts) => artifacts,
+        Err(err) => {
+            errors.push(err);
+            receipt.insert("success".into(), Value::from(false));
+            receipt.insert(
+                "errors".into(),
+                Value::Array(errors.iter().cloned().map(Value::from).collect()),
+            );
+            write_deploy_receipt_and_stdout(&receipt_path, &Value::Object(receipt))?;
+            return Err("deploy failed while building local artifacts".to_string());
+        }
+    };
+
+    receipt.insert(
+        "cid_hex".into(),
+        Value::from(artifacts.root_cid_hex.clone()),
+    );
+    receipt.insert(
+        "cid_base32".into(),
+        Value::from(artifacts.root_cid_base32.clone()),
+    );
+    receipt.insert(
+        "manifest_digest_hex".into(),
+        Value::from(artifacts.manifest_digest_hex.clone()),
+    );
+    receipt.insert(
+        "payload_digest_blake3_hex".into(),
+        Value::from(artifacts.payload_digest_hex.clone()),
+    );
+    receipt.insert(
+        "payload_bytes".into(),
+        Value::from(artifacts.manifest.content_length),
+    );
+    receipt.insert("payload_kind".into(), Value::from(artifacts.payload_kind));
+
+    let mut artifact_paths = Map::new();
+    artifact_paths.insert("car".into(), Value::from(car_path.display().to_string()));
+    artifact_paths.insert(
+        "plan_json".into(),
+        Value::from(plan_path.display().to_string()),
+    );
+    artifact_paths.insert(
+        "pack_summary_json".into(),
+        Value::from(pack_summary_path.display().to_string()),
+    );
+    artifact_paths.insert(
+        "manifest_to".into(),
+        Value::from(manifest_path.display().to_string()),
+    );
+    artifact_paths.insert(
+        "manifest_json".into(),
+        Value::from(manifest_json_path.display().to_string()),
+    );
+    artifact_paths.insert(
+        "pin_register_response".into(),
+        Value::from(register_response_path.display().to_string()),
+    );
+    receipt.insert("artifacts".into(), Value::Object(artifact_paths));
+
+    let authority = AccountId::new(client_config.public_key.clone());
+    let authority_literal =
+        authority_payload_literal(&authority, Some(client_config.chain_discriminant))?;
+    let submitted_epoch = match resolve_submitted_epoch_from_status(&client, &torii_base_url) {
+        Ok(epoch) => epoch,
+        Err(err) => {
+            errors.push(format!("failed to resolve submitted epoch: {err}"));
+            0
+        }
+    };
+
+    let registration = if errors.is_empty() {
+        submit_pin_register_http(
+            &client,
+            &torii_base_url,
+            &authority_literal,
+            client_config.private_key.clone(),
+            &artifacts.manifest,
+            artifacts.chunk_digest_sha3,
+            submitted_epoch,
+        )
+    } else {
+        Err(
+            "skipped paid pin registration because submitted epoch could not be resolved"
+                .to_string(),
+        )
+    };
+
+    let mut registration_summary = Map::new();
+    registration_summary.insert("submitted_epoch".into(), Value::from(submitted_epoch));
+    registration_summary.insert("authority".into(), Value::from(authority_literal));
+    registration_summary.insert(
+        "response_path".into(),
+        Value::from(register_response_path.display().to_string()),
+    );
+    let mut registration_ok = false;
+    let mut paid_pin_fee = Value::Null;
+    match registration {
+        Ok(response) => {
+            ensure_parent_dir(&register_response_path)?;
+            fs::write(&register_response_path, &response.response_bytes).map_err(|err| {
+                format!(
+                    "failed to write `{}`: {err}",
+                    register_response_path.display()
+                )
+            })?;
+            registration_ok = response.status.is_success();
+            registration_summary.insert(
+                "status".into(),
+                Value::from(response.status.as_u16() as u64),
+            );
+            registration_summary.insert("endpoint".into(), Value::from(response.endpoint));
+            registration_summary.insert("success".into(), Value::from(registration_ok));
+            paid_pin_fee = paid_pin_fee_from_register_response(&response.response_value);
+            if !registration_ok {
+                let body = String::from_utf8_lossy(&response.response_bytes);
+                errors.push(format!(
+                    "paid pin registration failed with status {}: {body}",
+                    response.status
+                ));
+            }
+        }
+        Err(err) => {
+            registration_summary.insert("success".into(), Value::from(false));
+            registration_summary.insert("error".into(), Value::from(err.clone()));
+            errors.push(err);
+        }
+    }
+    receipt.insert("registration".into(), Value::Object(registration_summary));
+    receipt.insert("paid_pin_fee".into(), paid_pin_fee);
+
+    let discovery = if peer_discovery_enabled {
+        discover_publish_peers(&client, &torii_base_url)
+    } else {
+        PublishPeerDiscovery {
+            gateway_base_url: None,
+            pin_torii_urls: Vec::new(),
+            status: None,
+            error: Some("peer discovery disabled by --no-peer-discovery".to_string()),
+        }
+    };
+    let gateway_base_url = gateway_base_url_override
+        .or(discovery.gateway_base_url.clone())
+        .unwrap_or_else(|| torii_url.clone());
+    let mut discovery_json = Map::new();
+    discovery_json.insert("enabled".into(), Value::from(peer_discovery_enabled));
+    discovery_json.insert(
+        "gateway_base_url".into(),
+        discovery
+            .gateway_base_url
+            .as_ref()
+            .map_or(Value::Null, |url| Value::from(url.clone())),
+    );
+    discovery_json.insert(
+        "pin_torii_urls".into(),
+        Value::Array(
+            discovery
+                .pin_torii_urls
+                .iter()
+                .cloned()
+                .map(Value::from)
+                .collect(),
+        ),
+    );
+    if let Some(status) = discovery.status {
+        discovery_json.insert("status".into(), Value::from(status as u64));
+    }
+    if let Some(err) = discovery.error.as_ref() {
+        discovery_json.insert("warning".into(), Value::from(err.clone()));
+    }
+    receipt.insert("peer_discovery".into(), Value::Object(discovery_json));
+
+    let pin_endpoints = resolve_pin_torii_urls(
+        &torii_url,
+        &discovery.pin_torii_urls,
+        &explicit_pin_torii_urls,
+    );
+    receipt.insert(
+        "pin_endpoints".into(),
+        Value::Array(pin_endpoints.iter().cloned().map(Value::from).collect()),
+    );
+
+    let mut pin_results = Vec::new();
+    if registration_ok {
+        for (index, peer_url) in pin_endpoints.iter().enumerate() {
+            let response_path =
+                out_dir.join(format!("{deploy_name}.storage-pin.{index}.response.json"));
+            let result = submit_storage_pin_request(
+                &client,
+                peer_url,
+                &artifacts.manifest_bytes,
+                &artifacts.payload_bytes,
+                artifacts.storage_files.as_deref(),
+            );
+            let mut entry = Map::new();
+            entry.insert("torii_url".into(), Value::from(peer_url.clone()));
+            entry.insert(
+                "response_path".into(),
+                Value::from(response_path.display().to_string()),
+            );
+            match result {
+                Ok(response) => {
+                    ensure_parent_dir(&response_path)?;
+                    fs::write(&response_path, &response.response_bytes).map_err(|err| {
+                        format!("failed to write `{}`: {err}", response_path.display())
+                    })?;
+                    let ok = response.success();
+                    entry.insert("endpoint".into(), Value::from(response.endpoint));
+                    entry.insert(
+                        "status".into(),
+                        Value::from(response.status.as_u16() as u64),
+                    );
+                    entry.insert("success".into(), Value::from(ok));
+                    entry.insert(
+                        "already_stored".into(),
+                        Value::from(response.already_stored),
+                    );
+                    if !ok {
+                        let body = String::from_utf8_lossy(&response.response_bytes);
+                        let message = storage_pin_failure_message(response.status, body.as_ref());
+                        entry.insert("error".into(), Value::from(message.clone()));
+                        errors.push(format!("{peer_url}: {message}"));
+                    }
+                }
+                Err(err) => {
+                    entry.insert("success".into(), Value::from(false));
+                    entry.insert("error".into(), Value::from(err.clone()));
+                    errors.push(format!("{peer_url}: {err}"));
+                }
+            }
+            pin_results.push(Value::Object(entry));
+        }
+    } else {
+        errors.push("skipped storage pinning because paid registration failed".to_string());
+    }
+    receipt.insert("pin_results".into(), Value::Array(pin_results));
+
+    let gateway_verification = verify_gateway_deploy(
+        &client,
+        &gateway_base_url,
+        &artifacts.root_cid_base32,
+        &artifacts.storage_files,
+        artifacts.manifest.content_length,
+    );
+    let gateway_success = gateway_verification
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let cid_url = gateway_url_for_cid(&gateway_base_url, &artifacts.root_cid_base32)?;
+    receipt.insert("gateway_base_url".into(), Value::from(gateway_base_url));
+    receipt.insert("cid_base32_url".into(), Value::from(cid_url));
+    receipt.insert("gateway_verification".into(), gateway_verification);
+    if !gateway_success {
+        errors.push("gateway verification failed".to_string());
+    }
+
+    let success = errors.is_empty();
+    receipt.insert("success".into(), Value::from(success));
+    receipt.insert(
+        "errors".into(),
+        Value::Array(errors.iter().cloned().map(Value::from).collect()),
+    );
+    write_deploy_receipt_and_stdout(&receipt_path, &Value::Object(receipt))?;
+
+    if success {
+        Ok(())
+    } else {
+        Err("deploy failed; see receipt for details".to_string())
+    }
+}
+
+fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read client config `{}`: {err}", path.display()))?;
+    let root: toml::Table = raw.parse().map_err(|err| {
+        format!(
+            "failed to parse client config TOML `{}`: {err}",
+            path.display()
+        )
+    })?;
+    let torii_url = root
+        .get("torii_url")
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned);
+    let account = root
+        .get("account")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "client config must contain an `[account]` table".to_string())?;
+    let public_key_raw = account
+        .get("public_key")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| "client config `[account]` must define `public_key`".to_string())?;
+    let private_key_raw = account
+        .get("private_key")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| "client config `[account]` must define `private_key`".to_string())?;
+    let chain_discriminant = account
+        .get("chain_discriminant")
+        .and_then(toml::Value::as_integer)
+        .ok_or_else(|| {
+            "client config `[account]` must define integer `chain_discriminant`".to_string()
+        })
+        .and_then(|value| {
+            u16::try_from(value).map_err(|_| {
+                "client config `[account].chain_discriminant` must fit in u16".to_string()
+            })
+        })?;
+    let public_key = PublicKey::from_str(public_key_raw)
+        .map_err(|err| format!("failed to parse client config public_key: {err}"))?;
+    let private_key = parse_private_key_inline(private_key_raw)
+        .map_err(|err| format!("failed to parse client config private_key: {err}"))?;
+    Ok(DeployClientConfig {
+        torii_url,
+        public_key,
+        private_key,
+        chain_discriminant,
+    })
+}
+
+fn build_deploy_artifacts(
+    payload_path: &Path,
+    car_path: &Path,
+    plan_path: &Path,
+    pack_summary_path: &Path,
+    manifest_path: &Path,
+    manifest_json_path: &Path,
+) -> Result<DeployPackArtifacts, String> {
+    let handle = DEFAULT_CHUNKER_HANDLE;
+    let descriptor = chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
+        format!("unknown chunker profile handle `{handle}`; refresh the SoraFS chunker registry")
+    })?;
+    let metadata = fs::metadata(payload_path)
+        .map_err(|err| format!("failed to stat payload `{}`: {err}", payload_path.display()))?;
+    let (input_summary, mut plan, payload_cursor): (InputSummary, CarBuildPlan, Cursor<Vec<u8>>) =
+        if metadata.is_dir() {
+            let (plan, payload) =
+                CarBuildPlan::from_directory_with_profile(payload_path, descriptor.profile)
+                    .map_err(|err| format!("failed to build directory payload plan: {err}"))?;
+            (
+                InputSummary::Directory {
+                    path: payload_path.to_path_buf(),
+                    file_count: plan.files.len() as u64,
+                },
+                plan,
+                Cursor::new(payload),
+            )
+        } else if metadata.is_file() {
+            let payload = fs::read(payload_path).map_err(|err| {
+                format!("failed to read payload `{}`: {err}", payload_path.display())
+            })?;
+            let plan = CarBuildPlan::single_file_with_profile(&payload, descriptor.profile)
+                .map_err(|err| format!("failed to chunk payload: {err}"))?;
+            (
+                InputSummary::File {
+                    path: payload_path.to_path_buf(),
+                    bytes: payload.len() as u64,
+                },
+                plan,
+                Cursor::new(payload),
+            )
+        } else {
+            return Err(format!(
+                "payload `{}` is neither a regular file nor directory",
+                payload_path.display()
+            ));
+        };
+
+    ensure_parent_dir(car_path)?;
+    let car_file = File::create(car_path)
+        .map_err(|err| format!("failed to create `{}`: {err}", car_path.display()))?;
+    let mut writer = BufWriter::new(car_file);
+    let mut payload_reader = payload_cursor;
+    let stats = CarStreamingWriter::new(&plan)
+        .write_from_reader(&mut payload_reader, &mut writer)
+        .map_err(format_car_error)?;
+    writer
+        .flush()
+        .map_err(|err| format!("failed to flush `{}`: {err}", car_path.display()))?;
+
+    let plan_specs = plan.chunk_fetch_specs();
+    let plan_json = chunk_fetch_specs_to_string(&plan_specs)
+        .map_err(|err| format!("failed to render chunk plan JSON: {err}"))?;
+    ensure_parent_dir(plan_path)?;
+    write_text(plan_path, plan_json.as_bytes())?;
+
+    let pack_summary = render_summary(&input_summary, descriptor, handle, &plan, &stats, car_path);
+    let pack_rendered = to_string_pretty(&pack_summary)
+        .map_err(|err| format!("failed to render pack summary JSON: {err}"))?;
+    ensure_parent_dir(pack_summary_path)?;
+    write_text(pack_summary_path, pack_rendered.as_bytes())?;
+
+    let root_cid = stats
+        .root_cids
+        .first()
+        .cloned()
+        .ok_or_else(|| "CAR build did not emit a root CID".to_string())?;
+    let car_digest: [u8; 32] = (*stats.car_archive_digest.as_bytes()).into();
+    let manifest_descriptor =
+        manifest_chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
+            format!("unknown manifest chunker profile handle `{handle}`; refresh the registry")
+        })?;
+    let chunking_profile = ChunkingProfileV1::from_descriptor(manifest_descriptor);
+    let manifest = ManifestBuilder::new()
+        .root_cid(root_cid.clone())
+        .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
+        .chunking_profile(chunking_profile)
+        .content_length(plan.content_length)
+        .car_digest(car_digest)
+        .car_size(stats.car_size)
+        .pin_policy(PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Hot,
+            retention_epoch: 0,
+        })
+        .build()
+        .map_err(format_manifest_error)?;
+    let manifest_bytes = manifest
+        .encode()
+        .map_err(|err| format!("failed to encode manifest: {err}"))?;
+    ensure_parent_dir(manifest_path)?;
+    fs::write(manifest_path, &manifest_bytes)
+        .map_err(|err| format!("failed to write `{}`: {err}", manifest_path.display()))?;
+    let manifest_json = to_string_pretty(
+        &to_value(&manifest).map_err(|err| format!("failed to serialise manifest JSON: {err}"))?,
+    )
+    .map_err(|err| format!("failed to render manifest JSON: {err}"))?;
+    ensure_parent_dir(manifest_json_path)?;
+    write_text(manifest_json_path, manifest_json.as_bytes())?;
+
+    let manifest_digest = manifest
+        .digest()
+        .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
+    let (payload_bytes, storage_files, payload_kind) =
+        load_storage_pin_payload(payload_path, &manifest)?;
+    let payload_digest_hex = hex_encode(blake3_hash(&payload_bytes).as_bytes());
+    let root_cid_hex = hex_encode(&root_cid);
+    let root_cid_base32 = encode_content_cid_base32(&root_cid);
+    let chunk_digest_sha3 = chunk_digest_sha3_from_specs(&plan_specs);
+    plan.chunks.shrink_to_fit();
+
+    Ok(DeployPackArtifacts {
+        manifest,
+        manifest_bytes,
+        manifest_digest_hex: hex_encode(manifest_digest.as_bytes()),
+        root_cid_hex,
+        root_cid_base32,
+        chunk_digest_sha3,
+        payload_bytes,
+        storage_files,
+        payload_kind,
+        payload_digest_hex,
+    })
+}
+
+fn submit_pin_register_http(
+    client: &HttpClient,
+    torii_base_url: &Url,
+    authority_literal: &str,
+    private_key: PrivateKey,
+    manifest: &ManifestV1,
+    chunk_digest_sha3: [u8; 32],
+    submitted_epoch: u64,
+) -> Result<ManifestRegisterHttpResponse, String> {
+    let endpoint = torii_base_url
+        .join("v1/sorafs/pin/register")
+        .map_err(|err| format!("failed to build Torii pin-register endpoint URL: {err}"))?;
+    let payload = build_pin_register_payload(
+        authority_literal,
+        private_key,
+        manifest,
+        chunk_digest_sha3,
+        submitted_epoch,
+        None,
+        None,
+    )?;
+    let body_bytes =
+        to_vec(&payload).map_err(|err| format!("failed to encode Torii payload: {err}"))?;
+    let response = client
+        .post(endpoint.as_str())
+        .header(CONTENT_TYPE, "application/json")
+        .body(body_bytes)
+        .send()
+        .map_err(|err| format!("failed to submit manifest to Torii: {err}"))?;
+    let status = response.status();
+    let response_bytes = response
+        .bytes()
+        .map_err(|err| format!("failed to read Torii response: {err}"))?
+        .to_vec();
+    let response_value = decode_response_value_or_text(&response_bytes);
+    Ok(ManifestRegisterHttpResponse {
+        endpoint: endpoint.as_str().to_string(),
+        status,
+        response_bytes,
+        response_value,
+    })
+}
+
+struct ManifestRegisterHttpResponse {
+    endpoint: String,
+    status: StatusCode,
+    response_bytes: Vec<u8>,
+    response_value: Value,
+}
+
+fn submit_storage_pin_request(
+    client: &HttpClient,
+    torii_url: &str,
+    manifest_bytes: &[u8],
+    payload_bytes: &[u8],
+    files: Option<&[StorageFileEntryOwned]>,
+) -> Result<StoragePinHttpResponse, String> {
+    let torii_base_url =
+        Url::parse(torii_url).map_err(|err| format!("invalid Torii URL `{torii_url}`: {err}"))?;
+    let torii_endpoint = torii_base_url
+        .join("v1/sorafs/storage/pin")
+        .map_err(|err| format!("failed to build Torii storage pin endpoint URL: {err}"))?;
+    let request_body = norito::json!({
+        "manifest_b64": (BASE64_STANDARD.encode(manifest_bytes)),
+        "payload_b64": (BASE64_STANDARD.encode(payload_bytes)),
+        "files": (storage_files_to_json_value(files)),
+    });
+    let body_bytes =
+        to_vec(&request_body).map_err(|err| format!("failed to encode Torii payload: {err}"))?;
+    let response = client
+        .post(torii_endpoint.as_str())
+        .header(CONTENT_TYPE, "application/json")
+        .body(body_bytes)
+        .send()
+        .map_err(|err| format!("failed to submit storage pin request to Torii: {err}"))?;
+    let status = response.status();
+    let response_bytes = response
+        .bytes()
+        .map_err(|err| format!("failed to read Torii response: {err}"))?
+        .to_vec();
+    let response_value = decode_response_value_or_text(&response_bytes);
+    let response_text = String::from_utf8_lossy(&response_bytes);
+    let already_stored = status == StatusCode::CONFLICT && response_text.contains("already stored");
+    Ok(StoragePinHttpResponse {
+        endpoint: torii_endpoint.as_str().to_string(),
+        status,
+        response_bytes,
+        response_value,
+        already_stored,
+    })
+}
+
+fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishPeerDiscovery {
+    let endpoint = match torii_base_url.join("v1/sorafs/storage/peers") {
+        Ok(endpoint) => endpoint,
+        Err(err) => {
+            return PublishPeerDiscovery {
+                gateway_base_url: None,
+                pin_torii_urls: Vec::new(),
+                status: None,
+                error: Some(format!(
+                    "failed to build peer discovery endpoint URL: {err}"
+                )),
+            };
+        }
+    };
+    let response = match client
+        .get(endpoint.as_str())
+        .header("Accept", "application/json")
+        .send()
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return PublishPeerDiscovery {
+                gateway_base_url: None,
+                pin_torii_urls: Vec::new(),
+                status: None,
+                error: Some(format!("peer discovery unavailable: {err}")),
+            };
+        }
+    };
+    let status = response.status();
+    let response_bytes = match response.bytes() {
+        Ok(bytes) => bytes.to_vec(),
+        Err(err) => {
+            return PublishPeerDiscovery {
+                gateway_base_url: None,
+                pin_torii_urls: Vec::new(),
+                status: Some(status.as_u16()),
+                error: Some(format!("failed to read peer discovery response: {err}")),
+            };
+        }
+    };
+    if !status.is_success() {
+        return PublishPeerDiscovery {
+            gateway_base_url: None,
+            pin_torii_urls: Vec::new(),
+            status: Some(status.as_u16()),
+            error: Some(format!(
+                "peer discovery returned {status}; falling back to primary Torii URL"
+            )),
+        };
+    }
+    let value: Value = match from_slice(&response_bytes) {
+        Ok(value) => value,
+        Err(err) => {
+            return PublishPeerDiscovery {
+                gateway_base_url: None,
+                pin_torii_urls: Vec::new(),
+                status: Some(status.as_u16()),
+                error: Some(format!("failed to parse peer discovery JSON: {err}")),
+            };
+        }
+    };
+    let gateway_base_url = value
+        .get("gateway_base_url")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let pin_torii_urls = value
+        .get("pin_torii_urls")
+        .and_then(Value::as_array)
+        .map(|urls| {
+            urls.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    PublishPeerDiscovery {
+        gateway_base_url,
+        pin_torii_urls,
+        status: Some(status.as_u16()),
+        error: None,
+    }
+}
+
+fn resolve_pin_torii_urls(
+    primary: &str,
+    discovered: &[String],
+    explicit: &[String],
+) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut urls = Vec::new();
+    for url in discovered.iter().chain(explicit.iter()) {
+        let normalized = normalize_url_for_receipt(url);
+        if normalized.is_empty() {
+            continue;
+        }
+        if seen.insert(normalized.clone()) {
+            urls.push(normalized);
+        }
+    }
+    let normalized_primary = normalize_url_for_receipt(primary);
+    if !normalized_primary.is_empty() && seen.insert(normalized_primary.clone()) {
+        urls.push(normalized_primary);
+    }
+    if urls.is_empty() {
+        urls.push(normalize_url_for_receipt(primary));
+    }
+    urls
+}
+
+fn verify_gateway_deploy(
+    client: &HttpClient,
+    gateway_base_url: &str,
+    cid_base32: &str,
+    files: &Option<Vec<StorageFileEntryOwned>>,
+    payload_bytes: u64,
+) -> Value {
+    let mut root_expected = Some(payload_bytes);
+    if let Some(entries) = files
+        && let Some(index) = entries
+            .iter()
+            .find(|entry| entry.path.len() == 1 && entry.path[0] == "index.html")
+    {
+        root_expected = Some(index.size);
+    }
+    let root_url = match gateway_url_for_cid(gateway_base_url, cid_base32) {
+        Ok(url) => url,
+        Err(err) => {
+            return Value::Object(Map::from_iter([
+                ("success".into(), Value::from(false)),
+                (
+                    "gateway_base_url".into(),
+                    Value::from(gateway_base_url.to_string()),
+                ),
+                ("error".into(), Value::from(err)),
+            ]));
+        }
+    };
+    let root_check = fetch_gateway_check(client, &root_url, root_expected);
+    let mut checks = vec![root_check.clone()];
+
+    if let Some(entries) = files {
+        let mut ordered = entries.clone();
+        ordered.sort_by(|left, right| left.path.cmp(&right.path));
+        for entry in ordered.into_iter().take(32) {
+            let url = match gateway_url_for_file(gateway_base_url, cid_base32, &entry.path) {
+                Ok(url) => url,
+                Err(err) => {
+                    checks.push(Value::Object(Map::from_iter([
+                        ("success".into(), Value::from(false)),
+                        ("path".into(), Value::from(entry.path.join("/"))),
+                        ("error".into(), Value::from(err)),
+                    ])));
+                    continue;
+                }
+            };
+            checks.push(fetch_gateway_check(client, &url, Some(entry.size)));
+        }
+    }
+
+    let success = checks
+        .iter()
+        .all(|check| check.get("success").and_then(Value::as_bool) == Some(true));
+    let mut map = Map::new();
+    map.insert("success".into(), Value::from(success));
+    map.insert(
+        "gateway_base_url".into(),
+        Value::from(gateway_base_url.to_string()),
+    );
+    map.insert("root_url".into(), Value::from(root_url));
+    map.insert("checks".into(), Value::Array(checks));
+    Value::Object(map)
+}
+
+fn fetch_gateway_check(client: &HttpClient, url: &str, expected_len: Option<u64>) -> Value {
+    let mut map = Map::new();
+    map.insert("url".into(), Value::from(url.to_string()));
+    if let Some(expected) = expected_len {
+        map.insert("expected_bytes".into(), Value::from(expected));
+    }
+    match client.get(url).send() {
+        Ok(response) => {
+            let status = response.status();
+            let bytes = match response.bytes() {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    map.insert("status".into(), Value::from(status.as_u16() as u64));
+                    map.insert("success".into(), Value::from(false));
+                    map.insert(
+                        "error".into(),
+                        Value::from(format!("failed to read gateway response: {err}")),
+                    );
+                    return Value::Object(map);
+                }
+            };
+            let actual = bytes.len() as u64;
+            let length_ok = expected_len.map_or(true, |expected| expected == actual);
+            map.insert("status".into(), Value::from(status.as_u16() as u64));
+            map.insert("actual_bytes".into(), Value::from(actual));
+            map.insert("length_ok".into(), Value::from(length_ok));
+            map.insert(
+                "success".into(),
+                Value::from(status == StatusCode::OK && length_ok),
+            );
+        }
+        Err(err) => {
+            map.insert("success".into(), Value::from(false));
+            map.insert("error".into(), Value::from(err.to_string()));
+        }
+    }
+    Value::Object(map)
+}
+
+fn gateway_url_for_cid(gateway_base_url: &str, cid_base32: &str) -> Result<String, String> {
+    let base = Url::parse(gateway_base_url)
+        .map_err(|err| format!("invalid gateway base URL `{gateway_base_url}`: {err}"))?;
+    Ok(base
+        .join(&format!("sorafs/cid/{cid_base32}/"))
+        .map_err(|err| format!("failed to build gateway CID URL: {err}"))?
+        .to_string())
+}
+
+fn gateway_url_for_file(
+    gateway_base_url: &str,
+    cid_base32: &str,
+    path: &[String],
+) -> Result<String, String> {
+    let root = gateway_url_for_cid(gateway_base_url, cid_base32)?;
+    let mut url = Url::parse(&root)
+        .map_err(|err| format!("failed to parse gateway CID root URL `{root}`: {err}"))?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| "gateway URL cannot be a base for path segments".to_string())?;
+        for component in path {
+            segments.push(component);
+        }
+    }
+    Ok(url.to_string())
+}
+
+fn paid_pin_fee_from_register_response(response: &Value) -> Value {
+    let mut map = Map::new();
+    if let Some(value) = response.get("pin_fee_nano") {
+        map.insert("pin_fee_nano".into(), value.clone());
+    }
+    if let Some(value) = response.get("pin_fee_asset_id") {
+        map.insert("pin_fee_asset_id".into(), value.clone());
+    }
+    if let Some(value) = response.get("pin_fee_treasury_account_id") {
+        map.insert("pin_fee_treasury_account_id".into(), value.clone());
+    }
+    if map.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(map)
+    }
+}
+
+fn write_deploy_receipt_and_stdout(path: &Path, value: &Value) -> Result<(), String> {
+    let rendered =
+        to_string_pretty(value).map_err(|err| format!("failed to render deploy receipt: {err}"))?;
+    println!("{rendered}");
+    ensure_parent_dir(path)?;
+    write_text(path, rendered.as_bytes())
+}
+
+fn storage_pin_failure_message(status: StatusCode, response_text: &str) -> String {
+    let mut message =
+        format!("Torii returned {status} when pinning bundle into storage: {response_text}");
+    if status == StatusCode::PAYMENT_REQUIRED
+        || response_text.contains("no paid pin registry record")
+    {
+        message.push_str(
+            ". Register the paid pin first with `sorafs_cli deploy --payload=PATH --client-config=PATH` or `sorafs_cli manifest submit` before running `sorafs_cli storage pin`.",
+        );
+    }
+    message
+}
+
+fn sanitize_deploy_name(raw: &str) -> String {
+    let sanitized: String = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches(['.', '-']).trim();
+    if trimmed.is_empty() {
+        "payload".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn normalize_url_for_receipt(raw: &str) -> String {
+    raw.trim().trim_end_matches('/').to_string()
+}
+
+fn encode_content_cid_base32(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    if bytes.is_empty() {
+        return "b".to_string();
+    }
+    let mut acc = 0_u32;
+    let mut bits = 0_u32;
+    let mut out = Vec::with_capacity((bytes.len() * 8).div_ceil(5) + 1);
+    out.push(b'b');
+    for byte in bytes {
+        acc = (acc << 8) | u32::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            let index = ((acc >> (bits - 5)) & 0x1f) as usize;
+            out.push(ALPHABET[index]);
+            bits -= 5;
+        }
+    }
+    if bits > 0 {
+        let index = ((acc << (5 - bits)) & 0x1f) as usize;
+        out.push(ALPHABET[index]);
+    }
+    String::from_utf8(out).expect("CID base32 alphabet is valid UTF-8")
 }
 
 fn taikai_bundle(raw_args: Vec<String>) -> Result<(), String> {
@@ -1841,6 +2862,7 @@ fn format_car_error(err: CarWriteError) -> String {
 fn usage() -> String {
     "Usage:
   sorafs_cli norito build --source=PATH --bytecode-out=PATH [--abi-version=N] [--summary-out=PATH]
+  sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--pin-torii-url=URL...] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest sign --manifest=PATH (--bundle-out=PATH | --signature-out=PATH) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--identity-token=JWT | --identity-token-env=VAR | --identity-token-file=PATH | --identity-token-provider=github-actions [--identity-token-audience=AUD]] [--include-token=true|false] [--issued-at=UNIX]
@@ -5098,57 +6120,38 @@ fn storage_pin(raw_args: Vec<String>) -> Result<(), String> {
         u64::try_from(entries.len()).unwrap_or(u64::MAX)
     });
 
-    let torii_base_url =
-        Url::parse(&torii_url).map_err(|err| format!("invalid `--torii-url` value: {err}"))?;
-    let torii_endpoint = torii_base_url
-        .join("v1/sorafs/storage/pin")
-        .map_err(|err| format!("failed to build Torii endpoint URL: {err}"))?;
-
-    let request_body = norito::json!({
-        "manifest_b64": (BASE64_STANDARD.encode(&manifest_bytes)),
-        "payload_b64": (BASE64_STANDARD.encode(&payload_bytes)),
-        "files": (storage_files_to_json_value(files.as_deref())),
-    });
-    let body_bytes =
-        to_vec(&request_body).map_err(|err| format!("failed to encode Torii payload: {err}"))?;
-
     let client = HttpClient::builder()
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
-    let response = client
-        .post(torii_endpoint.as_str())
-        .header(CONTENT_TYPE, "application/json")
-        .body(body_bytes)
-        .send()
-        .map_err(|err| format!("failed to submit storage pin request to Torii: {err}"))?;
-    let status = response.status();
-    let response_bytes = response
-        .bytes()
-        .map_err(|err| format!("failed to read Torii response: {err}"))?
-        .to_vec();
+    let response = submit_storage_pin_request(
+        &client,
+        &torii_url,
+        &manifest_bytes,
+        &payload_bytes,
+        files.as_deref(),
+    )?;
 
     if let Some(path) = response_out {
         ensure_parent_dir(&path)?;
-        fs::write(&path, &response_bytes)
+        fs::write(&path, &response.response_bytes)
             .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
     }
 
-    let torii_response_value = decode_response_value_or_text(&response_bytes);
-    let response_text = String::from_utf8_lossy(&response_bytes);
-    let already_stored = status == StatusCode::CONFLICT && response_text.contains("already stored");
-    if !status.is_success() && !already_stored {
-        return Err(format!(
-            "Torii returned {status} when pinning bundle into storage: {response_text}"
+    let response_text = String::from_utf8_lossy(&response.response_bytes);
+    if !response.success() {
+        return Err(storage_pin_failure_message(
+            response.status,
+            response_text.as_ref(),
         ));
     }
 
     let mut summary = Map::new();
     summary.insert("torii_url".into(), Value::from(torii_url));
+    summary.insert("torii_endpoint".into(), Value::from(response.endpoint));
     summary.insert(
-        "torii_endpoint".into(),
-        Value::from(torii_endpoint.as_str().to_string()),
+        "status".into(),
+        Value::from(response.status.as_u16() as u64),
     );
-    summary.insert("status".into(), Value::from(status.as_u16() as u64));
     summary.insert(
         "manifest_path".into(),
         Value::from(manifest_path.display().to_string()),
@@ -5172,8 +6175,11 @@ fn storage_pin(raw_args: Vec<String>) -> Result<(), String> {
             manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
         )),
     );
-    summary.insert("already_stored".into(), Value::from(already_stored));
-    summary.insert("torii_response".into(), torii_response_value);
+    summary.insert(
+        "already_stored".into(),
+        Value::from(response.already_stored),
+    );
+    summary.insert("torii_response".into(), response.response_value);
 
     let rendered = to_string_pretty(&Value::Object(summary))
         .map_err(|err| format!("failed to render summary: {err}"))?;

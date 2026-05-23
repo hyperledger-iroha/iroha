@@ -1555,6 +1555,8 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_admission: Option<Arc<sorafs::AdmissionRegistry>>,
     #[cfg(feature = "app_api")]
+    sorafs_publish_discovery: iroha_config::parameters::actual::SorafsPublishDiscovery,
+    #[cfg(feature = "app_api")]
     sorafs_gateway_config: iroha_config::parameters::actual::SorafsGateway,
     #[cfg(feature = "app_api")]
     sorafs_gateway_policy: Option<Arc<sorafs::gateway::GatewayPolicy>>,
@@ -33650,6 +33652,8 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_admission: Option<Arc<sorafs::AdmissionRegistry>>,
     #[cfg(feature = "app_api")]
+    sorafs_publish_discovery: iroha_config::parameters::actual::SorafsPublishDiscovery,
+    #[cfg(feature = "app_api")]
     stream_token_issuer: Option<Arc<sorafs::StreamTokenIssuer>>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
@@ -35457,9 +35461,20 @@ impl Torii {
     fn add_sorafs_routes(&self, builder: &mut RouterBuilder) {
         let discovery_enabled = self.sorafs_cache.is_some();
         let capacity_enabled = self.sorafs_node.is_enabled();
+        let publish_discovery_enabled = self.sorafs_publish_discovery.gateway_base_url.is_some()
+            || !self.sorafs_publish_discovery.pin_torii_urls.is_empty();
 
-        if !discovery_enabled && !capacity_enabled {
+        if !discovery_enabled && !capacity_enabled && !publish_discovery_enabled {
             return;
+        }
+
+        if publish_discovery_enabled {
+            builder.apply(|router| {
+                router.route(
+                    "/v1/sorafs/storage/peers",
+                    axum::routing::get(sorafs::api::handle_get_sorafs_storage_peers),
+                )
+            });
         }
 
         if discovery_enabled {
@@ -36328,6 +36343,8 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let sorafs_alias_enforcement = sorafs::enforcement_from_config(&config.sorafs_alias_cache);
         #[cfg(feature = "app_api")]
+        let sorafs_publish_discovery = config.sorafs_discovery.publish.clone();
+        #[cfg(feature = "app_api")]
         let sorafs_gateway = config.sorafs_gateway.clone();
         #[cfg(feature = "app_api")]
         let sorafs_gateway_security = if sorafs_node.is_enabled() {
@@ -36552,6 +36569,8 @@ impl Torii {
             sorafs_pin_policy,
             #[cfg(feature = "app_api")]
             sorafs_admission,
+            #[cfg(feature = "app_api")]
+            sorafs_publish_discovery,
             #[cfg(feature = "app_api")]
             stream_token_issuer,
             #[cfg(feature = "app_api")]
@@ -36964,6 +36983,8 @@ impl Torii {
             sorafs_alias_enforcement: self.sorafs_alias_enforcement,
             #[cfg(feature = "app_api")]
             sorafs_admission: self.sorafs_admission.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_publish_discovery: self.sorafs_publish_discovery.clone(),
             #[cfg(feature = "app_api")]
             sorafs_gateway_config: self.sorafs_gateway.clone(),
             #[cfg(feature = "app_api")]
@@ -40568,6 +40589,9 @@ pub(crate) mod tests_runtime_handlers {
         #[cfg(feature = "app_api")]
         let stream_token_issuer: Option<Arc<sorafs::StreamTokenIssuer>> = None;
         #[cfg(feature = "app_api")]
+        let sorafs_publish_discovery =
+            iroha_config::parameters::actual::SorafsPublishDiscovery::default();
+        #[cfg(feature = "app_api")]
         let sorafs_gateway_config = iroha_config::parameters::actual::SorafsGateway::default();
         #[cfg(feature = "app_api")]
         let sorafs_pin_policy = sorafs::PinSubmissionPolicy::from_config(
@@ -40783,6 +40807,8 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_alias_enforcement,
             #[cfg(feature = "app_api")]
             sorafs_admission: None,
+            #[cfg(feature = "app_api")]
+            sorafs_publish_discovery,
             #[cfg(feature = "app_api")]
             sorafs_gateway_config,
             #[cfg(feature = "app_api")]
