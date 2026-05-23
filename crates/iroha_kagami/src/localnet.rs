@@ -1423,6 +1423,12 @@ fn localnet_dataspace_catalog(
         let mut entry = Table::new();
         entry.insert("alias".into(), Value::String(alias.to_owned()));
         entry.insert("id".into(), Value::Integer(id));
+        if alias != "universal" {
+            entry.insert(
+                "manifest_hash".into(),
+                Value::String(localnet_dataspace_manifest_hash(id)),
+            );
+        }
         entry.insert("description".into(), Value::String(description.to_owned()));
         entry.insert("fault_tolerance".into(), Value::Integer(fault_tolerance));
         catalog.push(Value::Table(entry));
@@ -1456,12 +1462,28 @@ fn localnet_dataspace_catalog(
         let mut entry = Table::new();
         entry.insert("alias".into(), Value::String(alias.to_owned()));
         entry.insert("id".into(), Value::Integer(id));
+        entry.insert(
+            "manifest_hash".into(),
+            Value::String(localnet_dataspace_manifest_hash(id)),
+        );
         entry.insert("description".into(), Value::String(description.to_owned()));
         entry.insert("fault_tolerance".into(), Value::Integer(fault_tolerance));
         catalog.push(Value::Table(entry));
     }
 
     catalog
+}
+
+fn localnet_dataspace_manifest_hash(id: i64) -> String {
+    use std::fmt::Write as _;
+
+    let id = u64::try_from(id).expect("dataspace id must be non-negative");
+    let mut hex = String::with_capacity(64);
+    for byte in id.to_le_bytes() {
+        write!(&mut hex, "{byte:02x}").expect("writing to String should not fail");
+    }
+    hex.push_str("000000000000000000000000000000000000000000000000");
+    hex
 }
 
 fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<toml::Value>)> {
@@ -5247,6 +5269,14 @@ mod tests {
         );
         for entry in catalog {
             let entry = entry.as_table().expect("dataspace entry");
+            let alias = entry
+                .get("alias")
+                .and_then(toml::Value::as_str)
+                .expect("dataspace alias");
+            let id = entry
+                .get("id")
+                .and_then(toml::Value::as_integer)
+                .expect("dataspace id");
             assert_eq!(
                 entry
                     .get("fault_tolerance")
@@ -5254,6 +5284,19 @@ mod tests {
                 Some(i64::from(fault_tolerance)),
                 "fault tolerance should scale with peers"
             );
+            if alias == "universal" {
+                assert!(
+                    entry.get("manifest_hash").is_none(),
+                    "universal dataspace keeps the reserved id without a manifest hash"
+                );
+            } else {
+                let expected_manifest = localnet_dataspace_manifest_hash(id);
+                assert_eq!(
+                    entry.get("manifest_hash").and_then(toml::Value::as_str),
+                    Some(expected_manifest.as_str()),
+                    "non-universal dataspaces must carry an id-derived manifest hash"
+                );
+            }
         }
     }
 

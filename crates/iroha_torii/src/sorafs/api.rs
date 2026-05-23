@@ -11689,26 +11689,16 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_pin_accepts_paid_record_without_legacy_pin_token() {
-        use iroha_config::parameters::actual::SorafsStoragePin as PinCfg;
-
+    async fn storage_pin_accepts_paid_record_without_council_signature() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app)
             .unwrap_or_else(|_| panic!("unique app state for pin policy mutation"));
         let (node, _dir) = sorafs_node_with_temp_storage();
         inner.sorafs_node = node;
-        inner.trusted_proxy_nets = Arc::new(crate::limits::parse_cidrs(&["127.0.0.0/8".into()]));
-
-        let mut pin_cfg = PinCfg {
-            require_token: true,
-            ..Default::default()
-        };
-        pin_cfg.allow_cidrs = vec!["203.0.113.0/24".to_string()];
-        inner.sorafs_pin_policy =
-            sorafs::PinSubmissionPolicy::from_config(&pin_cfg).expect("valid pin policy");
 
         let payload = vec![0x44; 64];
-        let manifest = manifest_for_payload(0x44, &payload);
+        let mut manifest = manifest_for_payload(0x44, &payload);
+        manifest.governance.council_signatures.clear();
         let request = StoragePinRequestDto {
             manifest_b64: base64::engine::general_purpose::STANDARD
                 .encode(norito::to_bytes(&manifest).expect("encode manifest")),
