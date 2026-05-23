@@ -2,6 +2,17 @@
 
 Last updated: 2026-05-23
 
+## 2026-05-23 Nexus lane commitment fixture refresh
+
+- Regenerated the deterministic Nexus lane commitment JSON and Norito `.to`
+  fixtures so the checked-in payloads match the current canonical generator,
+  including explicit empty `native_amx_receipts` and `nexus_fee_receipts`
+  arrays.
+- Focused validation passed:
+  - `cargo test -p iroha_data_model --features transparent_api --test consensus_roundtrip lane_commitment_fixtures_roundtrip -- --nocapture`
+  - `cargo test -p iroha_data_model --features transparent_api --test consensus_roundtrip -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- nexus-fixtures --verify`
+
 ## 2026-05-23 SCCP IVM-proved helper replay fix
 
 - `gov_instruction` now publishes the generated `RecordSccpMessage` literal TLV

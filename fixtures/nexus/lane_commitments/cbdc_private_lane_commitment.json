@@ -2,6 +2,8 @@
   "block_height": 91234,
   "dataspace_id": 24,
   "lane_id": 12,
+  "native_amx_receipts": [],
+  "nexus_fee_receipts": [],
   "receipts": [
     {
       "local_amount_micro": 3300000,
