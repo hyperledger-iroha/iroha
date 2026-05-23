@@ -1634,10 +1634,10 @@ public final class HttpClientTransport implements IrohaClient {
     }
     if (timestampMs == null) {
       return CanonicalRequestSigner.buildHeaders(
-          method, target, body, canonicalAuth.accountId(), canonicalAuth.privateKey());
+          method, target, body, canonicalAuth);
     }
     return CanonicalRequestSigner.buildHeaders(
-        method, target, body, canonicalAuth.accountId(), canonicalAuth.privateKey(), timestampMs, nonce);
+        method, target, body, canonicalAuth, timestampMs, nonce);
   }
 
   private URI resolvePath(final String path) {

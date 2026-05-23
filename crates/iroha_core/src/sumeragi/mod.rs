@@ -10813,6 +10813,22 @@ pub enum BackgroundPost {
         /// Time when the task was enqueued.
         enqueued_at: Instant,
     },
+    /// Post a native AMX control-plane message to a specific peer.
+    PostNativeAmx {
+        /// Destination peer identifier.
+        peer: PeerId,
+        /// Native AMX control message to dispatch.
+        message: crate::native_amx::NativeAmxMessage,
+        /// Time when the task was enqueued.
+        enqueued_at: Instant,
+    },
+    /// Broadcast a native AMX control-plane message to all peers.
+    BroadcastNativeAmx {
+        /// Native AMX control message to broadcast.
+        message: crate::native_amx::NativeAmxMessage,
+        /// Time when the task was enqueued.
+        enqueued_at: Instant,
+    },
 }
 
 /// Internal request type enqueued by subsystems that need the actor to schedule a background
@@ -10842,6 +10858,18 @@ pub enum BackgroundRequest {
     BroadcastControlFlow {
         /// Control-flow frame to broadcast.
         frame: ControlFlow,
+    },
+    /// Send a point-to-point native AMX control message to the given peer.
+    PostNativeAmx {
+        /// Peer that should receive the native AMX control message.
+        peer: PeerId,
+        /// Native AMX control message to send to the peer.
+        message: crate::native_amx::NativeAmxMessage,
+    },
+    /// Broadcast a native AMX control message to all peers.
+    BroadcastNativeAmx {
+        /// Native AMX control message to broadcast.
+        message: crate::native_amx::NativeAmxMessage,
     },
 }
 
@@ -11265,6 +11293,10 @@ impl BlockPayloadDedupCache {
 enum LaneRelayMessage {
     Envelope(LaneRelayEnvelope),
     MergeSignature(MergeCommitteeSignature),
+    NativeAmx {
+        sender: PeerId,
+        message: crate::native_amx::NativeAmxMessage,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12436,6 +12468,75 @@ impl SumeragiHandle {
                 Err(mpsc::TrySendError::Disconnected(_msg)) => {
                     status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
                     iroha_logger::warn!("Sumeragi actor dropped merge signature");
+                    false
+                }
+            },
+        }
+    }
+
+    /// Enqueue an inbound native AMX control-plane message for processing.
+    pub fn incoming_native_amx(
+        &self,
+        sender: PeerId,
+        message: crate::native_amx::NativeAmxMessage,
+    ) {
+        let _ = self.incoming_native_amx_with_mode(sender, message, IngressMode::Blocking);
+    }
+
+    /// Enqueue an inbound native AMX control-plane message without blocking the caller.
+    /// Returns `true` if the message was accepted by the queue.
+    pub fn try_incoming_native_amx(
+        &self,
+        sender: PeerId,
+        message: crate::native_amx::NativeAmxMessage,
+    ) -> bool {
+        self.incoming_native_amx_with_mode(sender, message, IngressMode::NonBlocking)
+    }
+
+    fn incoming_native_amx_with_mode(
+        &self,
+        sender: PeerId,
+        message: crate::native_amx::NativeAmxMessage,
+        mode: IngressMode,
+    ) -> bool {
+        let relay_message = || LaneRelayMessage::NativeAmx {
+            sender: sender.clone(),
+            message: message.clone(),
+        };
+        match mode {
+            IngressMode::Blocking => {
+                self.wake();
+                let start = Instant::now();
+                match self.lane_relay.send(relay_message()) {
+                    Ok(()) => {
+                        status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                        status::record_worker_queue_blocked(
+                            status::WorkerQueueKind::LaneRelay,
+                            start.elapsed(),
+                        );
+                        true
+                    }
+                    Err(err) => {
+                        status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                        iroha_logger::warn!(?err, "Sumeragi actor dropped native AMX message");
+                        false
+                    }
+                }
+            }
+            IngressMode::NonBlocking => match self.lane_relay.try_send(relay_message()) {
+                Ok(()) => {
+                    status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                    self.wake();
+                    true
+                }
+                Err(mpsc::TrySendError::Full(_msg)) => {
+                    status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                    iroha_logger::warn!("Sumeragi actor dropped native AMX message");
+                    false
+                }
+                Err(mpsc::TrySendError::Disconnected(_msg)) => {
+                    status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                    iroha_logger::warn!("Sumeragi actor dropped native AMX message");
                     false
                 }
             },

@@ -6,9 +6,10 @@
 //! exact routing policy while allowing metrics to reflect the real
 //! assignments instead of single-lane placeholders.
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
+use iroha_crypto::Hash;
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
@@ -44,6 +45,7 @@ use iroha_executor_data_model::permission::{
     nexus::CanPublishSpaceDirectoryManifest,
 };
 use mv::storage::StorageReadOnly;
+use norito::codec::{Decode, Encode};
 
 use crate::{
     state::{State, StateReadOnly, StateView, WorldReadOnly},
@@ -55,7 +57,7 @@ const AMX_POLICY_METADATA_KEY: &str = "amx_policy";
 const AMX_POLICY_REJECT_CROSS_DATASPACE: &str = "reject_cross_dataspace";
 
 /// Routing decision returned by a [`LaneRouter`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct RoutingDecision {
     /// Lane assigned to the transaction.
     pub lane_id: LaneId,
@@ -77,6 +79,117 @@ impl RoutingDecision {
 impl Default for RoutingDecision {
     fn default() -> Self {
         Self::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+    }
+}
+
+/// Role of one route in a transaction routing plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum RouteLegRole {
+    /// The route coordinates final admission and commit ordering for the plan.
+    Coordinator,
+    /// The route prepares or commits one dataspace-local leg of the plan.
+    Participant,
+}
+
+/// One lane/dataspace leg in a transaction routing plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct RouteLeg {
+    /// Lane and dataspace selected for this leg.
+    pub route: RoutingDecision,
+    /// Plan role assigned to the leg.
+    pub role: RouteLegRole,
+}
+
+impl RouteLeg {
+    /// Construct a new route leg.
+    #[must_use]
+    pub const fn new(route: RoutingDecision, role: RouteLegRole) -> Self {
+        Self { route, role }
+    }
+}
+
+/// Native AMX routing plan for a transaction that touches multiple dataspaces.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct NativeAmxRoutingPlan {
+    /// Stable digest of the coordinator and participant route set.
+    pub plan_digest: Hash,
+    /// Coordinator route for the native AMX plan.
+    pub coordinator: RouteLeg,
+    /// Dataspace-local participant routes sorted by dataspace and lane id.
+    pub participants: Vec<RouteLeg>,
+}
+
+/// Complete routing plan for a transaction.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum RoutingPlan {
+    /// The transaction executes on one lane/dataspace route.
+    Single(RouteLeg),
+    /// The transaction requires native AMX coordination across dataspaces.
+    NativeAmx(NativeAmxRoutingPlan),
+}
+
+impl RoutingPlan {
+    /// Construct a single-route coordinator plan.
+    #[must_use]
+    pub const fn single(route: RoutingDecision) -> Self {
+        Self::Single(RouteLeg::new(route, RouteLegRole::Coordinator))
+    }
+
+    /// Construct a canonical native AMX plan.
+    #[must_use]
+    pub fn native_amx(coordinator: RoutingDecision, mut participants: Vec<RouteLeg>) -> Self {
+        participants.sort_by_key(|leg| (leg.route.dataspace_id, leg.route.lane_id));
+        participants.dedup_by_key(|leg| (leg.route.dataspace_id, leg.route.lane_id));
+        for leg in &mut participants {
+            leg.role = RouteLegRole::Participant;
+        }
+        let plan_digest = native_amx_plan_digest(coordinator, &participants);
+        Self::NativeAmx(NativeAmxRoutingPlan {
+            plan_digest,
+            coordinator: RouteLeg::new(coordinator, RouteLegRole::Coordinator),
+            participants,
+        })
+    }
+
+    /// Return the route that existing single-route queue machinery should use as coordinator.
+    #[must_use]
+    pub const fn coordinator_route(&self) -> RoutingDecision {
+        match self {
+            Self::Single(leg) => leg.route,
+            Self::NativeAmx(plan) => plan.coordinator.route,
+        }
+    }
+
+    /// Return the coordinator leg.
+    #[must_use]
+    pub const fn coordinator_leg(&self) -> RouteLeg {
+        match self {
+            Self::Single(leg) => *leg,
+            Self::NativeAmx(plan) => plan.coordinator,
+        }
+    }
+
+    /// Return all plan legs in deterministic coordinator-first order.
+    #[must_use]
+    pub fn legs(&self) -> Vec<RouteLeg> {
+        match self {
+            Self::Single(leg) => vec![*leg],
+            Self::NativeAmx(plan) => {
+                let mut legs = Vec::with_capacity(plan.participants.len().saturating_add(1));
+                legs.push(plan.coordinator);
+                legs.extend(plan.participants.iter().copied());
+                legs
+            }
+        }
+    }
+
+    /// Return the deterministic digest for the plan.
+    #[must_use]
+    pub fn digest(&self) -> Hash {
+        match self {
+            Self::Single(leg) => routing_plan_digest(&[leg.route]),
+            Self::NativeAmx(plan) => plan.plan_digest,
+        }
     }
 }
 
@@ -286,6 +399,49 @@ pub fn evaluate_policy_with_catalog(
     )
 }
 
+/// Evaluate the routing policy and resolve the full routing plan against the configured catalogs.
+pub fn evaluate_policy_plan_with_catalog(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    tx: &AcceptedTransaction<'_>,
+) -> Result<RoutingPlan, RoutingResolveError> {
+    if let Some(decision) = dataspace_scoped_permission_routing_decision(
+        tx,
+        Some(lane_catalog),
+        Some(dataspace_catalog),
+        None,
+    )? {
+        return Ok(RoutingPlan::single(decision));
+    }
+    if let Some(decision) = settlement_routing_decision(tx, lane_catalog, dataspace_catalog, None)?
+    {
+        return Ok(RoutingPlan::single(decision));
+    }
+    if let Some(account_id) = account_permission_holder_routing_target(tx) {
+        return resolve_query_routing_decision(
+            policy,
+            lane_catalog,
+            dataspace_catalog,
+            account_id,
+            None,
+        )
+        .map(RoutingPlan::single);
+    }
+    let target = transaction_dataspace_routing_target_info(tx, Some(dataspace_catalog), None)?;
+    let matched_rule = policy
+        .rules
+        .iter()
+        .find(|rule| rule_matches(rule, tx, None));
+    resolve_policy_routing_plan(
+        policy,
+        matched_rule,
+        target,
+        lane_catalog,
+        dataspace_catalog,
+    )
+}
+
 /// Evaluate the routing policy against catalogs, resolving opaque dataspace-scoped
 /// permissions from the current world snapshot when possible.
 pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
@@ -332,6 +488,56 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
         matched_rule,
         target.dataspace_id,
         target.coordinator_route,
+        lane_catalog,
+        dataspace_catalog,
+    )
+}
+
+/// Evaluate the routing policy and resolve the full routing plan against catalogs/world state.
+pub fn evaluate_policy_plan_with_catalog_and_world<W: WorldReadOnly>(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    tx: &AcceptedTransaction<'_>,
+    world: &W,
+) -> Result<RoutingPlan, RoutingResolveError> {
+    if let Some(decision) = dataspace_scoped_permission_routing_decision_with_world(
+        tx,
+        Some(lane_catalog),
+        Some(dataspace_catalog),
+        world,
+    )? {
+        return Ok(RoutingPlan::single(decision));
+    }
+    if let Some(decision) =
+        settlement_routing_decision_with_world(tx, lane_catalog, dataspace_catalog, world)?
+    {
+        return Ok(RoutingPlan::single(decision));
+    }
+    if let Some(account_id) = account_permission_holder_routing_target(tx) {
+        return resolve_query_routing_decision_with_world(
+            policy,
+            lane_catalog,
+            dataspace_catalog,
+            account_id,
+            world,
+        )
+        .map(RoutingPlan::single);
+    }
+    let mut target =
+        transaction_dataspace_routing_target_info_with_world(tx, Some(dataspace_catalog), world)?;
+    if target.dataspace_id.is_none() {
+        target.dataspace_id = authority_dataspace_target_with_world(Some(world), tx);
+        target.coordinator_route = target.dataspace_id == Some(DataSpaceId::UNIVERSAL);
+    }
+    let matched_rule = policy
+        .rules
+        .iter()
+        .find(|rule| rule_matches_with_world(rule, tx, dataspace_catalog, world));
+    resolve_policy_routing_plan(
+        policy,
+        matched_rule,
+        target,
         lane_catalog,
         dataspace_catalog,
     )
@@ -908,10 +1114,11 @@ fn merge_native_target_dataspace(
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct TransactionDataspaceTarget {
     dataspace_id: Option<DataSpaceId>,
     coordinator_route: bool,
+    participants: BTreeSet<DataSpaceId>,
 }
 
 fn merge_transaction_target_dataspace(
@@ -922,6 +1129,11 @@ fn merge_transaction_target_dataspace(
     let Some(candidate) = candidate else {
         return Ok(());
     };
+    if candidate != DataSpaceId::UNIVERSAL {
+        target.participants.insert(candidate);
+    } else {
+        target.coordinator_route = true;
+    }
 
     match target.dataspace_id {
         Some(existing) if existing == candidate => {}
@@ -934,9 +1146,11 @@ fn merge_transaction_target_dataspace(
                 ));
             }
             target.dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            target.coordinator_route = true;
         }
-        None => target.dataspace_id = Some(candidate),
+        None => {
+            target.dataspace_id = Some(candidate);
+            target.coordinator_route = candidate == DataSpaceId::UNIVERSAL;
+        }
     }
 
     Ok(())
@@ -1042,9 +1256,9 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
 /// Return the concrete dataspace participants of a native AMX candidate.
 ///
 /// This is intentionally narrower than route resolution: it preserves the
-/// per-dataspace legs that caused a native transaction to collapse onto the
-/// universal coordinator route so block commitments can expose deterministic
-/// prepare/commit evidence.
+/// per-dataspace legs that make a native transaction require a coordinator
+/// route so block commitments can expose deterministic prepare/commit evidence.
+#[allow(dead_code)]
 pub(crate) fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
     tx: &AcceptedTransaction<'_>,
     dataspace_catalog: &DataSpaceCatalog,
@@ -2406,6 +2620,74 @@ fn canonical_dataspace_route(
     )
 }
 
+fn routing_plan_digest(routes: &[RoutingDecision]) -> Hash {
+    let mut bytes = Vec::with_capacity(16 + routes.len() * 12);
+    bytes.extend_from_slice(b"iroha:routing-plan:v1");
+    for route in routes {
+        bytes.extend_from_slice(&route.lane_id.as_u32().to_le_bytes());
+        bytes.extend_from_slice(&route.dataspace_id.as_u64().to_le_bytes());
+    }
+    Hash::new(bytes)
+}
+
+fn native_amx_plan_digest(coordinator: RoutingDecision, participants: &[RouteLeg]) -> Hash {
+    let mut bytes = Vec::with_capacity(24 + participants.len() * 13);
+    bytes.extend_from_slice(b"iroha:native-amx-plan:v1");
+    bytes.push(0);
+    bytes.extend_from_slice(&coordinator.lane_id.as_u32().to_le_bytes());
+    bytes.extend_from_slice(&coordinator.dataspace_id.as_u64().to_le_bytes());
+    for participant in participants {
+        bytes.push(1);
+        bytes.extend_from_slice(&participant.route.lane_id.as_u32().to_le_bytes());
+        bytes.extend_from_slice(&participant.route.dataspace_id.as_u64().to_le_bytes());
+    }
+    Hash::new(bytes)
+}
+
+fn resolve_policy_routing_plan(
+    policy: &LaneRoutingPolicy,
+    matched_rule: Option<&LaneRoutingRule>,
+    target: TransactionDataspaceTarget,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+) -> Result<RoutingPlan, RoutingResolveError> {
+    if !target.participants.is_empty()
+        && (target.participants.len() > 1 || target.coordinator_route)
+    {
+        let coordinator_dataspace = if target.coordinator_route {
+            DataSpaceId::UNIVERSAL
+        } else {
+            *target
+                .participants
+                .iter()
+                .next()
+                .expect("non-empty participants has first dataspace")
+        };
+        let coordinator_route =
+            canonical_dataspace_route(coordinator_dataspace, lane_catalog, dataspace_catalog)?;
+        let participants = target
+            .participants
+            .iter()
+            .copied()
+            .map(|dataspace_id| {
+                canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog)
+                    .map(|route| RouteLeg::new(route, RouteLegRole::Participant))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(RoutingPlan::native_amx(coordinator_route, participants));
+    }
+
+    let decision = resolve_policy_routing_decision(
+        policy,
+        matched_rule,
+        target.dataspace_id,
+        target.coordinator_route,
+        lane_catalog,
+        dataspace_catalog,
+    )?;
+    Ok(RoutingPlan::single(decision))
+}
+
 fn resolve_policy_routing_decision(
     policy: &LaneRoutingPolicy,
     matched_rule: Option<&LaneRoutingRule>,
@@ -2418,18 +2700,29 @@ fn resolve_policy_routing_decision(
         return canonical_dataspace_route(DataSpaceId::UNIVERSAL, lane_catalog, dataspace_catalog);
     }
 
+    if let Some(dataspace_id) = target_dataspace {
+        if let Some(rule) = matched_rule {
+            let decision = RoutingDecision::new(rule.lane, dataspace_id);
+            if let Some(rule_dataspace) = rule.dataspace
+                && rule_dataspace != dataspace_id
+            {
+                return Err(RoutingResolveError::LaneDataspaceMismatch {
+                    lane_id: rule.lane,
+                    lane_dataspace_id: rule_dataspace,
+                    dataspace_id,
+                });
+            }
+            return resolve_routing_decision(decision, lane_catalog, dataspace_catalog);
+        }
+        return canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog);
+    }
+
     if let Some(rule) = matched_rule {
         let decision = RoutingDecision::new(
             rule.lane,
-            rule.dataspace
-                .or(target_dataspace)
-                .unwrap_or(policy.default_dataspace),
+            rule.dataspace.unwrap_or(policy.default_dataspace),
         );
         return resolve_routing_decision(decision, lane_catalog, dataspace_catalog);
-    }
-
-    if let Some(dataspace_id) = target_dataspace {
-        return canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog);
     }
 
     resolve_routing_decision(
@@ -3263,6 +3556,48 @@ pub trait LaneRouter: Send + Sync + 'static {
     ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
         Ok(self.route_without_state(tx))
     }
+
+    /// Build the full routing plan for a transaction and return deterministic errors.
+    fn try_route_plan(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        self.try_route(tx)
+            .map(|route| RoutingPlan::Single(RouteLeg::new(route, RouteLegRole::Coordinator)))
+    }
+
+    /// Build the full routing plan with an existing state view.
+    fn try_route_plan_with_view(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state_view: &StateView<'_>,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        self.try_route_with_view(tx, state_view)
+            .map(|route| RoutingPlan::Single(RouteLeg::new(route, RouteLegRole::Coordinator)))
+    }
+
+    /// Build the full routing plan with narrow state access when possible.
+    fn try_route_plan_with_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state: &State,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        if let Some(plan) = self.try_route_plan_without_state(tx)? {
+            return Ok(plan);
+        }
+        let state_view = state.view();
+        self.try_route_plan_with_view(tx, &state_view)
+    }
+
+    /// Build the full routing plan without state when possible.
+    fn try_route_plan_without_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
+        Ok(self
+            .try_route_without_state(tx)?
+            .map(|route| RoutingPlan::Single(RouteLeg::new(route, RouteLegRole::Coordinator))))
+    }
 }
 
 /// Trivial router that keeps the single-lane/universal-dataspace behaviour.
@@ -3396,6 +3731,63 @@ impl LaneRouter for ConfigLaneRouter {
         )
     }
 
+    fn try_route_plan(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        if let Some(decision) = dataspace_scoped_permission_routing_decision(
+            tx,
+            Some(self.lane_catalog.as_ref()),
+            Some(self.dataspace_catalog.as_ref()),
+            None,
+        )? {
+            return Ok(RoutingPlan::Single(RouteLeg::new(
+                decision,
+                RouteLegRole::Coordinator,
+            )));
+        }
+        if let Some(decision) = settlement_routing_decision(
+            tx,
+            self.lane_catalog.as_ref(),
+            self.dataspace_catalog.as_ref(),
+            None,
+        )? {
+            return Ok(RoutingPlan::Single(RouteLeg::new(
+                decision,
+                RouteLegRole::Coordinator,
+            )));
+        }
+        if let Some(account_id) = account_permission_holder_routing_target(tx) {
+            return resolve_query_routing_decision(
+                &self.policy,
+                self.lane_catalog.as_ref(),
+                self.dataspace_catalog.as_ref(),
+                account_id,
+                None,
+            )
+            .map(|decision| {
+                RoutingPlan::Single(RouteLeg::new(decision, RouteLegRole::Coordinator))
+            });
+        }
+        let target = transaction_dataspace_routing_target_info(
+            tx,
+            Some(self.dataspace_catalog.as_ref()),
+            None,
+        )?;
+        let matched_rule = self
+            .policy
+            .rules
+            .iter()
+            .find(|rule| rule_matches(rule, tx, None));
+        resolve_policy_routing_plan(
+            &self.policy,
+            matched_rule,
+            target,
+            self.lane_catalog.as_ref(),
+            self.dataspace_catalog.as_ref(),
+        )
+    }
+
     fn try_route_with_view(
         &self,
         tx: &AcceptedTransaction<'_>,
@@ -3451,6 +3843,69 @@ impl LaneRouter for ConfigLaneRouter {
         )
     }
 
+    fn try_route_plan_with_view(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state_view: &StateView<'_>,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        let nexus = state_view.nexus();
+        if let Some(decision) = dataspace_scoped_permission_routing_decision(
+            tx,
+            Some(&nexus.lane_catalog),
+            Some(&nexus.dataspace_catalog),
+            Some(state_view),
+        )? {
+            return Ok(RoutingPlan::Single(RouteLeg::new(
+                decision,
+                RouteLegRole::Coordinator,
+            )));
+        }
+        if let Some(decision) = settlement_routing_decision(
+            tx,
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+            Some(state_view),
+        )? {
+            return Ok(RoutingPlan::Single(RouteLeg::new(
+                decision,
+                RouteLegRole::Coordinator,
+            )));
+        }
+        if let Some(account_id) = account_permission_holder_routing_target(tx) {
+            return resolve_query_routing_decision(
+                &self.policy,
+                &nexus.lane_catalog,
+                &nexus.dataspace_catalog,
+                account_id,
+                Some(state_view),
+            )
+            .map(|decision| {
+                RoutingPlan::Single(RouteLeg::new(decision, RouteLegRole::Coordinator))
+            });
+        }
+        let mut target = transaction_dataspace_routing_target_info(
+            tx,
+            Some(&nexus.dataspace_catalog),
+            Some(state_view),
+        )?;
+        if target.dataspace_id.is_none() {
+            target.dataspace_id = authority_dataspace_target(Some(state_view), tx);
+            target.coordinator_route = target.dataspace_id == Some(DataSpaceId::UNIVERSAL);
+        }
+        let matched_rule = self
+            .policy
+            .rules
+            .iter()
+            .find(|rule| rule_matches(rule, tx, Some(state_view)));
+        resolve_policy_routing_plan(
+            &self.policy,
+            matched_rule,
+            target,
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+        )
+    }
+
     fn try_route_without_state(
         &self,
         tx: &AcceptedTransaction<'_>,
@@ -3477,6 +3932,22 @@ impl LaneRouter for ConfigLaneRouter {
             return Ok(None);
         }
         self.try_route(tx).map(Some)
+    }
+
+    fn try_route_plan_without_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
+        if policy_needs_state(self.policy.as_ref())
+            || dataspace_scoped_permission_routing_requires_state(tx)
+            || transaction_target_routing_requires_state(tx)
+        {
+            return Ok(None);
+        }
+        if self.authority_scope_routing_requires_state(tx)? {
+            return Ok(None);
+        }
+        self.try_route_plan(tx).map(Some)
     }
 }
 
@@ -4022,10 +4493,9 @@ mod tests {
     }
 
     #[test]
-    fn rule_dataspace_override_is_used() {
+    fn resolve_policy_rejects_rule_dataspace_override_for_target() {
         use iroha_data_model::nexus::DataSpaceMetadata;
 
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
             default_dataspace: DataSpaceId::UNIVERSAL,
@@ -4033,14 +4503,14 @@ mod tests {
                 lane: LaneId::new(5),
                 dataspace: Some(DataSpaceId::new(7)),
                 matcher: LaneRoutingMatcher {
-                    account: Some(alice_id.to_string()),
-                    instruction: None,
+                    account: None,
+                    instruction: Some("register".to_string()),
                     description: None,
                 },
             }],
         };
 
-        let catalog = DataSpaceCatalog::new(vec![
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
                 id: DataSpaceId::new(7),
@@ -4051,27 +4521,25 @@ mod tests {
         ])
         .expect("valid dataspace catalog");
 
-        let policy_for_helper = policy.clone();
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(5), DataSpaceId::new(7)),
         ]);
-        let router = ConfigLaneRouter::new(policy, catalog, lane_catalog);
-
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("override", "universal").expect("domain"),
-            )))],
+        assert_eq!(
+            resolve_policy_routing_decision(
+                &policy,
+                Some(&policy.rules[0]),
+                Some(DataSpaceId::UNIVERSAL),
+                false,
+                &lane_catalog,
+                &dataspace_catalog,
+            ),
+            Err(RoutingResolveError::LaneDataspaceMismatch {
+                lane_id: LaneId::new(5),
+                lane_dataspace_id: DataSpaceId::new(7),
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            })
         );
-        let state = blank_state();
-        let decision = router.route_with_view(&tx, &state.view());
-        assert_eq!(decision.lane_id, LaneId::new(5));
-        assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
-
-        let helper_decision = evaluate_policy(&policy_for_helper, &tx);
-        assert_eq!(helper_decision, decision);
     }
 
     #[test]
@@ -7525,7 +7993,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_domain_write_targets_across_dataspaces_route_to_universal() {
+    fn mixed_domain_write_targets_across_dataspaces_build_native_amx_plan() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
@@ -7555,16 +8023,33 @@ mod tests {
             ],
         );
 
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("mixed domain writes should build a native AMX plan");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("mixed domain writes should not collapse to a single route");
+        };
         assert_eq!(
-            router
-                .try_route(&tx)
-                .expect("mixed domain writes should route to AMX coordinator"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+            plan.coordinator.route,
+            RoutingDecision::new(LaneId::new(2), first_dataspace)
+        );
+        assert_eq!(
+            plan.participants,
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(2), first_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(3), second_dataspace),
+                    RouteLegRole::Participant,
+                ),
+            ]
         );
     }
 
     #[test]
-    fn mixed_domain_write_targets_ignore_non_universal_rule_dataspace() {
+    fn mixed_domain_write_targets_keep_object_dataspaces_over_rule_dataspace() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
@@ -7602,11 +8087,18 @@ mod tests {
             ],
         );
 
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("matched rules must not override AMX participant dataspaces");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("mixed domain writes should build a native AMX plan");
+        };
         assert_eq!(
-            router
-                .try_route(&tx)
-                .expect("mixed domain writes should stay on the universal coordinator route"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+            plan.participants
+                .iter()
+                .map(|leg| leg.route.dataspace_id)
+                .collect::<Vec<_>>(),
+            vec![first_dataspace, second_dataspace]
         );
     }
 
@@ -7859,7 +8351,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_domain_write_targets_without_universal_lane_fail_closed() {
+    fn mixed_domain_write_targets_do_not_require_universal_lane() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
@@ -7888,12 +8380,17 @@ mod tests {
             ],
         );
 
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("native AMX should coordinate on a participant route");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("mixed domain writes should build a native AMX plan");
+        };
         assert_eq!(
-            router.try_route(&tx),
-            Err(RoutingResolveError::NoLaneForDataspace {
-                dataspace_id: DataSpaceId::UNIVERSAL,
-            })
+            plan.coordinator.route,
+            RoutingDecision::new(LaneId::new(2), first_dataspace)
         );
+        assert_eq!(plan.participants.len(), 2);
     }
 
     #[test]

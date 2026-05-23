@@ -5,7 +5,7 @@ use super::*;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
 use core::num::{NonZeroU64, NonZeroUsize};
-use iroha_data_model::block::{BlockExecutionContextBundle, ExternalExecutionContext};
+use iroha_data_model::block::BlockExecutionContextBundle;
 use iroha_data_model::consensus::{
     CommitStakeSnapshot as ModelCommitStakeSnapshot,
     CommitStakeSnapshotEntry as ModelCommitStakeSnapshotEntry, PreviousRosterEvidence,
@@ -187,6 +187,7 @@ pub(super) fn cached_slot_effective_quorum_timeout(
     }
 }
 
+#[cfg(test)]
 fn trim_batch_for_size_cap<T, U>(
     tx_batch: &mut Vec<T>,
     routing_batch: &mut Vec<U>,
@@ -214,6 +215,40 @@ fn trim_batch_for_size_cap<T, U>(
     removed_count
 }
 
+fn trim_batch_for_size_cap_with_plans<T, U, V>(
+    tx_batch: &mut Vec<T>,
+    routing_batch: &mut Vec<U>,
+    routing_plan_batch: &mut Vec<V>,
+    sizes: &mut Vec<usize>,
+    removed: &mut Vec<(T, V)>,
+    mut excess_bytes: usize,
+) -> usize {
+    debug_assert_eq!(tx_batch.len(), routing_batch.len());
+    debug_assert_eq!(tx_batch.len(), routing_plan_batch.len());
+    debug_assert_eq!(tx_batch.len(), sizes.len());
+    let mut removed_count = 0usize;
+    while excess_bytes > 0 && tx_batch.len() > 1 {
+        let tx = match tx_batch.pop() {
+            Some(tx) => tx,
+            None => break,
+        };
+        let _routing = match routing_batch.pop() {
+            Some(routing) => routing,
+            None => break,
+        };
+        let routing_plan = match routing_plan_batch.pop() {
+            Some(routing_plan) => routing_plan,
+            None => break,
+        };
+        let size = sizes.pop().unwrap_or(1).max(1);
+        excess_bytes = excess_bytes.saturating_sub(size);
+        removed.push((tx, routing_plan));
+        removed_count = removed_count.saturating_add(1);
+    }
+    removed_count
+}
+
+#[cfg(test)]
 fn canonicalize_parallel_batch_by_key<T, U, K, F>(
     tx_batch: &mut Vec<T>,
     routing_batch: &mut Vec<U>,
@@ -257,6 +292,7 @@ fn canonicalize_parallel_batch_by_key<T, U, K, F>(
     }
 }
 
+#[cfg(test)]
 fn canonicalize_proposal_batch(
     tx_batch: &mut Vec<AcceptedTransaction<'static>>,
     routing_batch: &mut Vec<RoutingDecision>,
@@ -268,6 +304,63 @@ fn canonicalize_proposal_batch(
         sizes,
         crate::tx::AcceptedTransaction::hash_as_entrypoint,
     );
+}
+
+fn canonicalize_proposal_batch_with_plans(
+    tx_batch: &mut Vec<AcceptedTransaction<'static>>,
+    routing_batch: &mut Vec<RoutingDecision>,
+    routing_plan_batch: &mut Vec<crate::queue::RoutingPlan>,
+    sizes: &mut Vec<usize>,
+) {
+    assert_eq!(
+        tx_batch.len(),
+        routing_batch.len(),
+        "routing decisions must align with transactions"
+    );
+    assert_eq!(
+        tx_batch.len(),
+        routing_plan_batch.len(),
+        "routing plans must align with transactions"
+    );
+    assert_eq!(
+        tx_batch.len(),
+        sizes.len(),
+        "transaction sizes must align with transactions"
+    );
+    if tx_batch.len() <= 1 {
+        return;
+    }
+
+    let mut entries: Vec<_> = std::mem::take(tx_batch)
+        .into_iter()
+        .zip(std::mem::take(routing_batch))
+        .zip(std::mem::take(routing_plan_batch))
+        .zip(std::mem::take(sizes))
+        .enumerate()
+        .map(|(idx, (((tx, routing), routing_plan), size))| {
+            (
+                tx.hash_as_entrypoint(),
+                idx,
+                tx,
+                routing,
+                routing_plan,
+                size,
+            )
+        })
+        .collect();
+
+    entries.sort_unstable_by(|lhs, rhs| lhs.0.cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1)));
+
+    tx_batch.reserve(entries.len());
+    routing_batch.reserve(entries.len());
+    routing_plan_batch.reserve(entries.len());
+    sizes.reserve(entries.len());
+    for (_, _, tx, routing, routing_plan, size) in entries {
+        tx_batch.push(tx);
+        routing_batch.push(routing);
+        routing_plan_batch.push(routing_plan);
+        sizes.push(size);
+    }
 }
 
 const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
@@ -338,6 +431,153 @@ fn da_payload_budget(
 }
 
 impl Actor {
+    fn native_amx_attestation_body(
+        tx: &AcceptedTransaction<'_>,
+        plan_digest: Hash,
+        coordinator: RoutingDecision,
+        participant: crate::queue::RouteLeg,
+        phase: NativeAmxPhase,
+        block_height: u64,
+    ) -> NativeAmxAttestationBodyV1 {
+        let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
+        source_id.copy_from_slice(tx.hash().as_ref());
+        NativeAmxAttestationBodyV1 {
+            source_id,
+            tx_entrypoint_hash: tx.hash_as_entrypoint(),
+            plan_digest,
+            phase,
+            coordinator_lane_id: coordinator.lane_id,
+            coordinator_dataspace_id: coordinator.dataspace_id,
+            participant_lane_id: participant.route.lane_id,
+            participant_dataspace_id: participant.route.dataspace_id,
+            planned_coordinator_block_height: block_height,
+        }
+    }
+
+    fn native_amx_vote_roster(&self) -> Vec<PeerId> {
+        let mut roster = self.effective_commit_topology();
+        roster.retain(roster_member_allowed_bls);
+        roster
+    }
+
+    fn native_amx_receipt_for_plan(
+        &mut self,
+        tx: &AcceptedTransaction<'_>,
+        plan: &crate::queue::RoutingPlan,
+        block_height: u64,
+    ) -> Result<Option<NativeAmxReceipt>, &'static str> {
+        let crate::queue::RoutingPlan::NativeAmx(native_plan) = plan else {
+            return Ok(None);
+        };
+        let validator_set = self.native_amx_vote_roster();
+        if validator_set.is_empty() {
+            return Err("native AMX participant attestation roster is empty");
+        }
+        let min_signers =
+            crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1);
+        let coordinator = native_plan.coordinator.route;
+        let key = {
+            let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
+            source_id.copy_from_slice(tx.hash().as_ref());
+            NativeAmxSessionKey {
+                source_id,
+                plan_digest: native_plan.plan_digest,
+            }
+        };
+
+        let mut pending = false;
+        let mut legs = Vec::with_capacity(native_plan.participants.len());
+        for participant in &native_plan.participants {
+            let prepare_body = Self::native_amx_attestation_body(
+                tx,
+                native_plan.plan_digest,
+                coordinator,
+                *participant,
+                NativeAmxPhase::Prepare,
+                block_height,
+            );
+            let commit_body = Self::native_amx_attestation_body(
+                tx,
+                native_plan.plan_digest,
+                coordinator,
+                *participant,
+                NativeAmxPhase::Commit,
+                block_height,
+            );
+
+            let prepare_votes = self
+                .native_amx_sessions
+                .sorted_votes_for_body(key, &prepare_body);
+            let commit_votes = self
+                .native_amx_sessions
+                .sorted_votes_for_body(key, &commit_body);
+            if prepare_votes.len() < min_signers {
+                pending = true;
+                self.schedule_background(BackgroundRequest::BroadcastNativeAmx {
+                    message: NativeAmxMessage::PrepareRequest(prepare_body),
+                });
+                continue;
+            }
+            if commit_votes.len() < min_signers {
+                pending = true;
+                self.schedule_background(BackgroundRequest::BroadcastNativeAmx {
+                    message: NativeAmxMessage::CommitRequest(commit_body),
+                });
+                continue;
+            }
+
+            let prepare_qc = aggregate_votes_to_qc(
+                prepare_body,
+                validator_set.clone(),
+                &prepare_votes,
+                min_signers,
+            )
+            .map_err(|_| "native AMX prepare QC could not be assembled")?;
+            let commit_qc = aggregate_votes_to_qc(
+                commit_body,
+                validator_set.clone(),
+                &commit_votes,
+                min_signers,
+            )
+            .map_err(|_| "native AMX commit QC could not be assembled")?;
+            legs.push(NativeAmxLegRecord {
+                lane_id: participant.route.lane_id,
+                dataspace_id: participant.route.dataspace_id,
+                prepare_qc,
+                commit_qc,
+            });
+        }
+
+        if pending {
+            return Err("native AMX participant attestations are still pending");
+        }
+
+        let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
+        source_id.copy_from_slice(tx.hash().as_ref());
+        Ok(Some(NativeAmxReceipt {
+            version: 1,
+            source_id,
+            plan_digest: native_plan.plan_digest,
+            lane_id: coordinator.lane_id,
+            dataspace_id: coordinator.dataspace_id,
+            block_height,
+            legs,
+        }))
+    }
+
+    fn native_amx_receipts_for_batch(
+        &mut self,
+        tx_batch: &[AcceptedTransaction<'static>],
+        routing_plan_batch: &[crate::queue::RoutingPlan],
+        block_height: u64,
+    ) -> Result<Vec<Option<NativeAmxReceipt>>, &'static str> {
+        let mut receipts = Vec::with_capacity(tx_batch.len());
+        for (tx, plan) in tx_batch.iter().zip(routing_plan_batch) {
+            receipts.push(self.native_amx_receipt_for_plan(tx, plan, block_height)?);
+        }
+        Ok(receipts)
+    }
+
     fn frontier_missing_qc_liveness_active(&self, height: u64, view: u64) -> bool {
         self.subsystems
             .propose
@@ -670,10 +910,12 @@ impl Actor {
         tx_guards: &mut Vec<crate::queue::TransactionGuard>,
         height: u64,
         view: u64,
-    ) -> Vec<(AcceptedTransaction<'static>, RoutingDecision)> {
+    ) -> Vec<(AcceptedTransaction<'static>, crate::queue::RoutingPlan)> {
         let mut lane_consumption: BTreeMap<LaneId, u64> = BTreeMap::new();
-        let mut deferred_accumulator: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
-            Vec::new();
+        let mut deferred_accumulator: Vec<(
+            AcceptedTransaction<'static>,
+            crate::queue::RoutingPlan,
+        )> = Vec::new();
         let mut fetched_total = 0usize;
         let mut gas_used_in_block = 0u64;
         let gas_limit_per_block = gas_limit_per_block.map(NonZeroU64::get);
@@ -729,7 +971,7 @@ impl Actor {
             fetched_total = fetched_total.saturating_add(fetched.len());
             let deferred = self
                 .queue
-                .enforce_lane_teu_limits_with_consumption_and_routing(
+                .enforce_lane_teu_limits_with_consumption_and_routing_plans(
                     &mut fetched,
                     &mut lane_consumption,
                 );
@@ -762,7 +1004,7 @@ impl Actor {
 
                 if tx_guards.len().saturating_add(accepted.len()) >= max_in_block.get() {
                     release_lane_consumption(&guard, &mut lane_consumption);
-                    deferred_accumulator.push((guard.clone_accepted(), guard.routing()));
+                    deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
                     continue;
                 }
 
@@ -774,7 +1016,7 @@ impl Actor {
                 {
                     release_lane_consumption(&guard, &mut lane_consumption);
                     ivm_transactions_deferred = ivm_transactions_deferred.saturating_add(1);
-                    deferred_accumulator.push((guard.clone_accepted(), guard.routing()));
+                    deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
                     continue;
                 }
 
@@ -787,7 +1029,7 @@ impl Actor {
 
                     if would_exceed && !allow_oversized {
                         release_lane_consumption(&guard, &mut lane_consumption);
-                        deferred_accumulator.push((guard.clone_accepted(), guard.routing()));
+                        deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
                         continue;
                     }
 
@@ -834,13 +1076,13 @@ impl Actor {
     fn requeue_accepted_transaction(
         &self,
         tx: AcceptedTransaction<'static>,
-        routing_decision: crate::queue::RoutingDecision,
+        routing_plan: crate::queue::RoutingPlan,
         warn_context: &'static str,
     ) {
         let tx_hash = tx.as_ref().hash();
         if let Err(err) =
             self.queue
-                .push_requeued_with_routing(tx, routing_decision, self.state.as_ref())
+                .push_requeued_with_routing_plan(tx, routing_plan, self.state.as_ref())
         {
             match err.err {
                 crate::queue::Error::IsInQueue => {
@@ -1952,6 +2194,7 @@ impl Actor {
             conf_features,
             mut transactions,
             mut routing_decisions,
+            mut routing_plans,
             mut tx_sizes,
             deferred_transactions,
         ) = {
@@ -2070,6 +2313,10 @@ impl Actor {
                 .iter()
                 .map(crate::queue::TransactionGuard::routing)
                 .collect();
+            let routing_plans: Vec<crate::queue::RoutingPlan> = tx_guards
+                .iter()
+                .map(crate::queue::TransactionGuard::routing_plan)
+                .collect();
             let tx_sizes: Vec<usize> = tx_guards
                 .iter()
                 .map(crate::queue::TransactionGuard::encoded_len)
@@ -2084,24 +2331,33 @@ impl Actor {
                 conf_features,
                 transactions,
                 routing_decisions,
+                routing_plans,
                 tx_sizes,
                 deferred_accumulator,
             )
         };
 
-        let (filtered_guards, filtered_transactions, filtered_routing, filtered_sizes, _dropped) =
-            Self::filter_committed_transactions_for_proposal(
-                self.state.as_ref(),
-                tx_guards,
-                transactions,
-                routing_decisions,
-                tx_sizes,
-                height,
-                view,
-            );
+        let (
+            filtered_guards,
+            filtered_transactions,
+            filtered_routing,
+            filtered_routing_plans,
+            filtered_sizes,
+            _dropped,
+        ) = Self::filter_committed_transactions_for_proposal(
+            self.state.as_ref(),
+            tx_guards,
+            transactions,
+            routing_decisions,
+            routing_plans,
+            tx_sizes,
+            height,
+            view,
+        );
         tx_guards = filtered_guards;
         transactions = filtered_transactions;
         routing_decisions = filtered_routing;
+        routing_plans = filtered_routing_plans;
         tx_sizes = filtered_sizes;
 
         if transactions.len() > 1 {
@@ -2119,6 +2375,7 @@ impl Actor {
                 }
                 reorder_vec(&mut transactions, &order);
                 reorder_vec(&mut routing_decisions, &order);
+                reorder_vec(&mut routing_plans, &order);
                 reorder_vec(&mut tx_sizes, &order);
             }
         }
@@ -2138,6 +2395,7 @@ impl Actor {
                 let encoded_len = heartbeat.encoded_len();
                 transactions.push(heartbeat);
                 routing_decisions.push(RoutingDecision::default());
+                routing_plans.push(crate::queue::RoutingPlan::single(RoutingDecision::default()));
                 tx_sizes.push(encoded_len);
                 info!(
                     height = proposal_height,
@@ -2164,12 +2422,16 @@ impl Actor {
         };
 
         let da_enabled = self.runtime_da_enabled();
-        let mut overflow_transactions: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
-            Vec::new();
+        let mut overflow_transactions: Vec<(
+            AcceptedTransaction<'static>,
+            crate::queue::RoutingPlan,
+        )> = Vec::new();
         let mut oversized_frame_len: Option<usize> = None;
         let tx_sizes_in = tx_sizes;
+        let routing_plans_in = routing_plans;
         let mut tx_batch;
         let mut routing_batch;
+        let mut routing_plan_batch;
         let mut tx_sizes;
         if da_enabled {
             let mut remaining_budget = da_payload_budget(
@@ -2180,10 +2442,12 @@ impl Actor {
             );
             tx_batch = Vec::with_capacity(transactions.len());
             routing_batch = Vec::with_capacity(routing_decisions.len());
+            routing_plan_batch = Vec::with_capacity(routing_plans_in.len());
             let mut tx_sizes_out = Vec::with_capacity(transactions.len());
-            for ((tx, routing), encoded_len) in transactions
+            for (((tx, routing), routing_plan), encoded_len) in transactions
                 .into_iter()
                 .zip(routing_decisions.into_iter())
+                .zip(routing_plans_in.into_iter())
                 .zip(tx_sizes_in.into_iter())
             {
                 if encoded_len > self.consensus_payload_frame_cap {
@@ -2191,13 +2455,14 @@ impl Actor {
                         Some(oversized_frame_len.map_or(encoded_len, |prev| prev.max(encoded_len)));
                 }
                 if encoded_len > remaining_budget {
-                    overflow_transactions.push((tx, routing));
+                    overflow_transactions.push((tx, routing_plan));
                     continue;
                 }
                 remaining_budget = remaining_budget.saturating_sub(encoded_len);
                 tx_sizes_out.push(encoded_len);
                 tx_batch.push(tx);
                 routing_batch.push(routing);
+                routing_plan_batch.push(routing_plan);
             }
             tx_sizes = tx_sizes_out;
         } else {
@@ -2207,15 +2472,17 @@ impl Actor {
             ));
             tx_batch = Vec::with_capacity(transactions.len());
             routing_batch = Vec::with_capacity(routing_decisions.len());
+            routing_plan_batch = Vec::with_capacity(routing_plans_in.len());
             let mut tx_sizes_out = Vec::with_capacity(transactions.len());
-            for ((tx, routing), encoded_len) in transactions
+            for (((tx, routing), routing_plan), encoded_len) in transactions
                 .into_iter()
                 .zip(routing_decisions.into_iter())
+                .zip(routing_plans_in.into_iter())
                 .zip(tx_sizes_in.into_iter())
             {
                 if let Some(budget) = payload_budget {
                     if encoded_len > budget {
-                        overflow_transactions.push((tx, routing));
+                        overflow_transactions.push((tx, routing_plan));
                         continue;
                     }
                     payload_budget = Some(budget.saturating_sub(encoded_len));
@@ -2223,6 +2490,7 @@ impl Actor {
                 }
                 tx_batch.push(tx);
                 routing_batch.push(routing);
+                routing_plan_batch.push(routing_plan);
             }
             tx_sizes = tx_sizes_out;
         }
@@ -2231,15 +2499,54 @@ impl Actor {
             if let Some(admin_idx) = tx_batch.iter().position(Self::is_peer_admin_transaction) {
                 let admin_tx = tx_batch.remove(admin_idx);
                 let admin_route = routing_batch.remove(admin_idx);
+                let admin_plan = routing_plan_batch.remove(admin_idx);
                 let admin_size = tx_sizes.remove(admin_idx);
-                overflow_transactions.extend(tx_batch.drain(..).zip(routing_batch.drain(..)));
+                overflow_transactions.extend(tx_batch.drain(..).zip(routing_plan_batch.drain(..)));
+                routing_batch.clear();
                 tx_sizes.clear();
                 tx_batch.push(admin_tx);
                 routing_batch.push(admin_route);
+                routing_plan_batch.push(admin_plan);
                 tx_sizes.push(admin_size);
             }
         }
-        canonicalize_proposal_batch(&mut tx_batch, &mut routing_batch, &mut tx_sizes);
+        canonicalize_proposal_batch_with_plans(
+            &mut tx_batch,
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &mut tx_sizes,
+        );
+
+        if let Err(reason) =
+            self.native_amx_receipts_for_batch(&tx_batch, &routing_plan_batch, proposal_height)
+        {
+            tx_guards.clear();
+            for (tx, routing) in tx_batch.drain(..).zip(routing_plan_batch.drain(..)) {
+                if crate::tx::is_heartbeat_accepted_transaction(&tx) {
+                    continue;
+                }
+                self.requeue_accepted_transaction(tx, routing, "native AMX attestations pending");
+            }
+            routing_batch.clear();
+            tx_sizes.clear();
+            for (tx, routing) in std::mem::take(&mut overflow_transactions) {
+                if crate::tx::is_heartbeat_accepted_transaction(&tx) {
+                    continue;
+                }
+                self.requeue_accepted_transaction(
+                    tx,
+                    routing,
+                    "failed to requeue transaction overflowed by RBC budget",
+                );
+            }
+            info!(
+                height = proposal_height,
+                view,
+                reason,
+                "deferring proposal while native AMX participant attestations are collected"
+            );
+            return Ok(false);
+        }
 
         if tx_batch.is_empty() {
             tx_guards.clear();
@@ -2276,11 +2583,12 @@ impl Actor {
             );
         }
 
-        let original_for_requeue: Vec<(AcceptedTransaction<'static>, RoutingDecision)> = tx_batch
-            .iter()
-            .cloned()
-            .zip(routing_batch.iter().copied())
-            .collect();
+        let original_for_requeue: Vec<(AcceptedTransaction<'static>, crate::queue::RoutingPlan)> =
+            tx_batch
+                .iter()
+                .cloned()
+                .zip(routing_plan_batch.iter().cloned())
+                .collect();
         let previous_roster_evidence = prev_block.as_deref().and_then(|parent| {
             previous_roster_evidence_for_parent(
                 self.state.as_ref(),
@@ -2290,21 +2598,25 @@ impl Actor {
                 parent,
             )
         });
-        let mut removed_for_chunk_cap: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
-            Vec::new();
-        let mut removed_for_frame_cap: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
-            Vec::new();
+        let mut removed_for_chunk_cap: Vec<(
+            AcceptedTransaction<'static>,
+            crate::queue::RoutingPlan,
+        )> = Vec::new();
+        let mut removed_for_frame_cap: Vec<(
+            AcceptedTransaction<'static>,
+            crate::queue::RoutingPlan,
+        )> = Vec::new();
         let assembly_result: Result<()> = (|| {
             if tx_sizes.len() < tx_batch.len() {
                 for tx in tx_batch.iter().skip(tx_sizes.len()) {
                     tx_sizes.push(tx.encoded_len());
                 }
             }
-            canonicalize_parallel_batch_by_key(
+            canonicalize_proposal_batch_with_plans(
                 &mut tx_batch,
                 &mut routing_batch,
+                &mut routing_plan_batch,
                 &mut tx_sizes,
-                crate::tx::AcceptedTransaction::hash_as_entrypoint,
             );
             let (
                 signed_block,
@@ -2590,15 +2902,25 @@ impl Actor {
                 let proof_policy_bundle = crate::da::proof_policy_bundle(&lane_config);
                 builder = builder.with_da_proof_policies(Some(proof_policy_bundle));
 
+                let native_amx_receipts = self
+                    .native_amx_receipts_for_batch(&tx_batch, &routing_plan_batch, proposal_height)
+                    .map_err(|reason| {
+                        eyre!("native AMX participant attestations unavailable: {reason}")
+                    })?;
                 let execution_context = tx_batch
                     .iter()
-                    .zip(routing_batch.iter())
-                    .map(|(tx, routing)| {
-                        ExternalExecutionContext::new(
+                    .zip(routing_plan_batch.iter())
+                    .zip(native_amx_receipts.into_iter())
+                    .map(|((tx, plan), receipt)| {
+                        let context = crate::queue::execution_context_for_routing_plan(
                             tx.hash_as_entrypoint(),
-                            routing.lane_id,
-                            routing.dataspace_id,
-                        )
+                            plan,
+                        );
+                        if let Some(receipt) = receipt {
+                            context.with_native_amx_receipt(receipt)
+                        } else {
+                            context
+                        }
                     })
                     .collect::<Vec<_>>();
                 if !execution_context.is_empty() {
@@ -2644,11 +2966,14 @@ impl Actor {
                             ));
                         }
                         if let Some(removed_tx) = tx_batch.pop() {
-                            let removed_routing = routing_batch
+                            let _removed_routing = routing_batch
                                 .pop()
                                 .expect("routing batch should align with tx batch");
+                            let removed_plan = routing_plan_batch
+                                .pop()
+                                .expect("routing plan batch should align with tx batch");
                             let _ = tx_sizes.pop();
-                            removed_for_chunk_cap.push((removed_tx, removed_routing));
+                            removed_for_chunk_cap.push((removed_tx, removed_plan));
                             continue;
                         }
                     }
@@ -2714,20 +3039,24 @@ impl Actor {
                         ));
                     }
                     let excess = frame_len.saturating_sub(self.consensus_payload_frame_cap);
-                    let removed = trim_batch_for_size_cap(
+                    let removed = trim_batch_for_size_cap_with_plans(
                         &mut tx_batch,
                         &mut routing_batch,
+                        &mut routing_plan_batch,
                         &mut tx_sizes,
                         &mut removed_for_frame_cap,
                         excess,
                     );
                     if removed == 0 {
                         if let Some(removed_tx) = tx_batch.pop() {
-                            let removed_routing = routing_batch
+                            let _removed_routing = routing_batch
                                 .pop()
                                 .expect("routing batch should align with tx batch");
+                            let removed_plan = routing_plan_batch
+                                .pop()
+                                .expect("routing plan batch should align with tx batch");
                             let _ = tx_sizes.pop();
-                            removed_for_frame_cap.push((removed_tx, removed_routing));
+                            removed_for_frame_cap.push((removed_tx, removed_plan));
                             continue;
                         }
                     }
@@ -3273,6 +3602,7 @@ impl Actor {
         tx_guards: Vec<crate::queue::TransactionGuard>,
         transactions: Vec<AcceptedTransaction<'static>>,
         routing_decisions: Vec<RoutingDecision>,
+        routing_plans: Vec<crate::queue::RoutingPlan>,
         tx_sizes: Vec<usize>,
         height: u64,
         view: u64,
@@ -3280,19 +3610,22 @@ impl Actor {
         Vec<crate::queue::TransactionGuard>,
         Vec<AcceptedTransaction<'static>>,
         Vec<RoutingDecision>,
+        Vec<crate::queue::RoutingPlan>,
         Vec<usize>,
         usize,
     ) {
         let mut retained_guards = Vec::with_capacity(tx_guards.len());
         let mut retained_transactions = Vec::with_capacity(transactions.len());
         let mut retained_routing = Vec::with_capacity(routing_decisions.len());
+        let mut retained_routing_plans = Vec::with_capacity(routing_plans.len());
         let mut retained_sizes = Vec::with_capacity(tx_sizes.len());
         let mut dropped = 0usize;
 
         let mut guard_iter = tx_guards.into_iter();
-        for ((tx, routing), size) in transactions
+        for (((tx, routing), routing_plan), size) in transactions
             .into_iter()
             .zip(routing_decisions.into_iter())
+            .zip(routing_plans.into_iter())
             .zip(tx_sizes.into_iter())
         {
             let guard = guard_iter.next();
@@ -3305,6 +3638,7 @@ impl Actor {
             }
             retained_transactions.push(tx);
             retained_routing.push(routing);
+            retained_routing_plans.push(routing_plan);
             retained_sizes.push(size);
         }
 
@@ -3319,6 +3653,7 @@ impl Actor {
             retained_guards,
             retained_transactions,
             retained_routing,
+            retained_routing_plans,
             retained_sizes,
             dropped,
         )

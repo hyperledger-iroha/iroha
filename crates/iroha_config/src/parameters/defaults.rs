@@ -285,6 +285,10 @@ pub mod queue {
     pub const EXPIRED_CULL_INTERVAL: Duration = Duration::from_secs(1);
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub const EXPIRED_CULL_BATCH: NonZeroUsize = nonzero!(256_usize);
+    /// Whether to persist pending transaction routing plans for local restart replay.
+    pub const PLAN_JOURNAL_ENABLED: bool = true;
+    /// Maximum journal size before compaction is considered.
+    pub const PLAN_JOURNAL_MAX_BYTES: u64 = 64 * 1024 * 1024;
 }
 
 /// Transaction admission defaults enforced at pipeline ingress.

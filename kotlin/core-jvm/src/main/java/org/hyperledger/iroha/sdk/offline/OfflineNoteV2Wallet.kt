@@ -1152,7 +1152,13 @@ class OfflineNoteV2Wallet @JvmOverloads constructor(
                         result.completeExceptionally(error)
                         return@prepareComplete
                     }
-                    issuer.issueNote(request).whenComplete { response, issueError ->
+                    val issueFuture = try {
+                        issuer.issueNote(request)
+                    } catch (error: Throwable) {
+                        result.completeExceptionally(error)
+                        return@prepareComplete
+                    }
+                    issueFuture.whenComplete { response, issueError ->
                         loadExecutor.execute(issueComplete@{
                             if (issueError != null) {
                                 result.completeExceptionally(unwrapCompletion(issueError))

@@ -148,12 +148,14 @@ fn run_validate(
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
     let header = block.header();
+    let (_time_handle, validation_time) =
+        iroha_primitives::time::TimeSource::new_mock(header.creation_time());
     ValidBlock::validate(
         block,
         &topology,
         chain,
         authority,
-        &iroha_primitives::time::TimeSource::new_system(),
+        &validation_time,
         &mut state.block(header),
     )
     .unpack(|_| {})

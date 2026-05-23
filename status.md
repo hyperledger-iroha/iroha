@@ -1,6 +1,103 @@
 # Status
 
-Last updated: 2026-05-22
+Last updated: 2026-05-23
+
+## 2026-05-22 Multidataspace routing plan implementation
+
+- Native AMX receipts now use versioned participant attestation bodies and
+  prepare/commit QC records instead of boolean synthetic leg flags. The
+  attestation preimage is domain-separated with `iroha:native-amx:v1`, and
+  receipt validation checks plan digest, source entrypoint, coordinator route,
+  participant route, phase, height, validator-set hash, signer bitmap shape, and
+  quorum before accepting local receipts.
+- Native AMX receipt validation now verifies BLS aggregate signatures against
+  the live consensus-key PoPs for the participant signer set. Block assembly no
+  longer emits zero-signature synthetic AMX receipts; proposer-side collection
+  must provide participant prepare/commit QCs before a receipt can be sealed in
+  the durable execution context.
+- `NetworkMessage::NativeAmx` now carries native AMX prepare/commit requests
+  and votes on the control topic, backed by a bounded deterministic session
+  cache that rejects duplicate signers per participant leg. Sumeragi now accepts
+  native AMX ingress, signs participant requests with the local BLS consensus
+  key when a live PoP exists, caches verified votes, broadcasts missing
+  prepare/commit requests from proposal assembly, and deterministically projects
+  participant votes into validator-set order to build the AMX QC bitmap plus
+  BLS aggregate for block receipts.
+- The native AMX vote cache now scopes duplicate signer rejection to the exact
+  attestation body, so retries at a new planned coordinator height collect fresh
+  votes without stale cross-body aggregation.
+- Torii transaction submit proxy routing-plan drift now fails fast with
+  `409 Conflict` and `routing_plan_mismatch`, including both ingress and
+  receiver plan digests. Signed-query/read route drift remains warning-only.
+- Transaction queue admission/requeue call sites now use full `RoutingPlan`
+  paths for precomputed transaction routing. The old public bare-decision queue
+  wrappers and `routing_hint(...)` transaction helper were removed; read callers
+  derive coordinator metadata from `routing_plan_hint(...)`.
+- Proposal-time deferrals now preserve full routing plans when TEU limits, gas
+  caps, payload trimming, or assembly failures requeue transactions, so native
+  AMX participant legs are not collapsed to a coordinator-only route.
+- A local Norito queue plan journal frame format now records pending entrypoint,
+  signed hash, full routing plan, cached gossip payload, and enqueue timestamp,
+  with remove tombstones, replay, and atomic compaction primitives. Queue
+  admission appends put frames and committed removals append tombstones when the
+  journal is installed. `irohad` installs and replays this journal by default
+  under the Kura storage directory, discarding committed, expired, malformed, and
+  stale-plan entries and following the Kura fsync mode for durability.
+- Queue plan journal open now truncates incomplete trailing frames from torn
+  appends before installing the append handle, and queue `clear_all` appends
+  remove tombstones before dropping in-memory plans.
+- Queue routing now exposes a first-class `RoutingPlan` with single-route and
+  native AMX variants. Mixed native transaction targets retain their
+  participant dataspaces and build deterministic coordinator/participant route
+  legs instead of requiring a universal fallback lane.
+- Queue admission, cached routing, transaction guards, requeue, and the routing
+  ledger now retain the full plan alongside the coordinator route. Gossip
+  batches carry the full plan per transaction, account for its encoded size,
+  and receivers recompute and reject mismatched plans.
+- Torii submit proxy requests now carry a stable full routing-plan hint.
+  Receivers recompute locally and reject submit drift rather than queueing a
+  receiver-resolved plan.
+- Block execution contexts now commit the routing plan digest and route legs,
+  and block validation recomputes the full plan before accepting external
+  execution metadata. Native AMX receipts include the plan digest and use the
+  deterministic coordinator plus participant lane set; validation rejects
+  native AMX contexts missing receipts or carrying malformed participant QCs.
+- `integration_tests --test native_amx_routing` now covers a 4-peer
+  mixed-dataspace native AMX submit path through a non-coordinator peer,
+  deterministic coordinator routing, gossip/proxy admission, durable execution
+  context plan metadata, per-participant prepare/commit QCs, peer convergence,
+  and queue-journal replay after admitting-peer restart.
+- Policy resolution now treats object-derived dataspace targets as invariants:
+  rule dataspaces are rejected when they conflict with the resolved target.
+- User Nexus config now requires non-universal dataspaces to declare a
+  32-byte `manifest_hash`; explicit numeric ids are accepted only when they
+  match the manifest-derived id.
+- Focused validation passed:
+  - `cargo test -p iroha_core transaction_gossip -- --nocapture`
+  - `cargo test -p iroha_data_model --lib external_execution_context -- --nocapture`
+  - `cargo test -p iroha_core --lib torii_routing_plan_hint_roundtrips_single_and_native_amx_plans -- --nocapture`
+  - `cargo test -p iroha_core --lib native_amx_receipt -- --nocapture`
+  - `cargo check -p iroha_data_model --lib`
+  - `cargo check -p iroha_core --lib`
+  - `cargo check -p iroha_torii --lib`
+  - `cargo test -p iroha_core --lib native_amx`
+  - `cargo test -p iroha_core --lib queue_plan_journal -- --nocapture`
+  - `cargo test -p iroha_core --lib enforce_lane_teu_limits_with_routing_plans_returns_requeue_hint -- --nocapture`
+  - `cargo test -p iroha_core --lib journal_replays_puts_and_removes`
+  - `cargo test -p iroha_torii --lib validate_proxy_routing_plan`
+  - `cargo test -p iroha_data_model --lib native_amx`
+  - `cargo test -p iroha_config queue`
+  - `cargo check -p irohad --bin irohad`
+  - `git diff --check`
+  - `cargo test -p iroha_core --lib mixed_domain_write_targets -- --nocapture`
+  - `cargo test -p iroha_core --lib resolve_policy_rejects_rule_dataspace_override_for_target -- --nocapture`
+  - `cargo test -p iroha_config dataspace -- --nocapture`
+  - `cargo test -p iroha_torii --lib torii_proxy_attempt_timeout -- --nocapture`
+  - `cargo test -p integration_tests --test native_amx_routing -- --nocapture`
+- Remaining work: longer-running native AMX soak and fault-injection coverage,
+  plus future independent participant-lane finality work. The targeted 4-peer
+  mixed-dataspace routing, proxy/gossip, receipt, convergence, and restart
+  proof is now covered.
 
 ## 2026-05-22 Confidential wallet fixture refresh
 
@@ -2027,11 +2124,11 @@ Last updated: 2026-05-22
   and destination balance buckets from each account's unique dataspace binding,
   while non-universal routes still cannot debit an explicitly scoped source
   balance from another dataspace.
-- Global asset writes may execute through the universal AMX coordinator even
+- Global asset writes may execute through the native AMX coordinator even
   when the asset's authoritative home dataspace is non-universal; direct
   non-universal execution still has to match the authoritative dataspace.
 - Lane block commitments now include versioned `native_amx_receipts` recording
-  the source transaction, universal coordinator lane/dataspace/height, and
+  the source transaction, coordinator lane/dataspace/height, and
   successful prepare/commit legs for each non-universal participant dataspace.
 - Nexus fee documentation now states the intended invariant: gas is XOR across
   all dataspaces, and local-token conversion is reserved for explicit

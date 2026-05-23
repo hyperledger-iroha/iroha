@@ -286,7 +286,14 @@ public final class OfflineNoteV2Wallet {
                         result.completeExceptionally(error);
                         return;
                       }
-                      issuerClient.issueNote(request)
+                      final CompletableFuture<OfflineNoteV2IssueResponse> issueFuture;
+                      try {
+                        issueFuture = issuerClient.issueNote(request);
+                      } catch (final Throwable error) {
+                        result.completeExceptionally(error);
+                        return;
+                      }
+                      issueFuture
                           .whenComplete(
                               (response, issueError) ->
                                   LOAD_EXECUTOR.execute(

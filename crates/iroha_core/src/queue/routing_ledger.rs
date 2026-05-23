@@ -12,10 +12,13 @@ use dashmap::DashMap;
 use iroha_crypto::HashOf;
 use iroha_data_model::transaction::SignedTransaction;
 
-use super::router::RoutingDecision;
+use super::router::{RoutingDecision, RoutingPlan};
 
 /// Global routing registry indexed by `HashOf<SignedTransaction>`.
 static ROUTING_REGISTRY: LazyLock<DashMap<HashOf<SignedTransaction>, RoutingDecision>> =
+    LazyLock::new(DashMap::new);
+/// Global full-plan registry indexed by `HashOf<SignedTransaction>`.
+static ROUTING_PLAN_REGISTRY: LazyLock<DashMap<HashOf<SignedTransaction>, RoutingPlan>> =
     LazyLock::new(DashMap::new);
 
 /// Store (or replace) the routing decision for the given transaction hash.
@@ -23,15 +26,34 @@ pub fn record(hash: HashOf<SignedTransaction>, decision: RoutingDecision) {
     ROUTING_REGISTRY.insert(hash, decision);
 }
 
+/// Store (or replace) the full routing plan for the given transaction hash.
+pub fn record_plan(hash: HashOf<SignedTransaction>, plan: RoutingPlan) {
+    record(hash, plan.coordinator_route());
+    ROUTING_PLAN_REGISTRY.insert(hash, plan);
+}
+
 /// Remove and return the routing decision for `hash`, if present.
 pub fn take(hash: &HashOf<SignedTransaction>) -> Option<RoutingDecision> {
     ROUTING_REGISTRY.remove(hash).map(|(_, decision)| decision)
 }
 
+/// Remove and return the full routing plan for `hash`, if present.
+pub fn take_plan(hash: &HashOf<SignedTransaction>) -> Option<RoutingPlan> {
+    ROUTING_PLAN_REGISTRY.remove(hash).map(|(_, plan)| plan)
+}
+
 /// Retrieve the routing decision for `hash` without removing it.
-#[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
+#[cfg(test)]
 pub fn get(hash: &HashOf<SignedTransaction>) -> Option<RoutingDecision> {
     ROUTING_REGISTRY.get(hash).map(|entry| *entry.value())
+}
+
+/// Retrieve the full routing plan for `hash` without removing it.
+#[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
+pub fn get_plan(hash: &HashOf<SignedTransaction>) -> Option<RoutingPlan> {
+    ROUTING_PLAN_REGISTRY
+        .get(hash)
+        .map(|entry| entry.value().clone())
 }
 
 /// Delete the routing decision for `hash` if it matches `expected`.
@@ -41,4 +63,11 @@ pub fn get(hash: &HashOf<SignedTransaction>) -> Option<RoutingDecision> {
 /// to accidentally clear entries already consumed by downstream stages.
 pub fn discard_if_matches(hash: &HashOf<SignedTransaction>, expected: RoutingDecision) {
     ROUTING_REGISTRY.remove_if(hash, |_, current| *current == expected);
+}
+
+/// Delete the routing plan for `hash` if it has the expected digest.
+pub fn discard_plan_if_matches(hash: &HashOf<SignedTransaction>, expected: &RoutingPlan) {
+    let expected_digest = expected.digest();
+    ROUTING_PLAN_REGISTRY.remove_if(hash, |_, current| current.digest() == expected_digest);
+    discard_if_matches(hash, expected.coordinator_route());
 }

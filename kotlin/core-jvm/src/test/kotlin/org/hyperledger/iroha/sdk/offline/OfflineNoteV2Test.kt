@@ -11,6 +11,7 @@ import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -1568,6 +1569,41 @@ class OfflineNoteV2Test {
     }
 
     @Test
+    fun walletLoadCompletesExceptionallyWhenIssuerThrowsSynchronously() {
+        val fixture = loadFixture()
+        val token = obj(fixture, "payment_token")
+        val derivation = obj(obj(fixture, "chain_vectors"), "derivation")
+        val issue = obj(obj(fixture, "chain_vectors"), "issue")
+        val senderCertificate = certificate(obj(token, "sender_key_certificate"))
+        val accountId = accountFromAssetId(string(issue, "asset_id"))
+        val loadContext = OfflineNoteV2LoadContext(
+            operationId = string(derivation, "issuer_load_operation_id"),
+            lineageId = string(derivation, "issuer_load_lineage_id"),
+            localRevision = long(derivation, "issuer_load_local_revision"),
+            keyCertificate = senderCertificate,
+        )
+        val wallet = OfflineNoteV2Wallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountId,
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            issuerClient = SynchronouslyThrowingIssuerClient(loadContext),
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "source_note_secret_hex")))),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_001_000L },
+        )
+
+        val failure = assertFailsWith<ExecutionException> {
+            wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount"))
+                .get(5, TimeUnit.SECONDS)
+        }
+        assertTrue(failure.cause is IllegalStateException)
+        assertEquals("issuer exploded", failure.cause?.message)
+    }
+
+    @Test
     fun toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment() {
         val fixture = loadFixture()
         val certificateJson = obj(obj(fixture, "payment_token"), "sender_key_certificate")
@@ -2991,6 +3027,21 @@ class OfflineNoteV2Test {
             lastIssueRequest = request
             issueRequested.countDown()
             return issueFuture
+        }
+    }
+
+    private class SynchronouslyThrowingIssuerClient(
+        private val loadContext: OfflineNoteV2LoadContext,
+    ) : OfflineNoteV2IssuerClient {
+        override fun prepareLoad(
+            chainId: String,
+            accountId: String,
+            assetDefinitionId: String,
+            amount: String,
+        ): CompletableFuture<OfflineNoteV2LoadContext> = CompletableFuture.completedFuture(loadContext)
+
+        override fun issueNote(request: OfflineNoteV2IssueRequest): CompletableFuture<OfflineNoteV2IssueResponse> {
+            throw IllegalStateException("issuer exploded")
         }
     }
 
