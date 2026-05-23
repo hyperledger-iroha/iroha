@@ -17,9 +17,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.client.ClientResponse;
@@ -63,6 +65,7 @@ public final class OfflineNoteV2Test {
     walletNoteJsonCodecRoundTripsFixtureNote();
     walletLoadDerivesCommitmentBeforeIssuerSubmission();
     walletLoadDoesNotBlockIssuerCompletionThread();
+    walletLoadCompletesExceptionallyWhenIssuerThrowsSynchronously();
     toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment();
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
     walletSyncReconcilesPendingSpendChangeAndRedeemStates();
@@ -2013,6 +2016,15 @@ public final class OfflineNoteV2Test {
         new ToriiOfflineNoteV2IssuerClient(
             new ToriiCanonicalRequestAuth(accountId, keyPair.getPrivate()),
             (chainId, requestAccountId, requestAssetDefinitionId) -> binding,
+            (chainId, requestAccountId, requestAssetDefinitionId, operation, lineageId, proofAmount) -> {
+              final Map<String, Object> proof = new LinkedHashMap<>();
+              proof.put("operation", operation);
+              proof.put("lineage_id", lineageId);
+              if (proofAmount != null) {
+                proof.put("amount", proofAmount);
+              }
+              return proof;
+            },
             executor,
             URI.create("https://torii.example"),
             java.time.Duration.ofSeconds(15),
@@ -2069,12 +2081,17 @@ public final class OfflineNoteV2Test {
         "nested-device-signature-is-not-body-auth",
         string(obj(refillBody, "device_binding"), "signature_base64"),
         "nested device proof is preserved");
+    assertEquals(
+        "setup", string(obj(refillBody, "device_proof"), "operation"), "refill device proof");
 
     final Map<String, Object> issueBody = executor.requestBody(1);
     assertEquals(hex(commitment), string(issueBody, "note_commitment"), "issue commitment");
     assertEquals(0L, longValue(issueBody, "local_revision"), "pre-issue revision");
     assertEquals("0", string(issueBody, "local_balance"), "pre-issue balance");
     assertEquals("auth-issue-1", string(issueBody, "nonce"), "issue nonce");
+    assertEquals(
+        "load", string(obj(issueBody, "device_proof"), "operation"), "issue device proof");
+    assertEquals("5", string(obj(issueBody, "device_proof"), "amount"), "issue proof amount");
     obj(issueBody, "lineage_state");
   }
 
@@ -2150,6 +2167,47 @@ public final class OfflineNoteV2Test {
       store.release.countDown();
       issuerCompleter.shutdownNow();
     }
+  }
+
+  private static void walletLoadCompletesExceptionallyWhenIssuerThrowsSynchronously()
+      throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> token = obj(fixture, "payment_token");
+    final Map<String, Object> derivation = obj(obj(fixture, "chain_vectors"), "derivation");
+    final Map<String, Object> issue = obj(obj(fixture, "chain_vectors"), "issue");
+    final OfflineNoteV2.KeyCertificateV2 senderCertificate =
+        certificate(obj(token, "sender_key_certificate"));
+    final String accountId = accountFromAssetId(string(issue, "asset_id"));
+    final OfflineNoteV2LoadContext loadContext =
+        new OfflineNoteV2LoadContext(
+            string(derivation, "issuer_load_operation_id"),
+            string(derivation, "issuer_load_lineage_id"),
+            longValue(derivation, "issuer_load_local_revision"),
+            senderCertificate);
+    final OfflineNoteV2Wallet wallet =
+        new OfflineNoteV2Wallet(
+            string(derivation, "chain_id"),
+            accountId,
+            new StaticAttestationProvider(senderCertificate),
+            new InMemoryOfflineNoteV2Store(),
+            new SynchronouslyThrowingIssuerClient(loadContext),
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            certificateVerifier(fixture),
+            new QueueRandomSource(
+                Collections.singletonList(hexBytes(string(derivation, "source_note_secret_hex")))),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_001_000L);
+
+    final Throwable cause =
+        assertFutureFailsWithin(
+            wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount")),
+            "synchronous issue failure should fail wallet load");
+    assertTrue(
+        cause instanceof IllegalStateException,
+        "synchronous issue failure should propagate the issuer exception");
+    assertEquals("issuer exploded", cause.getMessage(), "synchronous issue failure message");
   }
 
   private static void walletLifecycleBuildsAuditAcceptAndRedeemTransactions() throws Exception {
@@ -3578,6 +3636,29 @@ public final class OfflineNoteV2Test {
     }
   }
 
+  private static final class SynchronouslyThrowingIssuerClient implements OfflineNoteV2IssuerClient {
+    private final OfflineNoteV2LoadContext loadContext;
+
+    private SynchronouslyThrowingIssuerClient(final OfflineNoteV2LoadContext loadContext) {
+      this.loadContext = loadContext;
+    }
+
+    @Override
+    public CompletableFuture<OfflineNoteV2LoadContext> prepareLoad(
+        final String chainId,
+        final String accountId,
+        final String assetDefinitionId,
+        final String amount) {
+      return CompletableFuture.completedFuture(loadContext);
+    }
+
+    @Override
+    public CompletableFuture<OfflineNoteV2IssueResponse> issueNote(
+        final OfflineNoteV2IssueRequest request) {
+      throw new IllegalStateException("issuer exploded");
+    }
+  }
+
   private static final class BlockingOfflineNoteV2Store implements OfflineNoteV2Store {
     private final Map<String, OfflineNoteV2WalletNote> notes = new LinkedHashMap<>();
     private final CountDownLatch entered = new CountDownLatch(1);
@@ -3897,6 +3978,21 @@ public final class OfflineNoteV2Test {
       throw new AssertionError(message, ex);
     } catch (final Exception ex) {
       return;
+    }
+    throw new AssertionError(message);
+  }
+
+  private static Throwable assertFutureFailsWithin(
+      final CompletableFuture<?> future, final String message) {
+    try {
+      future.get(5, TimeUnit.SECONDS);
+    } catch (final InterruptedException ex) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError(message, ex);
+    } catch (final TimeoutException ex) {
+      throw new AssertionError(message + ": future timed out", ex);
+    } catch (final ExecutionException ex) {
+      return ex.getCause();
     }
     throw new AssertionError(message);
   }

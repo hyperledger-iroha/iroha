@@ -585,7 +585,7 @@ pub struct SumeragiDataspaceCommitment {
 }
 
 /// Deterministic settlement receipt emitted for audit and reconciliation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -655,23 +655,100 @@ pub struct NexusFeeReceipt {
     pub schedule: NexusFeeScheduleInputs,
 }
 
-/// Per-dataspace native AMX leg committed by the universal coordinator.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+/// Phase certified by a native AMX participant committee.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "phase", content = "detail", rename_all = "snake_case")]
+pub enum NativeAmxPhase {
+    /// Participant prepared its dataspace-local leg.
+    Prepare,
+    /// Participant committed its dataspace-local leg.
+    Commit,
+}
+
+/// Canonical native AMX attestation payload signed by participant committees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NativeAmxAttestationBodyV1 {
+    /// Source transaction hash/id.
+    pub source_id: [u8; 32],
+    /// Hash of the canonical transaction entrypoint.
+    pub tx_entrypoint_hash: HashOf<crate::transaction::TransactionEntrypoint>,
+    /// Deterministic digest of the full coordinator/participant routing plan.
+    pub plan_digest: Hash,
+    /// Native AMX phase certified by this body.
+    pub phase: NativeAmxPhase,
+    /// Coordinator lane selected by the routing plan.
+    pub coordinator_lane_id: LaneId,
+    /// Coordinator dataspace selected by the routing plan.
+    pub coordinator_dataspace_id: DataSpaceId,
+    /// Participant lane certified by the committee.
+    pub participant_lane_id: LaneId,
+    /// Participant dataspace certified by the committee.
+    pub participant_dataspace_id: DataSpaceId,
+    /// Coordinator block height planned for final inclusion.
+    pub planned_coordinator_block_height: u64,
+}
+
+impl NativeAmxAttestationBodyV1 {
+    /// Build the domain-separated signature preimage for this attestation body.
+    #[must_use]
+    pub fn signature_preimage(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + 256);
+        out.extend_from_slice(b"iroha:native-amx:v1");
+        out.extend_from_slice(
+            &norito::to_bytes(self).expect("native AMX attestation body must encode"),
+        );
+        out
+    }
+}
+
+/// Validator-set proof for a native AMX attestation body.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NativeAmxAttestationQcV1 {
+    /// Body certified by the aggregate signature.
+    pub body: NativeAmxAttestationBodyV1,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Stable hash of the validator set that produced the certificate.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Ordered validator set used when assembling the certificate.
+    pub validator_set: Vec<PeerId>,
+    /// Compact signer bitmap (LSB-first).
+    pub signers_bitmap: Vec<u8>,
+    /// BLS12-381 aggregate signature bytes (compressed).
+    pub bls_aggregate_signature: Vec<u8>,
+}
+
+/// Per-dataspace native AMX leg committed by the routing-plan coordinator.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct NativeAmxLegRecord {
+    /// Participant lane certified by both phase QCs.
+    pub lane_id: LaneId,
     /// Dataspace participating in the native AMX group.
     pub dataspace_id: DataSpaceId,
-    /// Whether the coordinator accepted the prepare phase for this dataspace.
-    pub prepared: bool,
-    /// Whether the coordinator applied the commit phase for this dataspace.
-    pub committed: bool,
+    /// Participant prepare QC.
+    pub prepare_qc: NativeAmxAttestationQcV1,
+    /// Participant commit QC.
+    pub commit_qc: NativeAmxAttestationQcV1,
 }
 
-/// Versioned native AMX receipt committed by a finalized universal coordinator block.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+/// Versioned native AMX receipt committed by a finalized coordinator block.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -681,6 +758,8 @@ pub struct NativeAmxReceipt {
     pub version: u16,
     /// Source transaction hash/id.
     pub source_id: [u8; 32],
+    /// Deterministic digest of the coordinator/participant routing plan.
+    pub plan_digest: Hash,
     /// Coordinator lane that finalized the transaction.
     pub lane_id: LaneId,
     /// Coordinator dataspace that finalized the transaction.
@@ -776,7 +855,7 @@ pub struct LaneBlockCommitment {
     /// Versioned Nexus fee receipts committed for asynchronous public XOR settlement.
     #[norito(default)]
     pub nexus_fee_receipts: Vec<NexusFeeReceipt>,
-    /// Versioned native AMX receipts committed by universal coordinator execution.
+    /// Versioned native AMX receipts committed by coordinator execution.
     #[norito(default)]
     pub native_amx_receipts: Vec<NativeAmxReceipt>,
 }
@@ -2604,6 +2683,11 @@ impl_decode_from_slice_via_codec!(SumeragiDataspaceCommitment);
 impl_decode_from_slice_via_codec!(SumeragiRuntimeUpgradeHook);
 impl_decode_from_slice_via_codec!(SumeragiLaneGovernance);
 impl_decode_from_slice_via_codec!(SumeragiStatusWire);
+impl_decode_from_slice_via_codec!(NativeAmxPhase);
+impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV1);
+impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV1);
+impl_decode_from_slice_via_codec!(NativeAmxLegRecord);
+impl_decode_from_slice_via_codec!(NativeAmxReceipt);
 
 // Provide nicer `Debug` rendering for validator indices in test snapshots.
 impl fmt::Display for CertPhase {
@@ -2633,6 +2717,8 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, MerkleTree, SignatureOf};
     use iroha_primitives::numeric::Numeric;
     use norito::core::DecodeFromSlice;
+
+    use crate::consensus::VALIDATOR_SET_HASH_VERSION_V1;
 
     use super::*;
 
@@ -2719,6 +2805,40 @@ mod tests {
         }
     }
 
+    fn sample_entrypoint_hash(seed: u8) -> HashOf<crate::transaction::TransactionEntrypoint> {
+        HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
+    }
+
+    fn sample_native_amx_qc(
+        phase: NativeAmxPhase,
+        source_id: [u8; 32],
+        plan_digest: Hash,
+        coordinator_lane_id: LaneId,
+        coordinator_dataspace_id: DataSpaceId,
+        participant_lane_id: LaneId,
+        participant_dataspace_id: DataSpaceId,
+        validator_set: Vec<PeerId>,
+    ) -> NativeAmxAttestationQcV1 {
+        NativeAmxAttestationQcV1 {
+            body: NativeAmxAttestationBodyV1 {
+                source_id,
+                tx_entrypoint_hash: sample_entrypoint_hash(0x42),
+                plan_digest,
+                phase,
+                coordinator_lane_id,
+                coordinator_dataspace_id,
+                participant_lane_id,
+                participant_dataspace_id,
+                planned_coordinator_block_height: 42,
+            },
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set,
+            signers_bitmap: vec![0b0000_0111],
+            bls_aggregate_signature: vec![0xA5; 96],
+        }
+    }
+
     #[test]
     fn legacy_lane_block_commitment_decodes_with_empty_nexus_fee_receipts() {
         let legacy = LegacyLaneBlockCommitment {
@@ -2772,10 +2892,15 @@ mod tests {
 
     #[test]
     fn native_amx_receipts_change_lane_block_commitment_hash_inputs() {
+        let plan_digest = Hash::new(b"test-native-amx-plan");
+        let source_id = [0xAB; 32];
+        let coordinator_lane_id = LaneId::new(0);
+        let coordinator_dataspace_id = DataSpaceId::UNIVERSAL;
+        let validators = sample_roster();
         let base = LaneBlockCommitment {
             block_height: 42,
-            lane_id: LaneId::new(0),
-            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_id: coordinator_lane_id,
+            dataspace_id: coordinator_dataspace_id,
             tx_count: 1,
             total_local_micro: 0,
             total_xor_due_micro: 0,
@@ -2786,28 +2911,85 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: vec![NativeAmxReceipt {
                 version: 1,
-                source_id: [0xAB; 32],
-                lane_id: LaneId::new(0),
-                dataspace_id: DataSpaceId::UNIVERSAL,
+                source_id,
+                plan_digest,
+                lane_id: coordinator_lane_id,
+                dataspace_id: coordinator_dataspace_id,
                 block_height: 42,
                 legs: vec![
                     NativeAmxLegRecord {
+                        lane_id: LaneId::new(7),
                         dataspace_id: DataSpaceId::new(7),
-                        prepared: true,
-                        committed: true,
+                        prepare_qc: sample_native_amx_qc(
+                            NativeAmxPhase::Prepare,
+                            source_id,
+                            plan_digest,
+                            coordinator_lane_id,
+                            coordinator_dataspace_id,
+                            LaneId::new(7),
+                            DataSpaceId::new(7),
+                            validators.clone(),
+                        ),
+                        commit_qc: sample_native_amx_qc(
+                            NativeAmxPhase::Commit,
+                            source_id,
+                            plan_digest,
+                            coordinator_lane_id,
+                            coordinator_dataspace_id,
+                            LaneId::new(7),
+                            DataSpaceId::new(7),
+                            validators.clone(),
+                        ),
                     },
                     NativeAmxLegRecord {
+                        lane_id: LaneId::new(8),
                         dataspace_id: DataSpaceId::new(8),
-                        prepared: true,
-                        committed: true,
+                        prepare_qc: sample_native_amx_qc(
+                            NativeAmxPhase::Prepare,
+                            source_id,
+                            plan_digest,
+                            coordinator_lane_id,
+                            coordinator_dataspace_id,
+                            LaneId::new(8),
+                            DataSpaceId::new(8),
+                            validators.clone(),
+                        ),
+                        commit_qc: sample_native_amx_qc(
+                            NativeAmxPhase::Commit,
+                            source_id,
+                            plan_digest,
+                            coordinator_lane_id,
+                            coordinator_dataspace_id,
+                            LaneId::new(8),
+                            DataSpaceId::new(8),
+                            validators,
+                        ),
                     },
                 ],
             }],
         };
         let mut changed = base.clone();
-        changed.native_amx_receipts[0].legs[1].committed = false;
+        changed.native_amx_receipts[0].legs[1].commit_qc.body.phase = NativeAmxPhase::Prepare;
 
         assert_ne!(Hash::new(base.encode()), Hash::new(changed.encode()));
+    }
+
+    #[test]
+    fn native_amx_attestation_preimage_is_domain_separated() {
+        let body = NativeAmxAttestationBodyV1 {
+            source_id: [0x11; 32],
+            tx_entrypoint_hash: sample_entrypoint_hash(0x12),
+            plan_digest: Hash::new(b"plan"),
+            phase: NativeAmxPhase::Prepare,
+            coordinator_lane_id: LaneId::new(1),
+            coordinator_dataspace_id: DataSpaceId::UNIVERSAL,
+            participant_lane_id: LaneId::new(2),
+            participant_dataspace_id: DataSpaceId::new(2),
+            planned_coordinator_block_height: 7,
+        };
+        let preimage = body.signature_preimage();
+        assert!(preimage.starts_with(b"iroha:native-amx:v1"));
+        assert!(preimage.len() > b"iroha:native-amx:v1".len());
     }
 
     fn sample_proposal() -> Proposal {

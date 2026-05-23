@@ -777,9 +777,16 @@ function encodeMultisigAccountSelectorFields(request, context) {
 
 function encodeEmbeddedInstructionBox(instruction, context) {
   const framed = Buffer.from(noritoEncodeInstruction(instruction));
-  const { wireId, payload, innerFlags } = decodeInstructionEnvelope(framed);
+  const { wireId, payload, innerFlags, innerFrame } = decodeInstructionEnvelope(framed);
   const outerFlags = noritoLengthFlags & COMPACT_LEN_FLAG;
-  return encodeInstructionBoxPayload(wireId, payload, outerFlags, context, innerFlags);
+  return encodeInstructionBoxPayload(
+    wireId,
+    payload,
+    outerFlags,
+    context,
+    innerFlags,
+    innerFrame,
+  );
 }
 
 /**
@@ -1109,7 +1116,7 @@ function decodeInstructionEnvelope(bytes) {
     "instruction.inner",
     INNER_SCHEMA_HASH_BY_WIRE_ID[wireId] ?? null,
   );
-  return { wireId, payload: inner.payload, innerFlags: inner.flags };
+  return { wireId, payload: inner.payload, innerFlags: inner.flags, innerFrame: innerBytes };
 }
 
 function encodeInstructionBoxPayload(
@@ -1118,19 +1125,24 @@ function encodeInstructionBoxPayload(
   outerFlags,
   context = "instruction",
   innerFlags = noritoLengthFlags & COMPACT_LEN_FLAG,
+  decodedInnerFrame = null,
 ) {
   const innerSchemaHash = INNER_SCHEMA_HASH_BY_WIRE_ID[wireId];
-  if (!innerSchemaHash) {
+  let innerFrame;
+  if (innerSchemaHash) {
+    innerFrame = frameNoritoPayload(
+      innerPayload,
+      innerSchemaHash,
+      innerFlags,
+      INNER_HEADER_PADDING_BY_WIRE_ID[wireId] ?? 0,
+    );
+  } else if (decodedInnerFrame !== null) {
+    innerFrame = Buffer.from(decodedInnerFrame);
+  } else {
     throw new Error(
       `${context} uses unsupported instruction wire id ${wireId}; native embedding requires a schema hash`,
     );
   }
-  const innerFrame = frameNoritoPayload(
-    innerPayload,
-    innerSchemaHash,
-    innerFlags,
-    INNER_HEADER_PADDING_BY_WIRE_ID[wireId] ?? 0,
-  );
   const innerFieldPayload = withNoritoU64Lengths(() => encodeNoritoField(innerFrame));
   return withNoritoLengthFlags(outerFlags, () =>
     Buffer.concat([

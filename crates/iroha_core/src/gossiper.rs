@@ -34,7 +34,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     IrohaNetwork, NetworkMessage,
-    queue::{GossipBatchEntry, Queue, RoutingDecision},
+    queue::{GossipBatchEntry, Queue, RoutingDecision, RoutingPlan},
     state::{State, StatelessValidationContext, TransactionsReadOnly},
     tx::{
         AcceptTransactionFail, AcceptedTransaction, PreparedTransactionMetadata,
@@ -108,6 +108,7 @@ fn tx_gossip_frame_payload_cap(
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
         }],
+        plans: vec![RoutingPlan::single(RoutingDecision::default())],
         plane: GossipPlane::Public,
     };
     let gossip_len = probe_gossip
@@ -214,11 +215,13 @@ mod handle_tests {
         let msg1 = TransactionGossip {
             txs: Vec::new(),
             routes: Vec::new(),
+            plans: Vec::new(),
             plane: GossipPlane::Public,
         };
         let msg2 = TransactionGossip {
             txs: Vec::new(),
             routes: Vec::new(),
+            plans: Vec::new(),
             plane: GossipPlane::Restricted,
         };
 
@@ -1252,7 +1255,12 @@ impl TransactionGossiper {
     #[allow(clippy::too_many_lines)]
     fn handle_transaction_gossip_owned(
         &self,
-        TransactionGossip { txs, routes, plane }: TransactionGossip,
+        TransactionGossip {
+            txs,
+            routes,
+            plans,
+            plane,
+        }: TransactionGossip,
     ) {
         iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
         let batch_txs = txs.len();
@@ -1301,6 +1309,33 @@ impl TransactionGossiper {
             );
             return;
         }
+        if plans.len() != txs.len() {
+            let dataspace = routes
+                .first()
+                .map_or(DataSpaceId::UNIVERSAL, |route| route.dataspace_id);
+            iroha_logger::warn!(
+                plans = plans.len(),
+                txs = txs.len(),
+                "dropping transaction gossip batch due to plan/tx length mismatch"
+            );
+            self.record_drop_metric(
+                plane,
+                dataspace,
+                routes
+                    .first()
+                    .map(|route| vec![route.lane_id])
+                    .unwrap_or_default()
+                    .as_slice(),
+                "plan_tx_len_mismatch",
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(plane),
+                batch_txs,
+                0,
+            );
+            return;
+        }
 
         let nexus = self.state.nexus_snapshot();
         let lane_catalog = nexus.lane_catalog.clone();
@@ -1320,6 +1355,7 @@ impl TransactionGossiper {
         struct GossipAdmissionCandidate {
             tx: GossipTransaction,
             route: GossipRoute,
+            plan: RoutingPlan,
             tx_hash: HashOf<SignedTransaction>,
         }
 
@@ -1341,6 +1377,42 @@ impl TransactionGossiper {
                 );
                 continue;
             };
+            let Some(plan) = plans.get(idx).cloned() else {
+                iroha_logger::warn!("routing plan metadata missing for transaction gossip entry");
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "missing_plan_entry",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            };
+            if plan.coordinator_route() != RoutingDecision::new(route.lane_id, route.dataspace_id) {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    "dropping transaction gossip entry due to route/plan coordinator mismatch"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "route_plan_mismatch",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
             if let Err(reason) = validate_route(&lane_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
@@ -1440,7 +1512,12 @@ impl TransactionGossiper {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
-            candidates.push(GossipAdmissionCandidate { tx, route, tx_hash });
+            candidates.push(GossipAdmissionCandidate {
+                tx,
+                route,
+                plan,
+                tx_hash,
+            });
         }
 
         struct MaterializedGossipCandidate {
@@ -1448,6 +1525,7 @@ impl TransactionGossiper {
             payload: Arc<Vec<u8>>,
             entrypoint_hash: HashOf<TransactionEntrypoint>,
             route: GossipRoute,
+            plan: RoutingPlan,
             tx_hash: HashOf<SignedTransaction>,
             prepared: Option<PreparedTransactionMetadata>,
             ed25519_prechecked: bool,
@@ -1496,6 +1574,7 @@ impl TransactionGossiper {
                 payload,
                 entrypoint_hash,
                 route: candidate.route,
+                plan: candidate.plan,
                 tx_hash: candidate.tx_hash,
                 prepared,
                 ed25519_prechecked: false,
@@ -1636,6 +1715,7 @@ impl TransactionGossiper {
 
         for mut candidate in materialized {
             let route = candidate.route;
+            let advertised_plan = candidate.plan;
             let tx_hash = candidate.tx_hash;
             let payload = Some(Arc::clone(&candidate.payload));
             let accepted = if let Some(err) = candidate.precheck_rejection.take() {
@@ -1656,8 +1736,8 @@ impl TransactionGossiper {
             match accepted {
                 Ok(tx) => {
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
-                    let local_route = match self.queue.route_for_gossip_with_state(&tx, state) {
-                        Ok(route) => route,
+                    let local_plan = match self.queue.route_plan_for_gossip_with_state(&tx, state) {
+                        Ok(plan) => plan,
                         Err(err) => {
                             iroha_logger::warn!(
                                 %tx_hash,
@@ -1680,6 +1760,7 @@ impl TransactionGossiper {
                             continue;
                         }
                     };
+                    let local_route = local_plan.coordinator_route();
                     if local_route != advertised_route {
                         iroha_logger::warn!(
                                 %tx_hash,
@@ -1703,12 +1784,32 @@ impl TransactionGossiper {
                         );
                         continue;
                     }
-                    match self.queue.push_with_gossip_payload_with_state_and_routing(
-                        tx,
-                        state,
-                        local_route,
-                        payload,
-                    ) {
+                    if local_plan != advertised_plan {
+                        iroha_logger::warn!(
+                            %tx_hash,
+                            advertised_digest = %advertised_plan.digest(),
+                            expected_digest = %local_plan.digest(),
+                            "dropping transaction gossip entry due to routing plan mismatch"
+                        );
+                        self.record_drop_metric(
+                            plane,
+                            local_route.dataspace_id,
+                            &[local_route.lane_id],
+                            DROP_REASON_ROUTE_MISMATCH,
+                            false,
+                            None,
+                            &[],
+                            self.target_cap_for_plane(plane),
+                            1,
+                            0,
+                        );
+                        continue;
+                    }
+                    match self
+                        .queue
+                        .push_with_gossip_payload_with_state_and_routing_plan(
+                            tx, state, local_plan, payload,
+                        ) {
                         Ok(()) => {
                             iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
                         }
@@ -1792,6 +1893,7 @@ impl TransactionGossiper {
     fn handle_transaction_gossip_shared(&self, gossip: &TransactionGossip) {
         let txs = &gossip.txs;
         let routes = &gossip.routes;
+        let plans = &gossip.plans;
         let plane = gossip.plane;
 
         iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
@@ -1841,6 +1943,33 @@ impl TransactionGossiper {
             );
             return;
         }
+        if plans.len() != txs.len() {
+            let dataspace = routes
+                .first()
+                .map_or(DataSpaceId::UNIVERSAL, |route| route.dataspace_id);
+            iroha_logger::warn!(
+                plans = plans.len(),
+                txs = txs.len(),
+                "dropping transaction gossip batch due to plan/tx length mismatch"
+            );
+            self.record_drop_metric(
+                plane,
+                dataspace,
+                routes
+                    .first()
+                    .map(|route| vec![route.lane_id])
+                    .unwrap_or_default()
+                    .as_slice(),
+                "plan_tx_len_mismatch",
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(plane),
+                batch_txs,
+                0,
+            );
+            return;
+        }
 
         let nexus = self.state.nexus_snapshot();
         let lane_catalog = nexus.lane_catalog.clone();
@@ -1872,6 +2001,44 @@ impl TransactionGossiper {
                 );
                 continue;
             };
+            let Some(advertised_plan) = plans.get(idx).cloned() else {
+                iroha_logger::warn!("routing plan metadata missing for transaction gossip entry");
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "missing_plan_entry",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            };
+            if advertised_plan.coordinator_route()
+                != RoutingDecision::new(route.lane_id, route.dataspace_id)
+            {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    "dropping transaction gossip entry due to route/plan coordinator mismatch"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "route_plan_mismatch",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
             if let Err(reason) = validate_route(&lane_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
@@ -2008,8 +2175,8 @@ impl TransactionGossiper {
             match accepted {
                 Ok(tx) => {
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
-                    let local_route = match self.queue.route_for_gossip_with_state(&tx, state) {
-                        Ok(route) => route,
+                    let local_plan = match self.queue.route_plan_for_gossip_with_state(&tx, state) {
+                        Ok(plan) => plan,
                         Err(err) => {
                             iroha_logger::warn!(
                                 %tx_hash,
@@ -2032,6 +2199,7 @@ impl TransactionGossiper {
                             continue;
                         }
                     };
+                    let local_route = local_plan.coordinator_route();
                     if local_route != advertised_route {
                         iroha_logger::warn!(
                                 %tx_hash,
@@ -2055,12 +2223,35 @@ impl TransactionGossiper {
                         );
                         continue;
                     }
-                    match self.queue.push_with_gossip_payload_with_state_and_routing(
-                        tx,
-                        state,
-                        local_route,
-                        Some(payload),
-                    ) {
+                    if local_plan != advertised_plan {
+                        iroha_logger::warn!(
+                            %tx_hash,
+                            advertised_digest = %advertised_plan.digest(),
+                            expected_digest = %local_plan.digest(),
+                            "dropping transaction gossip entry due to routing plan mismatch"
+                        );
+                        self.record_drop_metric(
+                            plane,
+                            local_route.dataspace_id,
+                            &[local_route.lane_id],
+                            DROP_REASON_ROUTE_MISMATCH,
+                            false,
+                            None,
+                            &[],
+                            self.target_cap_for_plane(plane),
+                            1,
+                            0,
+                        );
+                        continue;
+                    }
+                    match self
+                        .queue
+                        .push_with_gossip_payload_with_state_and_routing_plan(
+                            tx,
+                            state,
+                            local_plan,
+                            Some(payload),
+                        ) {
                         Ok(()) => {
                             iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
                         }
@@ -2255,6 +2446,8 @@ pub struct TransactionGossip {
     pub txs: Vec<GossipTransaction>,
     /// Routing metadata aligned with `txs`.
     pub routes: Vec<GossipRoute>,
+    /// Full routing plans aligned with `txs`.
+    pub plans: Vec<RoutingPlan>,
     /// Visibility plane this batch targets.
     pub plane: GossipPlane,
 }
@@ -2269,6 +2462,7 @@ impl TransactionGossip {
             // to guarantee that the sending peer checked transaction limits
             txs: gossip_txs,
             routes: Vec::new(),
+            plans: Vec::new(),
             plane: GossipPlane::Public,
         }
     }
@@ -2301,8 +2495,17 @@ fn decode_transaction_gossip_payload(
 ) -> Result<(TransactionGossip, usize), ncore::Error> {
     let (txs, offset) = decode_len_prefixed_field::<Vec<GossipTransaction>>(bytes, 0)?;
     let (routes, offset) = decode_len_prefixed_field::<Vec<GossipRoute>>(bytes, offset)?;
+    let (plans, offset) = decode_len_prefixed_field::<Vec<RoutingPlan>>(bytes, offset)?;
     let (plane, offset) = decode_len_prefixed_field::<GossipPlane>(bytes, offset)?;
-    Ok((TransactionGossip { txs, routes, plane }, offset))
+    Ok((
+        TransactionGossip {
+            txs,
+            routes,
+            plans,
+            plane,
+        },
+        offset,
+    ))
 }
 
 impl NoritoSerialize for TransactionGossip {
@@ -2310,6 +2513,7 @@ impl NoritoSerialize for TransactionGossip {
         let mut tmp = ncore::DeriveSmallBuf::new();
         ncore::write_len_prefixed_exact(&mut writer, &self.txs, &mut tmp)?;
         ncore::write_len_prefixed_exact(&mut writer, &self.routes, &mut tmp)?;
+        ncore::write_len_prefixed_exact(&mut writer, &self.plans, &mut tmp)?;
         ncore::write_len_prefixed_exact(&mut writer, &self.plane, &mut tmp)?;
         Ok(())
     }
@@ -2322,7 +2526,8 @@ impl NoritoSerialize for TransactionGossip {
         let txs_payload_len = gossip_vec_payload_len_cached(self.txs.iter())
             .or_else(|| gossip_vec_payload_len_exact(self.txs.iter()))?;
         let routes_payload_len = gossip_routes_payload_len(self.routes.len())?;
-        gossip_message_encoded_len(txs_payload_len, routes_payload_len)
+        let plans_payload_len = gossip_encoded_vec_payload_len_exact(self.plans.iter())?;
+        gossip_message_encoded_len(txs_payload_len, routes_payload_len, plans_payload_len)
     }
 }
 
@@ -2772,15 +2977,23 @@ fn gossip_plane_encoded_len() -> Option<usize> {
 fn gossip_message_empty_len() -> Option<usize> {
     let txs_payload_len = ncore::seq_len_prefix_len(0);
     let routes_payload_len = ncore::seq_len_prefix_len(0);
-    gossip_message_encoded_len(txs_payload_len, routes_payload_len)
+    let plans_payload_len = ncore::seq_len_prefix_len(0);
+    gossip_message_encoded_len(txs_payload_len, routes_payload_len, plans_payload_len)
 }
 
-fn gossip_message_encoded_len(txs_payload_len: usize, routes_payload_len: usize) -> Option<usize> {
+fn gossip_message_encoded_len(
+    txs_payload_len: usize,
+    routes_payload_len: usize,
+    plans_payload_len: usize,
+) -> Option<usize> {
     let plane_payload_len = gossip_plane_encoded_len()?;
     let mut total = ncore::len_prefix_len(txs_payload_len).checked_add(txs_payload_len)?;
     total = total
         .checked_add(ncore::len_prefix_len(routes_payload_len))?
         .checked_add(routes_payload_len)?;
+    total = total
+        .checked_add(ncore::len_prefix_len(plans_payload_len))?
+        .checked_add(plans_payload_len)?;
     total = total
         .checked_add(ncore::len_prefix_len(plane_payload_len))?
         .checked_add(plane_payload_len)?;
@@ -2811,6 +3024,23 @@ fn gossip_vec_payload_len_cached<'a>(
     for item in items {
         count = count.checked_add(1)?;
         let item_len = item.encoded.len();
+        total = total.checked_add(ncore::len_prefix_len(item_len))?;
+        total = total.checked_add(item_len)?;
+    }
+    ncore::seq_len_prefix_len(count).checked_add(total)
+}
+
+fn gossip_encoded_vec_payload_len_exact<'a, T>(items: impl Iterator<Item = &'a T>) -> Option<usize>
+where
+    T: NoritoSerialize + 'a,
+{
+    let mut count = 0usize;
+    let mut total = 0usize;
+    for item in items {
+        count = count.checked_add(1)?;
+        let item_len = item
+            .encoded_len_exact()
+            .or_else(|| item.encoded_len_hint())?;
         total = total.checked_add(ncore::len_prefix_len(item_len))?;
         total = total.checked_add(item_len)?;
     }
@@ -2848,11 +3078,13 @@ fn partition_gossip_batch(
     let mut message = TransactionGossip {
         txs: Vec::new(),
         routes: Vec::new(),
+        plans: Vec::new(),
         plane,
     };
     let reserved = max_count.min(txs.len());
     message.txs.reserve(reserved);
     message.routes.reserve(reserved);
+    message.plans.reserve(reserved);
     let mut requeue = Vec::with_capacity(txs.len());
     let mut encoded_len = gossip_message_empty_len().unwrap_or(0);
     let Some(route_len) = gossip_route_encoded_len() else {
@@ -2890,15 +3122,28 @@ fn partition_gossip_batch(
         }
 
         let routing = entry.routing;
+        let routing_plan = entry.routing_plan;
         let tx_payload_len = entry.payload.len();
         let Some(tx_entry_len) = ncore::len_prefix_len(tx_payload_len).checked_add(tx_payload_len)
         else {
             requeue.push(hash);
             continue;
         };
+        let Some(plan_len) = routing_plan
+            .encoded_len_exact()
+            .or_else(|| routing_plan.encoded_len_hint())
+        else {
+            requeue.push(hash);
+            continue;
+        };
+        let Some(plan_entry_len) = ncore::len_prefix_len(plan_len).checked_add(plan_len) else {
+            requeue.push(hash);
+            continue;
+        };
         let Some(next_encoded_len) = encoded_len
             .checked_add(tx_entry_len)
             .and_then(|total| total.checked_add(route_entry_len))
+            .and_then(|total| total.checked_add(plan_entry_len))
         else {
             requeue.push(hash);
             continue;
@@ -2916,6 +3161,7 @@ fn partition_gossip_batch(
             lane_id: routing.lane_id,
             dataspace_id: routing.dataspace_id,
         });
+        message.plans.push(routing_plan);
         encoded_len = next_encoded_len;
     }
 
@@ -2925,6 +3171,7 @@ fn partition_gossip_batch(
             requeue.push(removed.hash());
         }
         message.routes.pop();
+        message.plans.pop();
         exact_len = message.encoded_len_exact().unwrap_or(exact_len);
     }
 
@@ -3008,6 +3255,14 @@ mod tests {
         Arc::new(encode_transaction_entrypoint(
             &TransactionEntrypoint::External(tx.clone()),
         ))
+    }
+
+    fn plan_for_route(route: GossipRoute) -> RoutingPlan {
+        RoutingPlan::single(RoutingDecision::new(route.lane_id, route.dataspace_id))
+    }
+
+    fn default_plan() -> RoutingPlan {
+        RoutingPlan::single(RoutingDecision::default())
     }
 
     fn decode_gossip_message(message: &TransactionGossip) -> TransactionGossip {
@@ -3633,12 +3888,14 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let small_len = norito::codec::Encode::encode(&TransactionGossip {
             txs: vec![small_signed.clone().into()],
             routes: vec![small_route],
+            plans: vec![plan_for_route(small_route)],
             plane: GossipPlane::Public,
         })
         .len();
         let both_len = norito::codec::Encode::encode(&TransactionGossip {
             txs: vec![small_signed.clone().into(), large_signed.clone().into()],
             routes: vec![small_route, large_route],
+            plans: vec![plan_for_route(small_route), plan_for_route(large_route)],
             plane: GossipPlane::Public,
         })
         .len();
@@ -3653,11 +3910,13 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 GossipBatchEntry {
                     tx: small_accepted,
                     routing: RoutingDecision::default(),
+                    routing_plan: default_plan(),
                     payload: payload_for(&small_signed),
                 },
                 GossipBatchEntry {
                     tx: large_accepted,
                     routing: RoutingDecision::default(),
+                    routing_plan: default_plan(),
                     payload: payload_for(&large_signed),
                 },
             ],
@@ -3690,6 +3949,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 lane_id: LaneId::SINGLE,
                 dataspace_id: DataSpaceId::UNIVERSAL,
             }],
+            plans: vec![default_plan()],
             plane: GossipPlane::Public,
         };
 
@@ -3721,6 +3981,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 lane_id: LaneId::SINGLE,
                 dataspace_id: DataSpaceId::UNIVERSAL,
             }],
+            plans: vec![default_plan()],
             plane: GossipPlane::Public,
         };
 
@@ -3751,6 +4012,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             vec![GossipBatchEntry {
                 tx: accepted,
                 routing: RoutingDecision::default(),
+                routing_plan: default_plan(),
                 payload,
             }],
         );
@@ -3809,6 +4071,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 lane_id: LaneId::SINGLE,
                 dataspace_id: DataSpaceId::UNIVERSAL,
             }],
+            plans: vec![default_plan()],
             plane: GossipPlane::Public,
         };
 
@@ -3852,6 +4115,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                     lane_id: LaneId::SINGLE,
                     dataspace_id: DataSpaceId::UNIVERSAL,
                 }],
+                plans: vec![default_plan()],
                 plane: GossipPlane::Public,
             };
             let encoded = NetworkMessage::TransactionGossiper(Arc::new(message)).encode();
@@ -3895,6 +4159,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                     lane_id: LaneId::SINGLE,
                     dataspace_id: DataSpaceId::UNIVERSAL,
                 }],
+                plans: vec![default_plan()],
                 plane: GossipPlane::Public,
             };
             let encoded = message.encode();
@@ -3935,6 +4200,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 lane_id: LaneId::SINGLE,
                 dataspace_id: DataSpaceId::UNIVERSAL,
             }],
+            plans: vec![default_plan()],
             plane: GossipPlane::Public,
         };
 
@@ -3959,6 +4225,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 lane_id: LaneId::SINGLE,
                 dataspace_id: DataSpaceId::UNIVERSAL,
             }],
+            plans: vec![default_plan()],
             plane: GossipPlane::Public,
         };
 
@@ -3992,6 +4259,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             vec![GossipBatchEntry {
                 tx: accepted,
                 routing: RoutingDecision::default(),
+                routing_plan: default_plan(),
                 payload: payload_for(&signed),
             }],
         );
@@ -4007,6 +4275,10 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
 
         let cap = norito::codec::Encode::encode(&TransactionGossip {
             txs: vec![tx_a_signed.clone().into(), tx_b_signed.clone().into()],
+            plans: vec![
+                default_plan(),
+                RoutingPlan::single(RoutingDecision::new(LaneId::new(2), DataSpaceId::new(5))),
+            ],
             routes: vec![
                 GossipRoute {
                     lane_id: LaneId::SINGLE,
@@ -4030,11 +4302,13 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 GossipBatchEntry {
                     tx: tx_a_accepted,
                     routing: RoutingDecision::default(),
+                    routing_plan: default_plan(),
                     payload: payload_for(&tx_a_signed),
                 },
                 GossipBatchEntry {
                     tx: tx_b_accepted,
                     routing: RoutingDecision::default(),
+                    routing_plan: default_plan(),
                     payload: payload_for(&tx_b_signed),
                 },
             ],
@@ -4557,6 +4831,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
             txs: vec![invalid_signed.into(), valid_signed.into()],
             routes: vec![invalid_route, valid_route],
+            plans: vec![plan_for_route(invalid_route), plan_for_route(valid_route)],
             plane: GossipPlane::Public,
         }));
 
@@ -4576,6 +4851,10 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 lane_id: LaneId::new(9),
                 dataspace_id: DataSpaceId::new(9),
             }],
+            plans: vec![RoutingPlan::single(RoutingDecision::new(
+                LaneId::new(9),
+                DataSpaceId::new(9),
+            ))],
             plane: GossipPlane::Public,
         });
         assert!(
@@ -4612,6 +4891,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 lane_id: LaneId::SINGLE,
                 dataspace_id: DataSpaceId::UNIVERSAL,
             }],
+            plans: vec![default_plan()],
             plane: GossipPlane::Public,
         });
         assert!(!decoded.txs[0].is_entrypoint_materialized());
@@ -4645,6 +4925,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                     dataspace_id: DataSpaceId::UNIVERSAL,
                 },
             ],
+            plans: vec![default_plan(), default_plan()],
             plane: GossipPlane::Public,
         }));
 
@@ -4670,6 +4951,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                     dataspace_id: DataSpaceId::UNIVERSAL,
                 },
             ],
+            plans: vec![default_plan(), default_plan()],
             plane: GossipPlane::Public,
         }));
 
@@ -4742,6 +5024,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 lane_id: LaneId::SINGLE,
                 dataspace_id: DataSpaceId::UNIVERSAL,
             }],
+            plans: vec![default_plan()],
             plane: GossipPlane::Public,
         }));
 
@@ -4824,6 +5107,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
             txs: vec![signed.into()],
             routes: vec![route],
+            plans: vec![plan_for_route(route)],
             plane: GossipPlane::Public,
         }));
 
@@ -4947,6 +5231,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
             txs: vec![signed.into()],
             routes: vec![route],
+            plans: vec![plan_for_route(route)],
             plane: GossipPlane::Restricted,
         }));
 

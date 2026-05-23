@@ -1018,6 +1018,7 @@ impl ConsensusIngressLimiter {
                 }
             },
             iroha_core::NetworkMessage::SumeragiControlFlow(_) => IngressPolicy::critical(),
+            iroha_core::NetworkMessage::NativeAmx(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::bulk(),
             _ => IngressPolicy::limited(),
         }
@@ -1966,6 +1967,11 @@ impl NetworkRelayShared {
             }
             MergeCommitteeSignature(signature) => {
                 let _ = self.sumeragi.try_incoming_merge_signature(*signature);
+            }
+            NativeAmx(message) => {
+                let _ = self
+                    .sumeragi
+                    .try_incoming_native_amx(peer.id().clone(), *message);
             }
             StreamingControl(frame) => {
                 if let Err(err) = self.streaming.process_control_frame(&peer, frame.as_ref()) {
@@ -4049,6 +4055,45 @@ impl Iroha {
                 .telemetry
                 .set_lane_manifest_registry(Arc::clone(&empty_registry));
         }
+        if config.queue.plan_journal_enabled {
+            let journal_path = config
+                .kura
+                .store_dir
+                .resolve_relative_path()
+                .join("queue_plan_journal.norito");
+            let durable_writes =
+                !matches!(config.kura.fsync_mode, iroha_config::kura::FsyncMode::Off);
+            let replayable = queue
+                .install_plan_journal(
+                    &journal_path,
+                    config.queue.plan_journal_max_bytes,
+                    durable_writes,
+                )
+                .map_err(|err| {
+                    Report::new(StartError::InitKura).attach(format!(
+                        "failed to open queue plan journal {}: {err}",
+                        journal_path.display()
+                    ))
+                })?;
+            let replay_summary = queue.replay_plan_journal(&state).map_err(|err| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "failed to replay queue plan journal {}: {err}",
+                    journal_path.display()
+                ))
+            })?;
+            iroha_logger::info!(
+                path = %journal_path.display(),
+                replayable,
+                records = replay_summary.records,
+                replayed = replay_summary.replayed,
+                tombstoned_committed = replay_summary.tombstoned_committed,
+                tombstoned_expired = replay_summary.tombstoned_expired,
+                tombstoned_stale = replay_summary.tombstoned_stale,
+                tombstoned_malformed = replay_summary.tombstoned_malformed,
+                rejected = replay_summary.rejected,
+                "queue plan journal installed"
+            );
+        }
 
         let config_caps = build_consensus_config_caps(&config.sumeragi)?;
         let consensus_caps_override =
@@ -4857,6 +4902,48 @@ impl Iroha {
                                         let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
                                         telemetry_for_worker
                                             .observe_bg_post_age_ms("BroadcastControlFlow", age_ms);
+                                    }
+                                }
+                                iroha_core::sumeragi::BackgroundPost::PostNativeAmx {
+                                    peer,
+                                    message,
+                                    enqueued_at,
+                                } => {
+                                    let post = iroha_p2p::Post {
+                                        data: iroha_core::NetworkMessage::NativeAmx(Box::new(
+                                            message,
+                                        )),
+                                        peer_id: peer.clone(),
+                                        priority: iroha_p2p::Priority::High,
+                                    };
+                                    network_for_worker.post(post);
+                                    #[cfg(feature = "telemetry")]
+                                    {
+                                        telemetry_for_worker.dec_bg_post_queue_depth();
+                                        telemetry_for_worker
+                                            .dec_bg_post_queue_depth_for_peer(&peer);
+                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
+                                        telemetry_for_worker
+                                            .observe_bg_post_age_ms("PostNativeAmx", age_ms);
+                                    }
+                                }
+                                iroha_core::sumeragi::BackgroundPost::BroadcastNativeAmx {
+                                    message,
+                                    enqueued_at,
+                                } => {
+                                    let b = iroha_p2p::Broadcast {
+                                        data: iroha_core::NetworkMessage::NativeAmx(Box::new(
+                                            message,
+                                        )),
+                                        priority: iroha_p2p::Priority::High,
+                                    };
+                                    network_for_worker.broadcast(b);
+                                    #[cfg(feature = "telemetry")]
+                                    {
+                                        telemetry_for_worker.dec_bg_post_queue_depth();
+                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
+                                        telemetry_for_worker
+                                            .observe_bg_post_age_ms("BroadcastNativeAmx", age_ms);
                                     }
                                 }
                             }

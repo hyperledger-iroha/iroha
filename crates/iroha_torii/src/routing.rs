@@ -53,7 +53,7 @@ use iroha_core::{
         },
     },
     query::store::LiveQueryStoreHandle,
-    queue::RoutingDecision,
+    queue::{RoutingDecision, RoutingPlan},
     sns::{
         LeaseQuote, SnsNamespace, get_name_record,
         quote_account_alias_registration_with_fee_asset_fallback,
@@ -10906,14 +10906,14 @@ pub(crate) fn push_accepted_transaction_for_ingress(
     state: Arc<CoreState>,
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
 ) -> Result<RoutingDecision> {
-    push_accepted_transaction_for_ingress_with_routing(queue, state, accepted_tx, None)
+    push_accepted_transaction_for_ingress_with_routing_plan(queue, state, accepted_tx, None)
 }
 
-pub(crate) fn push_accepted_transaction_for_ingress_with_routing(
+pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
-    routing_decision: Option<RoutingDecision>,
+    routing_plan: Option<RoutingPlan>,
 ) -> Result<RoutingDecision> {
     let pressure = {
         let block_time = state.sumeragi_effective_block_time();
@@ -10930,9 +10930,9 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing(
         );
     }
 
-    let result = match routing_decision {
-        Some(decision) => {
-            queue.push_with_lane_with_state_and_routing(accepted_tx, state.as_ref(), decision)
+    let result = match routing_plan {
+        Some(plan) => {
+            queue.push_with_lane_with_state_and_routing_plan(accepted_tx, state.as_ref(), plan)
         }
         None => queue.push_with_lane_with_state(accepted_tx, state.as_ref()),
     };
@@ -10968,6 +10968,21 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing(
         RoutingDecision,
     )>,
 ) -> Result<usize> {
+    push_accepted_transactions_for_ingress_with_routing_plans(
+        queue,
+        state,
+        accepted
+            .into_iter()
+            .map(|(tx, decision)| (tx, RoutingPlan::single(decision)))
+            .collect(),
+    )
+}
+
+pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    accepted: Vec<(iroha_core::tx::AcceptedTransaction<'static>, RoutingPlan)>,
+) -> Result<usize> {
     if accepted.is_empty() {
         return Ok(0);
     }
@@ -10989,7 +11004,7 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing(
     }
 
     queue
-        .push_batch_with_lane_with_state_and_routing(accepted, state.as_ref())
+        .push_batch_with_lane_with_state_and_routing_plans(accepted, state.as_ref())
         .map_err(|queue::Failure { tx, err }| {
             iroha_logger::warn!(
                 tx_hash=%tx.as_ref().hash(), ?err,

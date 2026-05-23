@@ -60,7 +60,10 @@ pub mod header;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
 
-pub use execution_context::{BlockExecutionContextBundle, ExternalExecutionContext};
+pub use execution_context::{
+    BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
+    ExternalExecutionRouteRole,
+};
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
 

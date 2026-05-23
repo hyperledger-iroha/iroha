@@ -19872,7 +19872,9 @@ async fn fetch_pending_block_stashes_exact_body_request_when_only_rbc_transport_
                 BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_)
             ),
             BackgroundPost::PostControlFlow { .. }
-            | BackgroundPost::BroadcastControlFlow { .. } => true,
+            | BackgroundPost::BroadcastControlFlow { .. }
+            | BackgroundPost::PostNativeAmx { .. }
+            | BackgroundPost::BroadcastNativeAmx { .. } => true,
         }),
         "exact-body fetches must not fall back to RBC transport sidecars"
     );
@@ -20270,7 +20272,9 @@ async fn fetch_pending_block_responses_do_not_enqueue_rbc_sidecars() {
                 BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_)
             ),
             BackgroundPost::PostControlFlow { .. }
-            | BackgroundPost::BroadcastControlFlow { .. } => true,
+            | BackgroundPost::BroadcastControlFlow { .. }
+            | BackgroundPost::PostNativeAmx { .. }
+            | BackgroundPost::BroadcastNativeAmx { .. } => true,
         }),
         "fetch pending block responses must not enqueue RBC sidecars"
     );
@@ -107701,15 +107705,15 @@ async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
     assert!(
         deferred
             .iter()
-            .all(|(_, routing)| routing.lane_id == LaneId::SINGLE),
+            .all(|(_, plan)| plan.coordinator_route().lane_id == LaneId::SINGLE),
         "only the lane0 burst should be deferred after the rotated lane wins"
     );
 
     drop(tx_guards);
-    for (tx, routing) in deferred {
+    for (tx, routing_plan) in deferred {
         actor
             .queue
-            .push_requeued_with_routing(tx, routing, actor.state.as_ref())
+            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
             .expect("requeue deferred tx");
     }
     assert_eq!(actor.queue.queued_len(), 3);
@@ -107765,6 +107769,10 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
         .iter()
         .map(crate::queue::TransactionGuard::routing)
         .collect();
+    let routing_plans: Vec<_> = tx_guards
+        .iter()
+        .map(crate::queue::TransactionGuard::routing_plan)
+        .collect();
     let tx_sizes: Vec<_> = tx_guards
         .iter()
         .map(crate::queue::TransactionGuard::encoded_len)
@@ -107782,16 +107790,23 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
         tx_block.commit().expect("commit transactions block");
     }
 
-    let (filtered_guards, filtered_transactions, _filtered_routing, _filtered_sizes, dropped) =
-        Actor::filter_committed_transactions_for_proposal(
-            actor.state.as_ref(),
-            tx_guards,
-            transactions,
-            routing,
-            tx_sizes,
-            height,
-            view,
-        );
+    let (
+        filtered_guards,
+        filtered_transactions,
+        _filtered_routing,
+        _filtered_routing_plans,
+        _filtered_sizes,
+        dropped,
+    ) = Actor::filter_committed_transactions_for_proposal(
+        actor.state.as_ref(),
+        tx_guards,
+        transactions,
+        routing,
+        routing_plans,
+        tx_sizes,
+        height,
+        view,
+    );
 
     assert_eq!(dropped, 1, "one committed transaction should be dropped");
     assert_eq!(
@@ -107864,10 +107879,10 @@ async fn proposal_gas_budget_limits_fetch() {
 
     drop(tx_guards);
 
-    for (tx, routing) in deferred {
+    for (tx, routing_plan) in deferred {
         actor
             .queue
-            .push_requeued_with_routing(tx, routing, actor.state.as_ref())
+            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
             .expect("requeue deferred tx");
     }
 
@@ -107933,10 +107948,10 @@ async fn proposal_ivm_budget_defers_extra_ivm_and_keeps_cheap_slots() {
     );
 
     drop(tx_guards);
-    for (tx, routing) in deferred {
+    for (tx, routing_plan) in deferred {
         actor
             .queue
-            .push_requeued_with_routing(tx, routing, actor.state.as_ref())
+            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
             .expect("requeue deferred tx");
     }
     assert_eq!(actor.queue.queued_len(), 1, "deferred IVM tx stays queued");

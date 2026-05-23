@@ -312,7 +312,7 @@ export interface MultisigProposePayload {
 }
 
 export interface MultisigContractCallProposeRequest extends MultisigAccountSelector {
-  signerAccountId?: string;
+  signerAccountId: string;
   contractAddress?: string;
   contractAlias?: string;
   entrypoint: string;
@@ -364,7 +364,7 @@ export interface MultisigContractCallProposePayload {
 }
 
 export interface MultisigContractCallApproveRequest extends MultisigAccountSelector {
-  signerAccountId?: string;
+  signerAccountId: string;
   proposalId?: string | null;
   instructionsHash?: string | null;
   feeSponsor?: string | null;
