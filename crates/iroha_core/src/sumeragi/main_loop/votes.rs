@@ -2375,6 +2375,43 @@ impl Actor {
                 targets,
                 target_kind,
             } => {
+                if matches!(highest.phase, crate::sumeragi::consensus::Phase::Commit) {
+                    let sent = send_certified_block_fetch_request(
+                        &self.network,
+                        &self.common_config.peer.id,
+                        highest.subject_block_hash,
+                        highest.height,
+                        highest.view,
+                        &targets,
+                    );
+                    if sent == 0 {
+                        warn!(
+                            height = highest.height,
+                            view = highest.view,
+                            block = %highest.subject_block_hash,
+                            source,
+                            target_kind = target_kind.label(),
+                            "unable to request highest-QC certified block: no remote targets available"
+                        );
+                        return false;
+                    }
+                    if !retain_exact_frontier_request {
+                        self.clear_missing_block_request(
+                            &highest.subject_block_hash,
+                            MissingBlockClearReason::Obsolete,
+                        );
+                    }
+                    info!(
+                        height = highest.height,
+                        view = highest.view,
+                        block = %highest.subject_block_hash,
+                        targets = sent,
+                        target_kind = target_kind.label(),
+                        source,
+                        "requested highest-QC certified block"
+                    );
+                    return true;
+                }
                 let routed_exact_frontier = self.request_missing_block(
                     highest.subject_block_hash,
                     highest.height,
@@ -2682,11 +2719,6 @@ impl Actor {
             record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
             return false;
         }
-        self.hydrate_vnext_certificates_for_block_from_roster_sidecar(
-            vote.block_hash,
-            vote.height,
-            vote.view,
-        );
         let (expected_chain_order_hash, expected_rechain_seq) = self
             .vnext_chain_order_binding_for_signature_topology(
                 vote.height,

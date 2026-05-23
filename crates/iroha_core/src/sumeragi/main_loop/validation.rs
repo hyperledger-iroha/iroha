@@ -582,7 +582,6 @@ impl Actor {
             | super::vnext::SlotState::Committed { .. } => return None,
             super::vnext::SlotState::Idle
             | super::vnext::SlotState::Proposed { .. }
-            | super::vnext::SlotState::AwaitingAvailability { .. }
             | super::vnext::SlotState::AwaitingValidation { .. }
             | super::vnext::SlotState::Prepared { .. } => {}
         }

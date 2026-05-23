@@ -1,6 +1,6 @@
 //! Block sync and missing-block request handlers.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -361,6 +361,18 @@ impl Actor {
                 .unwrap_or_default();
         let targets = Self::build_fetch_targets(&signer_set, &topology);
         if targets.is_empty() {
+            return;
+        }
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            let sent = self.request_certified_block_for_qc(qc, &topology, &signer_set, reason);
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                targets = sent,
+                reason,
+                "forcing certified block fetch for quarantined commit QC"
+            );
             return;
         }
         self.request_missing_block(
@@ -877,6 +889,327 @@ impl Actor {
         formed
     }
 
+    fn validator_checkpoint_from_commit_qc(
+        qc: &crate::sumeragi::consensus::Qc,
+    ) -> ValidatorSetCheckpoint {
+        ValidatorSetCheckpoint::new_with_chain_order(
+            qc.height,
+            qc.view,
+            qc.subject_block_hash,
+            qc.chain_order_hash,
+            qc.rechain_seq,
+            qc.parent_state_root,
+            qc.post_state_root,
+            qc.validator_set.clone(),
+            qc.aggregate.signers_bitmap.clone(),
+            qc.aggregate.bls_aggregate_signature.clone(),
+            qc.validator_set_hash_version,
+            None,
+        )
+    }
+
+    fn certified_block_fetch_response_for_block(
+        &mut self,
+        block: &SignedBlock,
+    ) -> Option<super::message::CertifiedBlockFetchResponse> {
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let commit_qc = self.direct_commit_qc_for_block(block)?;
+        if commit_qc.subject_block_hash != block_hash
+            || commit_qc.height != height
+            || commit_qc.view != view
+            || !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit)
+        {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                qc_height = commit_qc.height,
+                qc_view = commit_qc.view,
+                qc_block = %commit_qc.subject_block_hash,
+                "skipping certified block fetch response with mismatched commit QC"
+            );
+            return None;
+        }
+        let stake_snapshot = self
+            .state
+            .commit_roster_snapshot_for_block(height, block_hash)
+            .and_then(|snapshot| snapshot.stake_snapshot);
+        Some(super::message::CertifiedBlockFetchResponse {
+            height,
+            view,
+            block: block.clone(),
+            validator_checkpoint: Self::validator_checkpoint_from_commit_qc(&commit_qc),
+            commit_qc,
+            stake_snapshot,
+        })
+    }
+
+    fn dispatch_certified_block_fetch_response(
+        &mut self,
+        peer: PeerId,
+        response: super::message::CertifiedBlockFetchResponse,
+    ) {
+        self.dispatch_fetch_pending_block_response(
+            peer,
+            BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Response(
+                response,
+            )),
+            /*bypass_queue*/ true,
+        );
+    }
+
+    fn materialize_certified_block_fetch_response(
+        &mut self,
+        response: super::message::CertifiedBlockFetchResponse,
+    ) -> bool {
+        let block = response.block;
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let payload_bytes = super::proposals::block_payload_bytes(&block);
+        let payload_hash = Hash::new(&payload_bytes);
+        if let Some(inflight) = self.subsystems.commit.inflight.as_mut()
+            && inflight.block_hash == block_hash
+        {
+            if matches!(
+                inflight.pending.validation_status,
+                ValidationStatus::Invalid
+            ) {
+                warn!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    "dropping certified block fetch response for invalid inflight block"
+                );
+                return false;
+            }
+            inflight
+                .pending
+                .note_commit_qc_observed(response.commit_qc.epoch);
+            self.maybe_cache_rehydrated_kura_body(&block);
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
+            self.clear_missing_block_view_change(&block_hash);
+            self.request_commit_pipeline_for_pending(
+                block_hash,
+                super::status::RoundEventCauseTrace::BlockAvailable,
+                None,
+            );
+            return true;
+        }
+        match self.pending.pending_blocks.entry(block_hash) {
+            Entry::Occupied(mut entry) => {
+                let pending = entry.get_mut();
+                if matches!(pending.validation_status, ValidationStatus::Invalid) {
+                    warn!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        "dropping certified block fetch response for invalid pending block"
+                    );
+                    return false;
+                }
+                if pending.is_retry_aborted() {
+                    pending.revive_after_abort_with_payload_bytes(
+                        block.clone(),
+                        payload_hash,
+                        height,
+                        view,
+                        payload_bytes,
+                    );
+                } else {
+                    pending.replace_block_with_payload_bytes(
+                        block.clone(),
+                        payload_hash,
+                        height,
+                        view,
+                        payload_bytes,
+                    );
+                }
+                pending.note_commit_qc_observed(response.commit_qc.epoch);
+            }
+            Entry::Vacant(entry) => {
+                let mut pending = PendingBlock::new_with_payload_bytes(
+                    block.clone(),
+                    payload_hash,
+                    height,
+                    view,
+                    payload_bytes,
+                );
+                pending.note_commit_qc_observed(response.commit_qc.epoch);
+                entry.insert(pending);
+            }
+        }
+        self.maybe_cache_rehydrated_kura_body(&block);
+        self.deferred_missing_payload_qcs
+            .remove(&Self::qc_tally_key(&response.commit_qc));
+        self.deferred_block_sync_updates
+            .remove(&(height, view, block_hash));
+        self.flush_frontier_body_requesters(&block);
+        self.flush_pending_block_body_requests_if_ready(&block);
+        self.flush_pending_fetch_requests(&block);
+        self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
+        self.clear_missing_block_view_change(&block_hash);
+        let _ = self.try_replay_deferred_qcs();
+        let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
+        self.request_commit_pipeline_for_pending(
+            block_hash,
+            super::status::RoundEventCauseTrace::BlockAvailable,
+            None,
+        );
+        info!(
+            height,
+            view,
+            block = %block_hash,
+            "materialized certified block fetch response as pending block"
+        );
+        true
+    }
+
+    pub(super) fn handle_certified_block_fetch(
+        &mut self,
+        fetch: super::message::CertifiedBlockFetch,
+        sender: Option<PeerId>,
+    ) -> Result<()> {
+        match fetch {
+            super::message::CertifiedBlockFetch::Request(request) => {
+                self.handle_certified_block_fetch_request(request, sender);
+                Ok(())
+            }
+            super::message::CertifiedBlockFetch::Response(response) => {
+                self.handle_certified_block_fetch_response(response)
+            }
+        }
+    }
+
+    fn handle_certified_block_fetch_request(
+        &mut self,
+        request: super::message::CertifiedBlockFetchRequest,
+        sender: Option<PeerId>,
+    ) {
+        if let Some(sender) = sender.as_ref()
+            && sender != &request.requester
+        {
+            warn!(
+                authenticated_sender = %sender,
+                claimed_requester = %request.requester,
+                height = request.height,
+                view = request.view,
+                block = %request.block_hash,
+                "dropping certified block fetch request with mismatched requester"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return;
+        }
+        let Some(block) = self.local_signed_block_for_body_repair(request.block_hash) else {
+            debug!(
+                height = request.height,
+                view = request.view,
+                block = %request.block_hash,
+                requester = %request.requester,
+                "unable to serve certified block fetch request: local block missing"
+            );
+            return;
+        };
+        if block.header().height().get() != request.height
+            || block.header().view_change_index() != request.view
+            || block.hash() != request.block_hash
+        {
+            warn!(
+                height = request.height,
+                view = request.view,
+                block = %request.block_hash,
+                local_height = block.header().height().get(),
+                local_view = block.header().view_change_index(),
+                local_block = %block.hash(),
+                "dropping certified block fetch request with mismatched local subject"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return;
+        }
+        let Some(response) = self.certified_block_fetch_response_for_block(block.as_ref()) else {
+            debug!(
+                height = request.height,
+                view = request.view,
+                block = %request.block_hash,
+                requester = %request.requester,
+                "unable to serve certified block fetch request: commit QC unavailable"
+            );
+            return;
+        };
+        info!(
+            height = request.height,
+            view = request.view,
+            block = %request.block_hash,
+            requester = %request.requester,
+            "sending certified block fetch response"
+        );
+        self.dispatch_certified_block_fetch_response(request.requester, response);
+    }
+
+    fn handle_certified_block_fetch_response(
+        &mut self,
+        response: super::message::CertifiedBlockFetchResponse,
+    ) -> Result<()> {
+        if let Err(err) = response.validate_subject() {
+            warn!(
+                ?err,
+                height = response.height,
+                view = response.view,
+                block = %response.block.hash(),
+                "dropping malformed certified block fetch response"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        }
+        let block_hash = response.block.hash();
+        let height = response.height;
+        let view = response.view;
+        let commit_qc = response.commit_qc.clone();
+        self.handle_qc(commit_qc.clone())?;
+        if self
+            .cached_commit_qc_for_block(block_hash, height, view)
+            .is_none()
+        {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                "dropping certified block fetch response whose commit QC was not accepted locally"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        }
+        self.state.record_commit_roster(
+            &commit_qc,
+            &response.validator_checkpoint,
+            response.stake_snapshot.clone(),
+        );
+        super::status::record_commit_qc(commit_qc);
+        self.materialize_certified_block_fetch_response(response);
+        Ok(())
+    }
+
     fn direct_commit_qc_from_block_sync_update(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -1259,7 +1592,6 @@ impl Actor {
             self.state.as_ref(),
             self.config.consensus_mode,
         );
-        self.attach_vnext_certificates_to_block_sync_update(&mut update);
         let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
         let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
         let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
@@ -1970,8 +2302,6 @@ impl Actor {
             commit_qc: incoming_qc,
             validator_checkpoint,
             stake_snapshot,
-            vnext_rechain_certificates,
-            vnext_view_change_certificates,
         } = update;
         let mut incoming_qc = incoming_qc;
         let mut validator_checkpoint = validator_checkpoint;
@@ -1979,33 +2309,6 @@ impl Actor {
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
-        let matching_rechain_certificates = vnext_rechain_certificates
-            .iter()
-            .filter(|certificate| {
-                super::vnext_rechain_certificate_matches_block(
-                    certificate,
-                    block_hash,
-                    block_height,
-                    block_view,
-                )
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let matching_view_change_certificates = vnext_view_change_certificates
-            .iter()
-            .filter(|certificate| {
-                super::vnext_view_change_certificate_matches_block(
-                    certificate,
-                    block_height,
-                    block_view,
-                )
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        self.install_vnext_block_sync_sidecars(
-            &matching_rechain_certificates,
-            &matching_view_change_certificates,
-        );
         self.maybe_cache_rehydrated_kura_body(&block);
         let parent_hash = block.header().prev_block_hash();
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
@@ -2771,8 +3074,6 @@ impl Actor {
                     commit_qc: incoming_qc,
                     validator_checkpoint,
                     stake_snapshot,
-                    vnext_rechain_certificates,
-                    vnext_view_change_certificates,
                 },
                 sender,
                 block_hash,

@@ -1353,6 +1353,9 @@ impl Actor {
             super::qc_signer_indices(qc, topology.as_ref().len(), topology.as_ref().len())
                 .map(|parsed| parsed.voting.into_iter().collect::<BTreeSet<_>>())
                 .unwrap_or_default();
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            return self.request_certified_block_for_qc(qc, &topology, &signer_set, reason) > 0;
+        }
         let mut targets = Self::build_fetch_targets(&signer_set, &topology);
         let mut stall_all_peers = false;
         let mut stall_window_index = 0_u64;
@@ -1442,6 +1445,63 @@ impl Actor {
             "forcing targeted missing-block fetch for deferred QC"
         );
         true
+    }
+
+    pub(super) fn request_certified_block_for_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        topology: &super::network_topology::Topology,
+        signers: &BTreeSet<ValidatorIndex>,
+        reason: &'static str,
+    ) -> usize {
+        self.request_certified_block_for_header(
+            Self::qc_to_header_ref(qc),
+            topology,
+            signers,
+            reason,
+        )
+    }
+
+    pub(super) fn request_certified_block_for_header(
+        &mut self,
+        certified: crate::sumeragi::consensus::QcHeaderRef,
+        topology: &super::network_topology::Topology,
+        signers: &BTreeSet<ValidatorIndex>,
+        reason: &'static str,
+    ) -> usize {
+        if !matches!(certified.phase, crate::sumeragi::consensus::Phase::Commit) {
+            return 0;
+        }
+        let mut targets = Self::build_fetch_targets(signers, topology);
+        targets.sort();
+        targets.dedup();
+        let sent = send_certified_block_fetch_request(
+            &self.network,
+            &self.common_config.peer.id,
+            certified.subject_block_hash,
+            certified.height,
+            certified.view,
+            &targets,
+        );
+        if sent == 0 {
+            warn!(
+                height = certified.height,
+                view = certified.view,
+                block = %certified.subject_block_hash,
+                reason,
+                "unable to request certified block: no remote QC validator targets available"
+            );
+            return 0;
+        }
+        info!(
+            height = certified.height,
+            view = certified.view,
+            block = %certified.subject_block_hash,
+            targets = sent,
+            reason,
+            "requested certified block from QC validator set"
+        );
+        sent
     }
 
     pub(super) fn try_replay_deferred_qcs(&mut self) -> bool {
@@ -2810,13 +2870,33 @@ impl Actor {
                 Some(stats) => stats.clone(),
                 None => continue,
             };
+            let expected_epoch = self.epoch_for_height(stats_snapshot.height);
+            let certified_consensus_fetch = matches!(
+                (stats_snapshot.phase, stats_snapshot.priority),
+                (
+                    crate::sumeragi::consensus::Phase::Commit,
+                    super::MissingBlockPriority::Consensus
+                )
+            ) && (super::cached_qc_for(
+                &self.qc_cache,
+                crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                stats_snapshot.height,
+                stats_snapshot.view,
+                expected_epoch,
+            )
+            .is_some()
+                || self
+                    .state
+                    .commit_roster_snapshot_for_block(stats_snapshot.height, block_hash)
+                    .is_some());
             let exact_frontier_slot_matches = self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.block_hash == block_hash
                     && slot.height == stats_snapshot.height
                     && slot.view == stats_snapshot.view
             }) && self
                 .frontier_slot_is_exact_height(stats_snapshot.height);
-            if exact_frontier_slot_matches {
+            if exact_frontier_slot_matches && !certified_consensus_fetch {
                 if self.frontier_recovery_exists_at_height(stats_snapshot.height) {
                     if self.frontier_recovery_owns_height_window(stats_snapshot.height, now) {
                         progress = true;
@@ -2919,7 +2999,6 @@ impl Actor {
                 progress = true;
                 continue;
             }
-            let expected_epoch = self.epoch_for_height(stats_snapshot.height);
             let mut signers = BTreeSet::new();
             let mut roster: Option<Vec<PeerId>> = None;
             if let Some(qc) = super::cached_qc_for(
@@ -3004,7 +3083,10 @@ impl Actor {
                 .filter(|roster| !roster.is_empty())
                 .map(super::network_topology::Topology::new);
 
-            if stats_snapshot.height == frontier_height && !exact_frontier_slot_matches {
+            if stats_snapshot.height == frontier_height
+                && !exact_frontier_slot_matches
+                && !certified_consensus_fetch
+            {
                 let routed = if let Some(topology) = topology.as_ref() {
                     self.handle_frontier_body_gap_with_topology(
                         block_hash,
@@ -3044,7 +3126,7 @@ impl Actor {
                     continue;
                 }
             }
-            if stats_snapshot.height == keep_through_height {
+            if stats_snapshot.height == keep_through_height && !certified_consensus_fetch {
                 self.next_slot_prefetch = Some(super::FrontierPrefetchSlot {
                     height: stats_snapshot.height,
                     view: stats_snapshot.view,
@@ -3207,30 +3289,76 @@ impl Actor {
                     targets,
                     target_kind,
                 } => {
-                    self.request_missing_block(
-                        block_hash,
-                        stats_snapshot.height,
-                        stats_snapshot.view,
-                        stats_snapshot.priority,
-                        &targets,
-                    );
-                    iroha_logger::info!(
-                        height = stats_snapshot.height,
-                        view = stats_snapshot.view,
-                        phase = ?stats_snapshot.phase,
-                        block = ?block_hash,
-                        targets = ?targets,
-                        target_kind = target_kind.label(),
-                        retry_window_ms = effective_retry_window_ms,
-                        base_retry_window_ms = retry_window_ms,
-                        far_ahead_retry,
-                        far_ahead_retry_suppressed,
-                        dwell_ms,
-                        since_last_ms,
-                        attempts,
-                        "retrying missing block fetch"
-                    );
-                    progress = true;
+                    if certified_consensus_fetch {
+                        let sent = send_certified_block_fetch_request(
+                            &self.network,
+                            &self.common_config.peer.id,
+                            block_hash,
+                            stats_snapshot.height,
+                            stats_snapshot.view,
+                            targets,
+                        );
+                        if sent > 0 {
+                            iroha_logger::info!(
+                                height = stats_snapshot.height,
+                                view = stats_snapshot.view,
+                                phase = ?stats_snapshot.phase,
+                                block = ?block_hash,
+                                targets = sent,
+                                target_kind = target_kind.label(),
+                                retry_window_ms = effective_retry_window_ms,
+                                base_retry_window_ms = retry_window_ms,
+                                far_ahead_retry,
+                                far_ahead_retry_suppressed,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "retrying certified block fetch"
+                            );
+                            progress = true;
+                        } else {
+                            iroha_logger::warn!(
+                                height = stats_snapshot.height,
+                                view = stats_snapshot.view,
+                                phase = ?stats_snapshot.phase,
+                                block = ?block_hash,
+                                target_kind = target_kind.label(),
+                                retry_window_ms = effective_retry_window_ms,
+                                base_retry_window_ms = retry_window_ms,
+                                far_ahead_retry,
+                                far_ahead_retry_suppressed,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "unable to retry certified block fetch: no remote targets available"
+                            );
+                        }
+                    } else {
+                        self.request_missing_block(
+                            block_hash,
+                            stats_snapshot.height,
+                            stats_snapshot.view,
+                            stats_snapshot.priority,
+                            targets,
+                        );
+                        iroha_logger::info!(
+                            height = stats_snapshot.height,
+                            view = stats_snapshot.view,
+                            phase = ?stats_snapshot.phase,
+                            block = ?block_hash,
+                            targets = ?targets,
+                            target_kind = target_kind.label(),
+                            retry_window_ms = effective_retry_window_ms,
+                            base_retry_window_ms = retry_window_ms,
+                            far_ahead_retry,
+                            far_ahead_retry_suppressed,
+                            dwell_ms,
+                            since_last_ms,
+                            attempts,
+                            "retrying missing block fetch"
+                        );
+                        progress = true;
+                    }
                 }
                 MissingBlockFetchDecision::NoTargets => {
                     iroha_logger::warn!(
@@ -5873,9 +6001,11 @@ impl Actor {
                 );
             }
             let should_update = same_height_realign
-                || self
+                || allow_nonextending
+                || (self
                     .locked_qc
-                    .is_none_or(|lock| (qc.height, qc.view) > (lock.height, lock.view));
+                    .is_none_or(|lock| (qc.height, qc.view) > (lock.height, lock.view))
+                    && self.block_known_for_lock(qc_ref.subject_block_hash));
             if should_update {
                 super::status::set_locked_qc(qc.height, qc.view, Some(qc.subject_block_hash));
                 self.locked_qc = Some(qc_ref);
@@ -6116,11 +6246,6 @@ impl Actor {
             );
             return Ok(());
         }
-        self.hydrate_vnext_certificates_for_block_from_roster_sidecar(
-            qc.subject_block_hash,
-            qc.height,
-            qc.view,
-        );
         let (expected_chain_order_hash, expected_rechain_seq) =
             self.vnext_chain_order_binding_for_qc(&qc);
         if qc.chain_order_hash != expected_chain_order_hash
@@ -6804,13 +6929,6 @@ impl Actor {
                 return Ok(());
             }
             self.defer_qc_for_missing_payload(&qc, "payload_missing");
-            info!(
-                height = qc.height,
-                view = qc.view,
-                phase = ?qc.phase,
-                hash = %qc.subject_block_hash,
-                "received QC for unknown block; caching without updating locks/highest"
-            );
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
             if same_height_frontier_commit_qc {
                 // Already recorded before the non-actionable dependency gate so certified
@@ -6832,124 +6950,126 @@ impl Actor {
                     },
                 );
             }
-            let view_change_window = self.quorum_timeout(self.runtime_da_enabled());
-            let base_retry_window = self.rebroadcast_cooldown();
-            let aggressive_qc_fetch = matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit);
-            let existing_attempts = self
-                .pending
-                .missing_block_requests
-                .get(&qc.subject_block_hash)
-                .map_or(0, |stats| stats.attempts);
-            let aggressive_retry_floor = aggressive_qc_fetch && existing_attempts == 0;
-            let retry_window = if aggressive_retry_floor {
-                crate::sumeragi::status::inc_qc_missing_payload_aggressive_fetch();
-                super::REBROADCAST_COOLDOWN_FLOOR
+            if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    phase = ?qc.phase,
+                    hash = %qc.subject_block_hash,
+                    "received commit QC for unknown block; accepting certified state and requesting exact certified block"
+                );
+                let targets_len = self.request_certified_block_for_qc(
+                    &qc,
+                    &topology,
+                    &signer_set,
+                    "commit_qc_missing_payload",
+                );
+                super::status::record_missing_block_fetch(targets_len, 0);
             } else {
-                self.missing_block_retry_window_with_rbc_progress(
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    phase = ?qc.phase,
+                    hash = %qc.subject_block_hash,
+                    "received QC for unknown block; caching without updating locks/highest"
+                );
+                let view_change_window = self.quorum_timeout(self.runtime_da_enabled());
+                let base_retry_window = self.rebroadcast_cooldown();
+                let retry_window = self.missing_block_retry_window_with_rbc_progress(
                     qc.subject_block_hash,
                     qc.height,
                     qc.view,
                     base_retry_window,
-                )
-            };
-            if let Some(stats) = self
-                .pending
-                .missing_block_requests
-                .get_mut(&qc.subject_block_hash)
-            {
-                if aggressive_retry_floor && stats.attempts == 0 {
-                    if stats.retry_window == Duration::ZERO || retry_window < stats.retry_window {
-                        stats.retry_window = retry_window;
-                    }
-                } else if retry_window > stats.retry_window {
+                );
+                if let Some(stats) = self
+                    .pending
+                    .missing_block_requests
+                    .get_mut(&qc.subject_block_hash)
+                    && retry_window > stats.retry_window
+                {
                     stats.retry_window = retry_window;
                 }
+                let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
+                let decision = plan_missing_block_fetch_with_mode(
+                    &mut self.pending.missing_block_requests,
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                    qc.phase,
+                    super::MissingBlockPriority::Consensus,
+                    &signer_set,
+                    &topology,
+                    now,
+                    retry_window,
+                    Some(view_change_window),
+                    signer_fallback_attempts,
+                    super::MissingBlockFetchMode::Default,
+                    false,
+                );
+                let dwell = self
+                    .pending
+                    .missing_block_requests
+                    .get(&qc.subject_block_hash)
+                    .map(|stats| now.saturating_duration_since(stats.first_seen))
+                    .unwrap_or_default();
+                let dwell_ms = dwell.as_millis();
+                let targets_len = match &decision {
+                    MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+                    _ => 0,
+                };
+                let dwell_ms_u64 = dwell_ms.try_into().unwrap_or(u64::MAX);
+                self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+                match decision {
+                    MissingBlockFetchDecision::Requested {
+                        targets,
+                        target_kind,
+                    } => {
+                        self.request_missing_block(
+                            qc.subject_block_hash,
+                            qc.height,
+                            qc.view,
+                            super::MissingBlockPriority::Consensus,
+                            &targets,
+                        );
+                        iroha_logger::info!(
+                            height = qc.height,
+                            view = qc.view,
+                            phase = ?qc.phase,
+                            block = ?qc.subject_block_hash,
+                            targets = ?targets,
+                            target_kind = target_kind.label(),
+                            retry_window_ms = retry_window.as_millis(),
+                            dwell_ms,
+                            "requested missing block payload after QC arrival"
+                        );
+                    }
+                    MissingBlockFetchDecision::NoTargets => {
+                        iroha_logger::warn!(
+                            height = qc.height,
+                            view = qc.view,
+                            phase = ?qc.phase,
+                            block = ?qc.subject_block_hash,
+                            retry_window_ms = retry_window.as_millis(),
+                            dwell_ms,
+                            targets = targets_len,
+                            "unable to request missing block payload: no peers available"
+                        );
+                    }
+                    MissingBlockFetchDecision::Backoff => {
+                        iroha_logger::info!(
+                            height = qc.height,
+                            view = qc.view,
+                            phase = ?qc.phase,
+                            block = ?qc.subject_block_hash,
+                            retry_window_ms = retry_window.as_millis(),
+                            dwell_ms,
+                            targets = targets_len,
+                            "skipping missing-block fetch during retry backoff window"
+                        );
+                    }
+                }
+                super::status::record_missing_block_fetch(targets_len, dwell_ms_u64);
             }
-            let fetch_mode = if aggressive_qc_fetch {
-                super::MissingBlockFetchMode::AggressiveTopology
-            } else {
-                super::MissingBlockFetchMode::Default
-            };
-            let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
-            let decision = plan_missing_block_fetch_with_mode(
-                &mut self.pending.missing_block_requests,
-                qc.subject_block_hash,
-                qc.height,
-                qc.view,
-                qc.phase,
-                super::MissingBlockPriority::Consensus,
-                &signer_set,
-                &topology,
-                now,
-                retry_window,
-                Some(view_change_window),
-                signer_fallback_attempts,
-                fetch_mode,
-                false,
-            );
-            let dwell = self
-                .pending
-                .missing_block_requests
-                .get(&qc.subject_block_hash)
-                .map(|stats| now.saturating_duration_since(stats.first_seen))
-                .unwrap_or_default();
-            let dwell_ms = dwell.as_millis();
-            let targets_len = match &decision {
-                MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
-                _ => 0,
-            };
-            let dwell_ms_u64 = dwell_ms.try_into().unwrap_or(u64::MAX);
-            self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
-            match decision {
-                MissingBlockFetchDecision::Requested {
-                    targets,
-                    target_kind,
-                } => {
-                    self.request_missing_block(
-                        qc.subject_block_hash,
-                        qc.height,
-                        qc.view,
-                        super::MissingBlockPriority::Consensus,
-                        &targets,
-                    );
-                    iroha_logger::info!(
-                        height = qc.height,
-                        view = qc.view,
-                        phase = ?qc.phase,
-                        block = ?qc.subject_block_hash,
-                        targets = ?targets,
-                        target_kind = target_kind.label(),
-                        retry_window_ms = retry_window.as_millis(),
-                        dwell_ms,
-                        "requested missing block payload after QC arrival"
-                    );
-                }
-                MissingBlockFetchDecision::NoTargets => {
-                    iroha_logger::warn!(
-                        height = qc.height,
-                        view = qc.view,
-                        phase = ?qc.phase,
-                        block = ?qc.subject_block_hash,
-                        retry_window_ms = retry_window.as_millis(),
-                        dwell_ms,
-                        targets = targets_len,
-                        "unable to request missing block payload: no peers available"
-                    );
-                }
-                MissingBlockFetchDecision::Backoff => {
-                    iroha_logger::info!(
-                        height = qc.height,
-                        view = qc.view,
-                        phase = ?qc.phase,
-                        block = ?qc.subject_block_hash,
-                        retry_window_ms = retry_window.as_millis(),
-                        dwell_ms,
-                        targets = targets_len,
-                        "skipping missing-block fetch during retry backoff window"
-                    );
-                }
-            }
-            super::status::record_missing_block_fetch(targets_len, dwell_ms_u64);
         } else if !block_known_for_lock {
             info!(
                 height = qc.height,
@@ -6966,7 +7086,7 @@ impl Actor {
                 true
             }
             crate::sumeragi::consensus::Phase::Commit => {
-                self.process_precommit_qc(&qc, block_known_for_lock, false)
+                self.process_precommit_qc(&qc, true, false)
             }
             crate::sumeragi::consensus::Phase::NewView => {
                 self.process_new_view_qc(&qc, &signer_indices, &topology);

@@ -2,6 +2,28 @@
 
 Last updated: 2026-05-23
 
+## 2026-05-23 Certified block recovery simplification
+
+- Added the Norito-encoded `BlockMessage::CertifiedBlockFetch` request/response
+  family for direct recovery of blocks certified by commit QCs.
+- Commit-QC missing-payload handling now accepts the validated QC as certified
+  consensus state, requests the exact certified block from the QC validator set,
+  and no longer routes that critical path through `FetchPendingBlock`, exact
+  frontier `BlockBodyResponse`, or RBC repair. RBC remains DA/availability
+  plumbing and an opportunistic local payload source.
+- Certified fetch responses self-validate height, view, block hash, commit-QC
+  subject, and validator checkpoint consistency before materializing a pending
+  block. State application remains gated on local validation and certified root
+  checks, so a peer can temporarily know a higher certified/QC height than its
+  applied block height during catch-up.
+- Relay and ingress classification now treat certified-block fetches as
+  consensus-critical frames, and operator docs/roadmap call out the direct
+  certified recovery corridor plus remaining soak coverage.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core certified_block_fetch --lib -- --nocapture`
+  - `cargo check -p irohad --bin irohad`
+
 ## 2026-05-23 Sumeragi V1 canonical engine slice
 
 - Added first-release Sumeragi V1 DTOs (`RoundId`, `ValidatorSetId`,
@@ -14,9 +36,15 @@ Last updated: 2026-05-23
   `phase`, leader index, locked/highest QC, pending finality,
   validator-set id, quorum policy, and payload/RBC status) to both JSON and
   Norito status responses.
-- Quarantined non-canonical control frames at live Sumeragi ingress/broadcast
-  boundaries so they are recorded as rejected V1 status evidence instead of
-  driving consensus state.
+- Removed the non-canonical `BlockMessage::VNext` live wire/status surface:
+  V1 nodes no longer accept, broadcast, classify, or expose those frames as
+  consensus status labels. The old `vnext::ConsensusMessage` wire enum is gone,
+  and legacy vNext block-sync/Kura sidecar fields are no longer persisted,
+  rehydrated, relayed, or hashed as recovery evidence.
+- Deleted the now-unused live vNext ingress, suspicion, re-chain proposal, and
+  control-broadcast helpers. The remaining `sumeragi::vnext` module is
+  crate-private and exists only for actor-adapter diagnostics and the remaining
+  deterministic quorum/signature checks still referenced by the adapter.
 - Tightened quorum rules to strict supermajority: permissioned
   `floor(2n / 3) + 1`, and NPoS stake `signed_stake * 3 > total_stake * 2`
   with missing or zero stake failing closed.
@@ -39,9 +67,13 @@ Last updated: 2026-05-23
   - `cargo test -p iroha_genesis consensus_handshake_metadata --lib -- --nocapture`
   - `cargo test -p iroha_torii --lib status_snapshot_json_includes_canonical_v1_state -- --nocapture`
   - `cargo test -p iroha_core --lib sumeragi::engine -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::vnext -- --nocapture`
   - `cargo test -p iroha_core --lib sumeragi -- --nocapture`
   - `cargo test -p iroha_core sumeragi -- --nocapture`
   - `cargo test -p iroha_core --lib consensus_message_handling_labels_include_new_variants -- --nocapture`
+  - `cargo test -p iroha_core --lib incoming_block_message_accepts_block_sync_update_with_new_evidence -- --nocapture`
+  - `cargo check -p iroha_core --lib`
+  - `cargo check -p irohad`
   - `cargo test -p iroha_core --lib selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint -- --nocapture`
   - `cargo test -p iroha_core --lib stake_quorum_reached_for_peers_falls_back_without_stake_records -- --nocapture`
   - `cargo test -p iroha --lib get_sumeragi_status_prefers_norito_and_handles_json -- --nocapture`

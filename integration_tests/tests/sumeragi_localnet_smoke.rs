@@ -144,6 +144,7 @@ const REALISTIC_30TPS_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const REALISTIC_30TPS_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const REALISTIC_30TPS_TRANSFER_ACCOUNTS: usize = 640;
 const REALISTIC_30TPS_TRANSFER_MAX_AMOUNT: u64 = 5;
+const REALISTIC_30TPS_NPOS_FEE_FUNDING_CHUNK: usize = 128;
 const REALISTIC_30TPS_RAM_LFE_EMAIL_POLICY_ID: &str = "email#realistic";
 const REALISTIC_30TPS_RAM_LFE_EMAIL_PROGRAM_ID: &str = "email_realistic";
 const FAIL_ON_SANDBOX_SKIP_ENV: &str = "IROHA_FAIL_ON_SANDBOX_SKIP";
@@ -523,6 +524,64 @@ fn realistic_transfer_accounts(account_count: usize, rng_seed: u64) -> Vec<Trans
             TransferLoadAccount { id, key_pair }
         })
         .collect()
+}
+
+fn realistic_npos_fee_funding_instruction_chunks(
+    accounts: &[TransferLoadAccount],
+) -> Vec<Vec<InstructionBox>> {
+    let fee_asset_definition_id = route_fee_asset_definition_id();
+    accounts
+        .chunks(REALISTIC_30TPS_NPOS_FEE_FUNDING_CHUNK)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(|account| {
+                    Mint::asset_numeric(
+                        ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
+                        AssetId::new(fee_asset_definition_id.clone(), account.id.clone()),
+                    )
+                    .into()
+                })
+                .collect()
+        })
+        .collect()
+}
+
+async fn fund_realistic_npos_transfer_fee_accounts(
+    network: &Network,
+    accounts: &[TransferLoadAccount],
+) -> Result<()> {
+    if accounts.is_empty() {
+        return Ok(());
+    }
+
+    let before_statuses = collect_statuses(network, STATUS_POLL_TIMEOUT)
+        .await
+        .wrap_err("failed to collect baseline status before NPoS fee funding")?;
+    let baseline_approved = before_statuses
+        .iter()
+        .map(|status| status.txs_approved)
+        .min()
+        .unwrap_or_default();
+    let instruction_chunks = realistic_npos_fee_funding_instruction_chunks(accounts);
+    let target_approved = baseline_approved.saturating_add(
+        u64::try_from(instruction_chunks.len()).expect("funding chunk count fits u64"),
+    );
+    let client = network.client();
+
+    task::spawn_blocking(move || -> Result<()> {
+        for (chunk_index, instructions) in instruction_chunks.into_iter().enumerate() {
+            client.submit_all_blocking(instructions).wrap_err_with(|| {
+                format!("failed to fund NPoS fee assets for transfer account chunk {chunk_index}")
+            })?;
+        }
+        Ok(())
+    })
+    .await
+    .wrap_err("NPoS fee funding task join failed")??;
+
+    wait_for_min_txs_approved(network, target_approved, Duration::from_secs(60)).await?;
+    Ok(())
 }
 
 fn realistic_ram_lfe_email_policy_id() -> IdentifierPolicyId {
@@ -995,6 +1054,47 @@ fn verify_realistic_ram_lfe_email_claim_counts(
 #[ignore = "long-running 4-peer localnet regression (30 TPS for 20 minutes)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
 async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
+    run_realistic_30tps_localnet(
+        Realistic30TpsConsensusMode::Permissioned,
+        stringify!(permissioned_localnet_realistic_30tps_20min),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "long-running 4-peer localnet regression (30 TPS for 20 minutes, NPoS)"]
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
+async fn npos_localnet_realistic_30tps_20min() -> Result<()> {
+    run_realistic_30tps_localnet(
+        Realistic30TpsConsensusMode::Npos,
+        stringify!(npos_localnet_realistic_30tps_20min),
+    )
+    .await
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Realistic30TpsConsensusMode {
+    Permissioned,
+    Npos,
+}
+
+impl Realistic30TpsConsensusMode {
+    fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Permissioned => "permissioned",
+            Self::Npos => "npos",
+        }
+    }
+
+    fn is_npos(self) -> bool {
+        matches!(self, Self::Npos)
+    }
+}
+
+async fn run_realistic_30tps_localnet(
+    consensus_mode: Realistic30TpsConsensusMode,
+    test_name: &'static str,
+) -> Result<()> {
     init_instruction_registry();
     let _guard = LOCALNET_SMOKE_GUARD
         .get_or_init(|| Mutex::new(()))
@@ -1125,8 +1225,11 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
             SumeragiParameter::RedundantSendR(2),
         )))
         .with_config_layer(|layer| {
-            let _ = layer
-                .write(["sumeragi", "consensus_mode"], "permissioned")
+            let writer = layer
+                .write(
+                    ["sumeragi", "consensus_mode"],
+                    consensus_mode.as_config_str(),
+                )
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
                 .write(
@@ -1183,6 +1286,38 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
                 .write(["torii", "tx_rate_per_authority_per_sec"], 0_i64)
                 .write(["torii", "tx_burst_per_authority"], 0_i64)
                 .write(["torii", "api_high_load_tx_threshold"], 262_144_i64);
+            if consensus_mode.is_npos() {
+                let _ = writer
+                    .write(["sumeragi", "collectors", "k"], 2_i64)
+                    .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
+                    .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
+                    .write(["sumeragi", "npos", "election", "max_validators"], 4_i64)
+                    .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
+                    .write(
+                        ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
+                        i64::try_from(block_time_ms).expect("block time fits i64"),
+                    )
+                    .write(
+                        ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
+                        i64::try_from(commit_time_ms.saturating_mul(2))
+                            .expect("prevote timeout fits i64"),
+                    )
+                    .write(
+                        ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
+                        i64::try_from(commit_time_ms.saturating_mul(3))
+                            .expect("precommit timeout fits i64"),
+                    )
+                    .write(
+                        ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
+                        i64::try_from(commit_time_ms.saturating_mul(4))
+                            .expect("commit timeout fits i64"),
+                    )
+                    .write(
+                        ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
+                        i64::try_from(commit_time_ms.saturating_mul(2))
+                            .expect("DA timeout fits i64"),
+                    );
+            }
         });
     match load_kind {
         Realistic30TpsLoadKind::Transfer => {
@@ -1232,11 +1367,7 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
     }
 
     let result: Result<()> = async {
-        let Some(network) = sandbox::start_network_async_or_skip(
-            builder,
-            stringify!(permissioned_localnet_realistic_30tps_20min),
-        )
-        .await?
+        let Some(network) = sandbox::start_network_async_or_skip(builder, test_name).await?
         else {
             return Ok(());
         };
@@ -1250,6 +1381,11 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
 
         let run_result: Result<()> = async {
             wait_for_status_responses(&network, Duration::from_secs(30)).await?;
+            if consensus_mode.is_npos() && load_kind == Realistic30TpsLoadKind::Transfer {
+                fund_realistic_npos_transfer_fee_accounts(&network, &transfer_load_accounts)
+                    .await
+                    .wrap_err("failed to fund realistic NPoS transfer fee accounts")?;
+            }
             let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
             let baseline_non_empty = baseline_statuses
                 .iter()
@@ -1815,12 +1951,7 @@ async fn permissioned_localnet_realistic_30tps_20min() -> Result<()> {
         remove_env_var("IROHA_TEST_CLIENT_TTL_MS");
     }
 
-    if sandbox::handle_result(
-        result,
-        stringify!(permissioned_localnet_realistic_30tps_20min),
-    )?
-    .is_none()
-    {
+    if sandbox::handle_result(result, test_name)?.is_none() {
         return Ok(());
     }
     Ok(())
@@ -2048,6 +2179,12 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
     ds1.insert("alias".into(), TomlValue::String("ds1".to_owned()));
     ds1.insert("id".into(), TomlValue::Integer(1));
     ds1.insert(
+        "manifest_hash".into(),
+        TomlValue::String(
+            "0100000000000000000000000000000000000000000000000000000000000000".to_owned(),
+        ),
+    );
+    ds1.insert(
         "description".into(),
         TomlValue::String("alice route dataspace".to_owned()),
     );
@@ -2056,6 +2193,12 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
     let mut ds2 = Table::new();
     ds2.insert("alias".into(), TomlValue::String("ds2".to_owned()));
     ds2.insert("id".into(), TomlValue::Integer(2));
+    ds2.insert(
+        "manifest_hash".into(),
+        TomlValue::String(
+            "0200000000000000000000000000000000000000000000000000000000000000".to_owned(),
+        ),
+    );
     ds2.insert(
         "description".into(),
         TomlValue::String("bob route dataspace".to_owned()),
@@ -4443,6 +4586,61 @@ async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Resu
     }
 }
 
+async fn wait_for_min_txs_approved(
+    network: &Network,
+    target_approved: u64,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut last_min_approved = 0;
+    let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
+    let mut last_log = Instant::now()
+        .checked_sub(STATUS_LOG_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    loop {
+        match collect_statuses(network, STATUS_POLL_TIMEOUT).await {
+            Ok(statuses) => {
+                let min_approved = statuses
+                    .iter()
+                    .map(|status| status.txs_approved)
+                    .min()
+                    .unwrap_or_default();
+                let snapshot: Vec<StatusSnapshot> =
+                    statuses.iter().map(StatusSnapshot::from_status).collect();
+                if min_approved > last_min_approved
+                    || snapshot != last_snapshot
+                    || last_log.elapsed() >= STATUS_LOG_INTERVAL
+                {
+                    eprintln!(
+                        "waiting for approved transactions: min_approved={min_approved}, target_approved={target_approved}, snapshot={snapshot:?}"
+                    );
+                    last_min_approved = min_approved;
+                    last_snapshot = snapshot;
+                    last_log = Instant::now();
+                }
+                if min_approved >= target_approved {
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    return Err(eyre!(
+                        "approved transactions did not reach {target_approved} within {:?}: min_approved={min_approved}, last_snapshot={last_snapshot:?}",
+                        timeout
+                    ));
+                }
+            }
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    return Err(eyre!(
+                        "approved transaction status did not converge within {:?}: target_approved={target_approved}, last_snapshot={last_snapshot:?}, last_error={err:?}",
+                        timeout
+                    ));
+                }
+            }
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
 async fn wait_for_queue_depth(
     network: &Network,
     max_queue: u64,
@@ -4623,6 +4821,32 @@ async fn realistic_30tps_load_kind_parses_email_mode_and_defaults_to_transfer() 
     set_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND", "unsupported");
     assert!(Realistic30TpsLoadKind::from_env().is_err());
     remove_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND");
+}
+
+#[test]
+fn realistic_npos_fee_funding_instruction_chunks_target_fee_asset() {
+    let accounts = realistic_transfer_accounts(3, 7);
+    let chunks = realistic_npos_fee_funding_instruction_chunks(&accounts);
+    let fee_asset_definition_id = route_fee_asset_definition_id();
+
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].len(), accounts.len());
+    for (instruction, account) in chunks[0].iter().zip(&accounts) {
+        let Some(iroha::data_model::isi::MintBox::Asset(mint)) = instruction
+            .as_any()
+            .downcast_ref::<iroha::data_model::isi::MintBox>(
+        ) else {
+            panic!("expected asset mint instruction");
+        };
+        assert_eq!(
+            mint.destination(),
+            &AssetId::new(fee_asset_definition_id.clone(), account.id.clone())
+        );
+        assert_eq!(
+            mint.object(),
+            &Numeric::from(ROUTE_VALIDATOR_FEE_SEED_AMOUNT)
+        );
+    }
 }
 
 #[test]

@@ -2644,6 +2644,8 @@ pub enum ConsensusMessageKind {
     FetchBlockBody,
     /// Exact frontier body fetch response (`BlockBodyResponse`).
     BlockBodyResponse,
+    /// Direct certified block fetch request/response (`CertifiedBlockFetch`).
+    CertifiedBlockFetch,
     /// Consensus-parameter advertisements (`ConsensusParams`).
     ConsensusParams,
     /// Proposal hints (`ProposalHint`).
@@ -2676,8 +2678,6 @@ pub enum ConsensusMessageKind {
     FetchPendingBlock,
     /// Consensus control-flow evidence.
     Evidence,
-    /// Non-canonical consensus control messages rejected by V1 ingress.
-    VNext,
 }
 
 impl ConsensusMessageKind {
@@ -2689,6 +2689,7 @@ impl ConsensusMessageKind {
             ConsensusMessageKind::BlockSyncUpdate => "block_sync_update",
             ConsensusMessageKind::FetchBlockBody => "fetch_block_body",
             ConsensusMessageKind::BlockBodyResponse => "block_body_response",
+            ConsensusMessageKind::CertifiedBlockFetch => "certified_block_fetch",
             ConsensusMessageKind::ConsensusParams => "consensus_params",
             ConsensusMessageKind::ProposalHint => "proposal_hint",
             ConsensusMessageKind::Proposal => "proposal",
@@ -2705,7 +2706,6 @@ impl ConsensusMessageKind {
             ConsensusMessageKind::RbcDeliver => "rbc_deliver",
             ConsensusMessageKind::FetchPendingBlock => "fetch_pending_block",
             ConsensusMessageKind::Evidence => "evidence",
-            ConsensusMessageKind::VNext => "non_canonical_consensus",
         }
     }
 }
@@ -9527,11 +9527,11 @@ mod tests {
             super::ConsensusMessageKind::FetchPendingBlock.as_str(),
             "fetch_pending_block"
         );
-        assert_eq!(super::ConsensusMessageKind::Evidence.as_str(), "evidence");
         assert_eq!(
-            super::ConsensusMessageKind::VNext.as_str(),
-            "non_canonical_consensus"
+            super::ConsensusMessageKind::CertifiedBlockFetch.as_str(),
+            "certified_block_fetch"
         );
+        assert_eq!(super::ConsensusMessageKind::Evidence.as_str(), "evidence");
 
         assert_eq!(
             super::ConsensusMessageReason::MissingHighestQc.as_str(),

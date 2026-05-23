@@ -16978,6 +16978,275 @@ async fn commit_qc_only_fetch_pending_block_replays_cached_votes_when_cert_missi
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_qc_for_missing_block_accepts_certified_state_and_requests_certified_fetch() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster);
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap_for_actor(
+        actor,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let qc_key = Actor::qc_tally_key(&qc);
+
+    actor.handle_qc(qc.clone()).expect("handle commit QC");
+
+    assert!(
+        actor.deferred_missing_payload_qcs.contains_key(&qc_key),
+        "commit QC should stay deferred for local execution until the block body arrives"
+    );
+    assert!(
+        actor
+            .cached_commit_qc_for_block(block_hash, height, view)
+            .is_some(),
+        "valid commit QC should be cached even before the block body is locally validated"
+    );
+    assert_eq!(
+        actor.highest_qc.map(|qc| qc.subject_block_hash),
+        Some(block_hash),
+        "missing-payload commit QC should still advance certified highest state"
+    );
+    assert!(
+        !actor.block_known_locally(block_hash),
+        "QC acceptance must not materialize the missing block without a certified response"
+    );
+    let sent =
+        actor.request_certified_block_for_qc(&qc, &topology, &signers, "test_certified_fetch");
+    assert!(
+        sent > 0,
+        "certified-fetch helper should have remote QC validator targets available"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().all(|entry| {
+            !matches!(
+                entry.msg_kind,
+                Some("FetchPendingBlock") | Some("BlockBodyResponse")
+            )
+        }),
+        "commit-QC body recovery must not regress to FetchPendingBlock or exact frontier body repair"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "commit-QC body recovery should not leave a generic missing-block request behind"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_for_unvalidated_local_block_advances_certified_state_without_applying() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let committed_before = actor.committed_height_snapshot();
+    let height = committed_before.saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster);
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap_for_actor(
+        actor,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.handle_qc(qc).expect("handle commit QC");
+
+    assert_eq!(
+        actor.committed_height_snapshot(),
+        committed_before,
+        "commit QC must not apply an unvalidated block to state"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(|pending| {
+                pending.commit_qc_observed()
+                    && !matches!(pending.validation_status, ValidationStatus::Valid)
+            }),
+        "unvalidated local block should remain pending with commit evidence recorded"
+    );
+    assert_eq!(
+        actor.highest_qc.map(|qc| qc.subject_block_hash),
+        Some(block_hash),
+        "commit QC should advance certified highest state before execution validation completes"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().all(|entry| {
+            !matches!(
+                entry.msg_kind,
+                Some("FetchPendingBlock")
+                    | Some("BlockBodyResponse")
+                    | Some("CertifiedBlockFetchRequest")
+            )
+        }),
+        "local unvalidated payload should not trigger body recovery traffic"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn certified_block_fetch_response_materializes_pending_and_wakes_commit_pipeline() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let committed_before = actor.committed_height_snapshot();
+    let height = committed_before.saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster);
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap_for_actor(
+        actor,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor
+        .handle_qc(qc.clone())
+        .expect("handle commit QC before certified response");
+    let _ = take_background_log(&background_log);
+    actor.pending.commit_pipeline_wakeup = false;
+
+    let response = super::message::CertifiedBlockFetchResponse {
+        height,
+        view,
+        block: block.clone(),
+        validator_checkpoint: ValidatorSetCheckpoint::new_with_chain_order(
+            qc.height,
+            qc.view,
+            qc.subject_block_hash,
+            qc.chain_order_hash,
+            qc.rechain_seq,
+            qc.parent_state_root,
+            qc.post_state_root,
+            qc.validator_set.clone(),
+            qc.aggregate.signers_bitmap.clone(),
+            qc.aggregate.bls_aggregate_signature.clone(),
+            qc.validator_set_hash_version,
+            None,
+        ),
+        commit_qc: qc,
+        stake_snapshot: None,
+    };
+
+    actor
+        .handle_certified_block_fetch(
+            super::message::CertifiedBlockFetch::Response(response),
+            None,
+        )
+        .expect("handle certified block response");
+
+    assert!(
+        actor.block_known_locally(block_hash),
+        "certified response should materialize the missing block locally"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(|pending| {
+                pending.commit_qc_observed()
+                    && !matches!(pending.validation_status, ValidationStatus::Valid)
+            }),
+        "certified response should create a pending block without marking execution validation complete"
+    );
+    assert_eq!(
+        actor.committed_height_snapshot(),
+        committed_before,
+        "state application must wait for local block validation"
+    );
+    assert!(
+        !actor
+            .deferred_missing_payload_qcs
+            .contains_key(&Actor::qc_tally_key(
+                &actor
+                    .cached_commit_qc_for_block(block_hash, height, view)
+                    .expect("commit QC remains cached")
+            )),
+        "certified response should clear the missing-payload QC deferral"
+    );
+    assert!(
+        actor.commit_pipeline_wakeup_pending(),
+        "certified response should wake the commit pipeline for the recovered block"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn fetch_pending_block_highest_qc_bypasses_background_queue() {
     let _guard = super::status::qc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
@@ -21512,7 +21781,7 @@ async fn process_precommit_qc_realigns_same_height_when_locked_payload_missing_w
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn process_precommit_qc_accepts_newer_view_when_locked_payload_missing() {
+async fn process_precommit_qc_keeps_lock_for_newer_view_when_locked_payload_missing() {
     let _guard = super::status::qc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -21551,11 +21820,11 @@ async fn process_precommit_qc_accepts_newer_view_when_locked_payload_missing() {
 
     assert!(
         actor.process_precommit_qc(&qc, true, false),
-        "newer-view QC should override a missing older lock payload"
+        "newer-view QC should be cached while the older lock payload is missing"
     );
-    let locked = actor.locked_qc.expect("locked qc updated");
-    assert_eq!(locked.subject_block_hash, block_hash);
-    assert_eq!(locked.view, 1);
+    let locked = actor.locked_qc.expect("locked qc retained");
+    assert_eq!(locked.subject_block_hash, locked_hash);
+    assert_eq!(locked.view, 0);
     let highest = actor.highest_qc.expect("highest qc updated");
     assert_eq!(highest.subject_block_hash, block_hash);
     assert!(
@@ -39733,6 +40002,11 @@ async fn block_created_applies_cached_precommit_qc() {
         actor.locked_qc.is_none(),
         "lock must remain unset for unknown blocks"
     );
+    assert_eq!(
+        actor.highest_qc.map(|qc| qc.subject_block_hash),
+        Some(block_hash),
+        "commit QC should advance certified highest state before the body is validated"
+    );
 
     actor
         .handle_block_created(
@@ -39748,9 +40022,10 @@ async fn block_created_applies_cached_precommit_qc() {
         actor.locked_qc.is_none(),
         "lock must remain unset until the cached-QC block is validated"
     );
-    assert!(
-        actor.highest_qc.is_none(),
-        "highest QC must remain unset until the cached-QC block is validated"
+    assert_eq!(
+        actor.highest_qc.map(|qc| qc.subject_block_hash),
+        Some(block_hash),
+        "highest QC should remain on the certified block while validation is pending"
     );
 
     let commit_topology = actor.effective_commit_topology();
@@ -39851,7 +40126,7 @@ async fn block_created_replays_cached_prepare_qc() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_qc_missing_block_fetch_uses_aggressive_topology_for_commit_qc() {
+async fn handle_qc_missing_block_fetch_uses_certified_fetch_for_commit_qc() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -39898,57 +40173,24 @@ async fn handle_qc_missing_block_fetch_uses_aggressive_topology_for_commit_qc() 
         &harness.key_pairs,
     );
 
-    #[cfg(feature = "telemetry")]
-    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
-    #[cfg(feature = "telemetry")]
-    let metrics = telemetry.metrics().await;
-    #[cfg(feature = "telemetry")]
-    let signers_before = metrics
-        .sumeragi_missing_block_fetch_target_total
-        .with_label_values(&["signers"])
-        .get();
-    #[cfg(feature = "telemetry")]
-    let topology_before = metrics
-        .sumeragi_missing_block_fetch_target_total
-        .with_label_values(&["topology"])
-        .get();
-
     actor.handle_qc(qc).expect("handle precommit QC");
-    let stats = actor
-        .pending
-        .missing_block_requests
-        .get(&block_hash)
-        .expect("missing-block request recorded");
-    assert_eq!(
-        stats.retry_window,
-        super::REBROADCAST_COOLDOWN_FLOOR,
-        "commit QC should use aggressive retry window"
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .is_none(),
+        "commit QC should use direct certified-block fetch instead of generic missing-block tracking"
     );
     assert_eq!(
-        stats.view_change_window,
-        Some(actor.quorum_timeout(actor.runtime_da_enabled())),
-        "view-change deadline should still follow quorum timeout"
+        actor.highest_qc.map(|qc| qc.subject_block_hash),
+        Some(block_hash),
+        "certified commit QC should advance highest QC while waiting for the block body"
     );
-    #[cfg(feature = "telemetry")]
-    {
-        let signers_after = metrics
-            .sumeragi_missing_block_fetch_target_total
-            .with_label_values(&["signers"])
-            .get();
-        let topology_after = metrics
-            .sumeragi_missing_block_fetch_target_total
-            .with_label_values(&["topology"])
-            .get();
-        assert_eq!(
-            signers_after, signers_before,
-            "aggressive commit QC fetch should skip signer-only targets"
-        );
-        assert_eq!(
-            topology_after,
-            topology_before + 1,
-            "aggressive commit QC fetch should target full topology immediately"
-        );
-    }
+    assert!(
+        actor.locked_qc.is_none(),
+        "missing payload must not become the local locked QC before validation"
+    );
 
     harness.shutdown.send();
 }
@@ -75845,6 +76087,104 @@ async fn retry_missing_block_requests_stages_next_slot_prefetch_instead_of_gener
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn retry_missing_block_requests_keeps_cached_child_commit_qc_on_certified_fetch_path() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 37).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let local_height = actor.committed_height_snapshot();
+    assert_eq!(
+        local_height, 37,
+        "test models the observed parent gap at 38"
+    );
+    let height = 39_u64;
+    let view = 0_u64;
+    let now = Instant::now();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x39; Hash::LENGTH]));
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster);
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap_for_actor(
+        actor,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.qc_cache.insert(Actor::qc_tally_key(&qc), qc);
+
+    let retry_window = Duration::from_millis(10);
+    let due = now
+        .checked_sub(retry_window.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(retry_window),
+            first_seen: due,
+            last_requested: due,
+            last_dependency_progress: due,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+    let _ = take_background_log(&background_log);
+
+    assert!(
+        actor.retry_missing_block_requests(now, None),
+        "cached child commit QC should retry through direct certified fetch while parent height 38 is still pending"
+    );
+    assert!(
+        actor.next_slot_prefetch.is_none(),
+        "child commit QC recovery must not be downgraded into passive next-slot prefetch"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "certified fetch retry should keep the request state for further direct retries until the block arrives"
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| {
+                !matches!(
+                    entry.msg_kind,
+                    Some("FetchPendingBlock") | Some("FetchBlockBody") | Some("BlockBodyResponse")
+                )
+            }),
+        "cached child commit QC recovery must not use generic or exact-frontier body traffic"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retry_missing_block_requests_prunes_far_ahead_retry_into_contiguous_range_pull() {
     let _guard = super::status::missing_block_fetch_test_guard();
     super::status::reset_missing_block_fetch_counters_for_tests();
@@ -76964,9 +77304,11 @@ async fn retry_missing_block_requests_stages_next_slot_prefetch_when_commit_topo
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn retry_missing_block_requests_uses_commit_roster_snapshot_without_validation() {
+async fn retry_missing_block_requests_uses_commit_roster_snapshot_for_certified_fetch_without_validation()
+ {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
     let height = actor.committed_height_snapshot().saturating_add(2);
     let view = 0_u64;
     let epoch = actor.epoch_for_height(height);
@@ -77039,28 +77381,34 @@ async fn retry_missing_block_requests_uses_commit_roster_snapshot_without_valida
             attempts: 0,
         },
     );
+    let _ = take_background_log(&background_log);
 
     let progress = actor.retry_missing_block_requests(now, None);
     assert!(
         progress,
-        "retry should still progress even when the commit topology is unavailable"
+        "retry should still progress from the certified roster snapshot even when live roster validation is unavailable"
     );
     assert!(
         actor
             .pending
             .missing_block_requests
-            .get(&block_hash)
-            .is_none(),
-        "next-slot retry must leave the generic missing-block tracker even when commit topology is empty",
+            .contains_key(&block_hash),
+        "certified retry should retain request state for direct certified-fetch retries",
     );
     assert!(
-        actor
-            .next_slot_prefetch
-            .as_ref()
-            .is_some_and(|slot| slot.height == height
-                && slot.view == view
-                && slot.block_hash == block_hash),
-        "next-slot retry should still seed the bounded prefetch lane when commit topology is empty",
+        actor.next_slot_prefetch.is_none(),
+        "certified retry must not be downgraded into bounded next-slot prefetch",
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| {
+                !matches!(
+                    entry.msg_kind,
+                    Some("FetchPendingBlock") | Some("FetchBlockBody") | Some("BlockBodyResponse")
+                )
+            }),
+        "certified retry must avoid generic and exact body-repair traffic",
     );
 
     harness.shutdown.send();
@@ -107463,11 +107811,11 @@ async fn assemble_proposal_reanchors_lock_lag_highest_qc_catchup() {
         "locally tracked highest-QC hash should recover through range pull rather than leaving a missing-hash defer marker behind"
     );
     assert!(
-        actor
+        !actor
             .pending
             .missing_block_requests
             .contains_key(&highest_hash),
-        "tracked highest-QC hash without local payload should keep exact repair active alongside the locked+1 range pull"
+        "certified body fetch must not leave stale generic missing-block state for the tracked highest-QC hash"
     );
 
     super::status::set_locked_qc(0, 0, None);
@@ -125617,8 +125965,14 @@ async fn commit_qc_bootstraps_from_embedded_roster_when_cached_roster_is_stale()
         actor
             .pending
             .missing_block_requests
-            .contains_key(&block_hash),
-        "validated QC should still drive missing-block recovery for the unknown payload"
+            .get(&block_hash)
+            .is_none(),
+        "validated commit QC should use certified-block fetch instead of generic missing-block recovery"
+    );
+    assert_eq!(
+        actor.highest_qc.map(|qc| qc.subject_block_hash),
+        Some(block_hash),
+        "validated embedded-roster commit QC should advance certified highest state"
     );
 
     harness.shutdown.send();

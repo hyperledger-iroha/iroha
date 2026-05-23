@@ -3529,28 +3529,11 @@ mod tests {
             signer: 0,
             bls_sig: vec![1, 2, 3],
         });
-        let mut update_with_vnext_sidecar = message::BlockSyncUpdate::from(&block);
-        update_with_vnext_sidecar
-            .vnext_view_change_certificates
-            .push(vnext::ViewChangeCertificate {
-                new_view: 1,
-                highest_slot: Some(vnext::SlotId {
-                    height: 1,
-                    view: 0,
-                    epoch: 0,
-                    block_hash,
-                }),
-                chain_order_hash: Hash::prehashed([0xCC; 32]),
-                signer_bitmap: vec![0b0000_0001],
-                aggregate_signature: vec![0xAA],
-            });
-
         handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update));
         handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update_with_votes));
-        handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update_with_vnext_sidecar));
 
         let received: Vec<_> = rbc_chunk_rx.try_iter().collect();
-        assert_eq!(received.len(), 3);
+        assert_eq!(received.len(), 2);
         assert!(received.iter().all(|msg| matches!(
             msg,
             InboundBlockMessage {
@@ -10711,7 +10694,7 @@ pub mod rbc_store;
 pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
 pub mod status;
-pub mod vnext;
+pub(crate) mod vnext;
 pub mod witness;
 pub use evidence::EvidenceValidationContext;
 pub use evidence::evidence_subject_height_view;
@@ -10976,16 +10959,11 @@ fn block_sync_update_evidence_hash(update: &message::BlockSyncUpdate) -> CryptoH
         .stake_snapshot
         .as_ref()
         .map(|snapshot| CryptoHash::new(&snapshot.encode()));
-    let rechain_sidecars_hash = CryptoHash::new(&update.vnext_rechain_certificates.encode());
-    let view_change_sidecars_hash =
-        CryptoHash::new(&update.vnext_view_change_certificates.encode());
     let mut buf = Vec::new();
     buf.extend_from_slice(commit_votes_hash.as_ref());
     push_optional_hash(&mut buf, commit_qc_hash);
     push_optional_hash(&mut buf, checkpoint_hash);
     push_optional_hash(&mut buf, stake_snapshot_hash);
-    buf.extend_from_slice(rechain_sidecars_hash.as_ref());
-    buf.extend_from_slice(view_change_sidecars_hash.as_ref());
     CryptoHash::new(&buf)
 }
 
@@ -11609,8 +11587,9 @@ impl SumeragiHandle {
     ///
     /// Note: this is a best-effort enqueue that drops messages when queues are saturated
     /// to avoid stalling upstream relays. Block-sync updates and critical payload messages
-    /// (block creation, proposals, and RBC INIT), plus RBC READY/DELIVER and QC votes/certificates,
-    /// always use blocking semantics because dropping them can stall consensus recovery.
+    /// (block creation, proposals, and RBC INIT), certified-block fetches, plus RBC READY/DELIVER
+    /// and QC votes/certificates, always use blocking semantics because dropping them can stall
+    /// consensus recovery.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
         let msg = msg.normalize();
         let blocking = matches!(
@@ -11618,6 +11597,7 @@ impl SumeragiHandle {
             BlockMessage::BlockSyncUpdate(_)
                 | BlockMessage::BlockCreated(_)
                 | BlockMessage::BlockBodyResponse(_)
+                | BlockMessage::CertifiedBlockFetch(_)
                 | BlockMessage::Proposal(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
@@ -11644,6 +11624,7 @@ impl SumeragiHandle {
             BlockMessage::BlockSyncUpdate(_)
                 | BlockMessage::BlockCreated(_)
                 | BlockMessage::BlockBodyResponse(_)
+                | BlockMessage::CertifiedBlockFetch(_)
                 | BlockMessage::Proposal(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
@@ -11737,6 +11718,24 @@ impl SumeragiHandle {
                         queue = ?queue,
                         reason,
                         "dropping BlockBodyResponse message"
+                    );
+                }
+                BlockMessage::CertifiedBlockFetch(fetch) => {
+                    let (height, view, block_hash) = match fetch {
+                        message::CertifiedBlockFetch::Request(request) => {
+                            (request.height, request.view, request.block_hash)
+                        }
+                        message::CertifiedBlockFetch::Response(response) => {
+                            (response.height, response.view, response.block.hash())
+                        }
+                    };
+                    iroha_logger::warn!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        queue = ?queue,
+                        reason,
+                        "dropping CertifiedBlockFetch message"
                     );
                 }
                 BlockMessage::Proposal(proposal) => {
@@ -12285,6 +12284,13 @@ impl SumeragiHandle {
                 }
                 accepted
             }
+            BlockMessage::CertifiedBlockFetch(fetch) => enqueue_with_mode(
+                &self.block,
+                InboundBlockMessage::new(BlockMessage::CertifiedBlockFetch(fetch), sender),
+                "CertifiedBlockFetch",
+                status::WorkerQueueKind::Blocks,
+                mode,
+            ),
             other => enqueue_with_mode(
                 &self.block,
                 InboundBlockMessage::new(other, sender),

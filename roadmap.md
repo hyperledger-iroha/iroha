@@ -91,9 +91,10 @@ Kotlin, Java, Swift, and JavaScript.
 - Keep hardware acceleration paths feature-gated with deterministic scalar
   fallbacks.
 
-**Next checkpoints:** Sumeragi V1 adapter integration, peer-gap and DA/RBC
-tail-latency reductions, restarted-peer replay coverage, and updated operator
-runbooks when defaults change.
+**Next checkpoints:** Sumeragi V1 adapter integration, certified-block
+recovery soak coverage, peer-gap and DA/RBC tail-latency reductions,
+restarted-peer replay coverage, and updated operator runbooks when defaults
+change.
 
 ## Community and Governance
 

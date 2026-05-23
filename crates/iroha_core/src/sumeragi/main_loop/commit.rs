@@ -2628,7 +2628,6 @@ impl Actor {
                         &commit_topology,
                     );
                 }
-                self.persist_vnext_certificates_for_committed_block(committed_block.as_ref());
                 self.flush_pending_fetch_requests_if_ready(committed_block.as_ref());
                 self.flush_pending_block_body_requests_if_ready(committed_block.as_ref());
                 if pending_height == 1 {

@@ -59,7 +59,7 @@ use parking_lot::Mutex;
 
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
-use crate::sumeragi::{stake_snapshot::CommitStakeSnapshot, vnext};
+use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 use crate::{block::CommittedBlock, commit_roster_journal::CommitRosterJournal};
 
 impl From<CommittedBlock> for Arc<SignedBlock> {
@@ -5138,14 +5138,6 @@ pub struct RosterSidecar {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub stake_snapshot: Option<CommitStakeSnapshot>,
-    /// vNext re-chain certificates needed to reconstruct chain order for this committed block.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub vnext_rechain_certificates: Vec<vnext::RechainCertificate>,
-    /// vNext view-change certificates needed to reconstruct the live view for this committed block.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub vnext_view_change_certificates: Vec<vnext::ViewChangeCertificate>,
 }
 
 impl RosterSidecar {
@@ -5166,8 +5158,6 @@ impl RosterSidecar {
             commit_qc,
             validator_checkpoint,
             stake_snapshot,
-            vnext_rechain_certificates: Vec::new(),
-            vnext_view_change_certificates: Vec::new(),
         }
     }
 
@@ -5199,37 +5189,6 @@ impl RosterSidecar {
                     .as_ref()
                     .map(|chkpt| chkpt.validator_set.clone())
             })
-    }
-
-    /// Merge vNext certificate evidence into this sidecar.
-    ///
-    /// Returns `true` when at least one new certificate was inserted.
-    pub fn merge_vnext_certificates(
-        &mut self,
-        rechain_certificates: impl IntoIterator<Item = vnext::RechainCertificate>,
-        view_change_certificates: impl IntoIterator<Item = vnext::ViewChangeCertificate>,
-    ) -> bool {
-        let mut changed = false;
-        for certificate in rechain_certificates {
-            if !self.vnext_rechain_certificates.contains(&certificate) {
-                self.vnext_rechain_certificates.push(certificate);
-                changed = true;
-            }
-        }
-        for certificate in view_change_certificates {
-            if !self.vnext_view_change_certificates.contains(&certificate) {
-                self.vnext_view_change_certificates.push(certificate);
-                changed = true;
-            }
-        }
-        changed
-    }
-
-    /// Return `true` when this sidecar carries vNext recovery evidence.
-    #[must_use]
-    pub fn has_vnext_certificates(&self) -> bool {
-        !self.vnext_rechain_certificates.is_empty()
-            || !self.vnext_view_change_certificates.is_empty()
     }
 }
 
@@ -5819,44 +5778,6 @@ impl Kura {
                         checkpoint_height = checkpoint.height,
                         checkpoint_hash = %checkpoint.block_hash,
                         "roster sidecar checkpoint metadata mismatch"
-                    );
-                    return None;
-                }
-            }
-            for certificate in &sidecar.vnext_rechain_certificates {
-                if certificate.slot.height != sidecar.height
-                    || certificate.slot.block_hash != sidecar.block_hash
-                {
-                    iroha_logger::warn!(
-                        height,
-                        sidecar_height = sidecar.height,
-                        sidecar_hash = %sidecar.block_hash,
-                        certificate_height = certificate.slot.height,
-                        certificate_view = certificate.slot.view,
-                        certificate_hash = %certificate.slot.block_hash,
-                        "roster sidecar vNext re-chain certificate metadata mismatch"
-                    );
-                    return None;
-                }
-            }
-            for certificate in &sidecar.vnext_view_change_certificates {
-                let Some(highest_slot) = certificate.highest_slot else {
-                    iroha_logger::warn!(
-                        height,
-                        sidecar_height = sidecar.height,
-                        new_view = certificate.new_view,
-                        "roster sidecar vNext view-change certificate missing highest slot"
-                    );
-                    return None;
-                };
-                if highest_slot.height != sidecar.height {
-                    iroha_logger::warn!(
-                        height,
-                        sidecar_height = sidecar.height,
-                        certificate_height = highest_slot.height,
-                        certificate_view = highest_slot.view,
-                        new_view = certificate.new_view,
-                        "roster sidecar vNext view-change certificate height mismatch"
                     );
                     return None;
                 }
@@ -14604,114 +14525,6 @@ mod tests {
         assert_eq!(got.format_label(), "roster.snapshot");
         assert_eq!(got.stake_snapshot, Some(stake_snapshot));
         assert_eq!(got.roster_snapshot(), Some(roster));
-    }
-
-    fn sample_vnext_rechain_certificate(
-        height: u64,
-        view: u64,
-        block_hash: HashOf<BlockHeader>,
-    ) -> vnext::RechainCertificate {
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer = PeerId::new(keypair.public_key().clone());
-        let order = vnext::ChainOrder::new(height, view, 0, 1, vec![peer], 1, 1)
-            .expect("sample vNext chain order");
-        vnext::RechainCertificate {
-            slot: vnext::SlotId {
-                height,
-                view,
-                epoch: 0,
-                block_hash,
-            },
-            previous_chain_order_hash: Hash::prehashed([0x11; Hash::LENGTH]),
-            new_chain_order_hash: order.hash(),
-            new_order: order,
-            rechain_seq: 1,
-            tainted: Vec::new(),
-            suspicions: Vec::new(),
-            signer_bitmap: vec![0b0000_0001],
-            aggregate_signature: vec![0xAB; 96],
-        }
-    }
-
-    fn sample_vnext_view_change_certificate(
-        height: u64,
-        view: u64,
-        new_view: u64,
-        block_hash: HashOf<BlockHeader>,
-    ) -> vnext::ViewChangeCertificate {
-        vnext::ViewChangeCertificate {
-            new_view,
-            highest_slot: Some(vnext::SlotId {
-                height,
-                view,
-                epoch: 0,
-                block_hash,
-            }),
-            chain_order_hash: Hash::prehashed([0x22; Hash::LENGTH]),
-            signer_bitmap: vec![0b0000_0001],
-            aggregate_signature: vec![0xCD; 96],
-        }
-    }
-
-    #[test]
-    fn roster_sidecar_roundtrip_with_vnext_certificates() {
-        let kura = Kura::blank_kura_for_testing();
-        let block_hash = store_dummy_blocks(&kura, 1)[0];
-        let rechain = sample_vnext_rechain_certificate(1, 0, block_hash);
-        let view_change = sample_vnext_view_change_certificate(1, 0, 1, block_hash);
-        let mut sidecar = RosterSidecar::new(1, block_hash, None, None, None);
-
-        assert!(sidecar.merge_vnext_certificates(
-            std::iter::once(rechain.clone()),
-            std::iter::once(view_change.clone()),
-        ));
-        assert!(!sidecar.merge_vnext_certificates(
-            std::iter::once(rechain.clone()),
-            std::iter::once(view_change.clone()),
-        ));
-        assert!(sidecar.has_vnext_certificates());
-
-        kura.write_roster_metadata(&sidecar);
-        let got = kura.read_roster_metadata(1).expect("sidecar exists");
-
-        assert_eq!(got.vnext_rechain_certificates, vec![rechain]);
-        assert_eq!(got.vnext_view_change_certificates, vec![view_change]);
-    }
-
-    #[test]
-    fn roster_sidecar_rejects_vnext_rechain_certificate_mismatch() {
-        let kura = Kura::blank_kura_for_testing();
-        let block_hash = store_dummy_blocks(&kura, 1)[0];
-        let mismatch_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFA; Hash::LENGTH]));
-        let mut sidecar = RosterSidecar::new(1, block_hash, None, None, None);
-        sidecar
-            .vnext_rechain_certificates
-            .push(sample_vnext_rechain_certificate(1, 0, mismatch_hash));
-
-        kura.write_roster_metadata(&sidecar);
-
-        assert!(
-            kura.read_roster_metadata(1).is_none(),
-            "mismatched vNext re-chain certificate should be rejected"
-        );
-    }
-
-    #[test]
-    fn roster_sidecar_rejects_vnext_view_change_height_mismatch() {
-        let kura = Kura::blank_kura_for_testing();
-        let block_hash = store_dummy_blocks(&kura, 1)[0];
-        let mut sidecar = RosterSidecar::new(1, block_hash, None, None, None);
-        sidecar
-            .vnext_view_change_certificates
-            .push(sample_vnext_view_change_certificate(2, 0, 1, block_hash));
-
-        kura.write_roster_metadata(&sidecar);
-
-        assert!(
-            kura.read_roster_metadata(1).is_none(),
-            "mismatched vNext view-change certificate should be rejected"
-        );
     }
 
     #[derive(Debug, Encode, Decode, PartialEq, Eq)]

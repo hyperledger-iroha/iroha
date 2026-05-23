@@ -998,9 +998,9 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::VrfReveal(_)
                 | BlockMessage::FetchBlockBody(_)
                 | BlockMessage::FetchPendingBlock(_)
+                | BlockMessage::CertifiedBlockFetch(_)
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Proposal(_)
-                | BlockMessage::VNext(_)
                 | BlockMessage::BlockCreated(_) => IngressPolicy::critical(),
                 BlockMessage::RbcInit(_)
                 | BlockMessage::RbcInitRequest(_)
@@ -2183,6 +2183,18 @@ impl NetworkRelayShared {
                 Some(response.height),
                 Some(response.view),
             ),
+            CertifiedBlockFetch(fetch) => match fetch {
+                iroha_core::sumeragi::message::CertifiedBlockFetch::Request(request) => (
+                    "CertifiedBlockFetchRequest",
+                    Some(request.height),
+                    Some(request.view),
+                ),
+                iroha_core::sumeragi::message::CertifiedBlockFetch::Response(response) => (
+                    "CertifiedBlockFetchResponse",
+                    Some(response.height),
+                    Some(response.view),
+                ),
+            },
             FetchPendingBlock(_request) => ("FetchPendingBlock", None, None),
             ProposalHint(hint) => ("ProposalHint", Some(hint.height), Some(hint.view)),
             Proposal(proposal) => (
@@ -2191,40 +2203,6 @@ impl NetworkRelayShared {
                 Some(proposal.header.view),
             ),
             KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
-            VNext(message) => match message {
-                iroha_core::sumeragi::vnext::ConsensusMessage::Suspect(suspect) => (
-                    "VNextSuspect",
-                    Some(suspect.slot.height),
-                    Some(suspect.slot.view),
-                ),
-                iroha_core::sumeragi::vnext::ConsensusMessage::RechainProposal(proposal) => (
-                    "VNextRechainProposal",
-                    Some(proposal.slot.height),
-                    Some(proposal.slot.view),
-                ),
-                iroha_core::sumeragi::vnext::ConsensusMessage::RechainVote(vote) => (
-                    "VNextRechainVote",
-                    Some(vote.slot.height),
-                    Some(vote.slot.view),
-                ),
-                iroha_core::sumeragi::vnext::ConsensusMessage::RechainCertificate(certificate) => (
-                    "VNextRechainCertificate",
-                    Some(certificate.slot.height),
-                    Some(certificate.slot.view),
-                ),
-                iroha_core::sumeragi::vnext::ConsensusMessage::ViewChangeVote(vote) => (
-                    "VNextViewChangeVote",
-                    vote.highest_slot.map(|slot| slot.height),
-                    vote.highest_slot.map(|slot| slot.view),
-                ),
-                iroha_core::sumeragi::vnext::ConsensusMessage::ViewChangeCertificate(
-                    certificate,
-                ) => (
-                    "VNextViewChangeCertificate",
-                    certificate.highest_slot.map(|slot| slot.height),
-                    certificate.highest_slot.map(|slot| slot.view),
-                ),
-            },
         }
     }
 
@@ -2419,6 +2397,7 @@ fn sumeragi_block_message_requires_blocking(
             | BlockMessage::Proposal(_)
             | BlockMessage::QcVote(_)
             | BlockMessage::Qc(_)
+            | BlockMessage::CertifiedBlockFetch(_)
             | BlockMessage::RbcInit(_)
             | BlockMessage::RbcInitRequest(_)
             | BlockMessage::RbcChunkRequest(_)

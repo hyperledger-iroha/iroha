@@ -397,8 +397,6 @@ const QUORUM_RESCHEDULE_BACKOFF_DIVISOR: u32 = 4;
 const BLOCK_SYNC_WARN_COOLDOWN_FLOOR: Duration = Duration::from_secs(3);
 /// Prevent repeated insufficient-QC warnings for the same block/phase tuple across short intervals.
 const QC_INSUFFICIENT_WARN_COOLDOWN: Duration = Duration::from_secs(3);
-/// Keep recent non-canonical order-changing certificates for deterministic sidecar decoding.
-const VNEXT_CERTIFICATE_JOURNAL_CAP: usize = 256;
 /// Bound non-canonical vote caches by body to keep malformed gossip from growing memory.
 const VNEXT_VOTE_CACHE_CAP: usize = 512;
 /// Cap the number of block-sync quorum-miss warnings emitted per burst window.
@@ -3626,6 +3624,57 @@ fn build_fetch_block_body_request(
         height,
         view,
     }
+}
+
+fn build_certified_block_fetch_request(
+    requester: PeerId,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+) -> super::message::CertifiedBlockFetchRequest {
+    super::message::CertifiedBlockFetchRequest {
+        requester,
+        height,
+        view,
+        block_hash,
+    }
+}
+
+fn send_certified_block_fetch_request(
+    network: &IrohaNetwork,
+    peer_id: &PeerId,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    targets: &[PeerId],
+) -> usize {
+    if targets.is_empty() {
+        return 0;
+    }
+
+    let targets = missing_block_request_targets_without_local(peer_id, targets);
+    if targets.is_empty() {
+        return 0;
+    }
+
+    let request = build_certified_block_fetch_request(peer_id.clone(), block_hash, height, view);
+    let message = Arc::new(BlockMessage::CertifiedBlockFetch(
+        super::message::CertifiedBlockFetch::Request(request),
+    ));
+    let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
+    let post = crate::NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::with_encoded(
+        Arc::clone(&message),
+        Arc::clone(&encoded),
+    )));
+    let sent = targets.len();
+    for peer in targets {
+        network.post(Post {
+            data: post.clone(),
+            peer_id: peer,
+            priority: Priority::High,
+        });
+    }
+    sent
 }
 
 fn send_missing_block_request(
@@ -10940,8 +10989,6 @@ pub(super) struct Actor {
     vnext_rechain_votes: BTreeMap<VNextRechainVoteKey, BTreeMap<PeerId, super::vnext::RechainVote>>,
     vnext_view_change_votes:
         BTreeMap<VNextViewChangeVoteKey, BTreeMap<PeerId, super::vnext::ViewChangeVote>>,
-    vnext_rechain_journal: VecDeque<super::vnext::RechainCertificate>,
-    vnext_view_change_journal: VecDeque<super::vnext::ViewChangeCertificate>,
     epoch_manager: Option<EpochManager>,
     pending_npos_vrf_records: BTreeMap<u64, VrfEpochRecord>,
     npos_collectors: Option<NposCollectorConfig>,
@@ -13585,56 +13632,6 @@ fn block_sync_update_with_certified_roster(
     )
 }
 
-fn vnext_rechain_certificate_matches_block(
-    certificate: &super::vnext::RechainCertificate,
-    block_hash: HashOf<BlockHeader>,
-    height: u64,
-    view: u64,
-) -> bool {
-    certificate.slot.height == height
-        && certificate.slot.view == view
-        && certificate.slot.block_hash == block_hash
-}
-
-fn vnext_view_change_certificate_matches_block(
-    certificate: &super::vnext::ViewChangeCertificate,
-    height: u64,
-    view: u64,
-) -> bool {
-    certificate
-        .highest_slot
-        .is_some_and(|slot| slot.height == height && certificate.new_view == view)
-}
-
-fn attach_vnext_certificates_from_roster_sidecar(
-    kura: &Kura,
-    update: &mut super::message::BlockSyncUpdate,
-) {
-    let block_hash = update.block.hash();
-    let height = update.block.header().height().get();
-    let view = update.block.header().view_change_index();
-    let Some(sidecar) = kura.read_roster_metadata(height) else {
-        return;
-    };
-    if sidecar.block_hash != block_hash {
-        return;
-    }
-    for certificate in sidecar.vnext_rechain_certificates {
-        if vnext_rechain_certificate_matches_block(&certificate, block_hash, height, view)
-            && !update.vnext_rechain_certificates.contains(&certificate)
-        {
-            update.vnext_rechain_certificates.push(certificate);
-        }
-    }
-    for certificate in sidecar.vnext_view_change_certificates {
-        if vnext_view_change_certificate_matches_block(&certificate, height, view)
-            && !update.vnext_view_change_certificates.contains(&certificate)
-        {
-            update.vnext_view_change_certificates.push(certificate);
-        }
-    }
-}
-
 fn block_sync_update_with_roster_inner(
     block: &SignedBlock,
     state: &State,
@@ -13719,7 +13716,6 @@ fn block_sync_update_with_roster_inner(
             update.stake_snapshot = roster_cache.stake_snapshot_for_roster(roster);
         }
     }
-    attach_vnext_certificates_from_roster_sidecar(kura, &mut update);
     update
 }
 
@@ -14651,42 +14647,6 @@ impl Actor {
             );
             self.state
                 .record_commit_roster_with_sidecar(&cert, &checkpoint, stake_snapshot);
-        }
-    }
-
-    fn persist_vnext_certificates_for_committed_block(&self, block: &SignedBlock) {
-        let block_hash = block.hash();
-        let height = block.header().height().get();
-        let view = block.header().view_change_index();
-        let rechain_certificates = self
-            .vnext_rechain_journal
-            .iter()
-            .filter(|certificate| {
-                vnext_rechain_certificate_matches_block(certificate, block_hash, height, view)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let view_change_certificates = self
-            .vnext_view_change_journal
-            .iter()
-            .filter(|certificate| {
-                vnext_view_change_certificate_matches_block(certificate, height, view)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if rechain_certificates.is_empty() && view_change_certificates.is_empty() {
-            return;
-        }
-
-        let mut sidecar = self
-            .kura
-            .read_roster_metadata(height)
-            .filter(|sidecar| sidecar.block_hash == block_hash)
-            .unwrap_or_else(|| {
-                crate::kura::RosterSidecar::new(height, block_hash, None, None, None)
-            });
-        if sidecar.merge_vnext_certificates(rechain_certificates, view_change_certificates) {
-            self.kura.write_roster_metadata(&sidecar);
         }
     }
 
@@ -18712,8 +18672,6 @@ impl Actor {
             vnext_rounds: BTreeMap::new(),
             vnext_rechain_votes: BTreeMap::new(),
             vnext_view_change_votes: BTreeMap::new(),
-            vnext_rechain_journal: VecDeque::new(),
-            vnext_view_change_journal: VecDeque::new(),
             epoch_manager,
             pending_npos_vrf_records: BTreeMap::new(),
             npos_collectors,
@@ -20938,6 +20896,13 @@ impl Actor {
                             super::status::ConsensusMessageReason::FutureWindow,
                         );
                     }
+                    BlockMessage::CertifiedBlockFetch(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::CertifiedBlockFetch,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
                     BlockMessage::RbcInit(init) => {
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::RbcInit,
@@ -21021,6 +20986,9 @@ impl Actor {
             BlockMessage::BlockBodyResponse(response) => {
                 self.handle_block_body_response(response, sender)
             }
+            BlockMessage::CertifiedBlockFetch(fetch) => {
+                self.handle_certified_block_fetch(fetch, sender)
+            }
             BlockMessage::KuraReplicaAdvert(advert) => {
                 self.handle_kura_replica_advert(advert, sender);
                 Ok(())
@@ -21059,26 +21027,11 @@ impl Actor {
             BlockMessage::RbcDeliver(deliver) => self.handle_rbc_deliver(deliver),
             BlockMessage::FetchPendingBlock(request) => self.handle_fetch_pending_block(request),
             BlockMessage::Proposal(proposal) => self.handle_proposal(proposal),
-            BlockMessage::VNext(message) => self.handle_vnext_message(message),
         };
         if defer_committed_block_poll {
             self.process_committed_blocks_before_consensus("VrfMetadataPostHandle");
         }
         result
-    }
-
-    fn handle_vnext_message(&mut self, message: super::vnext::ConsensusMessage) -> Result<()> {
-        let (height, view) = self.vnext_message_height_view(&message);
-        debug!(
-            ?message,
-            height, view, "dropping non-canonical Sumeragi control frame"
-        );
-        self.record_consensus_message_handling(
-            super::status::ConsensusMessageKind::VNext,
-            super::status::ConsensusMessageOutcome::Dropped,
-            super::status::ConsensusMessageReason::InvalidPayload,
-        );
-        Ok(())
     }
 
     fn vnext_now_ms() -> u64 {
@@ -22149,95 +22102,6 @@ impl Actor {
         );
     }
 
-    fn handle_vnext_suspect_received(&mut self, suspect: super::vnext::Suspect, now_ms: u64) {
-        let key = (suspect.slot.height, suspect.slot.view);
-        let slot = suspect.slot;
-        let mut install = None;
-        let mut require = None;
-        let mut reject = None;
-        let Some(round) = self.vnext_rounds.get_mut(&key) else {
-            self.reject_vnext_suspicion(slot, "round_missing");
-            return;
-        };
-        if round
-            .last_rechain_ms
-            .is_some_and(|last| now_ms.saturating_sub(last) < round.config.rechain_cooldown_ms)
-        {
-            reject = Some("rechain_cooldown".to_owned());
-        } else {
-            match round
-                .chain_order
-                .rechain_after_suspect(suspect, &round.quorum)
-            {
-                Ok(certificate) => {
-                    if certificate.tainted.len() > usize::from(round.config.max_tainted_per_view) {
-                        require = Some("max_tainted_per_view_exceeded".to_owned());
-                    } else {
-                        round.chain_order = certificate.new_order.clone();
-                        round.last_rechain_ms = Some(now_ms);
-                        install = Some(certificate);
-                    }
-                }
-                Err(super::vnext::RechainError::InsufficientUntaintedValidators { .. })
-                | Err(super::vnext::RechainError::InsufficientQuorumAfterQuarantine) => {
-                    require = Some("rechain_would_weaken_quorum".to_owned());
-                }
-                Err(err) => reject = Some(super::vnext::rechain_error_label(&err).to_owned()),
-            }
-        }
-        if let Some(certificate) = install {
-            self.install_vnext_rechain_certificate(certificate);
-        }
-        if let Some(reason_label) = require {
-            self.require_vnext_view_change(slot, reason_label);
-        }
-        if let Some(reason_label) = reject {
-            self.reject_vnext_suspicion(slot, &reason_label);
-        }
-    }
-
-    fn handle_vnext_rechain_proposal_received(&mut self, proposal: super::vnext::RechainProposal) {
-        let key = (proposal.slot.height, proposal.slot.view);
-        let slot = proposal.slot;
-        let mut accepted = None;
-        let mut require = None;
-        let mut reject = None;
-        let Some(round) = self.vnext_rounds.get_mut(&key) else {
-            self.reject_vnext_suspicion(slot, "round_missing");
-            return;
-        };
-        if proposal.previous_chain_order_hash != round.chain_order.hash() {
-            reject = Some("chain_order_hash_mismatch".to_owned());
-        } else {
-            match round
-                .chain_order
-                .rechain_after_suspicions(proposal.suspicions.clone(), &round.quorum)
-            {
-                Ok(expected)
-                    if proposal.proposed_order == expected.new_order
-                        && proposal.suspicions == expected.suspicions =>
-                {
-                    accepted = Some(expected);
-                }
-                Ok(_) => reject = Some("rechain_evidence_mismatch".to_owned()),
-                Err(super::vnext::RechainError::InsufficientUntaintedValidators { .. })
-                | Err(super::vnext::RechainError::InsufficientQuorumAfterQuarantine) => {
-                    require = Some("rechain_would_weaken_quorum".to_owned());
-                }
-                Err(err) => reject = Some(super::vnext::rechain_error_label(&err).to_owned()),
-            }
-        }
-        if let Some(certificate) = accepted {
-            self.broadcast_vnext_rechain_vote(certificate);
-        }
-        if let Some(reason_label) = require {
-            self.require_vnext_view_change(slot, reason_label);
-        }
-        if let Some(reason_label) = reject {
-            self.reject_vnext_suspicion(slot, &reason_label);
-        }
-    }
-
     fn handle_vnext_rechain_certificate_received(
         &mut self,
         certificate: super::vnext::RechainCertificate,
@@ -22294,7 +22158,13 @@ impl Actor {
             self.require_vnext_view_change(slot, reason_label);
         }
         if let Some(reason_label) = reject {
-            self.reject_vnext_suspicion(slot, &reason_label);
+            debug!(
+                height = slot.height,
+                view = slot.view,
+                block = %slot.block_hash,
+                reason = %reason_label,
+                "vNext round rejected re-chain certificate"
+            );
         }
     }
 
@@ -22312,59 +22182,27 @@ impl Actor {
         self.install_vnext_view_change_certificate(certificate);
     }
 
-    fn reject_vnext_suspicion(&self, slot: super::vnext::SlotId, reason_label: &str) {
-        debug!(
-            height = slot.height,
-            view = slot.view,
-            block = %slot.block_hash,
-            reason = %reason_label,
-            "vNext round rejected suspicion/evidence"
-        );
-    }
-
     fn install_vnext_rechain_certificate(&mut self, certificate: super::vnext::RechainCertificate) {
-        if self
-            .vnext_rechain_journal
-            .iter()
-            .any(|existing| existing == &certificate)
-        {
-            return;
-        }
-        while self.vnext_rechain_journal.len() >= VNEXT_CERTIFICATE_JOURNAL_CAP {
-            self.vnext_rechain_journal.pop_front();
-        }
         debug!(
             height = certificate.slot.height,
             view = certificate.slot.view,
             block = %certificate.slot.block_hash,
             rechain_seq = certificate.rechain_seq,
-            "installed vNext re-chain certificate"
+            "discarded non-canonical vNext re-chain certificate"
         );
-        self.vnext_rechain_journal.push_back(certificate);
     }
 
     fn install_vnext_view_change_certificate(
         &mut self,
         certificate: super::vnext::ViewChangeCertificate,
     ) {
-        if self
-            .vnext_view_change_journal
-            .iter()
-            .any(|existing| existing == &certificate)
-        {
-            return;
-        }
         let height = self.vnext_view_change_certificate_height(&certificate);
         let new_view = certificate.new_view;
-        while self.vnext_view_change_journal.len() >= VNEXT_CERTIFICATE_JOURNAL_CAP {
-            self.vnext_view_change_journal.pop_front();
-        }
         debug!(
             new_view = certificate.new_view,
             highest_slot = ?certificate.highest_slot,
-            "installed vNext view-change certificate"
+            "discarded non-canonical vNext view-change certificate"
         );
-        self.vnext_view_change_journal.push_back(certificate);
         if new_view > 0 {
             self.trigger_view_change_with_cause(
                 height,
@@ -22372,97 +22210,6 @@ impl Actor {
                 ViewChangeCause::CensorshipEvidence,
             );
         }
-    }
-
-    pub(super) fn attach_vnext_certificates_to_block_sync_update(
-        &self,
-        update: &mut super::message::BlockSyncUpdate,
-    ) {
-        let block_hash = update.block.hash();
-        let height = update.block.header().height().get();
-        let view = update.block.header().view_change_index();
-        attach_vnext_certificates_from_roster_sidecar(self.kura.as_ref(), update);
-        for certificate in &self.vnext_rechain_journal {
-            if vnext_rechain_certificate_matches_block(certificate, block_hash, height, view)
-                && !update.vnext_rechain_certificates.contains(certificate)
-            {
-                update.vnext_rechain_certificates.push(certificate.clone());
-            }
-        }
-        for certificate in &self.vnext_view_change_journal {
-            if vnext_view_change_certificate_matches_block(certificate, height, view)
-                && !update.vnext_view_change_certificates.contains(certificate)
-            {
-                update
-                    .vnext_view_change_certificates
-                    .push(certificate.clone());
-            }
-        }
-    }
-
-    pub(super) fn install_vnext_block_sync_sidecars(
-        &mut self,
-        rechain_certificates: &[super::vnext::RechainCertificate],
-        view_change_certificates: &[super::vnext::ViewChangeCertificate],
-    ) {
-        for certificate in rechain_certificates {
-            if let Err(err) = self.handle_vnext_message(
-                super::vnext::ConsensusMessage::RechainCertificate(certificate.clone()),
-            ) {
-                debug!(?err, "failed to apply vNext re-chain block-sync sidecar");
-            }
-        }
-        for certificate in view_change_certificates {
-            if let Err(err) = self.handle_vnext_message(
-                super::vnext::ConsensusMessage::ViewChangeCertificate(certificate.clone()),
-            ) {
-                debug!(?err, "failed to apply vNext view-change block-sync sidecar");
-            }
-        }
-    }
-
-    pub(super) fn hydrate_vnext_certificates_for_block_from_roster_sidecar(
-        &mut self,
-        block_hash: HashOf<BlockHeader>,
-        height: u64,
-        view: u64,
-    ) -> bool {
-        let Some(sidecar) = self.kura.read_roster_metadata(height) else {
-            return false;
-        };
-        if sidecar.block_hash != block_hash || !sidecar.has_vnext_certificates() {
-            return false;
-        }
-        let rechain_certificates = sidecar
-            .vnext_rechain_certificates
-            .iter()
-            .filter(|certificate| {
-                vnext_rechain_certificate_matches_block(certificate, block_hash, height, view)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let view_change_certificates = sidecar
-            .vnext_view_change_certificates
-            .iter()
-            .filter(|certificate| {
-                vnext_view_change_certificate_matches_block(certificate, height, view)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if rechain_certificates.is_empty() && view_change_certificates.is_empty() {
-            return false;
-        }
-
-        debug!(
-            height,
-            view,
-            block = %block_hash,
-            rechain_certificates = rechain_certificates.len(),
-            view_change_certificates = view_change_certificates.len(),
-            "hydrating vNext certificates from persisted roster sidecar"
-        );
-        self.install_vnext_block_sync_sidecars(&rechain_certificates, &view_change_certificates);
-        true
     }
 
     fn accept_vnext_rechain_vote(&mut self, vote: super::vnext::RechainVote) {
@@ -22553,9 +22300,10 @@ impl Actor {
         } else {
             self.install_vnext_rechain_certificate(certificate.clone());
         }
-        self.broadcast_vnext_control_message(super::vnext::ConsensusMessage::RechainCertificate(
-            certificate,
-        ));
+        debug!(
+            ?certificate,
+            "retained vNext re-chain certificate without non-canonical broadcast"
+        );
     }
 
     fn accept_vnext_view_change_vote(&mut self, vote: super::vnext::ViewChangeVote) {
@@ -22647,15 +22395,9 @@ impl Actor {
         } else {
             self.install_vnext_view_change_certificate(certificate.clone());
         }
-        self.broadcast_vnext_control_message(
-            super::vnext::ConsensusMessage::ViewChangeCertificate(certificate),
-        );
-    }
-
-    fn broadcast_vnext_control_message(&mut self, message: super::vnext::ConsensusMessage) {
         debug!(
-            ?message,
-            "suppressing non-canonical Sumeragi control broadcast"
+            ?certificate,
+            "retained vNext view-change certificate without non-canonical broadcast"
         );
     }
 
@@ -22719,23 +22461,6 @@ impl Actor {
             && first.chain_order_hash == candidate.chain_order_hash
     }
 
-    fn sign_local_vnext_message(&self, message: &mut super::vnext::ConsensusMessage) {
-        let super::vnext::ConsensusMessage::Suspect(suspect) = message else {
-            return;
-        };
-        if &suspect.accuser != self.common_config.peer.id() || !suspect.signature.is_empty() {
-            return;
-        }
-        let (_, mode_tag, _) = self.consensus_context_for_height(suspect.slot.height);
-        if let Err(err) = suspect.sign(
-            &self.chain_id,
-            mode_tag,
-            self.common_config.key_pair.private_key(),
-        ) {
-            warn!(?err, "failed to sign local vNext suspicion");
-        }
-    }
-
     fn broadcast_vnext_rechain_vote(&mut self, certificate: super::vnext::RechainCertificate) {
         let local_peer = self.common_config.peer.id().clone();
         if !certificate
@@ -22757,11 +22482,10 @@ impl Actor {
             return;
         }
         self.accept_vnext_rechain_vote(vote.clone());
-        self.schedule_background(BackgroundRequest::Broadcast {
-            msg: BlockMessageWire::new(BlockMessage::VNext(
-                super::vnext::ConsensusMessage::RechainVote(vote),
-            )),
-        });
+        debug!(
+            ?vote,
+            "retained local re-chain vote without non-canonical broadcast"
+        );
     }
 
     fn broadcast_vnext_view_change_vote_for_slot(
@@ -22806,40 +22530,10 @@ impl Actor {
             return;
         }
         self.accept_vnext_view_change_vote(vote.clone());
-        self.schedule_background(BackgroundRequest::Broadcast {
-            msg: BlockMessageWire::new(BlockMessage::VNext(
-                super::vnext::ConsensusMessage::ViewChangeVote(vote),
-            )),
-        });
-    }
-
-    fn vnext_message_height_view(&self, message: &super::vnext::ConsensusMessage) -> (u64, u64) {
-        match message {
-            super::vnext::ConsensusMessage::Suspect(suspect) => {
-                (suspect.slot.height, suspect.slot.view)
-            }
-            super::vnext::ConsensusMessage::RechainProposal(proposal) => {
-                (proposal.slot.height, proposal.slot.view)
-            }
-            super::vnext::ConsensusMessage::RechainVote(vote) => (vote.slot.height, vote.slot.view),
-            super::vnext::ConsensusMessage::RechainCertificate(certificate) => {
-                (certificate.slot.height, certificate.slot.view)
-            }
-            super::vnext::ConsensusMessage::ViewChangeVote(vote) => {
-                let height = vote.highest_slot.map_or_else(
-                    || self.committed_height_snapshot().saturating_add(1),
-                    |slot| slot.height,
-                );
-                (height, vote.new_view)
-            }
-            super::vnext::ConsensusMessage::ViewChangeCertificate(certificate) => {
-                let height = certificate.highest_slot.map_or_else(
-                    || self.committed_height_snapshot().saturating_add(1),
-                    |slot| slot.height,
-                );
-                (height, certificate.new_view)
-            }
-        }
+        debug!(
+            ?vote,
+            "retained local view-change vote without non-canonical broadcast"
+        );
     }
 
     fn vnext_signer_pops(&self, signer_roster: &[PeerId]) -> Option<Vec<Vec<u8>>> {
@@ -22879,46 +22573,6 @@ impl Actor {
                     });
                 }
                 (!total.is_zero()).then_some(super::vnext::QuorumPolicy::Stake { total, weights })
-            }
-        }
-    }
-
-    fn vnext_drop_reason(
-        error: super::vnext::VNextSignatureError,
-    ) -> super::status::ConsensusMessageReason {
-        use super::vnext::VNextSignatureError;
-
-        match error {
-            VNextSignatureError::MissingSignature
-            | VNextSignatureError::BadSignature
-            | VNextSignatureError::MissingAggregateSignature
-            | VNextSignatureError::BadAggregateSignature
-            | VNextSignatureError::UnsupportedAggregateKeyAlgorithm { .. } => {
-                super::status::ConsensusMessageReason::InvalidSignature
-            }
-            VNextSignatureError::QuorumNotMet { .. }
-            | VNextSignatureError::MissingQuorum
-            | VNextSignatureError::EmptySignerSet => {
-                super::status::ConsensusMessageReason::QuorumMissing
-            }
-            VNextSignatureError::MissingHead
-            | VNextSignatureError::EmptySignerRoster
-            | VNextSignatureError::SignerNotInRoster
-            | VNextSignatureError::SignerPopLength { .. } => {
-                super::status::ConsensusMessageReason::RosterMissing
-            }
-            VNextSignatureError::CanonicalEncoding
-            | VNextSignatureError::SignerBitmapLength { .. }
-            | VNextSignatureError::SignerBitmapOutOfRange { .. }
-            | VNextSignatureError::SignerIndexOutOfRange { .. }
-            | VNextSignatureError::DuplicateSignerIndex { .. }
-            | VNextSignatureError::EmptyEvidence
-            | VNextSignatureError::ChainOrderValidation
-            | VNextSignatureError::RechainEvidenceMismatch
-            | VNextSignatureError::SlotMismatch
-            | VNextSignatureError::ChainOrderHashMismatch
-            | VNextSignatureError::RechainSequenceMismatch => {
-                super::status::ConsensusMessageReason::InvalidPayload
             }
         }
     }
@@ -23392,8 +23046,6 @@ impl Actor {
         let header = update.block.header();
         let height = header.height().get();
         let view = header.view_change_index();
-        self.attach_vnext_certificates_to_block_sync_update(update);
-
         if !self.trim_block_sync_update_for_frame_cap(update) {
             let evidence = classify_block_sync_roster_evidence(update, consensus_mode);
             debug!(
@@ -23436,17 +23088,6 @@ impl Actor {
         let mut wire_len = block_sync_update_wire_len(origin, update);
         if wire_len <= payload_cap {
             return true;
-        }
-
-        if !update.vnext_rechain_certificates.is_empty()
-            || !update.vnext_view_change_certificates.is_empty()
-        {
-            update.vnext_rechain_certificates.clear();
-            update.vnext_view_change_certificates.clear();
-            wire_len = block_sync_update_wire_len(origin, update);
-            if wire_len <= payload_cap {
-                return true;
-            }
         }
 
         if !update.commit_votes.is_empty() {
@@ -23562,6 +23203,7 @@ impl Actor {
             BlockMessage::BlockCreated(_)
             | BlockMessage::BlockSyncUpdate(_)
             | BlockMessage::BlockBodyResponse(_)
+            | BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Response(_))
             | BlockMessage::FetchPendingBlock(_)
             | BlockMessage::Proposal(_)
             | BlockMessage::RbcChunk(_)
@@ -23570,6 +23212,7 @@ impl Actor {
             | BlockMessage::RbcDeliver(_)
             | BlockMessage::RbcReady(_) => self.consensus_payload_frame_cap,
             BlockMessage::FetchBlockBody(_)
+            | BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Request(_))
             | BlockMessage::KuraReplicaAdvert(_)
             | BlockMessage::ConsensusParams(_)
             | BlockMessage::ExecWitness(_)
@@ -23578,7 +23221,6 @@ impl Actor {
             | BlockMessage::ProposalHint(_)
             | BlockMessage::Qc(_)
             | BlockMessage::QcVote(_)
-            | BlockMessage::VNext(_)
             | BlockMessage::VrfCommit(_)
             | BlockMessage::VrfReveal(_) => self.consensus_frame_cap,
         }
@@ -23909,6 +23551,14 @@ impl Actor {
             | BlockMessage::KuraReplicaAdvert(_) => None,
             BlockMessage::FetchBlockBody(request) => Some((request.height, request.view)),
             BlockMessage::BlockBodyResponse(response) => Some((response.height, response.view)),
+            BlockMessage::CertifiedBlockFetch(fetch) => match fetch {
+                super::message::CertifiedBlockFetch::Request(request) => {
+                    Some((request.height, request.view))
+                }
+                super::message::CertifiedBlockFetch::Response(response) => {
+                    Some((response.height, response.view))
+                }
+            },
             BlockMessage::ExecWitness(witness) => Some((witness.height, witness.view)),
             BlockMessage::RbcInitRequest(request) => Some((request.height, request.view)),
             BlockMessage::RbcChunkRequest(request) => Some((request.height, request.view)),
@@ -23925,26 +23575,6 @@ impl Actor {
             }
             BlockMessage::QcVote(vote) => Some((vote.height, vote.view)),
             BlockMessage::Qc(cert) => Some((cert.height, cert.view)),
-            BlockMessage::VNext(message) => match message {
-                super::vnext::ConsensusMessage::Suspect(suspect) => {
-                    Some((suspect.slot.height, suspect.slot.view))
-                }
-                super::vnext::ConsensusMessage::RechainProposal(proposal) => {
-                    Some((proposal.slot.height, proposal.slot.view))
-                }
-                super::vnext::ConsensusMessage::RechainVote(vote) => {
-                    Some((vote.slot.height, vote.slot.view))
-                }
-                super::vnext::ConsensusMessage::RechainCertificate(certificate) => {
-                    Some((certificate.slot.height, certificate.slot.view))
-                }
-                super::vnext::ConsensusMessage::ViewChangeVote(vote) => {
-                    vote.highest_slot.map(|slot| (slot.height, slot.view))
-                }
-                super::vnext::ConsensusMessage::ViewChangeCertificate(certificate) => certificate
-                    .highest_slot
-                    .map(|slot| (slot.height, slot.view)),
-            },
         }
     }
 
@@ -23954,6 +23584,10 @@ impl Actor {
             BlockMessage::BlockSyncUpdate(_) => "BlockSyncUpdate",
             BlockMessage::FetchBlockBody(_) => "FetchBlockBody",
             BlockMessage::BlockBodyResponse(_) => "BlockBodyResponse",
+            BlockMessage::CertifiedBlockFetch(fetch) => match fetch {
+                super::message::CertifiedBlockFetch::Request(_) => "CertifiedBlockFetchRequest",
+                super::message::CertifiedBlockFetch::Response(_) => "CertifiedBlockFetchResponse",
+            },
             BlockMessage::ConsensusParams(_) => "ConsensusParams",
             BlockMessage::QcVote(vote) => match vote.phase {
                 crate::sumeragi::consensus::Phase::Prepare => "PrepareVote",
@@ -23979,7 +23613,6 @@ impl Actor {
             BlockMessage::KuraReplicaAdvert(_) => "KuraReplicaAdvert",
             BlockMessage::ProposalHint(_) => "ProposalHint",
             BlockMessage::Proposal(_) => "Proposal",
-            BlockMessage::VNext(_) => "VNext",
         }
     }
 
