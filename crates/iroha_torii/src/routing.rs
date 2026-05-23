@@ -52498,19 +52498,19 @@ fn trader_module_contract_key(module: &str) -> &'static str {
 #[cfg(feature = "app_api")]
 fn trader_module_alias_candidates(module: &str) -> &'static [&'static str] {
     match module {
-        "swaps" => &["dlmm.dlmm_router"],
-        "n3x" => &["n3x.n3x_hub"],
-        "perps" => &["perps.perps_engine"],
-        "farms" => &["farms.farm"],
-        "launchpad" => &["launchpad.sale_factory"],
-        "options" => &["options.factory", "options.manager"],
-        "cover" => &["cover.policy_manager"],
-        "intents" => &["intents.settlement_router"],
-        "vaults" => &["vaults.manager"],
-        "operators" => &["operators.registry"],
-        "margin" => &["margin.portfolio_margin"],
-        "rwa" => &["rwa.market"],
-        "dlmmHooks" => &["dlmm_hooks.hook_manager"],
+        "swaps" => &["dlmm_router::dlmm.universal"],
+        "n3x" => &["n3x_hub::n3x.universal"],
+        "perps" => &["perps_engine::perps.universal"],
+        "farms" => &["farm::farms.universal"],
+        "launchpad" => &["sale_factory::launchpad.universal"],
+        "options" => &["factory::options.universal", "manager::options.universal"],
+        "cover" => &["policy_manager::cover.universal"],
+        "intents" => &["settlement_router::intents.universal"],
+        "vaults" => &["manager::vaults.universal"],
+        "operators" => &["registry::operators.universal"],
+        "margin" => &["portfolio_margin::margin.universal"],
+        "rwa" => &["market::rwa.universal"],
+        "dlmmHooks" => &["hook_manager::dlmm_hooks.universal"],
         _ => &[],
     }
 }
@@ -52811,7 +52811,7 @@ fn call_contract_view_value(
     state: Arc<CoreState>,
     authority: &iroha_data_model::account::AccountId,
     contract_address: iroha_data_model::smart_contract::ContractAddress,
-    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    _contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     entrypoint: &str,
     payload: Option<Value>,
     gas_limit: u64,
@@ -52821,7 +52821,7 @@ fn call_contract_view_value(
         ContractViewDto {
             authority: authority.clone(),
             contract_address: Some(contract_address),
-            contract_alias,
+            contract_alias: None,
             entrypoint: Some(entrypoint.to_owned()),
             payload: payload.map(IrohaJson::new),
             gas_limit,
@@ -52862,7 +52862,7 @@ fn load_swap_fill_rollup(
         state.as_ref(),
         params.contract_address.as_deref(),
         params.contract_alias.as_deref(),
-        "dlmm.dlmm_router",
+        "dlmm_router::dlmm.universal",
     )?;
     let contract_address = prepared.contract_address.clone();
     let contract_alias = prepared.contract_alias.clone();
@@ -54235,6 +54235,17 @@ mod tx_projection_display_tests {
     }
 
     #[test]
+    fn trader_module_alias_candidates_are_parseable_contract_aliases() {
+        for module in TRADER_MODULE_ORDER {
+            for alias in trader_module_alias_candidates(module) {
+                alias
+                    .parse::<iroha_data_model::smart_contract::ContractAlias>()
+                    .unwrap_or_else(|err| panic!("invalid alias candidate `{alias}`: {err}"));
+            }
+        }
+    }
+
+    #[test]
     fn projections_omit_invalid_authority_literals() {
         let projection = TxProjection {
             authority: Some("operator1@banka".to_string()),
@@ -54596,7 +54607,7 @@ mod tx_projection_display_tests {
         SwapFillRollup {
             authority: ALICE_ID.to_string(),
             contract_address: "tairac1router".into(),
-            contract_alias: Some("dlmm.dlmm_router".into()),
+            contract_alias: Some("dlmm_router::dlmm.universal".into()),
             base_asset_id: "xor#universal".into(),
             quote_asset_id: "usdt#soraswap.universal".into(),
             history_head: 7,
