@@ -90,6 +90,15 @@ known_capabilities = ["torii_gateway", "chunk_range_fetch"]
 [sorafs.discovery.admission]
 envelopes_dir = "configs/soranexus/taira/sorafs_admission"
 
+[sorafs.discovery.publish]
+gateway_base_url = "https://taira.sora.org"
+pin_torii_urls = [
+  "https://taira-validator-1.sora.org",
+  "https://taira-validator-2.sora.org",
+  "https://taira-validator-3.sora.org",
+  "https://taira-validator-4.sora.org",
+]
+
 [sorafs.gateway.denylist]
 catalog_path = "configs/soranexus/taira/sorafs_gateway_denylist.catalog.json"
 opt_out_packs = []

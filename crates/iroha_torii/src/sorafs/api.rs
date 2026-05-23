@@ -1861,6 +1861,37 @@ pub(crate) async fn handle_get_sorafs_providers(State(state): State<SharedAppSta
     JsonBody(response).into_response()
 }
 
+pub(crate) async fn handle_get_sorafs_storage_peers(
+    State(state): State<SharedAppState>,
+) -> Response {
+    let publish = &state.sorafs_publish_discovery;
+    let mut response = Map::new();
+    response.insert("source".into(), Value::from("config"));
+    response.insert(
+        "gateway_base_url".into(),
+        publish
+            .gateway_base_url
+            .as_ref()
+            .map_or(Value::Null, |url| Value::from(url.clone())),
+    );
+    response.insert(
+        "pin_torii_urls".into(),
+        Value::Array(
+            publish
+                .pin_torii_urls
+                .iter()
+                .cloned()
+                .map(Value::from)
+                .collect(),
+        ),
+    );
+    response.insert(
+        "count".into(),
+        Value::from(publish.pin_torii_urls.len() as u64),
+    );
+    JsonBody(Value::Object(response)).into_response()
+}
+
 pub(crate) async fn handle_post_sorafs_provider_advert(
     State(state): State<SharedAppState>,
     body: Bytes,
@@ -9603,6 +9634,40 @@ mod advert_tests {
         tests_runtime_handlers::mk_app_state_for_tests_with_world,
         utils::extractors::JsonOnly,
     };
+
+    #[tokio::test]
+    async fn sorafs_storage_peer_discovery_returns_configured_publish_urls() {
+        let mut state = mk_app_state_for_tests();
+        Arc::get_mut(&mut state)
+            .expect("unique app state")
+            .sorafs_publish_discovery = iroha_config::parameters::actual::SorafsPublishDiscovery {
+            gateway_base_url: Some("https://taira.sora.org".to_string()),
+            pin_torii_urls: vec![
+                "https://taira-validator-1.sora.org".to_string(),
+                "https://taira-validator-2.sora.org".to_string(),
+            ],
+        };
+
+        let response = handle_get_sorafs_storage_peers(State(state)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read peer discovery response");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode JSON");
+        assert_eq!(
+            value.get("gateway_base_url").and_then(Value::as_str),
+            Some("https://taira.sora.org")
+        );
+        let urls = value
+            .get("pin_torii_urls")
+            .and_then(Value::as_array)
+            .expect("pin URL array");
+        assert_eq!(urls.len(), 2);
+        assert_eq!(
+            urls.first().and_then(Value::as_str),
+            Some("https://taira-validator-1.sora.org")
+        );
+    }
 
     #[tokio::test]
     async fn proof_stream_potr_streams_recorded_receipts() {

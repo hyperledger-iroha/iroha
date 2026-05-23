@@ -6660,6 +6660,8 @@ pub struct SorafsDiscovery {
     pub known_capabilities: Vec<String>,
     /// Optional admission registry configuration.
     pub admission: Option<SorafsAdmission>,
+    /// Optional publish peer discovery hints served to SoraFS deploy clients.
+    pub publish: SorafsPublishDiscovery,
 }
 
 impl Default for SorafsDiscovery {
@@ -6668,6 +6670,7 @@ impl Default for SorafsDiscovery {
             discovery_enabled: super::defaults::torii::SORAFS_DISCOVERY_ENABLED,
             known_capabilities: super::defaults::torii::sorafs_known_capabilities(),
             admission: None,
+            publish: SorafsPublishDiscovery::default(),
         }
     }
 }
@@ -6677,6 +6680,15 @@ impl Default for SorafsDiscovery {
 pub struct SorafsAdmission {
     /// Directory containing governance-signed provider admission envelopes.
     pub envelopes_dir: PathBuf,
+}
+
+/// Config-backed SoraFS publish peer hints exposed by Torii.
+#[derive(Debug, Clone, Default)]
+pub struct SorafsPublishDiscovery {
+    /// Public gateway base URL deploy clients should verify after pinning.
+    pub gateway_base_url: Option<String>,
+    /// Torii URLs deploy clients should pin storage to after registering a paid pin.
+    pub pin_torii_urls: Vec<String>,
 }
 
 /// Repair scheduler configuration.
