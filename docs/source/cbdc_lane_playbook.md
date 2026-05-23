@@ -52,18 +52,21 @@ metadata.telemetry.contact = "ops@cb.example"
 [[nexus.dataspace_catalog]]
 alias = "cbdc.core"
 id = 10
+manifest_hash = "0a00000000000000000000000000000000000000000000000000000000000000"
 description = "CBDC issuance dataspace"
 fault_tolerance = 1
 
 [[nexus.dataspace_catalog]]
 alias = "cbdc.bank.wholesale"
 id = 11
+manifest_hash = "0b00000000000000000000000000000000000000000000000000000000000000"
 description = "Wholesale bank onboarding lane"
 fault_tolerance = 1
 
 [[nexus.dataspace_catalog]]
 alias = "cbdc.dapp.retail"
 id = 12
+manifest_hash = "0c00000000000000000000000000000000000000000000000000000000000000"
 description = "Retail wallets and programmable-money dApps"
 fault_tolerance = 1
 

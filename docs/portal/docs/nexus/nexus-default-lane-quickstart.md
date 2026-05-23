@@ -63,18 +63,21 @@ fault_tolerance = 1
 [[nexus.dataspace_catalog]]
 alias = "governance"
 id = 1
+manifest_hash = "0100000000000000000000000000000000000000000000000000000000000000"
 description = "Governance proposals & manifests"
 fault_tolerance = 1
 
 [[nexus.dataspace_catalog]]
 alias = "zk"
 id = 2
+manifest_hash = "0200000000000000000000000000000000000000000000000000000000000000"
 description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
 Each `index` must be unique and contiguous. Dataspace ids are 64-bit values;
-the examples above use the same numeric values as the lane indexes for clarity.
+non-universal dataspaces must carry a 32-byte `manifest_hash`, and any explicit
+`id` must match the low little-endian bytes derived from that hash.
 
 ## 2. Set routing defaults and optional overrides
 
