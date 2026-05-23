@@ -1702,7 +1702,7 @@ public final class HttpClientTransportTests {
             201, vpnQuoteJson(quoteId, meteringKey).getBytes(StandardCharsets.UTF_8));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
-        new ToriiCanonicalRequestAuth("alice", keyPair.getPrivate(), 1_700_000_000_000L, "vpn-nonce-1");
+        canonicalAuth("alice", keyPair, 1_700_000_000_000L, "vpn-nonce-1");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
@@ -1752,7 +1752,7 @@ public final class HttpClientTransportTests {
                 new QueuedResponse(200, "{\"items\":[" + settledReceipt + "],\"total\":1}")));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
-        new ToriiCanonicalRequestAuth("alice", keyPair.getPrivate(), 1_700_000_000_001L, "vpn-nonce-2");
+        canonicalAuth("alice", keyPair, 1_700_000_000_001L, "vpn-nonce-2");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
@@ -2689,6 +2689,29 @@ public final class HttpClientTransportTests {
     verifier.initVerify(publicKey);
     verifier.update(message);
     assert verifier.verify(signature) : "canonical request signature mismatch";
+  }
+
+  private static ToriiCanonicalRequestAuth canonicalAuth(
+      final String accountId,
+      final KeyPair keyPair,
+      final Long timestampMs,
+      final String nonce) {
+    return new ToriiCanonicalRequestAuth(
+        accountId,
+        message -> signEd25519(keyPair, message),
+        timestampMs,
+        nonce);
+  }
+
+  private static byte[] signEd25519(final KeyPair keyPair, final byte[] message) {
+    try {
+      final Signature signer = Signature.getInstance("Ed25519");
+      signer.initSign(keyPair.getPrivate());
+      signer.update(message);
+      return signer.sign();
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to sign canonical request fixture", ex);
+    }
   }
 
   private static String vpnQuoteJson(final String quoteId, final String meteringKey) {

@@ -23,6 +23,9 @@ Last updated: 2026-05-23
   prepare/commit requests from proposal assembly, and deterministically projects
   participant votes into validator-set order to build the AMX QC bitmap plus
   BLS aggregate for block receipts.
+- The native AMX vote cache now scopes duplicate signer rejection to the exact
+  attestation body, so retries at a new planned coordinator height collect fresh
+  votes without stale cross-body aggregation.
 - Torii transaction submit proxy routing-plan drift now fails fast with
   `409 Conflict` and `routing_plan_mismatch`, including both ingress and
   receiver plan digests. Signed-query/read route drift remains warning-only.
@@ -40,6 +43,9 @@ Last updated: 2026-05-23
   journal is installed. `irohad` installs and replays this journal by default
   under the Kura storage directory, discarding committed, expired, malformed, and
   stale-plan entries and following the Kura fsync mode for durability.
+- Queue plan journal open now truncates incomplete trailing frames from torn
+  appends before installing the append handle, and queue `clear_all` appends
+  remove tombstones before dropping in-memory plans.
 - Queue routing now exposes a first-class `RoutingPlan` with single-route and
   native AMX variants. Mixed native transaction targets retain their
   participant dataspaces and build deterministic coordinator/participant route

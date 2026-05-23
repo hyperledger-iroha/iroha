@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::{self, BufReader, Read, Write},
+    io::{self, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -100,6 +100,7 @@ impl QueuePlanJournal {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
+        repair_incomplete_tail(&path, durable_writes)?;
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -206,6 +207,65 @@ fn write_frame(file: &mut File, frame: &QueuePlanJournalFrameV1) -> io::Result<(
     Ok(())
 }
 
+fn repair_incomplete_tail(path: &Path, durable_writes: bool) -> io::Result<()> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    let file_len = file.metadata()?.len();
+    let mut position = 0_u64;
+    let mut valid_end = 0_u64;
+
+    while position < file_len {
+        let remaining = file_len.saturating_sub(position);
+        if remaining < 4 {
+            truncate_journal_tail(&mut file, valid_end, durable_writes)?;
+            return Ok(());
+        }
+
+        file.seek(SeekFrom::Start(position))?;
+        let mut len_bytes = [0_u8; 4];
+        file.read_exact(&mut len_bytes)?;
+        let payload_len = u32::from_le_bytes(len_bytes) as u64;
+        let payload_start = position.checked_add(4).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "queue journal frame length overflow",
+            )
+        })?;
+        let frame_end = payload_start.checked_add(payload_len).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "queue journal frame length overflow",
+            )
+        })?;
+
+        if frame_end > file_len {
+            truncate_journal_tail(&mut file, position, durable_writes)?;
+            return Ok(());
+        }
+
+        let mut bytes = vec![0_u8; payload_len as usize];
+        file.read_exact(&mut bytes)?;
+        norito::decode_from_bytes::<QueuePlanJournalFrameV1>(&bytes).map_err(io::Error::other)?;
+
+        valid_end = frame_end;
+        position = frame_end;
+    }
+
+    Ok(())
+}
+
+fn truncate_journal_tail(file: &mut File, valid_end: u64, durable_writes: bool) -> io::Result<()> {
+    file.set_len(valid_end)?;
+    if durable_writes {
+        file.sync_all()?;
+    }
+    Ok(())
+}
+
 fn read_frames(path: &Path) -> io::Result<Vec<QueuePlanJournalFrameV1>> {
     let file = match File::open(path) {
         Ok(file) => file,
@@ -223,7 +283,11 @@ fn read_frames(path: &Path) -> io::Result<Vec<QueuePlanJournalFrameV1>> {
         }
         let len = u32::from_le_bytes(len_bytes) as usize;
         let mut bytes = vec![0_u8; len];
-        reader.read_exact(&mut bytes)?;
+        match reader.read_exact(&mut bytes) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(err) => return Err(err),
+        }
         let frame = norito::decode_from_bytes::<QueuePlanJournalFrameV1>(&bytes)
             .map_err(io::Error::other)?;
         frames.push(frame);
@@ -233,6 +297,8 @@ fn read_frames(path: &Path) -> io::Result<Vec<QueuePlanJournalFrameV1>> {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs::OpenOptions, io::Write};
+
     use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
     use iroha_logger::Level;
     use iroha_test_samples::gen_account_in;
@@ -274,5 +340,54 @@ mod tests {
         }
         let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("reopen journal");
         assert_eq!(journal.replay().expect("replay"), vec![second]);
+    }
+
+    #[test]
+    fn journal_open_truncates_torn_payload_tail_before_append() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("queue-plan.norito");
+        let first = record("first");
+        let second = record("second");
+        let second_bytes =
+            norito::to_bytes(&QueuePlanJournalFrameV1::Put(second.clone())).expect("encode second");
+
+        let valid_len;
+        {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&path)
+                .expect("open raw journal");
+            write_frame(&mut file, &QueuePlanJournalFrameV1::Put(first.clone()))
+                .expect("write first frame");
+            valid_len = file.metadata().expect("valid metadata").len();
+            let second_len = u32::try_from(second_bytes.len()).expect("second frame length");
+            file.write_all(&second_len.to_le_bytes())
+                .expect("write torn length");
+            file.write_all(&second_bytes[..second_bytes.len() / 2])
+                .expect("write torn payload");
+        }
+        assert!(
+            path.metadata().expect("torn metadata").len() > valid_len,
+            "test setup should leave a torn tail"
+        );
+
+        let mut journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("repair journal");
+        assert_eq!(
+            path.metadata().expect("repaired metadata").len(),
+            valid_len,
+            "opening should truncate the incomplete trailing frame"
+        );
+        assert_eq!(
+            journal.replay().expect("replay repaired"),
+            vec![first.clone()]
+        );
+
+        journal.put(second.clone()).expect("append after repair");
+        let replayed = journal.replay().expect("replay appended");
+        assert_eq!(replayed.len(), 2);
+        assert!(replayed.contains(&first));
+        assert!(replayed.contains(&second));
     }
 }

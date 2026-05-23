@@ -3578,12 +3578,40 @@ impl Queue {
     ///
     /// Used when a peer is removed from the topology so it stops advertising stale transactions.
     pub fn clear_all(&self) {
+        let _guard = self.push_remove_lock.lock();
         while let Some(hash) = self.tx_hashes.pop() {
             if self.txs.remove(&hash).is_some() {
                 self.untrack_active_transaction();
             }
             self.routing_decisions.remove(&hash);
-            self.routing_plans.remove(&hash);
+            if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                self.record_plan_journal_remove(hash, &plan);
+                let _ = routing_ledger::take_plan(&hash);
+            } else if let Some(plan) = routing_ledger::take_plan(&hash) {
+                self.record_plan_journal_remove(hash, &plan);
+            }
+            let _ = routing_ledger::take(&hash);
+            self.removed_hashes.remove(&hash);
+        }
+        let remaining_plans = self
+            .routing_plans
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().clone()))
+            .collect::<Vec<_>>();
+        for (hash, plan) in remaining_plans {
+            self.record_plan_journal_remove(hash, &plan);
+            let _ = routing_ledger::take(&hash);
+            let _ = routing_ledger::take_plan(&hash);
+        }
+        let remaining_hashes = self
+            .txs
+            .iter()
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        for hash in remaining_hashes {
+            if self.txs.remove(&hash).is_some() {
+                self.untrack_active_transaction();
+            }
             let _ = routing_ledger::take(&hash);
             let _ = routing_ledger::take_plan(&hash);
             self.removed_hashes.remove(&hash);
@@ -7338,6 +7366,110 @@ pub mod tests {
                 .expect("install tombstoned journal"),
             0
         );
+    }
+
+    #[test]
+    fn queue_plan_journal_tombstones_clear_all_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(tx, &state, plan, None)
+            .expect("push with plan");
+        assert!(queue.txs.contains_key(&hash));
+
+        queue.clear_all();
+        assert!(!queue.txs.contains_key(&hash));
+        drop(queue);
+
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install tombstoned journal"),
+            0
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay tombstoned journal");
+        assert_eq!(summary.records, 0);
+        assert!(!replay_queue.txs.contains_key(&hash));
+    }
+
+    #[test]
+    fn queue_plan_journal_tombstones_clear_all_inflight_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let state = Arc::new(State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue = Arc::new(Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router.clone(),
+            &[],
+        ));
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(tx, &state, plan, None)
+            .expect("push with plan");
+
+        let mut expired = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state.view(), &mut expired)
+            .expect("in-flight guard");
+        assert!(queue.txs.contains_key(&hash));
+        assert!(queue.tx_hashes.is_empty());
+
+        queue.clear_all();
+        drop(guard);
+        drop(queue);
+
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install tombstoned journal"),
+            0
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay tombstoned journal");
+        assert_eq!(summary.records, 0);
+        assert!(!replay_queue.txs.contains_key(&hash));
     }
 
     #[test]
