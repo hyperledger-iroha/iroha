@@ -25,13 +25,24 @@ pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
 }
 
 /// Compute the `parent_state_root` using only the witnessed reads (pre-values).
-/// Writes are ignored to reflect the parent snapshot.
+/// When a block writes state, only pre-values for written keys are included.
+/// Read-only access witnesses can vary across execution strategies and should
+/// not perturb the commit vote for an otherwise identical state transition.
 pub fn parent_state_from_witness(w: &ExecWitness) -> Hash {
-    let reads: Vec<KvPair> = w
-        .reads
-        .iter()
-        .map(|kv| KvPair::new(kv.key.clone(), kv.value.clone()))
-        .collect();
+    let reads: Vec<KvPair> = if w.writes.is_empty() {
+        w.reads
+            .iter()
+            .map(|kv| KvPair::new(kv.key.clone(), kv.value.clone()))
+            .collect()
+    } else {
+        let write_keys: std::collections::BTreeSet<&[u8]> =
+            w.writes.iter().map(|kv| kv.key.as_slice()).collect();
+        w.reads
+            .iter()
+            .filter(|kv| write_keys.contains(kv.key.as_slice()))
+            .map(|kv| KvPair::new(kv.key.clone(), kv.value.clone()))
+            .collect()
+    };
     compute_post_state_root(&reads, &[])
 }
 
@@ -98,5 +109,58 @@ mod tests {
         // because the post root only commits to writes in that case.
         let post = post_state_from_witness(&witness);
         assert_ne!(parent, post);
+    }
+
+    #[test]
+    fn parent_root_ignores_incidental_reads_when_writes_exist() {
+        use super::super::consensus::{ExecKv, ExecWitness};
+
+        let base = ExecWitness {
+            reads: vec![ExecKv {
+                key: b"balance".to_vec(),
+                value: b"10".to_vec(),
+            }],
+            writes: vec![ExecKv {
+                key: b"balance".to_vec(),
+                value: b"7".to_vec(),
+            }],
+            fastpq_transcripts: Vec::new(),
+            fastpq_batches: Vec::new(),
+        };
+        let mut with_extra_read = base.clone();
+        with_extra_read.reads.push(ExecKv {
+            key: b"permission-cache".to_vec(),
+            value: b"true".to_vec(),
+        });
+
+        assert_eq!(
+            parent_state_from_witness(&base),
+            parent_state_from_witness(&with_extra_read)
+        );
+    }
+
+    #[test]
+    fn parent_root_keeps_read_only_witness_for_pure_reads() {
+        use super::super::consensus::{ExecKv, ExecWitness};
+
+        let base = ExecWitness {
+            reads: vec![ExecKv {
+                key: b"config".to_vec(),
+                value: b"1".to_vec(),
+            }],
+            writes: Vec::new(),
+            fastpq_transcripts: Vec::new(),
+            fastpq_batches: Vec::new(),
+        };
+        let mut with_extra_read = base.clone();
+        with_extra_read.reads.push(ExecKv {
+            key: b"other".to_vec(),
+            value: b"2".to_vec(),
+        });
+
+        assert_ne!(
+            parent_state_from_witness(&base),
+            parent_state_from_witness(&with_extra_read)
+        );
     }
 }
