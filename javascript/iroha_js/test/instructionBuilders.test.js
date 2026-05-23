@@ -1241,6 +1241,7 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
             write_keys: [],
           },
         ],
+        states: null,
       },
     },
   };
