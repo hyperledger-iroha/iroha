@@ -13423,9 +13423,11 @@ pub async fn handle_post_bridge_proof_submit(
     let instruction: dm::InstructionBox = dm::SubmitBridgeProof::new(bridge_proof).into();
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder = builder.with_executable(dm::Executable::Instructions(ConstVec::from(vec![
-        instruction,
-    ])));
+    let builder = builder
+        .with_metadata(metadata_with_default_gas_asset(state.as_ref()))
+        .with_executable(dm::Executable::Instructions(ConstVec::from(vec![
+            instruction,
+        ])));
 
     let response =
         if let Some(private_key) = private_key {
@@ -13654,8 +13656,9 @@ pub async fn handle_post_bridge_message_submit(
     }
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder =
-        builder.with_executable(dm::Executable::Instructions(ConstVec::from(instructions)));
+    let builder = builder
+        .with_metadata(metadata_with_default_gas_asset(state.as_ref()))
+        .with_executable(dm::Executable::Instructions(ConstVec::from(instructions)));
 
     let response =
         if let Some(private_key) = private_key {

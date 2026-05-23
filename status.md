@@ -17,6 +17,15 @@ Last updated: 2026-05-23
   - `CARGO_TARGET_DIR=target/codex-review-fixes CARGO_BUILD_JOBS=2 cargo test -p iroha url_join_tests -- --nocapture`
   - `cargo fmt --all --check`
 
+## 2026-05-23 iroha_config minimal snapshot refresh
+
+- Refreshed `minimal_config_snapshot` so the expected Torii SoraFS discovery
+  defaults include the config-backed publish hints: no `gateway_base_url` and
+  an empty `pin_torii_urls` list.
+- Focused validation passed:
+  - `cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `cargo test -p iroha_config --test fixtures -- --nocapture`
+
 ## 2026-05-23 Nexus template manifest hashes
 
 - `defaults/nexus/config.toml`, `configs/soranexus/nexus/config.toml`, and
