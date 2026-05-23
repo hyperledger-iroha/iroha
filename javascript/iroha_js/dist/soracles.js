@@ -29,7 +29,7 @@ export const queryOracleFeedHistory = (baseUrl, feedId, options = {}) => {
   return fetchJson(baseUrl, `/v1/soracles/feeds/${encodeURIComponent(feedId)}/history`, options);
 };
 
-export const getLatestSoraSwapOracleAttestation = ({
+export const getLatestDefiOracleAttestation = ({
   baseUrl,
   toriiUrl,
   domain,
@@ -44,7 +44,7 @@ export const getLatestSoraSwapOracleAttestation = ({
   if (subjectId === undefined || subjectId === null || subjectId === "") {
     throw new TypeError("subjectId is required");
   }
-  return fetchJson(resolvedBaseUrl, "/v1/soracles/soraswap/attestations/latest", {
+  return fetchJson(resolvedBaseUrl, "/v1/soracles/defi/attestations/latest", {
     domain,
     subject_id: subjectId,
     status,
