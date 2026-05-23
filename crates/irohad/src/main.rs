@@ -6953,7 +6953,7 @@ metadata = {}
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "5eaf540791b06ee5ad37a0e6b7d9dcaf500aa48c49acdbb8b097b328ec0eb483";
+        "5434666dee1a353467a927189b27422a9c85366a14134ba54b3be83a1beed13d";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");

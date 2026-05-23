@@ -2,6 +2,17 @@
 
 Last updated: 2026-05-23
 
+## 2026-05-23 Nexus template manifest hashes
+
+- `defaults/nexus/config.toml`, `configs/soranexus/nexus/config.toml`, and
+  `configs/soranexus/taira/config.toml` now include manifest-derived hashes for
+  the bundled `governance` and `zk` dataspaces, keeping the templates aligned
+  with the Nexus config parser requirement that non-universal dataspaces
+  advertise a 32-byte `manifest_hash`.
+- Focused validation passed:
+  - `cargo test -p iroha_config --test fixtures nexus_profile_template_enables_multilane_defaults -- --nocapture`
+  - `cargo test -p irohad nexus_profile -- --nocapture`
+
 ## 2026-05-22 Multidataspace routing plan implementation
 
 - Native AMX receipts now use versioned participant attestation bodies and

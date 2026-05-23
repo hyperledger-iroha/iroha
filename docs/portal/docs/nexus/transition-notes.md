@@ -98,7 +98,7 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   (`.github/workflows/integration_tests_multilane.yml`), replacing the retired
   `pytests/nexus/test_multilane_pipeline.py` reference; keep the hash for
   `defaults/nexus/config.toml` (`nexus.enabled = true`, blake2b
-  `d69eefa2abb8886b0f3e280e88fe307a907cfe88053b5d60a1d459a5cf8549e1`) in sync
+  `5434666dee1a353467a927189b27422a9c85366a14134ba54b3be83a1beed13d`) in sync
   with the tracker when refreshing rehearsal bundles.
 
 ## Runtime Lane Lifecycle
