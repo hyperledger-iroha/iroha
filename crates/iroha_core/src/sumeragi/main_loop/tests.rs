@@ -105,7 +105,7 @@ use crate::{
     block::BlockValidationError,
     kura::Kura,
     query::store::LiveQueryStore,
-    queue::{LaneRouter, Queue, SingleLaneRouter},
+    queue::{ConfigLaneRouter, Queue, SingleLaneRouter},
     smartcontracts::Execute,
     state::{State, StateReadOnly, World},
     sumeragi::consensus::{
@@ -107616,35 +107616,10 @@ async fn proposal_queue_scan_budget_limits_fetch() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
-    struct HashLaneRouter {
-        routes: Mutex<BTreeMap<HashOf<SignedTransaction>, RoutingDecision>>,
-    }
-
-    impl HashLaneRouter {
-        fn new() -> Self {
-            Self {
-                routes: Mutex::new(BTreeMap::new()),
-            }
-        }
-
-        fn insert(&self, hash: HashOf<SignedTransaction>, routing: RoutingDecision) {
-            self.routes
-                .lock()
-                .expect("router lock")
-                .insert(hash, routing);
-        }
-    }
-
-    impl LaneRouter for HashLaneRouter {
-        fn route(&self, tx: &AcceptedTransaction<'_>) -> RoutingDecision {
-            self.routes
-                .lock()
-                .expect("router lock")
-                .get(&tx.hash())
-                .copied()
-                .unwrap_or_default()
-        }
-    }
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig};
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -107652,8 +107627,78 @@ async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let router = Arc::new(HashLaneRouter::new());
-    let queue_router: Arc<dyn LaneRouter> = router.clone();
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: lane1.dataspace_id,
+            alias: "space-1".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+    let mut staged = Vec::new();
+    for routing in [lane0, lane0, lane0, lane1] {
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.clone().into_parts();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let tx = TransactionBuilder::new(ChainId::from("test-chain"), authority)
+            .with_instructions([Log::new(Level::INFO, "lane scan budget".to_string())])
+            .sign(&private_key);
+        staged.push((tx, routing));
+    }
+    let lane1_authority = staged
+        .iter()
+        .find_map(|(tx, routing)| (*routing == lane1).then(|| tx.authority().to_string()))
+        .expect("lane1 transaction authority");
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(lane1_authority),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.routing_policy = routing_policy.clone();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+
+    let queue_router = Arc::new(ConfigLaneRouter::new(
+        routing_policy,
+        dataspace_catalog,
+        lane_catalog,
+    ));
     actor.queue = Arc::new(Queue::test_with_router_for_routes(
         QueueConfig::default(),
         &time_source,
@@ -107663,13 +107708,9 @@ async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
             (LaneId::new(1), DataSpaceId::new(1)),
         ],
     ));
-
-    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
     let mut accepted = Vec::new();
-    for routing in [lane0, lane0, lane0, lane1] {
-        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction()));
-        router.insert(tx.hash(), routing);
+    for (tx, routing) in staged {
+        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         actor
             .queue
             .push(tx.clone(), actor.state.view())

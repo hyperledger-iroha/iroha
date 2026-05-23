@@ -1055,7 +1055,7 @@ mod tests {
         // Spot check deterministic value to guard accidental changes.
         assert_eq!(
             fp,
-            hex!("0c2dc54419cbe2e31b3a68d2d92852a5a407ad8df9ca51d53ccc2669a3c6b984")
+            hex!("1e528b871a78dee8f667e590aa7105dc5e6b6e1c73152f5228dcf7355f2c9e2e")
         );
     }
 

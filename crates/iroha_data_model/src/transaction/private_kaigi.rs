@@ -281,7 +281,6 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::KeyPair;
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
-    use norito::core::DecodeFromSlice;
 
     use super::*;
     #[cfg(feature = "fault_injection")]
@@ -369,7 +368,7 @@ mod tests {
         let mut bytes = norito::codec::encode_adaptive(&tx);
         bytes.push(0);
 
-        let err = PrivateKaigiTransaction::decode_from_slice(&bytes)
+        let err = norito::codec::decode_exact_from_slice::<PrivateKaigiTransaction>(&bytes)
             .expect_err("private Kaigi slice decoder must reject trailing bytes");
 
         assert!(matches!(err, norito::core::Error::LengthMismatch));
