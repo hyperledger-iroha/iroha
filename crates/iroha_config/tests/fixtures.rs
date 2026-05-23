@@ -1489,6 +1489,8 @@ fn minimal_config_snapshot() {
                 transaction_time_to_live: 86400s,
                 expired_cull_interval: 1s,
                 expired_cull_batch: 256,
+                plan_journal_enabled: true,
+                plan_journal_max_bytes: 67108864,
             },
             nexus: Nexus {
                 enabled: true,
@@ -3311,7 +3313,9 @@ fn routing_policy_dataspace_resolution() {
         dataspace_catalog: vec![DataSpaceDescriptor {
             alias: Some("alpha".into()),
             id: Some(1),
-            manifest_hash: None,
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
             description: None,
             fault_tolerance: None,
             fee_sponsor_account_id: None,
@@ -3362,7 +3366,9 @@ fn routing_policy_lane_dataspace_mismatch_rejected() {
         dataspace_catalog: vec![DataSpaceDescriptor {
             alias: Some("alpha".into()),
             id: Some(1),
-            manifest_hash: None,
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
             description: None,
             fault_tolerance: None,
             fee_sponsor_account_id: None,
@@ -3409,7 +3415,9 @@ fn dataspace_fault_tolerance_zero_rejected() {
         dataspace_catalog: vec![DataSpaceDescriptor {
             alias: Some("alpha".into()),
             id: Some(1),
-            manifest_hash: None,
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
             description: None,
             fault_tolerance: Some(0),
             fee_sponsor_account_id: None,
@@ -3422,6 +3430,56 @@ fn dataspace_fault_tolerance_zero_rejected() {
     let err = emitter.into_result().expect_err("parse error expected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "fault_tolerance must be >= 1");
+}
+
+#[test]
+fn dataspace_manifest_hash_required_for_non_universal() {
+    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: None,
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_account_id: None,
+        }],
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "must specify `manifest_hash`");
+}
+
+#[test]
+fn dataspace_explicit_id_must_match_manifest_hash() {
+    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: Some(
+                "0200000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_account_id: None,
+        }],
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "does not match manifest_hash-derived id");
 }
 
 #[test]
@@ -3448,7 +3506,9 @@ fn dataspace_fee_sponsor_account_id_parses_when_sponsorship_enabled() {
         dataspace_catalog: vec![DataSpaceDescriptor {
             alias: Some("alpha".into()),
             id: Some(1),
-            manifest_hash: None,
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
             description: None,
             fault_tolerance: None,
             fee_sponsor_account_id: Some("sponsor@alpha".into()),
@@ -3498,7 +3558,9 @@ fn dataspace_fee_sponsor_account_id_requires_sponsorship_enabled() {
         dataspace_catalog: vec![DataSpaceDescriptor {
             alias: Some("alpha".into()),
             id: Some(1),
-            manifest_hash: None,
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
             description: None,
             fault_tolerance: None,
             fee_sponsor_account_id: Some("sponsor@alpha".into()),

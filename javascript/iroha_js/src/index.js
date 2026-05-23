@@ -98,6 +98,8 @@ export {
   noritoEncodeInstruction,
   noritoDecodeInstruction,
   noritoEncodeMultisigProposeRequest,
+  noritoEncodeMultisigContractCallProposeRequest,
+  noritoEncodeMultisigContractCallApproveRequest,
 } from "./norito.js";
 export {
   buildGatewayRequest,

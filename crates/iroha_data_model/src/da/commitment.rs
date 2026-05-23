@@ -400,10 +400,7 @@ mod tests {
     use std::str::FromStr;
 
     use iroha_crypto::Hash;
-    use norito::{
-        codec::{DecodeAll, encode_adaptive},
-        core::DecodeFromSlice,
-    };
+    use norito::codec::{DecodeAll, decode_exact_from_slice, encode_adaptive};
 
     use super::*;
 
@@ -447,7 +444,7 @@ mod tests {
         let mut bytes = encode_adaptive(&bundle);
         bytes.push(0);
 
-        let err = DaCommitmentBundle::decode_from_slice(&bytes)
+        let err = decode_exact_from_slice::<DaCommitmentBundle>(&bytes)
             .expect_err("DA commitment bundle slice decoder must reject trailing bytes");
 
         assert!(matches!(err, norito::core::Error::LengthMismatch));

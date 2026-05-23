@@ -39,6 +39,116 @@ impl From<ToriiRouteHintV1> for crate::queue::RoutingDecision {
     }
 }
 
+/// Role of one route in a Torii transaction routing plan hint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum ToriiRouteLegRoleV1 {
+    /// Coordinator route for final admission and commit ordering.
+    Coordinator,
+    /// Dataspace-local participant route.
+    Participant,
+}
+
+impl From<crate::queue::RouteLegRole> for ToriiRouteLegRoleV1 {
+    fn from(value: crate::queue::RouteLegRole) -> Self {
+        match value {
+            crate::queue::RouteLegRole::Coordinator => Self::Coordinator,
+            crate::queue::RouteLegRole::Participant => Self::Participant,
+        }
+    }
+}
+
+impl From<ToriiRouteLegRoleV1> for crate::queue::RouteLegRole {
+    fn from(value: ToriiRouteLegRoleV1) -> Self {
+        match value {
+            ToriiRouteLegRoleV1::Coordinator => Self::Coordinator,
+            ToriiRouteLegRoleV1::Participant => Self::Participant,
+        }
+    }
+}
+
+/// One lane/dataspace leg in a Torii transaction routing plan hint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct ToriiRouteLegHintV1 {
+    /// Lane/dataspace route selected for this leg.
+    pub route: ToriiRouteHintV1,
+    /// Role assigned to this leg.
+    pub role: ToriiRouteLegRoleV1,
+}
+
+impl From<crate::queue::RouteLeg> for ToriiRouteLegHintV1 {
+    fn from(value: crate::queue::RouteLeg) -> Self {
+        Self {
+            route: value.route.into(),
+            role: value.role.into(),
+        }
+    }
+}
+
+impl From<ToriiRouteLegHintV1> for crate::queue::RouteLeg {
+    fn from(value: ToriiRouteLegHintV1) -> Self {
+        Self::new(value.route.into(), value.role.into())
+    }
+}
+
+/// Stable full routing plan determined at ingress.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum ToriiRoutingPlanHintV1 {
+    /// Single coordinator route.
+    Single(ToriiRouteLegHintV1),
+    /// Native AMX coordinator and participant route set.
+    NativeAmx {
+        /// Stable digest of the native AMX plan.
+        plan_digest: Hash,
+        /// Coordinator route for final ordering.
+        coordinator: ToriiRouteLegHintV1,
+        /// Dataspace-local participant routes.
+        participants: Vec<ToriiRouteLegHintV1>,
+    },
+}
+
+impl ToriiRoutingPlanHintV1 {
+    /// Return the coordinator route for peer selection and diagnostics.
+    #[must_use]
+    pub fn coordinator_route(&self) -> ToriiRouteHintV1 {
+        match self {
+            Self::Single(leg) => leg.route,
+            Self::NativeAmx { coordinator, .. } => coordinator.route,
+        }
+    }
+}
+
+impl From<crate::queue::RoutingPlan> for ToriiRoutingPlanHintV1 {
+    fn from(value: crate::queue::RoutingPlan) -> Self {
+        match value {
+            crate::queue::RoutingPlan::Single(leg) => Self::Single(leg.into()),
+            crate::queue::RoutingPlan::NativeAmx(plan) => Self::NativeAmx {
+                plan_digest: plan.plan_digest,
+                coordinator: plan.coordinator.into(),
+                participants: plan.participants.into_iter().map(Into::into).collect(),
+            },
+        }
+    }
+}
+
+impl From<ToriiRoutingPlanHintV1> for crate::queue::RoutingPlan {
+    fn from(value: ToriiRoutingPlanHintV1) -> Self {
+        match value {
+            ToriiRoutingPlanHintV1::Single(leg) => {
+                let leg: crate::queue::RouteLeg = leg.into();
+                Self::single(leg.route)
+            }
+            ToriiRoutingPlanHintV1::NativeAmx {
+                coordinator,
+                participants,
+                ..
+            } => Self::native_amx(
+                crate::queue::RouteLeg::from(coordinator).route,
+                participants.into_iter().map(Into::into).collect(),
+            ),
+        }
+    }
+}
+
 /// Encoded response format requested by the ingress node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiProxyResponseFormatV1 {
@@ -248,8 +358,8 @@ pub enum ToriiProxyRequestKindV1 {
     SubmitTransaction {
         /// Original transaction entrypoint from the client.
         transaction: TransactionEntrypoint,
-        /// Route resolved by the ingress node.
-        expected_route: ToriiRouteHintV1,
+        /// Full routing plan resolved by the ingress node.
+        expected_plan: ToriiRoutingPlanHintV1,
     },
     /// Execute a signed query on the authoritative lane validator.
     SignedQuery {
@@ -330,4 +440,67 @@ pub struct ToriiProxyResponseV1 {
     pub request_id: Hash,
     /// Serialized HTTP response from the authoritative peer.
     pub response: ToriiProxyHttpResponseV1,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
+
+    #[test]
+    fn torii_routing_plan_hint_roundtrips_single_and_native_amx_plans() {
+        let single_route = RoutingDecision::new(LaneId::new(4), DataSpaceId::new(9));
+        let single_hint = ToriiRoutingPlanHintV1::from(RoutingPlan::single(single_route));
+
+        assert_eq!(
+            single_hint.coordinator_route(),
+            ToriiRouteHintV1 {
+                lane_id: single_route.lane_id,
+                dataspace_id: single_route.dataspace_id,
+            }
+        );
+        assert_eq!(
+            RoutingPlan::from(single_hint),
+            RoutingPlan::single(single_route)
+        );
+
+        let coordinator = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
+        let native_plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(2), DataSpaceId::new(8)),
+                    RouteLegRole::Coordinator,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7)),
+                    RouteLegRole::Coordinator,
+                ),
+            ],
+        );
+        let native_hint = ToriiRoutingPlanHintV1::from(native_plan.clone());
+
+        assert_eq!(
+            native_hint.coordinator_route(),
+            ToriiRouteHintV1 {
+                lane_id: coordinator.lane_id,
+                dataspace_id: coordinator.dataspace_id,
+            }
+        );
+        let ToriiRoutingPlanHintV1::NativeAmx {
+            plan_digest,
+            participants,
+            ..
+        } = &native_hint
+        else {
+            panic!("expected native AMX routing plan hint");
+        };
+        assert_eq!(*plan_digest, native_plan.digest());
+        assert!(
+            participants
+                .iter()
+                .all(|leg| leg.role == ToriiRouteLegRoleV1::Participant)
+        );
+        assert_eq!(RoutingPlan::from(native_hint), native_plan);
+    }
 }

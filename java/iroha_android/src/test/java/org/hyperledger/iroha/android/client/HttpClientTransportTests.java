@@ -786,9 +786,12 @@ public final class HttpClientTransportTests {
             + "\"account_id\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\","
             + "\"label\":\"Primary\","
             + "\"assets\":[{"
-            + "\"asset\":\""
+            + "\"asset_id\":\""
             + assetDefinitionId
-            + "\",\"scope\":\"global\",\"quantity\":\"42\""
+            + "#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+            + "\",\"asset_definition_id\":\""
+            + assetDefinitionId
+            + "\",\"quantity\":\"42\""
             + "}]"
             + "}]"
             + "}]"
@@ -821,8 +824,11 @@ public final class HttpClientTransportTests {
     assert "Primary".equals(account.label()) : "Account label mismatch";
     assert account.assets().size() == 1 : "Expected single asset entry";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
-    assert assetDefinitionId.equals(asset.asset()) : "Asset definition mismatch";
-    assert "global".equals(asset.scope()) : "Scope mismatch";
+    assert (assetDefinitionId + "#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB").equals(asset.assetId())
+        : "Asset ID mismatch";
+    assert assetDefinitionId.equals(asset.assetDefinitionId()) : "Asset definition mismatch";
+    assert assetDefinitionId.equals(asset.asset()) : "Legacy asset accessor mismatch";
+    assert asset.scope() == null : "Modern portfolio payload must not require legacy scope";
     assert "42".equals(asset.quantity()) : "Asset quantity mismatch";
 
     final TransportRequest request = executor.lastRequest();

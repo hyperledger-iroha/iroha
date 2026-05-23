@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { noritoEncodeInstruction, noritoDecodeInstruction } from "../src/norito.js";
+import {
+  noritoEncodeInstruction,
+  noritoDecodeInstruction,
+  noritoEncodeMultisigProposeRequest,
+} from "../src/norito.js";
 import { __resetNativeStateForTests } from "../src/native.js";
 import { makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
@@ -97,6 +101,50 @@ function withMissingNativeBinding(callback) {
   }
 }
 
+function readU64Length(buffer, offset, label) {
+  assert.ok(offset + 8 <= buffer.length, `${label} length prefix is in bounds`);
+  const value = buffer.readBigUInt64LE(offset);
+  assert.ok(value <= BigInt(Number.MAX_SAFE_INTEGER), `${label} length fits JS number`);
+  return { length: Number(value), bytes: 8 };
+}
+
+function readCompactLength(buffer, offset, label) {
+  let value = 0n;
+  let shift = 0n;
+  let cursor = offset;
+  for (; cursor < buffer.length; cursor += 1) {
+    const byte = buffer[cursor];
+    value |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      assert.ok(value <= BigInt(Number.MAX_SAFE_INTEGER), `${label} length fits JS number`);
+      return { length: Number(value), bytes: cursor + 1 - offset };
+    }
+    shift += 7n;
+  }
+  assert.fail(`${label} compact length prefix is unterminated`);
+}
+
+function readNoritoFieldPayload(buffer, offset, label, compactLength) {
+  const { length, bytes } = compactLength
+    ? readCompactLength(buffer, offset, label)
+    : readU64Length(buffer, offset, label);
+  const start = offset + bytes;
+  const end = start + length;
+  assert.ok(end <= buffer.length, `${label} payload is in bounds`);
+  return { payload: buffer.subarray(start, end), offset: end };
+}
+
+function noritoFramePayload(body, label) {
+  const buffer = Buffer.from(body);
+  assert.equal(buffer.subarray(0, 4).toString("ascii"), "NRT0");
+  const { length: payloadLength } = readU64Length(buffer, 23, `${label}.payloadLength`);
+  assert.equal(buffer.length, 40 + payloadLength);
+  return {
+    flags: buffer[39],
+    payload: buffer.subarray(40),
+  };
+}
+
 test("noritoEncodeInstruction returns canonical bytes", () => {
   const encoded = noritoEncodeInstruction(REGISTER_DOMAIN);
   assert.ok(Buffer.isBuffer(encoded));
@@ -150,7 +198,7 @@ test("norito encode/decode supports transfer asset instructions", () => {
   assert.deepEqual(decoded, instruction);
 });
 
-baseTest("noritoEncodeInstruction uses pure JS fallback for supported instruction JSON", () => {
+baseTest("noritoEncodeInstruction uses the pure JS codec for supported instruction JSON", () => {
   const instruction = {
     Transfer: {
       Asset: {
@@ -166,6 +214,113 @@ baseTest("noritoEncodeInstruction uses pure JS fallback for supported instructio
   });
   assert.ok(encoded.length > 32);
   assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+});
+
+baseTest("native multisig proposal DTO embeds pure JS instructions with compact inner frames", () => {
+  const sourceAssetId = loadAssetIdFromFixture("mint_asset_numeric.json");
+  const instruction = {
+    Transfer: {
+      Asset: {
+        source: sourceAssetId,
+        object: "7",
+        destination: ACCOUNT_ID,
+      },
+    },
+  };
+  const request = {
+    multisig_account_alias: "cbdc@hbl.sbp",
+    signer_account_id: ACCOUNT_ID,
+    fee_sponsor: "sponsor@sbp",
+    instructions: [instruction],
+  };
+  const nativeBody = Buffer.from(noritoEncodeMultisigProposeRequest(request));
+  const body = withMissingNativeBinding(() =>
+    Buffer.from(noritoEncodeMultisigProposeRequest(request)),
+  );
+  assert.deepEqual(body, nativeBody);
+
+  const outer = noritoFramePayload(body, "MultisigProposeDto");
+  const outerUsesCompactLengths = (outer.flags & 0x02) !== 0;
+  assert.equal(outerUsesCompactLengths, true);
+  let offset = 0;
+  for (const fieldName of [
+    "multisig_account_id",
+    "multisig_account_alias",
+    "signer_account_id",
+    "private_key",
+    "public_key_hex",
+    "signature_b64",
+    "creation_time_ms",
+    "fee_sponsor",
+  ]) {
+    offset = readNoritoFieldPayload(
+      outer.payload,
+      offset,
+      `MultisigProposeDto.${fieldName}`,
+      outerUsesCompactLengths,
+    ).offset;
+  }
+  const instructions = readNoritoFieldPayload(
+    outer.payload,
+    offset,
+    "MultisigProposeDto.instructions",
+    outerUsesCompactLengths,
+  );
+  const count = readU64Length(instructions.payload, 0, "MultisigProposeDto.instructions.count");
+  assert.equal(count.length, 1);
+  const firstInstruction = readNoritoFieldPayload(
+    instructions.payload,
+    count.bytes,
+    "MultisigProposeDto.instructions[0]",
+    outerUsesCompactLengths,
+  );
+  const wireId = readNoritoFieldPayload(
+    firstInstruction.payload,
+    0,
+    "MultisigProposeDto.instructions[0].wire_id",
+    outerUsesCompactLengths,
+  );
+  const wireIdValue = readNoritoFieldPayload(
+    wireId.payload,
+    0,
+    "MultisigProposeDto.instructions[0].wire_id.value",
+    outerUsesCompactLengths,
+  );
+  assert.equal(wireIdValue.payload.toString("utf8"), "iroha.transfer");
+  const embeddedFrameField = readNoritoFieldPayload(
+    firstInstruction.payload,
+    wireId.offset,
+    "MultisigProposeDto.instructions[0].payload",
+    outerUsesCompactLengths,
+  );
+  const embeddedFrame = readNoritoFieldPayload(
+    embeddedFrameField.payload,
+    0,
+    "MultisigProposeDto.instructions[0].payload.frame",
+    false,
+  );
+  const inner = noritoFramePayload(
+    embeddedFrame.payload,
+    "MultisigProposeDto.instructions[0].payload.frame",
+  );
+  assert.equal((inner.flags & 0x02) !== 0, true);
+});
+
+test("native multisig proposal DTO preserves native instruction frames without JS schema entries", () => {
+  const request = {
+    multisig_account_alias: "cbdc@hbl.sbp",
+    signer_account_id: ACCOUNT_ID,
+    instructions: [
+      {
+        Unregister: {
+          Domain: "wonderland.sora",
+        },
+      },
+    ],
+  };
+
+  const body = Buffer.from(noritoEncodeMultisigProposeRequest(request));
+  assert.ok(body.length > 32);
 });
 
 baseTest("noritoEncodeInstruction requires native binding for unsupported instruction JSON", () => {
@@ -205,7 +360,7 @@ baseTest("noritoEncodeInstruction passes pre-encoded payloads through without na
 test("norito encode/decode supports ExecuteTrigger instructions", () => {
   const instruction = {
     ExecuteTrigger: {
-      trigger: "staged_mint_request_hbl",
+      trigger: "mint_request_hbl",
       args: {
         action: "create",
         request_id: "mr1",

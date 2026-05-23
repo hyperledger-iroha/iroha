@@ -228,9 +228,12 @@ final class OfflineNoteV2Tests: XCTestCase {
         let text = try OfflineNoteV2PaymentTokenCodec.encodeText(token)
         XCTAssertEqual(text, fixture.sdkInterop.paymentTokenText)
         XCTAssertTrue(text.hasPrefix(OfflineNoteV2PaymentTokenCodec.textPrefix))
+        XCTAssertEqual(OfflineNoteV2PaymentTokenCodec.textPrefix, OfflineNoteV2TransferTextPayloadCodec.paymentTokenPrefix)
         XCTAssertEqual(try OfflineNoteV2PaymentTokenCodec.decodeText(text).tokenIdHex, token.tokenIdHex)
         XCTAssertEqual(
-            try OfflineNoteV2PaymentTokenCodec.decodeText(fixture.sdkInterop.paymentTokenText).tokenIdHex,
+            try OfflineNoteV2PaymentTokenCodec.decodeText(
+                OfflineNoteV2TransferTextPayloadCodec.paymentTokenPrefix + String(text.split(separator: ":").last!)
+            ).tokenIdHex,
             token.tokenIdHex
         )
 
@@ -263,6 +266,58 @@ final class OfflineNoteV2Tests: XCTestCase {
             try OfflineNoteV2PaymentTokenCodec.decodeQrPayload(try XCTUnwrap(canonicalQrPayload)).tokenIdHex,
             token.tokenIdHex
         )
+    }
+
+    func testOfflineNoteV2ReceiveRequestCodecRoundTripsNoritoTextAndQrFrames() throws {
+        let fixture = try Self.loadFixture()
+        let output = fixture.paymentToken.outputClaims[0]
+        let request = try OfflineNoteV2ReceiveRequest(
+            chainId: fixture.chainVectors.derivation.chainId,
+            paymentRequestId: fixture.paymentToken.invoiceId,
+            accountId: output.accountId,
+            assetDefinitionId: output.assetDefinitionId,
+            assetId: "\(output.assetDefinitionId)#\(output.accountId)",
+            amount: output.amount,
+            keyCertificate: Self.certificate(output.keyCertificate),
+            outputCommitment: Self.hex(output.noteCommitment)
+        )
+
+        let noritoDecoded = try OfflineNoteV2ReceiveRequestCodec.decodeNorito(
+            OfflineNoteV2ReceiveRequestCodec.encodeNorito(request)
+        )
+        XCTAssertEqual(noritoDecoded.paymentRequestId, request.paymentRequestId)
+        XCTAssertEqual(noritoDecoded.accountId, request.accountId)
+        XCTAssertEqual(noritoDecoded.assetId, request.assetId)
+        XCTAssertEqual(noritoDecoded.amount, request.amount)
+        XCTAssertEqual(noritoDecoded.outputCommitmentHex, request.outputCommitmentHex)
+        XCTAssertEqual(
+            try noritoDecoded.keyCertificate.payloadHash(),
+            try request.keyCertificate.payloadHash()
+        )
+
+        let text = try OfflineNoteV2ReceiveRequestCodec.encodeText(request)
+        XCTAssertTrue(text.hasPrefix(OfflineNoteV2ReceiveRequestCodec.textPrefix))
+        XCTAssertEqual(
+            try OfflineNoteV2ReceiveRequestCodec.decodeText(text).outputCommitmentHex,
+            request.outputCommitmentHex
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2TransferTextPayloadCodec.decodeReceiveRequest(text).outputCommitmentHex,
+            request.outputCommitmentHex
+        )
+
+        let frames = try OfflineNoteV2ReceiveRequestCodec.encodeQrFrameBytes(
+            request,
+            options: OfflineQrStreamOptions(chunkSize: 180, parityGroup: 2)
+        )
+        let decoder = OfflineQrStreamDecoder()
+        var payload: Data?
+        for frame in frames {
+            let result = try decoder.ingest(frameBytes: frame)
+            payload = result.payload ?? payload
+        }
+        let qrDecoded = try OfflineNoteV2ReceiveRequestCodec.decodeQrPayload(XCTUnwrap(payload))
+        XCTAssertEqual(qrDecoded.outputCommitmentHex, request.outputCommitmentHex)
     }
 
     func testAssetDefinitionAddressRoundTripsFixtureAndRejectsBadChecksum() throws {
@@ -422,6 +477,21 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         XCTAssertEqual(OfflineNoteV2TransferHandoff.defaultNfcAidHex, OfflineNoteV2NfcApduProtocol.aidHex)
         XCTAssertEqual(OfflineNoteV2NfcApduProtocol.parseCommand(OfflineNoteV2NfcApduProtocol.selectAidAPDUData()), .select)
+        let customAid = Data([0xF0, 0x50, 0x4B, 0x45, 0x50, 0x4B, 0x52, 0x4E, 0x46, 0x43, 0x01])
+        XCTAssertEqual(OfflineNoteV2NfcApduProtocol.aidHex(for: customAid), "F0504B45504B524E464301")
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(
+                OfflineNoteV2NfcApduProtocol.selectAidAPDUData(aid: customAid),
+                aid: customAid
+            ),
+            .select
+        )
+        XCTAssertEqual(
+            OfflineNoteV2NfcApduProtocol.parseCommand(
+                OfflineNoteV2NfcApduProtocol.selectAidAPDUData(aid: customAid)
+            ),
+            .unsupported
+        )
         XCTAssertEqual(OfflineNoteV2NfcApduProtocol.parseCommand(OfflineNoteV2NfcApduProtocol.getInfoAPDUData()), .getInfo)
 
         let infoBytes = try OfflineNoteV2NfcApduProtocol.encodeInfo(kind: .paymentToken, payloadBytes: payload)
@@ -912,31 +982,89 @@ final class OfflineNoteV2Tests: XCTestCase {
     func testOfflineNoteV2NearbyEnvelopeRoundTripsPairingPaymentAndAck() throws {
         let fixture = try Self.loadFixture()
         let token = try OfflineNoteV2PaymentTokenCodec.decodeNorito(Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64))
+        let receiveOutput = try XCTUnwrap(token.audit.outputClaims.first)
+        let assetDefinitionId = try XCTUnwrap(
+            receiveOutput.assetId.split(separator: "#", maxSplits: 1).first
+        ).description
+        let receiveRequest = try OfflineNoteV2ReceiveRequest(
+            chainId: token.chainId,
+            paymentRequestId: token.paymentRequestId,
+            accountId: receiveOutput.keyCertificate.accountId,
+            assetDefinitionId: assetDefinitionId,
+            assetId: receiveOutput.assetId,
+            amount: receiveOutput.amount,
+            keyCertificate: receiveOutput.keyCertificate,
+            outputCommitment: receiveOutput.noteCommitment
+        )
+        let receiptAck = try OfflineNoteV2ReceiptAck.fromPaymentToken(
+            token,
+            recipientAccountId: receiveOutput.keyCertificate.accountId,
+            acceptedAtMs: 1_706_000_000_333
+        )
         let challenge = try OfflineNoteV2NearbyPairingChallenge(assetName: " nearby_pairing_bird ")
         let challengeEnvelope = try OfflineNoteV2NearbyEnvelope(
             kind: .challenge,
-            payload: Data("receive-challenge".utf8),
-            contentType: OfflineNoteV2TransferHandoff.receiveChallengeContentType,
+            payload: OfflineNoteV2ReceiveRequestCodec.encodeNorito(receiveRequest),
+            contentType: OfflineNoteV2TransferHandoff.receiveRequestContentType,
             pairingChallenge: challenge
         )
         let paymentBytes = try OfflineNoteV2TransferHandoff.nearbyPaymentEnvelopeBytes(for: token)
         let paymentEnvelope = try OfflineNoteV2NearbyEnvelope.decode(paymentBytes)
         let ackEnvelope = try OfflineNoteV2NearbyEnvelope(
             kind: .receiptAck,
-            payload: Data("accepted-locally".utf8),
+            payload: OfflineNoteV2TransferHandoff.rawReceiptAckBytes(for: receiptAck),
             contentType: OfflineNoteV2TransferHandoff.receiptAckContentType
+        )
+        let textChallenge = try OfflineNoteV2ReceiveRequestCodec.encodeText(receiveRequest)
+        let textPayment = try OfflineNoteV2PaymentTokenCodec.encodeText(token)
+        let textAck = try OfflineNoteV2ReceiptAckCodec.encodeText(receiptAck)
+        let textChallengeBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+            payload: textChallenge,
+            kind: .receiveRequest,
+            pairingChallenge: challenge
+        )
+        let textPaymentBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+            payload: textPayment,
+            kind: .paymentToken
+        )
+        let textAckBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+            payload: textAck,
+            kind: .receiptAck
         )
 
         XCTAssertEqual(try OfflineNoteV2NearbyEnvelope.decode(challengeEnvelope.encoded()).pairingChallenge, challenge)
+        XCTAssertEqual(
+            try OfflineNoteV2NearbyEnvelope.decode(challengeEnvelope.encoded()).receiveRequest().outputCommitmentHex,
+            receiveRequest.outputCommitmentHex
+        )
         XCTAssertEqual(paymentEnvelope.kind, .payment)
         XCTAssertEqual(try paymentEnvelope.paymentToken().tokenIdHex, token.tokenIdHex)
         XCTAssertEqual(try OfflineNoteV2TransferHandoff.decodeNearbyPaymentToken(from: paymentBytes).tokenIdHex, token.tokenIdHex)
-        XCTAssertEqual(try OfflineNoteV2NearbyEnvelope.decode(ackEnvelope.encoded()).payload, Data("accepted-locally".utf8))
-
-        let legacyPairing = Data(
-            #"{"version":1,"kind":"challenge","payload":"cmVjZWl2ZS1jaGFsbGVuZ2U","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":"nearby_pairing_bird"}}"#.utf8
+        XCTAssertEqual(
+            try OfflineNoteV2NearbyEnvelope.decode(ackEnvelope.encoded()).receiptAck().tokenIdHex,
+            receiptAck.tokenIdHex
         )
-        XCTAssertEqual(try OfflineNoteV2NearbyEnvelope.decode(legacyPairing).pairingChallenge, challenge)
+        XCTAssertEqual(
+            try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+                from: textChallengeBytes,
+                expectedKind: .receiveRequest
+            ).payload,
+            textChallenge
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+                from: textPaymentBytes,
+                expectedKind: .paymentToken
+            ).payload,
+            textPayment
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+                from: textAckBytes,
+                expectedKind: .receiptAck
+            ).payload,
+            textAck
+        )
     }
 
     func testOfflineNoteV2NearbyEnvelopeRejectsAdversarialMessages() throws {
@@ -949,7 +1077,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             try OfflineNoteV2NearbyEnvelope(
                 kind: .challenge,
                 payload: Data("challenge".utf8),
-                contentType: OfflineNoteV2TransferHandoff.receiveChallengeContentType
+                contentType: OfflineNoteV2TransferHandoff.receiveRequestContentType
             )
         )
         XCTAssertThrowsError(
@@ -979,7 +1107,41 @@ final class OfflineNoteV2Tests: XCTestCase {
             try OfflineNoteV2NearbyEnvelope(
                 kind: .receiptAck,
                 payload: Data("ok".utf8),
-                contentType: OfflineNoteV2TransferHandoff.receiveChallengeContentType
+                contentType: OfflineNoteV2TransferHandoff.receiveRequestContentType
+            )
+        )
+        let invalidTextReceiveRequest = try OfflineNoteV2TransferTextPayloadCodec.encode(
+            Data("garbage".utf8),
+            kind: .receiveRequest
+        )
+        let invalidTextPayment = try OfflineNoteV2TransferTextPayloadCodec.encode(
+            Data("garbage".utf8),
+            kind: .paymentToken
+        )
+        let invalidTextAck = try OfflineNoteV2TransferTextPayloadCodec.encode(
+            Data("garbage".utf8),
+            kind: .receiptAck
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .challenge,
+                payload: Data(invalidTextReceiveRequest.utf8),
+                contentType: OfflineNoteV2TransferHandoff.textReceiveRequestContentType,
+                pairingChallenge: pairing
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .payment,
+                payload: Data(invalidTextPayment.utf8),
+                contentType: OfflineNoteV2TransferHandoff.textPaymentTokenContentType
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteV2NearbyEnvelope(
+                kind: .receiptAck,
+                payload: Data(invalidTextAck.utf8),
+                contentType: OfflineNoteV2TransferHandoff.textReceiptAckContentType
             )
         )
 
@@ -987,19 +1149,19 @@ final class OfflineNoteV2Tests: XCTestCase {
             #"{"version":2,"kind":"payment","payload":"AQID","contentType":"application/vnd.iroha.offline.payment-token-v2+norito"}"#.utf8
         )
         let fractionalVersion = Data(
-            #"{"version":1.5,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}"#.utf8
+            #"{"version":1.5,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-request-v2+norito","pairingChallenge":"nearby_pairing_bird"}"#.utf8
         )
         let unknownField = Data(
             #"{"version":1,"kind":"payment","payload":"AQID","contentType":"application/vnd.iroha.offline.payment-token-v2+norito","extra":true}"#.utf8
         )
         let challengeContentTypeDowngrade = Data(
-            #"{"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receipt-ack-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}"#.utf8
+            #"{"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receipt-ack-v2+norito","pairingChallenge":"nearby_pairing_bird"}"#.utf8
         )
         let ackContentTypeDowngrade = Data(
-            #"{"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream"}"#.utf8
+            #"{"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receive-request-v2+norito"}"#.utf8
         )
         let paddedPayload = Data(
-            #"{"version":1,"kind":"challenge","payload":"YQ==","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}"#.utf8
+            #"{"version":1,"kind":"challenge","payload":"YQ==","contentType":"application/vnd.iroha.offline.receive-request-v2+norito","pairingChallenge":"nearby_pairing_bird"}"#.utf8
         )
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(unsupportedVersion))
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(fractionalVersion))
@@ -1010,22 +1172,28 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         let topLevelArray = Data(#"[]"#.utf8)
         let invalidBase64Payload = Data(
-            #"{"version":1,"kind":"challenge","payload":"!!!!","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}"#.utf8
+            #"{"version":1,"kind":"challenge","payload":"!!!!","contentType":"application/vnd.iroha.offline.receive-request-v2+norito","pairingChallenge":"nearby_pairing_bird"}"#.utf8
         )
         let badPairingObject = Data(
-            #"{"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":1}}"#.utf8
+            #"{"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-request-v2+norito","pairingChallenge":{"assetName":1}}"#.utf8
         )
         let smuggledPairingObject = Data(
-            #"{"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-challenge-v1+octet-stream","pairingChallenge":{"assetName":"nearby_pairing_bird","extra":true}}"#.utf8
+            #"{"version":1,"kind":"challenge","payload":"YQ","contentType":"application/vnd.iroha.offline.receive-request-v2+norito","pairingChallenge":{"assetName":"nearby_pairing_bird","extra":true}}"#.utf8
         )
         let ackWithPairing = Data(
-            #"{"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receipt-ack-v1+octet-stream","pairingChallenge":"nearby_pairing_bird"}"#.utf8
+            #"{"version":1,"kind":"receipt_ack","payload":"b2s","contentType":"application/vnd.iroha.offline.receipt-ack-v2+norito","pairingChallenge":"nearby_pairing_bird"}"#.utf8
+        )
+        let decodedInvalidTextPayment = Data(
+            """
+            {"version":1,"kind":"payment","payload":"\(Self.base64Url(Data(invalidTextPayment.utf8)))","contentType":"text/vnd.iroha.offline.payment-token-v2"}
+            """.utf8
         )
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(topLevelArray))
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(invalidBase64Payload))
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(badPairingObject))
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(smuggledPairingObject))
         XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(ackWithPairing))
+        XCTAssertThrowsError(try OfflineNoteV2NearbyEnvelope.decode(decodedInvalidTextPayment))
         XCTAssertThrowsError(
             try OfflineNoteV2NearbyEnvelope(
                 kind: .payment,
@@ -1565,6 +1733,61 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(note.state, .spendable)
     }
 
+    /// Regression: `Wallet.load(assetDefinitionId:)` must forward the
+    /// asset definition id verbatim to the issuer client. An earlier
+    /// revision derived the value from the SDK-internal 2-part `assetId
+    /// = name#account`, which dropped any suffix after the first `#`
+    /// (e.g. `someBase58Alias#extra` → `someBase58Alias`). The pass-
+    /// through is verified against the Base58 form that the wallet's
+    /// note-commitment encoding requires.
+    func testWalletLoadForwardsAssetDefinitionIdVerbatimToIssuerClient() async throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let loadContext = OfflineNoteV2LoadContext(
+            operationId: derivation.issuerLoadOperationId,
+            lineageId: derivation.issuerLoadLineageId,
+            localRevision: derivation.issuerLoadLocalRevision,
+            keyCertificate: senderCertificate
+        )
+        let issuerClient = RecordingIssuerClient(loadContext: loadContext)
+        let wallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            issuerClient: issuerClient,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            certificateVerifier: try Self.certificateVerifier(fixture),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.sourceNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_001_000 }
+        )
+
+        // The Base58 form is what the wallet's note-commitment encoding
+        // requires (assetId = `<asset-def-base58>#<account>`); the
+        // regression check is that the exact Base58 value is forwarded
+        // to the issuer client, not the substring before any later `#`.
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
+        _ = try await wallet.load(
+            assetDefinitionId: assetDefinitionId,
+            amount: fixture.chainVectors.issue.amount
+        )
+
+        XCTAssertEqual(
+            issuerClient.lastPrepareLoadAssetDefinitionId,
+            assetDefinitionId,
+            "prepareLoad must receive the assetDefinitionId verbatim; an earlier revision derived it from the SDK-internal assetId which dropped suffixes"
+        )
+        XCTAssertEqual(
+            issuerClient.lastIssueRequest?.assetDefinitionId,
+            assetDefinitionId,
+            "issueNote must receive the assetDefinitionId verbatim; an earlier revision derived it from the SDK-internal assetId which dropped suffixes"
+        )
+    }
+
     func testToriiIssuerClientBodySignsRefillAndIssuesWalletCommitment() async throws {
         let fixture = try Self.loadFixture()
         let certificate = fixture.paymentToken.senderKeyCertificate
@@ -1576,6 +1799,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             offlinePublicKey: offlinePublicKey,
             deviceBinding: [
                 "device_id": "device-1",
+                "attestation_key_id": "attestation-key-1",
                 "offline_public_key": offlinePublicKey,
                 "signature_base64": "nested-device-signature-is-not-body-auth",
             ]
@@ -1662,6 +1886,9 @@ final class OfflineNoteV2Tests: XCTestCase {
         let refillBody = try Self.requestBody(requests[0])
         XCTAssertEqual(try Self.string(refillBody, "account_id"), accountId)
         XCTAssertEqual(try Self.string(refillBody, "operation_id"), "operation-refill-1")
+        XCTAssertEqual(try Self.uint64(refillBody, "local_revision"), 0)
+        XCTAssertEqual(try Self.string(refillBody, "local_state_hash"), "")
+        XCTAssertEqual(try Self.string(refillBody, "attestation_key_id"), "attestation-key-1")
         XCTAssertEqual(try Self.string(refillBody, "nonce"), "auth-refill-1")
         XCTAssertFalse(try Self.string(refillBody, "signature_base64").isEmpty)
         XCTAssertEqual(
@@ -1675,6 +1902,82 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(try Self.string(issueBody, "local_balance"), "0")
         XCTAssertEqual(try Self.string(issueBody, "nonce"), "auth-issue-1")
         _ = try Self.object(issueBody, "lineage_state")
+    }
+
+    /// Regression: the canonical body sent to Torii must NOT escape `/` as
+    /// `\/`. The server reconstructs the signing bytes via `norito::json::to_vec`
+    /// which never escapes slashes; if Swift's `JSONSerialization` does, the
+    /// reconstructed bytes diverge and every refill / issue fails with
+    /// `OFFLINE_V2_SIGNATURE_INVALID` (403). Base64 fields routinely contain `/`,
+    /// so this is hit by every real device binding in practice.
+    func testRefillBodyDoesNotEscapeForwardSlashesForCanonicalSigning() async throws {
+        let fixture = try Self.loadFixture()
+        let certificate = fixture.paymentToken.senderKeyCertificate
+        let accountId = certificate.accountId
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
+        // Deliberately use a base64-shaped value that contains `/` so we
+        // exercise the escape path. `JSONSerialization` with only
+        // `[.sortedKeys]` would emit `\/` here.
+        let offlinePublicKey = "AB//CD/EFGH//IJ="
+        let deviceBinding = try OfflineNoteV2IssuerDeviceBinding(
+            deviceId: "device-1",
+            offlinePublicKey: offlinePublicKey,
+            deviceBinding: [
+                "device_id": "device-1",
+                "offline_public_key": offlinePublicKey,
+                "signature_base64": "ABC//DEF/GHI/JKL=",
+            ]
+        )
+        OfflineIssuerURLProtocol.reset()
+        OfflineIssuerURLProtocol.handler = { request in
+            let body = try Self.requestBody(request)
+            let response: [String: Any] = [
+                "operation_id": try Self.string(body, "operation_id"),
+                "lineage_state": Self.lineageState(revision: 0, balance: "0"),
+                "key_certificate": Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
+                "key_certificates": [Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
+            ]
+            return (200, try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]))
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfflineIssuerURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiOfflineNoteV2IssuerClient(
+            baseURL: URL(string: "https://torii.example")!,
+            session: session,
+            canonicalAuth: ToriiCanonicalRequestAuth(
+                accountId: accountId,
+                privateKey: Data(0..<32)
+            ),
+            deviceBindingProvider: StaticIssuerDeviceBindingProvider(binding: deviceBinding),
+            clock: { 1_700_000_000_000 },
+            nonceGenerator: SequenceIdGenerator(ids: [
+                "operation-refill-slash",
+                "auth-refill-slash",
+            ])
+        )
+
+        _ = try await client.prepareLoad(
+            chainId: "chain-1",
+            accountId: accountId,
+            assetDefinitionId: assetDefinitionId,
+            amount: "5"
+        )
+
+        let requests = OfflineIssuerURLProtocol.requests
+        XCTAssertEqual(requests.count, 1)
+        guard let rawBody = OfflineIssuerURLProtocol.body(for: requests[0]) else {
+            return XCTFail("missing request body")
+        }
+        let rawString = String(decoding: rawBody, as: UTF8.self)
+        XCTAssertFalse(
+            rawString.contains("\\/"),
+            "canonical body must not contain escaped slashes (\\/); server reconstructs bytes via norito::json::to_vec which never escapes /"
+        )
+        XCTAssertTrue(
+            rawString.contains(offlinePublicKey),
+            "expected the raw offline_public_key (with /) to appear unescaped in the body"
+        )
     }
 
     func testOfflineNoteV2WalletLifecycleBuildsAuditAcceptAndRedeemTransactions() async throws {
@@ -2528,6 +2831,20 @@ final class OfflineNoteV2Tests: XCTestCase {
                 .invalidIssuerSignatureLength(expected: 64, actual: 63)
             )
         }
+
+        XCTAssertNoThrow(try OfflineNoteKeyCertificateV2(
+            platform: cert.platform,
+            keyId: cert.keyId,
+            deviceId: cert.deviceId,
+            accountId: cert.accountId,
+            publicKey: publicKey,
+            assertionScheme: cert.assertionScheme,
+            assertionKeyAlgorithm: cert.assertionKeyAlgorithm,
+            assertionPublicKey: assertionPublicKey,
+            assertionUsageCountLimit: cert.assertionUsageCountLimit,
+            oneUse: true,
+            issuerSignature: issuerSignature
+        ))
     }
 
     func testOfflineNoteV2AuditBundleRejectsInvalidShapes() throws {
@@ -3572,6 +3889,7 @@ final class OfflineNoteV2Tests: XCTestCase {
     private final class RecordingIssuerClient: OfflineNoteV2IssuerClient {
         let loadContext: OfflineNoteV2LoadContext
         var lastIssueRequest: OfflineNoteV2IssueRequest?
+        var lastPrepareLoadAssetDefinitionId: String?
 
         init(loadContext: OfflineNoteV2LoadContext) {
             self.loadContext = loadContext
@@ -3581,7 +3899,8 @@ final class OfflineNoteV2Tests: XCTestCase {
                          accountId: String,
                          assetDefinitionId: String,
                          amount: String) async throws -> OfflineNoteV2LoadContext {
-            loadContext
+            lastPrepareLoadAssetDefinitionId = assetDefinitionId
+            return loadContext
         }
 
         func issueNote(_ request: OfflineNoteV2IssueRequest) async throws -> OfflineNoteV2IssueResponse {
@@ -3737,6 +4056,13 @@ final class OfflineNoteV2Tests: XCTestCase {
             throw OfflineNoteV2FixtureError.invalidBase64
         }
         return data
+    }
+
+    private static func base64Url(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
     }
 
     private static func certificateJSON(_ certificate: OfflineCertificateJSON,

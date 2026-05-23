@@ -21,7 +21,9 @@ import {
   extractConfidentialGasConfig,
 } from "../src/config.js";
 import {
+  buildMultisigContractCallProposeRequest,
   buildMultisigProposeRequest,
+  noritoEncodeMultisigContractCallProposeRequest,
   normalizeAccountId,
   ValidationError,
   ValidationErrorCode,
@@ -57,6 +59,187 @@ const nativeTest = makeNativeTest(test);
 
 function cloneFixture(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function readU64Length(buffer, offset, label) {
+  assert.ok(offset + 8 <= buffer.length, `${label} length prefix is in bounds`);
+  const value = buffer.readBigUInt64LE(offset);
+  assert.ok(value <= BigInt(Number.MAX_SAFE_INTEGER), `${label} length fits JS number`);
+  return { length: Number(value), bytes: 8 };
+}
+
+function readCompactLength(buffer, offset, label) {
+  let value = 0n;
+  let shift = 0n;
+  let cursor = offset;
+  for (; cursor < buffer.length; cursor += 1) {
+    const byte = buffer[cursor];
+    value |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      assert.ok(value <= BigInt(Number.MAX_SAFE_INTEGER), `${label} length fits JS number`);
+      return { length: Number(value), bytes: cursor + 1 - offset };
+    }
+    shift += 7n;
+  }
+  assert.fail(`${label} compact length prefix is unterminated`);
+}
+
+function readNoritoFieldPayload(buffer, offset, label, compactLength) {
+  const { length, bytes } = compactLength
+    ? readCompactLength(buffer, offset, label)
+    : readU64Length(buffer, offset, label);
+  const start = offset + bytes;
+  const end = start + length;
+  assert.ok(end <= buffer.length, `${label} payload is in bounds`);
+  return { payload: buffer.subarray(start, end), offset: end };
+}
+
+function noritoFramePayload(body, label) {
+  const buffer = Buffer.from(body);
+  assert.equal(buffer.subarray(0, 4).toString("ascii"), "NRT0");
+  const { length: payloadLength } = readU64Length(buffer, 23, `${label}.payloadLength`);
+  assert.equal(buffer.length, 40 + payloadLength);
+  return {
+    flags: buffer[39],
+    payload: buffer.subarray(40),
+  };
+}
+
+function assertFlattenedAliasSelector(body, alias, label) {
+  const { flags, payload } = noritoFramePayload(body, label);
+  const compactLength = (flags & 0x02) !== 0;
+  const multisigAccountId = readNoritoFieldPayload(
+    payload,
+    0,
+    `${label}.multisig_account_id`,
+    compactLength,
+  );
+  assert.deepEqual([...multisigAccountId.payload], [0]);
+  const multisigAccountAlias = readNoritoFieldPayload(
+    payload,
+    multisigAccountId.offset,
+    `${label}.multisig_account_alias`,
+    compactLength,
+  );
+  assert.equal(multisigAccountAlias.payload[0], 1);
+  const aliasOption = readNoritoFieldPayload(
+    multisigAccountAlias.payload,
+    1,
+    `${label}.multisig_account_alias.option`,
+    compactLength,
+  );
+  const aliasString = readNoritoFieldPayload(
+    aliasOption.payload,
+    0,
+    `${label}.multisig_account_alias.string`,
+    compactLength,
+  );
+  assert.equal(aliasString.payload.toString("utf8"), alias);
+}
+
+function assertContractCallPayloadJson(body, expected, label) {
+  const { flags, payload } = noritoFramePayload(body, label);
+  const compactLength = (flags & 0x02) !== 0;
+  let offset = 0;
+  for (const fieldName of [
+    "multisig_account_id",
+    "multisig_account_alias",
+    "signer_account_id",
+    "private_key",
+    "public_key_hex",
+    "signature_b64",
+    "creation_time_ms",
+    "contract_address",
+    "contract_alias",
+    "entrypoint",
+  ]) {
+    offset = readNoritoFieldPayload(
+      payload,
+      offset,
+      `${label}.${fieldName}`,
+      compactLength,
+    ).offset;
+  }
+  const payloadField = readNoritoFieldPayload(
+    payload,
+    offset,
+    `${label}.payload`,
+    compactLength,
+  );
+  assert.equal(payloadField.payload[0], 1);
+  const somePayload = readNoritoFieldPayload(
+    payloadField.payload,
+    1,
+    `${label}.payload.some`,
+    compactLength,
+  );
+  assert.equal(somePayload.offset, payloadField.payload.length);
+  const jsonValue = readNoritoFieldPayload(
+    somePayload.payload,
+    0,
+    `${label}.payload.json.value`,
+    compactLength,
+  );
+  assert.equal(jsonValue.offset, somePayload.payload.length);
+  const jsonString = readNoritoFieldPayload(
+    jsonValue.payload,
+    0,
+    `${label}.payload.json.value.string`,
+    compactLength,
+  );
+  assert.equal(jsonString.offset, jsonValue.payload.length);
+  assert.deepEqual(JSON.parse(jsonString.payload.toString("utf8")), expected);
+}
+
+function assertMultisigProposeInstructionWireId(body, expectedWireId, label) {
+  const { flags, payload } = noritoFramePayload(body, label);
+  const compactLength = (flags & 0x02) !== 0;
+  let offset = 0;
+  for (const fieldName of [
+    "multisig_account_id",
+    "multisig_account_alias",
+    "signer_account_id",
+    "private_key",
+    "public_key_hex",
+    "signature_b64",
+    "creation_time_ms",
+    "fee_sponsor",
+  ]) {
+    offset = readNoritoFieldPayload(
+      payload,
+      offset,
+      `${label}.${fieldName}`,
+      compactLength,
+    ).offset;
+  }
+  const instructions = readNoritoFieldPayload(
+    payload,
+    offset,
+    `${label}.instructions`,
+    compactLength,
+  );
+  const count = readU64Length(instructions.payload, 0, `${label}.instructions.count`);
+  assert.equal(count.length, 1);
+  const first = readNoritoFieldPayload(
+    instructions.payload,
+    count.bytes,
+    `${label}.instructions[0]`,
+    compactLength,
+  );
+  assert.equal(first.offset, instructions.payload.length);
+  const wireId = readNoritoFieldPayload(
+    first.payload,
+    0,
+    `${label}.instructions[0].wire_id`,
+    compactLength,
+  );
+  const wireIdString = readNoritoFieldPayload(
+    wireId.payload,
+    0,
+    `${label}.instructions[0].wire_id.value`,
+    compactLength,
+  );
+  assert.equal(wireIdString.payload.toString("utf8"), expectedWireId);
 }
 
 function sampleAccountForms() {
@@ -146,6 +329,122 @@ const FIXTURE_ASSET_ID_A = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const FIXTURE_ASSET_ID_B = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 const FIXTURE_ASSET_ID_C = "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o";
 const FIXTURE_ASSET_ID_D = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+
+function fixtureMultisigAccountId() {
+  const members = ["multisig-a", "multisig-b", "multisig-c"].map((label) => {
+    const controller = fixtureAccountAddress(label)._controller;
+    return {
+      curve: controller.curve,
+      publicKey: controller.publicKey,
+      weight: 1,
+    };
+  });
+  const address = new AccountAddress(
+    { version: 0, classId: 1, normVersion: 1, extFlag: false },
+    {
+      tag: 1,
+      version: 1,
+      threshold: 2,
+      members,
+    },
+  );
+  return address.toI105(SORA_I105_DISCRIMINANT);
+}
+
+function assertConcreteMultisigAccountUsesNativeLengths(body, label) {
+  const { flags, payload } = noritoFramePayload(body, label);
+  const compactLength = (flags & 0x02) !== 0;
+  assert.equal(compactLength, true);
+
+  const selector = readNoritoFieldPayload(
+    payload,
+    0,
+    `${label}.multisig_account_id`,
+    compactLength,
+  );
+  assert.equal(selector.payload[0], 1);
+  const accountId = readNoritoFieldPayload(
+    selector.payload,
+    1,
+    `${label}.multisig_account_id.some`,
+    compactLength,
+  );
+  assert.equal(accountId.payload.readUInt32LE(0), 1);
+
+  const policy = readNoritoFieldPayload(
+    accountId.payload,
+    4,
+    `${label}.multisig_account_id.policy`,
+    compactLength,
+  );
+  let policyOffset = 0;
+  const version = readNoritoFieldPayload(
+    policy.payload,
+    policyOffset,
+    `${label}.policy.version`,
+    compactLength,
+  );
+  policyOffset = version.offset;
+  assert.deepEqual([...version.payload], [1]);
+  const threshold = readNoritoFieldPayload(
+    policy.payload,
+    policyOffset,
+    `${label}.policy.threshold`,
+    compactLength,
+  );
+  policyOffset = threshold.offset;
+  assert.equal(threshold.payload.readUInt16LE(0), 2);
+  const members = readNoritoFieldPayload(
+    policy.payload,
+    policyOffset,
+    `${label}.policy.members`,
+    compactLength,
+  );
+  assert.equal(members.offset, policy.payload.length);
+
+  const memberCount = readU64Length(members.payload, 0, `${label}.policy.members.count`);
+  assert.equal(memberCount.length, 3);
+  const firstMemberLength = readCompactLength(
+    members.payload,
+    memberCount.bytes,
+    `${label}.policy.members[0]`,
+  );
+  assert.equal(firstMemberLength.bytes, 1);
+  const firstMember = readNoritoFieldPayload(
+    members.payload,
+    memberCount.bytes,
+    `${label}.policy.members[0]`,
+    compactLength,
+  );
+
+  const publicKey = readNoritoFieldPayload(
+    firstMember.payload,
+    0,
+    `${label}.policy.members[0].public_key`,
+    compactLength,
+  );
+  const publicKeyCount = readU64Length(
+    publicKey.payload,
+    0,
+    `${label}.policy.members[0].public_key.count`,
+  );
+  assert.equal(publicKeyCount.length, 33);
+  const algorithm = readNoritoFieldPayload(
+    publicKey.payload,
+    publicKeyCount.bytes,
+    `${label}.policy.members[0].public_key[0]`,
+    compactLength,
+  );
+  assert.equal(algorithm.payload.length, 1);
+  assert.equal(algorithm.payload[0], 0);
+  const firstKeyByte = readNoritoFieldPayload(
+    publicKey.payload,
+    algorithm.offset,
+    `${label}.policy.members[0].public_key[1]`,
+    compactLength,
+  );
+  assert.equal(firstKeyByte.payload.length, 1);
+}
 
 function expectValidationErrorFixture(error, key) {
   assert(error instanceof ValidationError);
@@ -17510,6 +17809,12 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
   assert.equal(captured.init.headers["Content-Type"], "application/x-norito");
   const body = Buffer.from(captured.init.body);
   assert.equal(body.subarray(0, 4).toString("ascii"), "NRT0");
+  assertFlattenedAliasSelector(body, "cbdc@banka", "MultisigProposeDto");
+  assertMultisigProposeInstructionWireId(
+    body,
+    "iroha.custom",
+    "MultisigProposeDto",
+  );
   assert.deepEqual(result, responsePayload);
 
   assert.deepEqual(
@@ -17517,12 +17822,51 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       multisigAccountAlias: "cbdc@banka",
       signerAccountId: FIXTURE_ALICE_ID,
       instructions: [instruction],
+      feeSponsor: "sponsor@sbp",
     }),
     {
       multisig_account_alias: "cbdc@banka",
       signer_account_id: FIXTURE_ALICE_ID,
       instructions: [instruction],
+      fee_sponsor: "sponsor@sbp",
     },
+  );
+});
+
+test("native multisig contract-call DTO flattens selector fields", () => {
+  const payload = { amount: 111 };
+  const body = noritoEncodeMultisigContractCallProposeRequest({
+    multisigAccountAlias: "cbdc@banka",
+    signerAccountId: FIXTURE_ALICE_ID,
+    contractAlias: "apps_mint_request::sbp",
+    entrypoint: "create_mint_request",
+    payload,
+    feeSponsor: "sponsor@sbp",
+    creationTimeMs: 123456,
+  });
+
+  assertFlattenedAliasSelector(
+    body,
+    "cbdc@banka",
+    "MultisigContractCallProposeDto",
+  );
+  assertContractCallPayloadJson(body, payload, "MultisigContractCallProposeDto");
+});
+
+test("native multisig contract-call DTO encodes concrete multisig IDs canonically", () => {
+  const body = noritoEncodeMultisigContractCallProposeRequest({
+    multisigAccountId: fixtureMultisigAccountId(),
+    signerAccountId: FIXTURE_ALICE_ID,
+    contractAlias: "apps_mint_request::sbp",
+    entrypoint: "create_mint_request",
+    payload: { amount: 111 },
+    feeSponsor: "sponsor@sbp",
+    creationTimeMs: 123456,
+  });
+
+  assertConcreteMultisigAccountUsesNativeLengths(
+    body,
+    "MultisigContractCallProposeDto",
   );
 });
 
@@ -17658,7 +18002,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
     entrypoint: "execute",
     payload: { amount: "10" },
     gasAssetId: FIXTURE_ASSET_ID_D,
-    feeSponsor: FIXTURE_BOB_ID,
+    feeSponsor: "sponsor@sbp",
     gasLimit: 5,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/propose`);
@@ -17670,14 +18014,29 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
     entrypoint: "execute",
     payload: { amount: "10" },
     gas_asset_id: FIXTURE_ASSET_ID_D,
-      fee_sponsor: FIXTURE_BOB_ID,
-      gas_limit: 5,
+    fee_sponsor: "sponsor@sbp",
+    gas_limit: 5,
   });
   assert.deepEqual(result, {
     ...responsePayload,
     tx_hash_hex: null,
     executed_tx_hash_hex: null,
   });
+});
+
+test("multisig contract call request builders accept fee sponsor aliases", () => {
+  assert.equal(
+    buildMultisigContractCallProposeRequest({
+      multisigAccountAlias: "cbdc@hbl.sbp",
+      signerAccountId: FIXTURE_ALICE_ID,
+      contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+      entrypoint: "execute",
+      trigger: "probe",
+      payload: { amount: "10" },
+      feeSponsor: "sponsor@sbp",
+    }).fee_sponsor,
+    "sponsor@sbp",
+  );
 });
 
 test("approveMultisigContractCall posts concrete selector and normalizes response", async () => {

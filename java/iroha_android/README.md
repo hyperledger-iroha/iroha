@@ -737,6 +737,8 @@ headers. Use `CanonicalRequestSigner.withBodySignature(...)` to add
 `account_id`, `timestamp_ms`, `nonce`, and `signature_base64` to a request
 body. Multisig callers should build the canonical request witness separately
 and pass it as `witness_base64` with `withBodyWitness(...)`.
+`ToriiOfflineNoteV2IssuerClient` requires `ToriiCanonicalRequestAuth` for
+issuer requests, including flows that also attach device-proof payloads.
 
 ### Sora VPN native lease flow
 

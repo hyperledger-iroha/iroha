@@ -30,6 +30,11 @@ and public release-readiness notes.
   execution, data availability, operator workflows, and SDK integration.
 - Complete the remaining independent-lane consensus, DA/RBC, and cross-lane
   relay validation needed for the first public Nexus release.
+- Continue native AMX hardening beyond the implemented attestation data model,
+  control-plane message handling, deterministic per-leg vote cache,
+  proposer-side prepare/commit gating, 4-peer convergence proof, and
+  queue-journal restart replay with longer-running soak, fault injection, and
+  independent participant-lane finality work.
 - Keep SCCP bridge submission permissionless while requiring outbound message
   records to originate from verified IVM-proved overlays and explicit
   deployment bindings for production-ready EVM lanes.

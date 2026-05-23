@@ -556,8 +556,8 @@ impl Command {
             | Self::Ledger(_)
             | Self::Ops(_)
             | Self::Contract(_)
-            | Self::Taira(_)
-            | Self::Soracloud(_) => false,
+            | Self::Taira(_) => false,
+            Self::Soracloud(command) => command.allows_fallback_config(),
         }
     }
 }
@@ -788,6 +788,7 @@ mod app {
                     crate::commands::da::Command::RentQuote(_)
                     | crate::commands::da::Command::RentLedger(_),
                 ) => true,
+                Self::Taikai(command) => taikai_allows_fallback_config(command),
                 Self::Sorafs(command) => sorafs_allows_fallback_config(command),
                 Self::SpaceDirectory(crate::space_directory::Command::Manifest(
                     crate::space_directory::ManifestCommand::Encode(_)
@@ -798,7 +799,6 @@ mod app {
                 | Self::Contracts(_)
                 | Self::Zk(_)
                 | Self::Confidential(_)
-                | Self::Taikai(_)
                 | Self::Content(_)
                 | Self::Da(_)
                 | Self::Streaming(_)
@@ -820,10 +820,21 @@ mod app {
         }
     }
 
+    fn taikai_allows_fallback_config(command: &crate::commands::taikai::Command) -> bool {
+        use crate::commands::taikai::{Command as TaikaiCommand, IngestCommand};
+
+        match command {
+            TaikaiCommand::Bundle(_)
+            | TaikaiCommand::CekRotate(_)
+            | TaikaiCommand::RptAttest(_)
+            | TaikaiCommand::Ingest(IngestCommand::Edge(_)) => true,
+            TaikaiCommand::Ingest(IngestCommand::Watch(args)) => !args.publish_da,
+        }
+    }
+
     fn sorafs_allows_fallback_config(command: &crate::commands::sorafs::Command) -> bool {
         use crate::commands::sorafs::{
-            Command as SorafsCommand, IncentivesCommand, IncentivesServiceCommand,
-            ReserveCommand,
+            Command as SorafsCommand, IncentivesCommand, IncentivesServiceCommand, ReserveCommand,
         };
 
         match command {
@@ -1066,7 +1077,9 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
 
     let mut config = match Config::load(load_path) {
         Ok(cfg) => cfg,
-        Err(_) if !config_was_explicit && !args.machine && args.command.allows_fallback_config() => {
+        Err(_)
+            if !config_was_explicit && !args.machine && args.command.allows_fallback_config() =>
+        {
             fallback_config()
         }
         Err(report) => {
@@ -7762,6 +7775,64 @@ mod tests {
         .expect("parse offline rent quote");
         assert!(args.command.allows_fallback_config());
 
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "taikai",
+            "cek-rotate",
+            "--event-id",
+            "demo-event",
+            "--stream-id",
+            "stream-1",
+            "--kms-profile",
+            "kms-demo",
+            "--new-wrap-key-label",
+            "wrap-v2",
+            "--effective-segment",
+            "42",
+            "--out",
+            "receipt.to",
+        ])
+        .expect("parse offline taikai cek rotation");
+        assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "taikai",
+            "ingest",
+            "watch",
+            "--source-dir",
+            ".",
+            "--event-id",
+            "demo-event",
+            "--stream-id",
+            "stream-1",
+            "--rendition-id",
+            "1080p-main",
+        ])
+        .expect("parse offline taikai watcher");
+        assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "taikai",
+            "ingest",
+            "watch",
+            "--source-dir",
+            ".",
+            "--event-id",
+            "demo-event",
+            "--stream-id",
+            "stream-1",
+            "--rendition-id",
+            "1080p-main",
+            "--publish-da",
+        ])
+        .expect("parse publishing taikai watcher");
+        assert!(!args.command.allows_fallback_config());
+
         let args = Args::try_parse_from(["iroha", "tools", "address", "convert", "sora1"])
             .expect("parse address conversion");
         assert!(args.command.allows_fallback_config());
@@ -7947,6 +8018,28 @@ mod tests {
         ])
         .expect_err("old nested Soracloud path must be removed");
         assert_eq!(err.kind(), ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn soracloud_offline_app_commands_allow_fallback_config() {
+        let init = Args::try_parse_from(["iroha", "soracloud", "app", "init"])
+            .expect("app init should parse");
+        assert!(init.command.allows_fallback_config());
+
+        let simulate = Args::try_parse_from([
+            "iroha",
+            "soracloud",
+            "app",
+            "simulate",
+            "--manifest",
+            "app_manifest.json",
+        ])
+        .expect("app simulate should parse");
+        assert!(simulate.command.allows_fallback_config());
+
+        let release = Args::try_parse_from(["iroha", "soracloud", "app", "release"])
+            .expect("app release should parse");
+        assert!(!release.command.allows_fallback_config());
     }
 
     #[test]

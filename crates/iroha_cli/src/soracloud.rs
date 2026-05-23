@@ -161,6 +161,18 @@ pub enum Command {
     Agent(AgentCommand),
 }
 
+impl Command {
+    pub(crate) fn allows_fallback_config(&self) -> bool {
+        match self {
+            Self::App(command) => command.allows_fallback_config(),
+            Self::Service(command) => command.allows_fallback_config(),
+            Self::Model(command) => command.allows_fallback_config(),
+            Self::Hf(command) => command.allows_fallback_config(),
+            Self::Agent(command) => command.allows_fallback_config(),
+        }
+    }
+}
+
 #[derive(clap::Subcommand, Debug)]
 pub enum ServiceCommand {
     /// Scaffold baseline container/service manifests.
@@ -342,6 +354,19 @@ pub enum AppCommand {
 }
 
 impl AppCommand {
+    fn allows_fallback_config(&self) -> bool {
+        matches!(
+            self,
+            Self::Init(_)
+                | Self::LocalPlan(_)
+                | Self::Doctor(_)
+                | Self::LocalDev(_)
+                | Self::BuildAndSync(_)
+                | Self::Simulate(_)
+                | Self::Status(_)
+        )
+    }
+
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Init(args) => context.print_data(&args.run()?),
@@ -394,6 +419,22 @@ impl Run for Command {
 }
 
 impl ServiceCommand {
+    fn allows_fallback_config(&self) -> bool {
+        matches!(
+            self,
+            Self::Init(_)
+                | Self::LocalPlan(_)
+                | Self::LocalDev(_)
+                | Self::BuildAndSync(_)
+                | Self::DeployWorkspace(_)
+                | Self::UpgradeWorkspace(_)
+                | Self::SyncManifests(_)
+                | Self::Status(_)
+                | Self::ConfigStatus(_)
+                | Self::SecretStatus(_)
+        )
+    }
+
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Init(args) => context.print_data(&args.run()?),
@@ -451,6 +492,13 @@ impl ServiceCommand {
 }
 
 impl AgentCommand {
+    fn allows_fallback_config(&self) -> bool {
+        matches!(
+            self,
+            Self::Status(_) | Self::MailboxStatus(_) | Self::AutonomyStatus(_)
+        )
+    }
+
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Deploy(args) => {
@@ -501,6 +549,18 @@ impl AgentCommand {
 }
 
 impl ModelCommand {
+    fn allows_fallback_config(&self) -> bool {
+        matches!(
+            self,
+            Self::TrainingJobStatus(_)
+                | Self::ArtifactStatus(_)
+                | Self::WeightStatus(_)
+                | Self::UploadEncryptionRecipient(_)
+                | Self::UploadStatus(_)
+                | Self::HostStatus(_)
+        )
+    }
+
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::TrainingJobStart(args) => {
@@ -558,6 +618,10 @@ impl ModelCommand {
 }
 
 impl HfCommand {
+    fn allows_fallback_config(&self) -> bool {
+        matches!(self, Self::Status(_))
+    }
+
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Deploy(args) => {
@@ -2308,11 +2372,11 @@ impl AppDoctorArgs {
             let service_path = resolve_manifest_path(&manifest_dir, &service_ref.service_manifest);
             let container: SoraContainerManifestV1 = load_json(&container_path)?;
             let service: SoraServiceManifestV1 = load_json(&service_path)?;
-            let bundle_exists = service_ref
+            let bundle_path = service_ref
                 .bundle_file
                 .as_deref()
-                .map(|path| resolve_manifest_path(&manifest_dir, path))
-                .is_some_and(|path| path.is_file());
+                .map(|path| resolve_manifest_path(&manifest_dir, path));
+            let bundle_exists = bundle_path.as_ref().is_some_and(|path| path.is_file());
             push_check(
                 &format!("bundle_file:{}", service_ref.service_name),
                 bundle_exists,
@@ -2327,15 +2391,17 @@ impl AppDoctorArgs {
                     .unwrap_or_else(|| "<none>".to_owned()),
             );
 
+            let service_workspace_dir = app_service_workspace_dir(&container_path, &service_path);
+            let bundle_is_in_service_workspace = service_workspace_dir
+                .as_ref()
+                .zip(bundle_path.as_ref())
+                .is_some_and(|(workspace_dir, bundle_path)| bundle_path.starts_with(workspace_dir));
             let child_scripts_ok = if container.runtime == SoraContainerRuntimeV1::Inrou {
-                let scripts = app_service_workspace_scripts(
-                    app_service_workspace_dir(&container_path, &service_path).as_deref(),
-                );
-                scripts.dev.is_some() && scripts.build.is_some()
+                let scripts = app_service_workspace_scripts(service_workspace_dir.as_deref());
+                (scripts.dev.is_some() && scripts.build.is_some())
+                    || (bundle_exists && !bundle_is_in_service_workspace)
             } else {
-                let scripts = app_service_workspace_scripts(
-                    app_service_workspace_dir(&container_path, &service_path).as_deref(),
-                );
+                let scripts = app_service_workspace_scripts(service_workspace_dir.as_deref());
                 scripts.dev.is_some() && scripts.build.is_some() && scripts.verify_build.is_some()
             };
             push_check(
@@ -18939,7 +19005,9 @@ const server = http.createServer(async (req, res) => {{
 }});
 
 server.listen(PORT, "0.0.0.0", () => {{
-  console.log(`${{SERVICE_NAME}} listening on ${{PORT}}`);
+  const address = server.address();
+  const boundPort = typeof address === "object" && address ? address.port : PORT;
+  console.log(`${{SERVICE_NAME}} listening on ${{boundPort}}`);
 }});
 "#
     )
@@ -28776,6 +28844,102 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-args.txt"
     }
 
     #[test]
+    fn app_doctor_rejects_any_hosted_live_route_outside_api_v1() {
+        let dir = temp_dir("split_app_doctor_rejects_hosted_prefix");
+        AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
+            overwrite: false,
+        }
+        .run()
+        .expect("split-app init should succeed");
+
+        fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist");
+        fs::write(
+            dir.join("frontend/dist/index.html"),
+            "<!doctype html><title>Travel Ops</title>",
+        )
+        .expect("write frontend index");
+        fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
+        fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
+        fs::write(
+            dir.join("services/live/build/live-api.tgz"),
+            b"doctor-live-bundle",
+        )
+        .expect("write live bundle");
+        fs::write(
+            dir.join("services/vault/build/vault-api.to"),
+            b"doctor-vault-bundle",
+        )
+        .expect("write vault bundle");
+
+        let admin_dir = dir.join("services/admin");
+        fs::create_dir_all(&admin_dir).expect("create admin service dir");
+        let admin_container_path = admin_dir.join("container_manifest.json");
+        let admin_service_path = admin_dir.join("service_manifest.json");
+        let artifact_dir = dir.join("artifacts");
+        let admin_bundle_path = artifact_dir.join("admin-api.tgz");
+        fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+        fs::write(&admin_bundle_path, b"doctor-admin-bundle").expect("write admin bundle");
+
+        let admin_container: SoraContainerManifestV1 =
+            load_json(&dir.join("services/live/container_manifest.json")).expect("live container");
+        let mut admin_service: SoraServiceManifestV1 =
+            load_json(&dir.join("services/live/service_manifest.json")).expect("live service");
+        admin_service.service_name = "travel-ops_admin".parse().expect("admin service name");
+        admin_service
+            .route
+            .as_mut()
+            .expect("hosted service route")
+            .path_prefix = "/admin".to_owned();
+        write_json(&admin_container_path, &admin_container).expect("write admin container");
+        write_json(&admin_service_path, &admin_service).expect("write admin service");
+
+        let manifest_path = dir.join("app_manifest.json");
+        let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
+        manifest.services.push(SoracloudAppServiceRefV1 {
+            service_name: "travel-ops_admin".to_owned(),
+            container_manifest: relative_path_string(&manifest_path, &admin_container_path),
+            service_manifest: relative_path_string(&manifest_path, &admin_service_path),
+            bundle_file: Some(relative_path_string(&manifest_path, &admin_bundle_path)),
+            initial_configs: None,
+            initial_secrets: None,
+        });
+        write_json(&manifest_path, &manifest).expect("write app manifest");
+
+        let output = AppDoctorArgs {
+            manifest: manifest_path,
+        }
+        .run()
+        .expect("doctor should produce a report");
+
+        assert!(
+            !output.ok,
+            "doctor must fail when any hosted Inrou route leaves /api/v1"
+        );
+        let failing_checks = output
+            .checks
+            .iter()
+            .filter(|check| check.status == "fail")
+            .map(|check| check.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(failing_checks, vec!["live_route_prefix"]);
+        let live_route_prefix = output
+            .checks
+            .iter()
+            .find(|check| check.name == "live_route_prefix")
+            .expect("live route prefix check");
+        assert_eq!(live_route_prefix.status, "fail");
+        assert!(live_route_prefix.detail.contains("travel-ops_live:/api/v1"));
+        assert!(live_route_prefix.detail.contains("travel-ops_admin:/admin"));
+    }
+
+    #[test]
     fn app_release_dry_run_reports_build_and_upsert_plan() {
         let dir = temp_dir("split_app_release_dry_run");
         AppInitArgs {
@@ -29195,7 +29359,6 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
         let collector_state_dir = dir.join("lease/collector-state");
         let runtime_cache_dir = dir.join("lease/runtime-cache");
         let mut script = r#"import { spawn } from "node:child_process";
-import net from "node:net";
 
 const SERVER_PATH = __SERVER_PATH__;
 const SHARED_CACHE_DIR = __SHARED_CACHE_DIR__;
@@ -29209,30 +29372,12 @@ function assert(condition, message) {
   }
 }
 
-async function freePort() {
-  return await new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      probe.close((closeError) => {
-        if (closeError) {
-          reject(closeError);
-          return;
-        }
-        resolve(port);
-      });
-    });
-  });
-}
-
-function startServer(port) {
+function startServer() {
   const child = spawn(process.execPath, [SERVER_PATH], {
     env: {
       ...process.env,
-      PORT: String(port),
-      SORACLOUD_HTTP_PORT: String(port),
+      PORT: "0",
+      SORACLOUD_HTTP_PORT: "0",
       SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR: SHARED_CACHE_DIR,
       SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_DIR: SEARCH_SESSIONS_DIR,
       SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_DIR: COLLECTOR_STATE_DIR,
@@ -29254,42 +29399,66 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function childExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 async function waitForExit(child, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  while (child.exitCode === null && Date.now() < deadline) {
+  while (!childExited(child) && Date.now() < deadline) {
     await sleep(25);
   }
 }
 
 async function stopServer(server) {
-  if (!server || !server.child || server.child.exitCode !== null) {
+  if (!server || !server.child || childExited(server.child)) {
     return;
   }
   server.child.kill("SIGTERM");
   await waitForExit(server.child, 800);
-  if (server.child.exitCode === null) {
+  if (!childExited(server.child)) {
     server.child.kill("SIGKILL");
     await waitForExit(server.child, 1500);
   }
 }
 
-async function waitForHealth(port) {
-  for (let attempt = 0; attempt < 160; attempt += 1) {
+async function waitForListeningPort(server) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const match = server.logs().match(/listening on (\d+)/);
+    if (match) {
+      return Number(match[1]);
+    }
+    if (childExited(server.child)) {
+      throw new Error(`server exited before listen: ${server.logs()}`);
+    }
+    await sleep(25);
+  }
+  throw new Error(`server did not report a listening port: ${server.logs()}`);
+}
+
+async function waitForHealth(server, port) {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`);
+      const response = await fetch(`http://127.0.0.1:${port}/health`, {
+        headers: { connection: "close" }
+      });
       if (response.status === 200) {
         return;
       }
     } catch {
       // keep retrying while process boots
     }
+    if (childExited(server.child)) {
+      throw new Error(`server exited before healthcheck: ${server.logs()}`);
+    }
     await sleep(25);
   }
-  throw new Error(`server failed healthcheck on port ${port}`);
+  throw new Error(`server failed healthcheck on port ${port}: ${server.logs()}`);
 }
 
 async function jsonRequest(port, method, route, body) {
-  const init = { method, headers: {} };
+  const init = { method, headers: { connection: "close" } };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
     init.body = JSON.stringify(body);
@@ -29303,7 +29472,9 @@ async function jsonRequest(port, method, route, body) {
 }
 
 async function textRequest(port, route) {
-  const response = await fetch(`http://127.0.0.1:${port}${route}`);
+  const response = await fetch(`http://127.0.0.1:${port}${route}`, {
+    headers: { connection: "close" }
+  });
   return {
     status: response.status,
     body: await response.text()
@@ -29313,9 +29484,9 @@ async function textRequest(port, route) {
 async function main() {
   let server = null;
   try {
-    const port = await freePort();
-    server = startServer(port);
-    await waitForHealth(port);
+    server = startServer();
+    const port = await waitForListeningPort(server);
+    await waitForHealth(server, port);
 
     const search = await jsonRequest(port, "POST", "/search", { origin: "SYD" });
     assert(search.status === 202, `search failed: ${JSON.stringify(search)}`);
@@ -34128,7 +34299,6 @@ main().catch((error) => {
         let harness_path = dir.join("pii_auth_origin_mismatch.mjs");
         let mut script = r#"import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import net from "node:net";
 
 const SERVER_PATH = __SERVER_PATH__;
 const FORWARDED_PROTO = "https";
@@ -34141,26 +34311,8 @@ function assert(condition, message) {
   }
 }
 
-async function freePort() {
-  return await new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      probe.close((closeError) => {
-        if (closeError) {
-          reject(closeError);
-          return;
-        }
-        resolve(port);
-      });
-    });
-  });
-}
-
-function startServer(port, envOverrides) {
-  const child = spawn(process.execPath, [SERVER_PATH, `--port=${port}`], {
+function startServer(envOverrides) {
+  const child = spawn(process.execPath, [SERVER_PATH, "--port=0"], {
     env: { ...process.env, ...envOverrides },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -34178,38 +34330,62 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function childExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 async function waitForExit(child, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  while (child.exitCode === null && Date.now() < deadline) {
+  while (!childExited(child) && Date.now() < deadline) {
     await sleep(25);
   }
 }
 
 async function stopServer(server) {
-  if (!server || !server.child || server.child.exitCode !== null) {
+  if (!server || !server.child || childExited(server.child)) {
     return;
   }
   server.child.kill("SIGTERM");
   await waitForExit(server.child, 800);
-  if (server.child.exitCode === null) {
+  if (!childExited(server.child)) {
     server.child.kill("SIGKILL");
     await waitForExit(server.child, 1500);
   }
 }
 
-async function waitForHealth(port) {
-  for (let attempt = 0; attempt < 160; attempt += 1) {
+async function waitForListeningPort(server) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const match = server.logs().match(/pii api listening on :(\d+)/);
+    if (match) {
+      return Number(match[1]);
+    }
+    if (childExited(server.child)) {
+      throw new Error(`server exited before listen: ${server.logs()}`);
+    }
+    await sleep(25);
+  }
+  throw new Error(`server did not report a listening port: ${server.logs()}`);
+}
+
+async function waitForHealth(server, port) {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/pii/api/healthz`);
+      const response = await fetch(`http://127.0.0.1:${port}/pii/api/healthz`, {
+        headers: { connection: "close" }
+      });
       if (response.status === 200) {
         return;
       }
     } catch {
       // keep retrying while process boots
     }
+    if (childExited(server.child)) {
+      throw new Error(`server exited before healthcheck: ${server.logs()}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error(`server failed healthcheck on port ${port}`);
+  throw new Error(`server failed healthcheck on port ${port}: ${server.logs()}`);
 }
 
 async function jsonRequest(port, method, route, body, headers = {}) {
@@ -34218,7 +34394,7 @@ async function jsonRequest(port, method, route, body, headers = {}) {
     () => controller.abort(new Error(`${method} ${route} request timed out`)),
     REQUEST_TIMEOUT_MS
   );
-  const init = { method, headers: { ...headers }, signal: controller.signal };
+  const init = { method, headers: { ...headers, connection: "close" }, signal: controller.signal };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
     init.body = JSON.stringify(body);
@@ -34226,6 +34402,10 @@ async function jsonRequest(port, method, route, body, headers = {}) {
   let response;
   try {
     response = await fetch(`http://127.0.0.1:${port}${route}`, init);
+  } catch (error) {
+    throw new Error(
+      `${method} ${route} request failed on port ${port}: ${error?.stack ?? String(error)}`
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -34263,9 +34443,9 @@ async function main() {
       PUBLIC_BASE_URL: ""
     };
 
-    const port = await freePort();
-    server = startServer(port, env);
-    await waitForHealth(port);
+    server = startServer(env);
+    const port = await waitForListeningPort(server);
+    await waitForHealth(server, port);
 
     const challenge = await jsonRequest(
       port,

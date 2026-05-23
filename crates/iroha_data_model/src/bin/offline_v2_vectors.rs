@@ -333,9 +333,9 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         assertion_base64: &one_use_signature_base64,
         proof_bytes_base64: &proof_bytes_base64,
     })?;
-    let receive_challenge = object(vec![
+    let receive_request = object(vec![
         ("version", Value::from(2_u64)),
-        ("type", Value::from("offline_receive_challenge_v2")),
+        ("type", Value::from("offline_receive_request_v2")),
         ("invoice_id", Value::from(INVOICE_ID)),
         (
             "account_id",
@@ -393,10 +393,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         (
             "prefixes",
             object(vec![
-                (
-                    "receive_challenge",
-                    Value::from("wallet-offline-challenge-v2:"),
-                ),
+                ("receive_request", Value::from("wallet-offline-receive-v2:")),
                 ("payment_token", Value::from("wallet-offline-payment-v2:")),
                 ("receipt_ack", Value::from("wallet-offline-ack-v2:")),
                 ("fountain_qr", Value::from("iroha:qr1:")),
@@ -417,7 +414,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
             "offline_fi_public_key_base64",
             Value::from(public_key_base64(&issuer_key_pair)),
         ),
-        ("receive_challenge", receive_challenge),
+        ("receive_request", receive_request),
         ("payment_token", payment_token),
         ("sdk_interop", sdk_interop),
         ("receipt_ack", receipt_ack),
@@ -922,10 +919,12 @@ fn payment_token_json(fields: PaymentTokenJsonFields<'_>) -> Result<Value, Box<d
         (
             "recursive_proof",
             object(vec![
+                ("verifier_key_backend", Value::from("halo2/ipa")),
                 (
                     "verifier_key_id",
                     Value::from("offline-note-v2-recursive-v1"),
                 ),
+                ("proof_backend", Value::from("halo2/ipa")),
                 (
                     "public_inputs_hash_hex",
                     Value::from(fields.public_inputs_hash_hex),
@@ -1199,8 +1198,8 @@ mod tests {
 
         let prefixes = field(&fixture, "prefixes");
         assert_eq!(
-            string(field(prefixes, "receive_challenge")),
-            "wallet-offline-challenge-v2:"
+            string(field(prefixes, "receive_request")),
+            "wallet-offline-receive-v2:"
         );
         assert_eq!(
             string(field(prefixes, "payment_token")),
@@ -1218,10 +1217,12 @@ mod tests {
         assert_eq!(array(field(token, "output_commitments")).len(), 2);
         assert_eq!(array(field(token, "output_claims")).len(), 2);
         let proof = field(token, "recursive_proof");
+        assert_eq!(string(field(proof, "verifier_key_backend")), "halo2/ipa");
         assert_eq!(
             string(field(proof, "verifier_key_id")),
             "offline-note-v2-recursive-v1"
         );
+        assert_eq!(string(field(proof, "proof_backend")), "halo2/ipa");
         assert!(!string(field(proof, "public_inputs_hash_hex")).is_empty());
         let assertion = field(token, "one_use_assertion");
         assert_eq!(number(field(assertion, "counter")), 1);

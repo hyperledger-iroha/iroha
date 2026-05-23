@@ -109,6 +109,8 @@ pub mod kura;
 pub mod merge;
 /// Minimal Merkle Mountain Range for bridge commitments.
 pub mod mmr;
+/// Native AMX participant attestation control plane.
+pub mod native_amx;
 /// Nexus helpers (UAID portfolio aggregation, etc.).
 pub mod nexus;
 /// Oracle host helpers (admission/aggregation plumbing).
@@ -228,6 +230,8 @@ pub enum NetworkMessage {
     LaneRelay(Box<LaneRelayEnvelope>),
     /// Merge committee signature share for merge-ledger quorum certificates.
     MergeCommitteeSignature(Box<MergeCommitteeSignature>),
+    /// Native AMX participant attestation control-plane message.
+    NativeAmx(Box<native_amx::NativeAmxMessage>),
     /// Block sync message.
     BlockSync(Box<BlockSyncMessage>),
     /// Transaction gossiper message.
@@ -332,6 +336,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             NetworkMessage::SumeragiControlFlow(_)
             | NetworkMessage::LaneRelay(_)
             | NetworkMessage::MergeCommitteeSignature(_)
+            | NetworkMessage::NativeAmx(_)
             | NetworkMessage::SoracloudLocalReadProxyRequest(_)
             | NetworkMessage::SoracloudLocalReadProxyResponse(_)
             | NetworkMessage::ToriiProxyRequest(_)
@@ -551,6 +556,7 @@ mod tests {
     use crate::{
         NetworkMessage, PeerTrustGossip, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
         gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
+        queue::{RoutingDecision, RoutingPlan},
         role::RoleIdWithOwner,
         soracloud_runtime::{
             SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
@@ -918,15 +924,20 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "ping".to_owned())])
             .sign(keypair.private_key());
         let payload = canonical_signed_transaction_payload(&signed);
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
         let gossip = TransactionGossip {
             txs: vec![GossipTransaction::with_encoded(
                 signed.clone(),
                 Arc::clone(&payload),
             )],
-            routes: vec![GossipRoute {
-                lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::UNIVERSAL,
-            }],
+            routes: vec![route],
+            plans: vec![RoutingPlan::single(RoutingDecision::new(
+                route.lane_id,
+                route.dataspace_id,
+            ))],
             plane: GossipPlane::Public,
         };
         let msg = NetworkMessage::TransactionGossiper(Arc::new(gossip));
@@ -973,15 +984,20 @@ mod tests {
             )
         };
         std::thread::spawn(move || {
+            let route = GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            };
             let gossip = TransactionGossip {
                 txs: vec![GossipTransaction::with_encoded(
                     signed.clone(),
                     Arc::clone(&payload),
                 )],
-                routes: vec![GossipRoute {
-                    lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::UNIVERSAL,
-                }],
+                routes: vec![route],
+                plans: vec![RoutingPlan::single(RoutingDecision::new(
+                    route.lane_id,
+                    route.dataspace_id,
+                ))],
                 plane: GossipPlane::Public,
             };
             let msg = NetworkMessage::TransactionGossiper(Arc::new(gossip));

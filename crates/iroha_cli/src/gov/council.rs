@@ -689,7 +689,9 @@ fn canonicalize_candidate_accounts(value: &mut norito::json::Value, label: &str)
 fn normalize_candidate_alias_suffix(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(eyre!("invalid --domain value: alias suffix must not be empty"));
+        return Err(eyre!(
+            "invalid --domain value: alias suffix must not be empty"
+        ));
     }
     if trimmed.contains('@') {
         return Err(eyre!(

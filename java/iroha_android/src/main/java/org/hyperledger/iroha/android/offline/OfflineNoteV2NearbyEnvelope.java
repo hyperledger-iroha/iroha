@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 
@@ -62,6 +63,10 @@ public final class OfflineNoteV2NearbyEnvelope {
     return payload.clone();
   }
 
+  public String textPayload() {
+    return new String(payload, StandardCharsets.UTF_8);
+  }
+
   public String contentType() {
     return contentType;
   }
@@ -86,10 +91,39 @@ public final class OfflineNoteV2NearbyEnvelope {
     if (kind != Kind.PAYMENT) {
       throw new IllegalArgumentException("Nearby envelope is not a payment");
     }
-    if (!OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE.equals(contentType)) {
-      throw new IllegalArgumentException("Nearby envelope content type is not a payment token");
+    if (OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE.equals(contentType)) {
+      return OfflineNoteV2PaymentTokenCodec.decodeNorito(payload);
     }
-    return OfflineNoteV2PaymentTokenCodec.decodeNorito(payload);
+    if (OfflineNoteV2TransferHandoff.TEXT_PAYMENT_TOKEN_CONTENT_TYPE.equals(contentType)) {
+      return OfflineNoteV2PaymentTokenCodec.decodeText(textPayload());
+    }
+    throw new IllegalArgumentException("Nearby envelope content type is not a payment token");
+  }
+
+  public OfflineNoteV2ReceiveRequest receiveRequest() {
+    if (kind != Kind.CHALLENGE) {
+      throw new IllegalArgumentException("Nearby envelope is not a receive request");
+    }
+    if (OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE.equals(contentType)) {
+      return OfflineNoteV2ReceiveRequestCodec.decodeNorito(payload);
+    }
+    if (OfflineNoteV2TransferHandoff.TEXT_RECEIVE_REQUEST_CONTENT_TYPE.equals(contentType)) {
+      return OfflineNoteV2ReceiveRequestCodec.decodeText(textPayload());
+    }
+    throw new IllegalArgumentException("Nearby envelope content type is not a receive request");
+  }
+
+  public OfflineNoteV2ReceiptAck receiptAck() {
+    if (kind != Kind.RECEIPT_ACK) {
+      throw new IllegalArgumentException("Nearby envelope is not a receipt ACK");
+    }
+    if (OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE.equals(contentType)) {
+      return OfflineNoteV2ReceiptAckCodec.decodeNorito(payload);
+    }
+    if (OfflineNoteV2TransferHandoff.TEXT_RECEIPT_ACK_CONTENT_TYPE.equals(contentType)) {
+      return OfflineNoteV2ReceiptAckCodec.decodeText(textPayload());
+    }
+    throw new IllegalArgumentException("Nearby envelope content type is not a receipt ACK");
   }
 
   public static OfflineNoteV2NearbyEnvelope decode(final byte[] bytes) {
@@ -165,36 +199,84 @@ public final class OfflineNoteV2NearbyEnvelope {
         if (pairingChallenge == null) {
           throw new IllegalArgumentException("Challenge envelope requires pairing challenge");
         }
-        if (!OfflineNoteV2TransferHandoff.RECEIVE_CHALLENGE_CONTENT_TYPE.equals(contentType)) {
+        if (!isOneOf(
+            contentType,
+            OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE,
+            OfflineNoteV2TransferHandoff.TEXT_RECEIVE_REQUEST_CONTENT_TYPE)) {
           throw new IllegalArgumentException("Challenge envelope content type mismatch");
         }
+        validateReceiveRequestPayload(payload, contentType);
       }
       case PAYMENT -> {
         if (pairingChallenge != null) {
           throw new IllegalArgumentException("Payment envelope must not include pairing challenge");
         }
-        if (!OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE.equals(contentType)) {
+        if (!isOneOf(
+            contentType,
+            OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE,
+            OfflineNoteV2TransferHandoff.TEXT_PAYMENT_TOKEN_CONTENT_TYPE)) {
           throw new IllegalArgumentException("Payment envelope content type mismatch");
         }
-        try {
-          OfflineNoteV2PaymentTokenCodec.decodeNorito(payload);
-        } catch (RuntimeException ex) {
-          throw new IllegalArgumentException("Payment envelope payload is invalid", ex);
-        }
+        validatePaymentPayload(payload, contentType);
       }
       case RECEIPT_ACK -> {
         if (pairingChallenge != null) {
           throw new IllegalArgumentException("Envelope must not include pairing challenge");
         }
-        if (!OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE.equals(contentType)) {
+        if (!isOneOf(
+            contentType,
+            OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE,
+            OfflineNoteV2TransferHandoff.TEXT_RECEIPT_ACK_CONTENT_TYPE)) {
           throw new IllegalArgumentException("Receipt ACK envelope content type mismatch");
         }
+        validateReceiptAckPayload(payload, contentType);
       }
       case REJECTED -> {
         if (pairingChallenge != null) {
           throw new IllegalArgumentException("Envelope must not include pairing challenge");
         }
       }
+    }
+  }
+
+  private static boolean isOneOf(final String value, final String first, final String second) {
+    return first.equals(value) || second.equals(value);
+  }
+
+  private static void validateReceiveRequestPayload(
+      final byte[] payload, final String contentType) {
+    try {
+      if (OfflineNoteV2TransferHandoff.RECEIVE_REQUEST_CONTENT_TYPE.equals(contentType)) {
+        OfflineNoteV2ReceiveRequestCodec.decodeNorito(payload);
+      } else {
+        OfflineNoteV2ReceiveRequestCodec.decodeText(new String(payload, StandardCharsets.UTF_8));
+      }
+    } catch (RuntimeException ex) {
+      throw new IllegalArgumentException("Challenge envelope payload is invalid", ex);
+    }
+  }
+
+  private static void validatePaymentPayload(final byte[] payload, final String contentType) {
+    try {
+      if (OfflineNoteV2TransferHandoff.PAYMENT_TOKEN_CONTENT_TYPE.equals(contentType)) {
+        OfflineNoteV2PaymentTokenCodec.decodeNorito(payload);
+      } else {
+        OfflineNoteV2PaymentTokenCodec.decodeText(new String(payload, StandardCharsets.UTF_8));
+      }
+    } catch (RuntimeException ex) {
+      throw new IllegalArgumentException("Payment envelope payload is invalid", ex);
+    }
+  }
+
+  private static void validateReceiptAckPayload(final byte[] payload, final String contentType) {
+    try {
+      if (OfflineNoteV2TransferHandoff.RECEIPT_ACK_CONTENT_TYPE.equals(contentType)) {
+        OfflineNoteV2ReceiptAckCodec.decodeNorito(payload);
+      } else {
+        OfflineNoteV2ReceiptAckCodec.decodeText(new String(payload, StandardCharsets.UTF_8));
+      }
+    } catch (RuntimeException ex) {
+      throw new IllegalArgumentException("Receipt ACK envelope payload is invalid", ex);
     }
   }
 
@@ -321,6 +403,10 @@ public final class OfflineNoteV2NearbyEnvelope {
 
     public static PairingChallenge fromAssetName(final String value) {
       return new PairingChallenge(value);
+    }
+
+    public static PairingChallenge random() {
+      return ALL_CHOICES.get(ThreadLocalRandom.current().nextInt(ALL_CHOICES.size()));
     }
 
     public String assetName() {

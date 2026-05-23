@@ -5973,11 +5973,12 @@ impl GovernanceStageApprovals {
             .is_some_and(|record| record.epoch == epoch && record.quorum_met())
     }
 
-    /// Check whether the rejection quorum for a given body is satisfied for the epoch.
+    /// Check whether a positive rejection quorum for a given body is satisfied for the epoch.
     #[must_use]
     pub fn rejection_quorum_met(&self, body: ParliamentBody, epoch: u64) -> bool {
         self.stages.get(&body).is_some_and(|record| {
             record.epoch == epoch
+                && record.required > 0
                 && u32::try_from(record.rejections.len()).unwrap_or(u32::MAX) >= record.required
         })
     }
@@ -56127,5 +56128,41 @@ mod tests {
             iroha_data_model::isi::governance::ParliamentDecision::Reject,
         ));
         assert!(u32::try_from(record.rejections.len()).unwrap_or(u32::MAX) >= record.required);
+    }
+
+    #[test]
+    fn governance_stage_rejection_quorum_requires_positive_threshold() {
+        let mut approvals = GovernanceStageApprovals::default();
+        approvals.stages.insert(
+            ParliamentBody::RulesCommittee,
+            GovernanceStageApproval {
+                epoch: 1,
+                approvers: BTreeSet::new(),
+                rejections: BTreeSet::new(),
+                abstentions: BTreeSet::new(),
+                required: 0,
+                quorum_bps: 0,
+            },
+        );
+
+        assert!(approvals.quorum_met(ParliamentBody::RulesCommittee, 1));
+        assert!(!approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
+
+        let rejecter = iroha_data_model::account::AccountId::new(
+            iroha_crypto::KeyPair::from_seed(
+                b"stage-rejection-quorum".to_vec(),
+                iroha_crypto::Algorithm::Ed25519,
+            )
+            .public_key()
+            .clone(),
+        );
+        let stage = approvals
+            .stages
+            .get_mut(&ParliamentBody::RulesCommittee)
+            .expect("stage present");
+        stage.required = 1;
+        stage.rejections.insert(rejecter);
+
+        assert!(approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
     }
 }

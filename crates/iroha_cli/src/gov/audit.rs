@@ -55,7 +55,10 @@ impl AuditDeployArgs {
         contract_address: &iroha::data_model::smart_contract::ContractAddress,
     ) -> Result<Value> {
         let binding = client.get_gov_contract_json(contract_address)?;
-        let found = binding.get("found").and_then(Value::as_bool).unwrap_or(false);
+        let found = binding
+            .get("found")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let dataspace = binding.get("dataspace").and_then(Value::as_str);
         let code_hash_raw = binding.get("code_hash_hex").and_then(Value::as_str);
 
@@ -275,9 +278,14 @@ fn audit_proposal_map(
         return;
     };
 
-    if let Some(expected_id) =
-        resolve_proposal_id(contract_address, code_hash, abi_hash_hex, proposal_map, issues)
-        && let Some(proposal_json) = fetch_proposal_json(client, &expected_id, proposal_map, issues)
+    if let Some(expected_id) = resolve_proposal_id(
+        contract_address,
+        code_hash,
+        abi_hash_hex,
+        proposal_map,
+        issues,
+    ) && let Some(proposal_json) =
+        fetch_proposal_json(client, &expected_id, proposal_map, issues)
     {
         process_proposal_json(
             &proposal_json,

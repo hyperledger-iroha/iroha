@@ -13,6 +13,7 @@ public final class UaidJsonParserTests {
 
   public static void main(final String[] args) {
     parsesPortfolioPayload();
+    parsesLegacyPortfolioPayload();
     rejectsInvalidUaidLsb();
     rejectsFractionalEpoch();
     System.out.println("[IrohaAndroid] UaidJsonParserTests passed.");
@@ -35,8 +36,8 @@ public final class UaidJsonParserTests {
                   "label": "alice",
                   "assets": [
                     {
-                      "asset": "%s",
-                      "scope": "global",
+                      "asset_id": "%s#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                      "asset_definition_id": "%s",
                       "quantity": "15"
                     }
                   ]
@@ -46,7 +47,7 @@ public final class UaidJsonParserTests {
           ]
         }
         """
-            .formatted(assetDefinitionId);
+            .formatted(assetDefinitionId, assetDefinitionId);
     final UaidPortfolioResponse response =
         UaidJsonParser.parsePortfolio(json.getBytes(StandardCharsets.UTF_8));
     assert UAID.equals(response.uaid()) : "uaid mismatch";
@@ -63,9 +64,48 @@ public final class UaidJsonParserTests {
     assert "alice".equals(account.label()) : "account label mismatch";
     assert account.assets().size() == 1 : "asset list size mismatch";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
-    assert assetDefinitionId.equals(asset.asset()) : "definition id mismatch";
-    assert "global".equals(asset.scope()) : "scope mismatch";
+    assert (assetDefinitionId + "#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB").equals(asset.assetId()) : "asset id mismatch";
+    assert assetDefinitionId.equals(asset.assetDefinitionId()) : "definition id mismatch";
+    assert assetDefinitionId.equals(asset.asset()) : "legacy definition alias mismatch";
+    assert asset.scope() == null : "modern payload should not synthesize a legacy scope";
     assert "15".equals(asset.quantity()) : "quantity mismatch";
+  }
+
+  private static void parsesLegacyPortfolioPayload() {
+    final String assetDefinitionId = TestAssetDefinitionIds.SECONDARY;
+    final String json =
+        """
+        {
+          "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+          "dataspaces": [
+            {
+              "dataspace_id": 7,
+              "accounts": [
+                {
+                  "account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                  "assets": [
+                    {
+                      "asset": "%s",
+                      "scope": "global",
+                      "quantity": "15"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        """
+            .formatted(assetDefinitionId);
+    final UaidPortfolioResponse response =
+        UaidJsonParser.parsePortfolio(json.getBytes(StandardCharsets.UTF_8));
+    final UaidPortfolioResponse.UaidPortfolioAsset asset =
+        response.dataspaces().get(0).accounts().get(0).assets().get(0);
+    assert assetDefinitionId.equals(asset.assetId()) : "legacy asset id fallback mismatch";
+    assert assetDefinitionId.equals(asset.assetDefinitionId()) : "legacy definition id mismatch";
+    assert assetDefinitionId.equals(asset.asset()) : "legacy asset accessor mismatch";
+    assert "global".equals(asset.scope()) : "legacy scope mismatch";
+    assert "15".equals(asset.quantity()) : "legacy quantity mismatch";
   }
 
   private static void rejectsFractionalEpoch() {

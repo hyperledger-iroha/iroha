@@ -5,15 +5,18 @@
 //! queue can expose the actual Nexus assignments instead of single-lane
 //! placeholders.
 
+mod journal;
 mod router;
 pub(crate) mod routing_ledger;
 
 use core::time::Duration;
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt,
     num::NonZeroUsize,
     ops::Deref,
+    path::Path,
     str::FromStr,
     sync::{
         Arc, LazyLock, OnceLock,
@@ -26,7 +29,9 @@ use crossbeam_queue::ArrayQueue;
 use dashmap::{DashMap, mapref::entry::Entry};
 use eyre::Result;
 use indexmap::IndexSet;
-use iroha_config::parameters::actual::{GovernanceCatalog, LaneRegistry, Nexus, Queue as Config};
+use iroha_config::parameters::actual::{
+    GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Queue as Config,
+};
 use iroha_crypto::HashOf;
 #[allow(unused_imports)]
 use iroha_data_model::nexus::{
@@ -35,6 +40,7 @@ use iroha_data_model::nexus::{
 };
 use iroha_data_model::{
     account::AccountId,
+    block::{ExternalExecutionContext, ExternalExecutionRouteLeg, ExternalExecutionRouteRole},
     events::pipeline::{TransactionEvent, TransactionStatus},
     isi::{
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
@@ -51,13 +57,15 @@ use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 use ivm::ProgramMetadata;
+use journal::{QueuePlanJournal, QueuePlanJournalRecordV1};
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
-pub(crate) use router::native_amx_participant_dataspaces_with_world;
 pub use router::{
-    ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingResolveError, SingleLaneRouter,
-    evaluate_policy, evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world,
+    ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
+    RoutingPlan, RoutingResolveError, SingleLaneRouter, evaluate_policy,
+    evaluate_policy_plan_with_catalog, evaluate_policy_plan_with_catalog_and_world,
+    evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world,
     resolve_query_routing_decision, resolve_routing_decision,
 };
 use thiserror::Error;
@@ -91,12 +99,71 @@ use crate::{
 
 type SignedTxHash = HashOf<iroha_data_model::transaction::SignedTransaction>;
 
-/// Return the latest queued routing hint recorded for a transaction hash.
+/// Return the latest queued full routing plan recorded for a transaction hash.
 #[must_use]
-pub fn routing_hint(
+pub fn routing_plan_hint(
     hash: &HashOf<iroha_data_model::transaction::SignedTransaction>,
-) -> Option<RoutingDecision> {
-    routing_ledger::get(hash)
+) -> Option<RoutingPlan> {
+    routing_ledger::get_plan(hash)
+}
+
+/// Convert a queue routing plan into durable block execution-context legs.
+#[must_use]
+pub(crate) fn execution_context_legs_for_routing_plan(
+    plan: &RoutingPlan,
+) -> Vec<ExternalExecutionRouteLeg> {
+    plan.legs()
+        .into_iter()
+        .map(|leg| {
+            let role = match leg.role {
+                RouteLegRole::Coordinator => ExternalExecutionRouteRole::Coordinator,
+                RouteLegRole::Participant => ExternalExecutionRouteRole::Participant,
+            };
+            ExternalExecutionRouteLeg::new(leg.route.lane_id, leg.route.dataspace_id, role)
+        })
+        .collect()
+}
+
+/// Convert a queue routing plan into one durable external block execution context.
+#[must_use]
+pub(crate) fn execution_context_for_routing_plan(
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    plan: &RoutingPlan,
+) -> ExternalExecutionContext {
+    let coordinator = plan.coordinator_route();
+    ExternalExecutionContext::with_routing_plan(
+        entrypoint_hash,
+        coordinator.lane_id,
+        coordinator.dataspace_id,
+        plan.digest(),
+        execution_context_legs_for_routing_plan(plan),
+    )
+}
+
+fn resolve_routing_plan_against_catalogs(
+    plan: RoutingPlan,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+) -> Result<RoutingPlan, RoutingResolveError> {
+    match plan {
+        RoutingPlan::Single(leg) => {
+            let route = resolve_routing_decision(leg.route, lane_catalog, dataspace_catalog)?;
+            Ok(RoutingPlan::single(route))
+        }
+        RoutingPlan::NativeAmx(plan) => {
+            let coordinator =
+                resolve_routing_decision(plan.coordinator.route, lane_catalog, dataspace_catalog)?;
+            let participants = plan
+                .participants
+                .into_iter()
+                .map(|leg| {
+                    resolve_routing_decision(leg.route, lane_catalog, dataspace_catalog)
+                        .map(|route| RouteLeg::new(route, RouteLegRole::Participant))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(RoutingPlan::native_amx(coordinator, participants))
+        }
+    }
 }
 
 /// Nexus-derived limits that influence queue telemetry and scheduling defaults.
@@ -217,6 +284,10 @@ pub struct Queue {
     lane_catalog: RwLock<Arc<LaneCatalog>>,
     /// Cached dataspace catalog for routing/telemetry.
     dataspace_catalog: RwLock<Arc<DataSpaceCatalog>>,
+    /// Cached routing policy used by the active router.
+    routing_policy: RwLock<LaneRoutingPolicy>,
+    /// Whether the active router is the Nexus config router.
+    routing_uses_config_router: RwLock<bool>,
     /// The queue for transactions
     tx_hashes: ArrayQueue<SignedTxHash>,
     /// Accepted transactions addressed by `Hash`.
@@ -227,6 +298,8 @@ pub struct Queue {
     active_count: AtomicUsize,
     /// Cached routing decision per transaction hash.
     routing_decisions: DashMap<SignedTxHash, RoutingDecision>,
+    /// Cached full routing plan per transaction hash.
+    routing_plans: DashMap<SignedTxHash, RoutingPlan>,
     /// Cached encoded length per queued transaction hash.
     tx_encoded_len: DashMap<SignedTxHash, usize>,
     /// Cached proposal gas cost per queued transaction hash.
@@ -241,6 +314,8 @@ pub struct Queue {
     queued_count: AtomicUsize,
     /// Cached full Norito-framed signed-transaction payloads for gossip retransmit.
     tx_gossip_payloads: DashMap<SignedTxHash, Arc<Vec<u8>>>,
+    /// Optional local journal for replaying pending transactions with full routing plans.
+    plan_journal: parking_lot::Mutex<Option<QueuePlanJournal>>,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
     removed_hashes: DashMap<SignedTxHash, ()>,
     /// Amount of transactions per user in the queue
@@ -418,14 +493,36 @@ pub struct GossipBatchEntry {
     pub tx: AcceptedTransaction<'static>,
     /// Lane/dataspace routing decision cached at admission time.
     pub routing: RoutingDecision,
+    /// Full routing plan cached at admission time.
+    pub routing_plan: RoutingPlan,
     /// Pre-serialized full-frame transaction payload for retransmit.
     pub payload: Arc<Vec<u8>>,
+}
+
+/// Result counters from replaying the local pending queue-plan journal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueuePlanJournalReplaySummary {
+    /// Records read from the live journal set.
+    pub records: usize,
+    /// Records admitted back into the queue.
+    pub replayed: usize,
+    /// Records tombstoned because the transaction was already committed.
+    pub tombstoned_committed: usize,
+    /// Records tombstoned because the transaction expired before replay.
+    pub tombstoned_expired: usize,
+    /// Records tombstoned because the recomputed routing plan no longer matched.
+    pub tombstoned_stale: usize,
+    /// Records tombstoned because the journal hash did not match the entrypoint.
+    pub tombstoned_malformed: usize,
+    /// Records skipped because normal queue admission rejected them.
+    pub rejected: usize,
 }
 
 struct PreparedQueueAdmission {
     checked: CheckedTransaction<'static>,
     hash: SignedTxHash,
     routing_decision: RoutingDecision,
+    routing_plan: RoutingPlan,
     encoded_len: usize,
     gossip_payload: Option<Arc<Vec<u8>>>,
     proposal_gas_cost: u64,
@@ -567,6 +664,7 @@ pub struct TransactionGuard {
     tx: Arc<CheckedTransaction<'static>>,
     queue: Arc<Queue>,
     routing: RoutingDecision,
+    routing_plan: RoutingPlan,
     queue_position: u64,
     encoded_len: usize,
     gas_cost: u64,
@@ -593,6 +691,12 @@ impl TransactionGuard {
     /// Routing decision associated with the transaction.
     pub fn routing(&self) -> RoutingDecision {
         self.routing
+    }
+
+    #[must_use]
+    /// Full routing plan associated with the transaction.
+    pub fn routing_plan(&self) -> RoutingPlan {
+        self.routing_plan.clone()
     }
 
     #[must_use]
@@ -632,7 +736,8 @@ impl Drop for TransactionGuard {
         #[cfg(not(feature = "telemetry"))]
         let telemetry_ref: Option<&StateTelemetry> = None;
 
-        self.queue.remove_transaction(&self.tx, telemetry_ref);
+        self.queue
+            .remove_transaction(&self.tx, &self.routing_plan, telemetry_ref);
         self.queue.release_inflight_guard();
     }
 }
@@ -872,6 +977,185 @@ impl Queue {
 
     fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
         tx.entrypoint_bytes()
+    }
+
+    /// Install the local pending queue-plan journal and return the number of replayable records.
+    ///
+    /// Startup replay admission is performed by the caller so it can use the fully initialized
+    /// state snapshot and discard stale records deterministically.
+    ///
+    /// # Errors
+    /// Returns journal open or replay I/O errors.
+    pub fn install_plan_journal(
+        &self,
+        path: impl AsRef<Path>,
+        max_bytes_before_compact: u64,
+        durable_writes: bool,
+    ) -> std::io::Result<usize> {
+        let journal = QueuePlanJournal::open(path, max_bytes_before_compact, durable_writes)?;
+        let replayable = journal.replay()?.len();
+        *self.plan_journal.lock() = Some(journal);
+        Ok(replayable)
+    }
+
+    /// Replay live pending queue-plan journal records against the current state.
+    ///
+    /// Records are admitted only when the recomputed full routing plan exactly matches the
+    /// journaled plan. Committed, expired, malformed, stale, and otherwise invalid records are
+    /// tombstoned so they cannot be replayed indefinitely.
+    ///
+    /// # Errors
+    /// Returns journal replay I/O or frame decode errors.
+    pub fn replay_plan_journal(
+        &self,
+        state: &State,
+    ) -> std::io::Result<QueuePlanJournalReplaySummary> {
+        let records = {
+            let guard = self.plan_journal.lock();
+            let Some(journal) = guard.as_ref() else {
+                return Ok(QueuePlanJournalReplaySummary::default());
+            };
+            journal.replay()?
+        };
+
+        let mut summary = QueuePlanJournalReplaySummary {
+            records: records.len(),
+            ..QueuePlanJournalReplaySummary::default()
+        };
+        #[cfg(feature = "telemetry")]
+        let telemetry_handle = state.metrics();
+        #[cfg(feature = "telemetry")]
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
+        #[cfg(not(feature = "telemetry"))]
+        let backpressure_telemetry: Option<&StateTelemetry> = None;
+
+        for record in records {
+            let hash = record.signed_transaction_hash;
+            let routing_plan = record.routing_plan.clone();
+            let accepted =
+                AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(record.entrypoint));
+
+            if accepted.hash() != hash {
+                summary.tombstoned_malformed = summary.tombstoned_malformed.saturating_add(1);
+                self.record_plan_journal_remove(hash, &routing_plan);
+                continue;
+            }
+            if state.has_committed_transaction(hash) {
+                summary.tombstoned_committed = summary.tombstoned_committed.saturating_add(1);
+                self.record_plan_journal_remove(hash, &routing_plan);
+                continue;
+            }
+            if self.is_expired(&accepted) {
+                summary.tombstoned_expired = summary.tombstoned_expired.saturating_add(1);
+                self.record_plan_journal_remove(hash, &routing_plan);
+                continue;
+            }
+            match self.route_plan_with_state(&accepted, state) {
+                Ok(current_plan) if current_plan == routing_plan => {}
+                Ok(current_plan) => {
+                    warn!(
+                        tx = %hash,
+                        journal_plan_digest = %routing_plan.digest(),
+                        current_plan_digest = %current_plan.digest(),
+                        "discarding queued transaction journal record with stale routing plan"
+                    );
+                    summary.tombstoned_stale = summary.tombstoned_stale.saturating_add(1);
+                    self.record_plan_journal_remove(hash, &routing_plan);
+                    continue;
+                }
+                Err(error) => {
+                    warn!(
+                        tx = %hash,
+                        reason = %error,
+                        reason_label = error.as_label(),
+                        "discarding queued transaction journal record with unresolved routing plan"
+                    );
+                    summary.tombstoned_stale = summary.tombstoned_stale.saturating_add(1);
+                    self.record_plan_journal_remove(hash, &routing_plan);
+                    continue;
+                }
+            }
+
+            let checked = CheckedTransaction::new_unchecked(accepted);
+            let gossip_payload = (!record.gossip_payload.is_empty())
+                .then(|| Arc::new(record.gossip_payload.clone()));
+            let mut state_access = LazyAdmissionStateAccess::new(state);
+            let mut prepared = match self.prepare_checked_for_enqueue(
+                checked,
+                routing_plan.clone(),
+                &mut state_access,
+                gossip_payload,
+                #[cfg(feature = "telemetry")]
+                telemetry_handle,
+            ) {
+                Ok(prepared) => prepared,
+                Err(failure) => {
+                    warn!(
+                        tx = %hash,
+                        error = %failure.err,
+                        "discarding queued transaction journal record rejected by admission"
+                    );
+                    summary.rejected = summary.rejected.saturating_add(1);
+                    self.record_plan_journal_remove(hash, &routing_plan);
+                    continue;
+                }
+            };
+            prepared.enqueued_at_ms = record.enqueue_timestamp_ms;
+
+            match self.enqueue_prepared_admissions(vec![prepared], backpressure_telemetry) {
+                Ok(notifications) => {
+                    summary.replayed = summary.replayed.saturating_add(notifications.len());
+                    self.publish_admission_notifications(&notifications);
+                }
+                Err((notifications, failure)) => {
+                    summary.replayed = summary.replayed.saturating_add(notifications.len());
+                    self.publish_admission_notifications(&notifications);
+                    warn!(
+                        tx = %hash,
+                        error = %failure.err,
+                        "discarding queued transaction journal record rejected by enqueue"
+                    );
+                    summary.rejected = summary.rejected.saturating_add(1);
+                    self.record_plan_journal_remove(hash, &routing_plan);
+                }
+            }
+        }
+
+        Ok(summary)
+    }
+
+    fn record_plan_journal_put(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        hash: SignedTxHash,
+        routing_plan: &RoutingPlan,
+        gossip_payload: Arc<Vec<u8>>,
+        enqueue_timestamp_ms: u64,
+    ) {
+        let mut guard = self.plan_journal.lock();
+        let Some(journal) = guard.as_mut() else {
+            return;
+        };
+        let record = QueuePlanJournalRecordV1::new(
+            tx.entrypoint().clone(),
+            hash,
+            routing_plan.clone(),
+            gossip_payload,
+            enqueue_timestamp_ms,
+        );
+        if let Err(error) = journal.put(record) {
+            warn!(%error, tx = %hash, "failed to append queue plan journal put");
+        }
+    }
+
+    fn record_plan_journal_remove(&self, hash: SignedTxHash, routing_plan: &RoutingPlan) {
+        let mut guard = self.plan_journal.lock();
+        let Some(journal) = guard.as_mut() else {
+            return;
+        };
+        if let Err(error) = journal.remove(hash, routing_plan.digest()) {
+            warn!(%error, tx = %hash, "failed to append queue plan journal remove");
+        }
     }
 
     pub(crate) fn compute_proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
@@ -1509,6 +1793,8 @@ impl Queue {
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
+            plan_journal_enabled,
+            plan_journal_max_bytes,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -1522,6 +1808,8 @@ impl Queue {
                 transaction_time_to_live,
                 expired_cull_interval,
                 expired_cull_batch,
+                plan_journal_enabled,
+                plan_journal_max_bytes,
             },
             events_sender,
             router,
@@ -1540,6 +1828,8 @@ impl Queue {
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
+            plan_journal_enabled,
+            plan_journal_max_bytes,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -1555,6 +1845,8 @@ impl Queue {
                 transaction_time_to_live,
                 expired_cull_interval,
                 expired_cull_batch,
+                plan_journal_enabled,
+                plan_journal_max_bytes,
             },
             events_sender,
             router,
@@ -1573,6 +1865,8 @@ impl Queue {
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
+            plan_journal_enabled: _,
+            plan_journal_max_bytes: _,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -1592,12 +1886,15 @@ impl Queue {
                 lane_compliance: RwLock::new(lane_compliance),
                 lane_catalog: RwLock::new(Arc::clone(lane_catalog)),
                 dataspace_catalog: RwLock::new(Arc::clone(dataspace_catalog)),
+                routing_policy: RwLock::new(LaneRoutingPolicy::default()),
+                routing_uses_config_router: RwLock::new(false),
                 tx_hashes: ArrayQueue::new(capacity.get()),
                 txs: DashMap::new(),
                 active_count: AtomicUsize::new(0),
                 removed_hashes: DashMap::new(),
                 txs_per_user: DashMap::new(),
                 routing_decisions: DashMap::new(),
+                routing_plans: DashMap::new(),
                 tx_encoded_len: DashMap::new(),
                 tx_gas_cost: DashMap::new(),
                 tx_enqueued_at_ms: DashMap::new(),
@@ -1605,6 +1902,7 @@ impl Queue {
                 queued_age_ring: parking_lot::Mutex::new(VecDeque::new()),
                 queued_count: AtomicUsize::new(0),
                 tx_gossip_payloads: DashMap::new(),
+                plan_journal: parking_lot::Mutex::new(None),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 guard_sequence: AtomicU64::new(0),
                 inflight_guards: AtomicUsize::new(0),
@@ -1790,7 +2088,7 @@ impl Queue {
         self.gossip_batch_inner(
             n,
             |_, tx_ref| self.is_pending(tx_ref, state_view),
-            |hash, tx_ref| self.refresh_routing_decision_with_view(hash, tx_ref, state_view),
+            |hash, tx_ref| self.refresh_routing_plan_with_view(hash, tx_ref, state_view),
             backpressure_telemetry,
         )
     }
@@ -1810,7 +2108,7 @@ impl Queue {
                 !self.is_expired(tx_ref.as_accepted())
                     && committed_transactions.get(&hash).is_none()
             },
-            |hash, tx_ref| self.refresh_routing_decision_with_state(hash, tx_ref, state),
+            |hash, tx_ref| self.refresh_routing_plan_with_state(hash, tx_ref, state),
             backpressure_telemetry,
         )
     }
@@ -1827,7 +2125,7 @@ impl Queue {
         R: FnMut(
             SignedTxHash,
             &CheckedTransaction<'static>,
-        ) -> Result<RoutingDecision, RoutingResolveError>,
+        ) -> Result<RoutingPlan, RoutingResolveError>,
     {
         let mut batch = Vec::with_capacity(n as usize);
         while let Some(hash) = self.tx_gossip.pop() {
@@ -1837,8 +2135,8 @@ impl Queue {
             };
             let tx_ref = tx_arc.as_ref();
             if is_pending(hash, tx_ref) {
-                let routing = match refresh_routing(hash, tx_ref) {
-                    Ok(routing) => routing,
+                let routing_plan = match refresh_routing(hash, tx_ref) {
+                    Ok(routing_plan) => routing_plan,
                     Err(err) => {
                         warn!(
                             tx = %hash,
@@ -1854,6 +2152,7 @@ impl Queue {
                         continue;
                     }
                 };
+                let routing = routing_plan.coordinator_route();
                 let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
                     Arc::clone(entry.value())
                 } else {
@@ -1865,6 +2164,7 @@ impl Queue {
                 batch.push(GossipBatchEntry {
                     tx: tx_ref.as_accepted().clone(),
                     routing,
+                    routing_plan,
                     payload,
                 });
                 if batch.len() >= n as usize {
@@ -1875,73 +2175,74 @@ impl Queue {
         batch
     }
 
-    /// Resolve routing without a [`StateView`] when the active router supports it.
-    fn resolve_queue_routing_decision(
+    fn resolve_queue_routing_plan(
         &self,
-        decision: RoutingDecision,
-    ) -> Result<RoutingDecision, RoutingResolveError> {
+        plan: RoutingPlan,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
         let lane_catalog = self.lane_catalog.read();
         let dataspace_catalog = self.dataspace_catalog.read();
-        resolve_routing_decision(decision, lane_catalog.as_ref(), dataspace_catalog.as_ref())
+        resolve_routing_plan_against_catalogs(
+            plan,
+            lane_catalog.as_ref(),
+            dataspace_catalog.as_ref(),
+        )
     }
 
-    /// Resolve routing without a [`StateView`] when the active router supports it.
-    pub(crate) fn route_for_gossip_without_state(
+    /// Resolve a full routing plan without a [`StateView`] when the active router supports it.
+    pub(crate) fn route_plan_for_gossip_without_state(
         &self,
         tx: &AcceptedTransaction<'_>,
-    ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
-        let decision = self.router.read().try_route_without_state(tx)?;
-        decision
-            .map(|decision| self.resolve_queue_routing_decision(decision))
+    ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
+        let plan = self.router.read().try_route_plan_without_state(tx)?;
+        plan.map(|plan| self.resolve_queue_routing_plan(plan))
             .transpose()
     }
 
-    /// Resolve routing for an inbound gossip transaction with the current state.
-    ///
-    /// This path prefers no-state routing and only falls back to a short-lived
-    /// snapshot when the active router requires dynamic world data.
-    pub(crate) fn route_for_gossip_with_state(
+    /// Resolve a full routing plan for an inbound gossip transaction with the current state.
+    pub(crate) fn route_plan_for_gossip_with_state(
         &self,
         tx: &AcceptedTransaction<'_>,
         state: &State,
-    ) -> Result<RoutingDecision, RoutingResolveError> {
-        let decision = self.router.read().try_route_with_state(tx, state)?;
-        self.resolve_queue_routing_decision(decision)
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        let plan = self.router.read().try_route_plan_with_state(tx, state)?;
+        self.resolve_queue_routing_plan(plan)
     }
 
-    fn record_refreshed_routing_decision(&self, hash: SignedTxHash, routing: RoutingDecision) {
+    fn record_refreshed_routing_plan(&self, hash: SignedTxHash, plan: RoutingPlan) {
+        let routing = plan.coordinator_route();
         self.routing_decisions.insert(hash, routing);
-        routing_ledger::record(hash, routing);
+        self.routing_plans.insert(hash, plan.clone());
+        routing_ledger::record_plan(hash, plan);
     }
 
-    fn refresh_routing_decision_with_view(
+    fn refresh_routing_plan_with_view(
         &self,
         hash: SignedTxHash,
         tx: &CheckedTransaction<'static>,
         state_view: &StateView<'_>,
-    ) -> Result<RoutingDecision, RoutingResolveError> {
-        let decision = self
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        let plan = self
             .router
             .read()
-            .try_route_with_view(tx.as_accepted(), state_view)?;
-        let routing = self.resolve_queue_routing_decision(decision)?;
-        self.record_refreshed_routing_decision(hash, routing);
-        Ok(routing)
+            .try_route_plan_with_view(tx.as_accepted(), state_view)?;
+        let plan = self.resolve_queue_routing_plan(plan)?;
+        self.record_refreshed_routing_plan(hash, plan.clone());
+        Ok(plan)
     }
 
-    fn refresh_routing_decision_with_state(
+    fn refresh_routing_plan_with_state(
         &self,
         hash: SignedTxHash,
         tx: &CheckedTransaction<'static>,
         state: &State,
-    ) -> Result<RoutingDecision, RoutingResolveError> {
-        let decision = self
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        let plan = self
             .router
             .read()
-            .try_route_with_state(tx.as_accepted(), state)?;
-        let routing = self.resolve_queue_routing_decision(decision)?;
-        self.record_refreshed_routing_decision(hash, routing);
-        Ok(routing)
+            .try_route_plan_with_state(tx.as_accepted(), state)?;
+        let plan = self.resolve_queue_routing_plan(plan)?;
+        self.record_refreshed_routing_plan(hash, plan.clone());
+        Ok(plan)
     }
 
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -1957,6 +2258,17 @@ impl Queue {
         } else {
             routing_ledger::take(&hash).unwrap_or_default()
         };
+        let removed_plan = self
+            .routing_plans
+            .remove(&hash)
+            .map(|(_, plan)| plan)
+            .or_else(|| routing_ledger::take_plan(&hash));
+        if let Some(plan) = removed_plan.as_ref() {
+            self.record_plan_journal_remove(hash, plan);
+            routing_ledger::discard_plan_if_matches(&hash, plan);
+        } else {
+            let _ = routing_ledger::take_plan(&hash);
+        }
 
         let removed_tx = self.txs.remove(&hash).map(|(_, tx)| tx);
         if let Some(removed_tx) = removed_tx {
@@ -2001,8 +2313,21 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         state: &State,
     ) -> Result<RoutingDecision, RoutingResolveError> {
-        let decision = self.router.read().try_route_with_state(tx, state)?;
-        self.resolve_queue_routing_decision(decision)
+        self.route_plan_with_state(tx, state)
+            .map(|plan| plan.coordinator_route())
+    }
+
+    /// Resolve the full routing plan for an admitted transaction against the current state.
+    ///
+    /// This is used by Torii, gossip, and block proposal paths to preserve native AMX
+    /// participant legs alongside the coordinator route.
+    pub fn route_plan_with_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state: &State,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        let plan = self.router.read().try_route_plan_with_state(tx, state)?;
+        self.resolve_queue_routing_plan(plan)
     }
 
     /// Returns whether the queue currently tracks the transaction hash.
@@ -2060,13 +2385,13 @@ impl Queue {
         state_view: &StateView<'_>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
-        let routing_decision = match self
+        let routing_plan = match self
             .router
             .read()
-            .try_route_with_view(&tx, state_view)
-            .and_then(|decision| self.resolve_queue_routing_decision(decision))
+            .try_route_plan_with_view(&tx, state_view)
+            .and_then(|plan| self.resolve_queue_routing_plan(plan))
         {
-            Ok(decision) => decision,
+            Ok(plan) => plan,
             Err(err) => {
                 return Err(Failure {
                     tx: tx.into(),
@@ -2076,6 +2401,7 @@ impl Queue {
                 });
             }
         };
+        let routing_decision = routing_plan.coordinator_route();
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
 
@@ -2112,7 +2438,7 @@ impl Queue {
         );
         self.push_checked_with_lane_context(
             checked,
-            routing_decision,
+            routing_plan,
             &mut state_access,
             gossip_payload,
             #[cfg(feature = "telemetry")]
@@ -2139,19 +2465,19 @@ impl Queue {
         &self,
         tx: AcceptedTransaction<'static>,
         state: &State,
-        routing_decision: Option<RoutingDecision>,
+        routing_plan: Option<RoutingPlan>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
-        let routing_decision = match routing_decision {
-            Some(decision) => self.resolve_queue_routing_decision(decision),
+        let routing_plan = match routing_plan {
+            Some(plan) => self.resolve_queue_routing_plan(plan),
             None => self
                 .router
                 .read()
-                .try_route_with_state(&tx, state)
-                .and_then(|decision| self.resolve_queue_routing_decision(decision)),
+                .try_route_plan_with_state(&tx, state)
+                .and_then(|plan| self.resolve_queue_routing_plan(plan)),
         };
-        let routing_decision = match routing_decision {
-            Ok(decision) => decision,
+        let routing_plan = match routing_plan {
+            Ok(plan) => plan,
             Err(err) => {
                 return Err(Failure {
                     tx: tx.into(),
@@ -2161,6 +2487,7 @@ impl Queue {
                 });
             }
         };
+        let routing_decision = routing_plan.coordinator_route();
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
 
@@ -2192,7 +2519,7 @@ impl Queue {
         let mut state_access = LazyAdmissionStateAccess::new(state);
         self.push_checked_with_lane_context(
             checked,
-            routing_decision,
+            routing_plan,
             &mut state_access,
             gossip_payload,
             #[cfg(feature = "telemetry")]
@@ -2205,14 +2532,15 @@ impl Queue {
     fn push_checked_with_lane_context<C: QueueAdmissionStateAccess>(
         &self,
         checked: CheckedTransaction<'static>,
-        routing_decision: RoutingDecision,
+        routing_plan: RoutingPlan,
         state_access: &mut C,
         gossip_payload: Option<Arc<Vec<u8>>>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<RoutingDecision, Failure> {
+        let routing_decision = routing_plan.coordinator_route();
         let prepared = self.prepare_checked_for_enqueue(
             checked,
-            routing_decision,
+            routing_plan,
             state_access,
             gossip_payload,
             #[cfg(feature = "telemetry")]
@@ -2240,11 +2568,12 @@ impl Queue {
     fn prepare_checked_for_enqueue<C: QueueAdmissionStateAccess>(
         &self,
         checked: CheckedTransaction<'static>,
-        routing_decision: RoutingDecision,
+        routing_plan: RoutingPlan,
         state_access: &mut C,
         gossip_payload: Option<Arc<Vec<u8>>>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<PreparedQueueAdmission, Failure> {
+        let routing_decision = routing_plan.coordinator_route();
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
 
@@ -2555,6 +2884,7 @@ impl Queue {
             checked,
             hash,
             routing_decision,
+            routing_plan,
             encoded_len,
             gossip_payload,
             proposal_gas_cost,
@@ -2643,6 +2973,7 @@ impl Queue {
                     checked,
                     hash,
                     routing_decision,
+                    routing_plan,
                     encoded_len,
                     gossip_payload,
                     proposal_gas_cost,
@@ -2668,9 +2999,13 @@ impl Queue {
                 entry.insert(Arc::clone(&tx_arc));
                 self.track_active_transaction();
                 self.routing_decisions.insert(hash, routing_decision);
-                routing_ledger::record(hash, routing_decision);
+                self.routing_plans.insert(hash, routing_plan.clone());
+                routing_ledger::record_plan(hash, routing_plan.clone());
                 self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
-                drop(tx_arc);
+                let journal_payload = gossip_payload
+                    .as_ref()
+                    .map(Arc::clone)
+                    .unwrap_or_else(|| Self::encode_gossip_payload(tx_arc.as_accepted()));
 
                 let mut pushed = self.tx_hashes.push(hash).is_ok();
                 if !pushed {
@@ -2682,10 +3017,14 @@ impl Queue {
                 if !pushed {
                     warn!("Queue is full");
                     let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+                    drop(tx_arc);
                     self.untrack_active_transaction();
-                    if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                    if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                        routing_ledger::discard_plan_if_matches(&hash, &plan);
+                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
                     }
+                    self.routing_decisions.remove(&hash);
                     self.tx_enqueued_at_ms.remove(&hash);
                     self.remove_queued_age(&hash);
                     failure = Some(Failure {
@@ -2706,6 +3045,14 @@ impl Queue {
                     self.tx_gossip_payloads.insert(hash, payload);
                 }
                 self.tx_gas_cost.insert(hash, proposal_gas_cost);
+                self.record_plan_journal_put(
+                    tx_arc.as_accepted(),
+                    hash,
+                    &routing_plan,
+                    journal_payload,
+                    enqueued_at_ms,
+                );
+                drop(tx_arc);
                 self.track_expiry_hash(hash);
                 if let Some(authority) = authority {
                     applied_user_increments
@@ -2830,23 +3177,22 @@ impl Queue {
             .map(|_| ())
     }
 
-    /// Pushes an accepted transaction into the queue using a precomputed routing decision and a
+    /// Pushes an accepted transaction into the queue using a precomputed full routing plan and a
     /// cached default full-frame gossip payload.
     ///
     /// # Errors
-    /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is
-    /// full or violates lane limits).
-    pub(crate) fn push_with_gossip_payload_with_state_and_routing(
+    /// Propagates [`Failure`] when the queue rejects the transaction.
+    pub(crate) fn push_with_gossip_payload_with_state_and_routing_plan(
         &self,
         tx: AcceptedTransaction<'static>,
         state: &State,
-        routing_decision: RoutingDecision,
+        routing_plan: RoutingPlan,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<(), Failure> {
         self.push_with_lane_internal_with_state_and_routing(
             tx,
             state,
-            Some(routing_decision),
+            Some(routing_plan),
             gossip_payload,
         )
         .map(|_| ())
@@ -2888,35 +3234,27 @@ impl Queue {
         self.push_with_lane_internal_with_state(tx, state, None)
     }
 
-    /// Push transaction into queue using a caller-provided routing decision.
-    ///
-    /// The caller must pass a decision resolved against the same state horizon used for
-    /// admission. This avoids repeating route resolution in batch ingress paths that
-    /// already needed the decision for local/proxy routing.
+    /// Push transaction into queue using a caller-provided full routing plan.
     ///
     /// # Errors
     /// See [`enum@Error`]
-    pub fn push_with_lane_with_state_and_routing(
+    pub fn push_with_lane_with_state_and_routing_plan(
         &self,
         tx: AcceptedTransaction<'static>,
         state: &State,
-        routing_decision: RoutingDecision,
+        routing_plan: RoutingPlan,
     ) -> Result<RoutingDecision, Failure> {
-        self.push_with_lane_internal_with_state_and_routing(tx, state, Some(routing_decision), None)
+        self.push_with_lane_internal_with_state_and_routing(tx, state, Some(routing_plan), None)
     }
 
-    /// Push an input-ordered batch of accepted transactions using caller-provided routing
-    /// decisions.
-    ///
-    /// This preserves single-push semantics: transactions before the first failure remain queued,
-    /// the first failure is returned, and later transactions are not admitted. Queue indexes are
-    /// mutated while holding the push/remove lock once for the accepted prefix.
+    /// Push an input-ordered batch of accepted transactions using caller-provided full routing
+    /// plans.
     ///
     /// # Errors
     /// Returns the first [`Failure`] that would be observed by sequential single admission.
-    pub fn push_batch_with_lane_with_state_and_routing(
+    pub fn push_batch_with_lane_with_state_and_routing_plans(
         &self,
-        txs: Vec<(AcceptedTransaction<'static>, RoutingDecision)>,
+        txs: Vec<(AcceptedTransaction<'static>, RoutingPlan)>,
         state: &State,
     ) -> Result<usize, Failure> {
         if txs.is_empty() {
@@ -2934,9 +3272,9 @@ impl Queue {
         let mut prepared = Vec::with_capacity(txs.len());
         let mut precheck_failure = None;
 
-        for (tx, routing_decision) in txs {
-            let routing_decision = match self.resolve_queue_routing_decision(routing_decision) {
-                Ok(decision) => decision,
+        for (tx, routing_plan) in txs {
+            let routing_plan = match self.resolve_queue_routing_plan(routing_plan) {
+                Ok(plan) => plan,
                 Err(err) => {
                     precheck_failure = Some(Failure {
                         tx: tx.into(),
@@ -2947,6 +3285,7 @@ impl Queue {
                     break;
                 }
             };
+            let routing_decision = routing_plan.coordinator_route();
             let lane_id = routing_decision.lane_id;
             let dataspace_id = routing_decision.dataspace_id;
             trace!(
@@ -2974,7 +3313,7 @@ impl Queue {
             }
             match self.prepare_checked_for_enqueue(
                 checked,
-                routing_decision,
+                routing_plan,
                 &mut state_access,
                 None,
                 #[cfg(feature = "telemetry")]
@@ -3032,17 +3371,14 @@ impl Queue {
         self.push_with_lane_in_view(tx, state_view).map(|_| ())
     }
 
-    /// Reinsert a previously admitted transaction with a precomputed routing decision.
-    ///
-    /// This fast-path is used by consensus requeue flows to avoid holding a full
-    /// [`StateView`] while rebuilding queue state after commit/reschedule failures.
+    /// Reinsert a previously admitted transaction with a precomputed full routing plan.
     ///
     /// # Errors
     /// Propagates [`Failure`] when queue limits reject the transaction.
-    pub(crate) fn push_requeued_with_routing(
+    pub(crate) fn push_requeued_with_routing_plan(
         &self,
         tx: AcceptedTransaction<'static>,
-        routing_decision: RoutingDecision,
+        routing_plan: RoutingPlan,
         state: &State,
     ) -> Result<(), Failure> {
         let hash = tx.hash();
@@ -3061,8 +3397,8 @@ impl Queue {
             });
         }
 
-        let routing_decision = match self.resolve_queue_routing_decision(routing_decision) {
-            Ok(decision) => decision,
+        let routing_plan = match self.resolve_queue_routing_plan(routing_plan) {
+            Ok(plan) => plan,
             Err(err) => {
                 return Err(Failure {
                     tx: Box::new(checked.into_accepted()),
@@ -3072,6 +3408,7 @@ impl Queue {
                 });
             }
         };
+        let routing_decision = routing_plan.coordinator_route();
 
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
@@ -3129,11 +3466,11 @@ impl Queue {
             entry.insert(Arc::clone(&tx_arc));
             self.track_active_transaction();
             self.routing_decisions.insert(hash, routing_decision);
-            routing_ledger::record(hash, routing_decision);
+            self.routing_plans.insert(hash, routing_plan.clone());
+            routing_ledger::record_plan(hash, routing_plan.clone());
             self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
             self.record_queued_age(hash, enqueue_at_ms);
-            // Drop the local holder before attempting to unwrap on push failure.
-            drop(tx_arc);
+            let journal_payload = Self::encode_gossip_payload(tx_arc.as_accepted());
             let mut pushed = self.tx_hashes.push(hash).is_ok();
             let mut restore_queued_age_after_compaction = false;
             if !pushed {
@@ -3146,10 +3483,14 @@ impl Queue {
             if !pushed {
                 warn!("Queue is full");
                 let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+                drop(tx_arc);
                 self.untrack_active_transaction();
-                if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                    routing_ledger::discard_plan_if_matches(&hash, &plan);
+                } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                     routing_ledger::discard_if_matches(&hash, decision);
                 }
+                self.routing_decisions.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
                 self.remove_queued_age(&hash);
                 if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
@@ -3170,6 +3511,14 @@ impl Queue {
             }
             self.tx_encoded_len.insert(hash, encoded_len);
             self.tx_gas_cost.insert(hash, proposal_gas_cost);
+            self.record_plan_journal_put(
+                tx_arc.as_accepted(),
+                hash,
+                &routing_plan,
+                journal_payload,
+                enqueue_at_ms,
+            );
+            drop(tx_arc);
             self.track_expiry_hash(hash);
             #[cfg(feature = "telemetry")]
             {
@@ -3234,6 +3583,9 @@ impl Queue {
                 self.untrack_active_transaction();
             }
             self.routing_decisions.remove(&hash);
+            self.routing_plans.remove(&hash);
+            let _ = routing_ledger::take(&hash);
+            let _ = routing_ledger::take_plan(&hash);
             self.removed_hashes.remove(&hash);
         }
         while self.tx_gossip.pop().is_some() {}
@@ -3243,6 +3595,8 @@ impl Queue {
         self.tx_encoded_len.clear();
         self.tx_gas_cost.clear();
         self.tx_enqueued_at_ms.clear();
+        self.routing_decisions.clear();
+        self.routing_plans.clear();
         self.clear_queued_age_index();
         self.tx_gossip_payloads.clear();
         #[cfg(feature = "telemetry")]
@@ -3318,11 +3672,15 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                    if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                        routing_ledger::discard_plan_if_matches(&hash, &plan);
+                        self.routing_decisions.remove(&hash);
+                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
                     } else {
                         // Ensure we do not leak entries when the queue-side cache missed the remove.
                         let _ = routing_ledger::take(&hash);
+                        let _ = routing_ledger::take_plan(&hash);
                     }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(state_view.telemetry));
@@ -3342,9 +3700,9 @@ impl Queue {
                 continue;
             }
 
-            let routing =
-                match self.refresh_routing_decision_with_view(hash, tx_arc.as_ref(), state_view) {
-                    Ok(routing) => routing,
+            let routing_plan =
+                match self.refresh_routing_plan_with_view(hash, tx_arc.as_ref(), state_view) {
+                    Ok(routing_plan) => routing_plan,
                     Err(err) => {
                         warn!(
                             tx = %hash,
@@ -3361,6 +3719,7 @@ impl Queue {
                         continue;
                     }
                 };
+            let routing = routing_plan.coordinator_route();
 
             if tx_arc.as_accepted().external().is_some()
                 && let Err(e) = self.recheck_external_nexus_fee_admission(
@@ -3383,11 +3742,16 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    let routing = if let Some((_, decision)) = self.routing_decisions.remove(&hash)
-                    {
+                    let routing = if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                        let routing = plan.coordinator_route();
+                        routing_ledger::discard_plan_if_matches(&hash, &plan);
+                        self.routing_decisions.remove(&hash);
+                        routing
+                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
                         decision
                     } else {
+                        let _ = routing_ledger::take_plan(&hash);
                         routing_ledger::take(&hash).unwrap_or_default()
                     };
                     #[cfg(feature = "telemetry")]
@@ -3433,6 +3797,7 @@ impl Queue {
                 tx: tx_arc,
                 queue: Arc::clone(self),
                 routing,
+                routing_plan,
                 queue_position,
                 encoded_len,
                 gas_cost,
@@ -3501,11 +3866,15 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                    if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                        routing_ledger::discard_plan_if_matches(&hash, &plan);
+                        self.routing_decisions.remove(&hash);
+                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
                     } else {
                         // Ensure we do not leak entries when the queue-side cache missed the remove.
                         let _ = routing_ledger::take(&hash);
+                        let _ = routing_ledger::take_plan(&hash);
                     }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(telemetry_handle));
@@ -3525,9 +3894,9 @@ impl Queue {
                 continue;
             }
 
-            let routing =
-                match self.refresh_routing_decision_with_state(hash, tx_arc.as_ref(), state) {
-                    Ok(routing) => routing,
+            let routing_plan =
+                match self.refresh_routing_plan_with_state(hash, tx_arc.as_ref(), state) {
+                    Ok(routing_plan) => routing_plan,
                     Err(err) => {
                         warn!(
                             tx = %hash,
@@ -3544,6 +3913,7 @@ impl Queue {
                         continue;
                     }
                 };
+            let routing = routing_plan.coordinator_route();
             let route_dataspace_id = Some(routing.dataspace_id);
             if tx_arc.as_accepted().external().is_some()
                 && let Err(e) = state_access.recheck_external_nexus_fee_admission(
@@ -3564,11 +3934,16 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    let routing = if let Some((_, decision)) = self.routing_decisions.remove(&hash)
-                    {
+                    let routing = if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                        let routing = plan.coordinator_route();
+                        routing_ledger::discard_plan_if_matches(&hash, &plan);
+                        self.routing_decisions.remove(&hash);
+                        routing
+                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
                         decision
                     } else {
+                        let _ = routing_ledger::take_plan(&hash);
                         routing_ledger::take(&hash).unwrap_or_default()
                     };
                     #[cfg(feature = "telemetry")]
@@ -3614,6 +3989,7 @@ impl Queue {
                 tx: tx_arc,
                 queue: Arc::clone(self),
                 routing,
+                routing_plan,
                 queue_position,
                 encoded_len,
                 gas_cost,
@@ -3873,6 +4249,17 @@ impl Queue {
                     .map(|(_, decision)| decision)
                     .or_else(|| routing_ledger::take(&hash))
                     .unwrap_or_default();
+                let removed_plan = self
+                    .routing_plans
+                    .remove(&hash)
+                    .map(|(_, plan)| plan)
+                    .or_else(|| routing_ledger::take_plan(&hash));
+                if let Some(plan) = removed_plan.as_ref() {
+                    self.record_plan_journal_remove(hash, plan);
+                    routing_ledger::discard_plan_if_matches(&hash, plan);
+                } else {
+                    let _ = routing_ledger::take_plan(&hash);
+                }
                 TransactionEvent {
                     hash,
                     block_height: None,
@@ -3903,19 +4290,19 @@ impl Queue {
         self.enforce_lane_teu_limits_with_consumption(guards, &mut consumed_teu)
     }
 
-    /// Apply lane-level TEU limits and return deferred transactions together with routing
-    /// decisions so callers can requeue without recomputing routing.
-    pub fn enforce_lane_teu_limits_with_consumption_and_routing(
+    /// Apply lane-level TEU limits and return deferred transactions together with full routing
+    /// plans so callers can requeue without recomputing routing or dropping participant legs.
+    pub fn enforce_lane_teu_limits_with_consumption_and_routing_plans(
         &self,
         guards: &mut Vec<TransactionGuard>,
         consumed_teu: &mut BTreeMap<LaneId, u64>,
-    ) -> Vec<(AcceptedTransaction<'static>, RoutingDecision)> {
+    ) -> Vec<(AcceptedTransaction<'static>, RoutingPlan)> {
         if guards.is_empty() {
             return Vec::new();
         }
 
         let mut retained: Vec<TransactionGuard> = Vec::with_capacity(guards.len());
-        let mut deferred: Vec<(AcceptedTransaction<'static>, RoutingDecision)> = Vec::new();
+        let mut deferred: Vec<(AcceptedTransaction<'static>, RoutingPlan)> = Vec::new();
 
         let mut drained = std::mem::take(guards);
         drained.sort_by(|left, right| {
@@ -3952,7 +4339,7 @@ impl Queue {
             }
             if new_total > limits.teu_capacity {
                 guard.record_lane_teu_deferral(lane_id, "cap_exceeded", teu);
-                deferred.push((guard.clone_accepted(), routing));
+                deferred.push((guard.clone_accepted(), guard.routing_plan()));
                 // guard drops here, removing the transaction from the queue.
                 continue;
             }
@@ -3972,9 +4359,9 @@ impl Queue {
         guards: &mut Vec<TransactionGuard>,
         consumed_teu: &mut BTreeMap<LaneId, u64>,
     ) -> Vec<AcceptedTransaction<'static>> {
-        self.enforce_lane_teu_limits_with_consumption_and_routing(guards, consumed_teu)
+        self.enforce_lane_teu_limits_with_consumption_and_routing_plans(guards, consumed_teu)
             .into_iter()
-            .map(|(tx, _routing)| tx)
+            .map(|(tx, _routing_plan)| tx)
             .collect()
     }
 
@@ -4181,6 +4568,8 @@ impl Queue {
                     .map(|(_, decision)| decision)
                     .or_else(|| routing_ledger::take(&hash))
                     .unwrap_or_default();
+                self.routing_plans.remove(&hash);
+                let _ = routing_ledger::take_plan(&hash);
                 self.removed_hashes.insert(hash, ());
                 self.untrack_expiry_hash(&hash);
                 if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
@@ -4279,6 +4668,7 @@ impl Queue {
     fn remove_transaction(
         &self,
         tx: &CheckedTransaction<'static>,
+        routing_plan: &RoutingPlan,
         telemetry: Option<&StateTelemetry>,
     ) {
         let hash = tx.hash();
@@ -4290,11 +4680,16 @@ impl Queue {
                 .routing_decisions
                 .remove(&hash)
                 .map(|(_, decision)| decision);
+            let plan = self
+                .routing_plans
+                .remove(&hash)
+                .map(|(_, plan)| plan)
+                .unwrap_or_else(|| routing_plan.clone());
             if let Some(authority) = tx.as_ref().authority_opt() {
                 self.decrease_per_user_tx_count(authority);
             }
-            if let Some(decision) = decision {
-                routing_ledger::record(hash, decision);
+            if decision.is_some() {
+                routing_ledger::record_plan(hash, plan);
             }
         }
         self.tx_encoded_len.remove(&hash);
@@ -4323,7 +4718,11 @@ impl Queue {
             let tx_arc = self.txs.remove(&hash).map(|(_, tx)| tx);
             self.untrack_expiry_hash(&hash);
             let _ = self.routing_decisions.remove(&hash);
+            if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                self.record_plan_journal_remove(hash, &plan);
+            }
             let _ = routing_ledger::take(&hash);
+            let _ = routing_ledger::take_plan(&hash);
             self.tx_encoded_len.remove(&hash);
             self.tx_gas_cost.remove(&hash);
             self.tx_enqueued_at_ms.remove(&hash);
@@ -4686,12 +5085,12 @@ impl Queue {
                 }
                 continue;
             }
-            let routing = match router
-                .try_route_with_view(tx.as_accepted(), state_view)
-                .and_then(|decision| {
-                    resolve_routing_decision(decision, lane_catalog, dataspace_catalog)
+            let routing_plan = match router
+                .try_route_plan_with_view(tx.as_accepted(), state_view)
+                .and_then(|plan| {
+                    resolve_routing_plan_against_catalogs(plan, lane_catalog, dataspace_catalog)
                 }) {
-                Ok(routing) => routing,
+                Ok(plan) => plan,
                 Err(err) => {
                     warn!(
                         tx = %entry.key(),
@@ -4700,6 +5099,7 @@ impl Queue {
                         "skipping reroute for queued transaction due to unresolved route"
                     );
                     self.routing_decisions.remove(entry.key());
+                    self.routing_plans.remove(entry.key());
                     #[cfg(feature = "telemetry")]
                     {
                         self.tx_teu.remove(entry.key());
@@ -4707,7 +5107,11 @@ impl Queue {
                     continue;
                 }
             };
+            let routing = routing_plan.coordinator_route();
             self.routing_decisions.insert(*entry.key(), routing);
+            self.routing_plans
+                .insert(*entry.key(), routing_plan.clone());
+            routing_ledger::record_plan(*entry.key(), routing_plan);
             #[cfg(feature = "telemetry")]
             {
                 let teu = Self::compute_teu_weight(tx.as_accepted());
@@ -4775,10 +5179,14 @@ impl Queue {
                 }
                 continue;
             }
-            let routing = match router.try_route_without_state(tx.as_accepted()) {
-                Ok(Some(routing)) => {
-                    match resolve_routing_decision(routing, lane_catalog, dataspace_catalog) {
-                        Ok(routing) => routing,
+            let routing_plan = match router.try_route_plan_without_state(tx.as_accepted()) {
+                Ok(Some(plan)) => {
+                    match resolve_routing_plan_against_catalogs(
+                        plan,
+                        lane_catalog,
+                        dataspace_catalog,
+                    ) {
+                        Ok(plan) => plan,
                         Err(err) => {
                             warn!(
                                 tx = %entry.key(),
@@ -4787,6 +5195,7 @@ impl Queue {
                                 "skipping reroute for queued transaction due to unresolved route"
                             );
                             self.routing_decisions.remove(entry.key());
+                            self.routing_plans.remove(entry.key());
                             #[cfg(feature = "telemetry")]
                             {
                                 self.tx_teu.remove(entry.key());
@@ -4798,11 +5207,15 @@ impl Queue {
                 Ok(None) => {
                     let state_view = route_view.get_or_insert_with(|| state.view());
                     match router
-                        .try_route_with_view(tx.as_accepted(), state_view)
-                        .and_then(|routing| {
-                            resolve_routing_decision(routing, lane_catalog, dataspace_catalog)
+                        .try_route_plan_with_view(tx.as_accepted(), state_view)
+                        .and_then(|plan| {
+                            resolve_routing_plan_against_catalogs(
+                                plan,
+                                lane_catalog,
+                                dataspace_catalog,
+                            )
                         }) {
-                        Ok(routing) => routing,
+                        Ok(plan) => plan,
                         Err(err) => {
                             warn!(
                                 tx = %entry.key(),
@@ -4811,6 +5224,7 @@ impl Queue {
                                 "skipping reroute for queued transaction due to unresolved route"
                             );
                             self.routing_decisions.remove(entry.key());
+                            self.routing_plans.remove(entry.key());
                             #[cfg(feature = "telemetry")]
                             {
                                 self.tx_teu.remove(entry.key());
@@ -4827,6 +5241,7 @@ impl Queue {
                         "skipping reroute for queued transaction due to unresolved route"
                     );
                     self.routing_decisions.remove(entry.key());
+                    self.routing_plans.remove(entry.key());
                     #[cfg(feature = "telemetry")]
                     {
                         self.tx_teu.remove(entry.key());
@@ -4834,7 +5249,11 @@ impl Queue {
                     continue;
                 }
             };
+            let routing = routing_plan.coordinator_route();
             self.routing_decisions.insert(*entry.key(), routing);
+            self.routing_plans
+                .insert(*entry.key(), routing_plan.clone());
+            routing_ledger::record_plan(*entry.key(), routing_plan);
             #[cfg(feature = "telemetry")]
             {
                 let teu = Self::compute_teu_weight(tx.as_accepted());
@@ -4934,6 +5353,57 @@ impl Queue {
         Self::compute_teu_weight(tx)
     }
 
+    fn nexus_uses_config_router(nexus: &Nexus) -> bool {
+        nexus.enabled && nexus.uses_multilane_catalogs()
+    }
+
+    fn router_for_nexus(
+        nexus: &Nexus,
+        lane_catalog: &LaneCatalog,
+        dataspace_catalog: &DataSpaceCatalog,
+    ) -> (Arc<dyn LaneRouter>, bool) {
+        if Self::nexus_uses_config_router(nexus) {
+            (
+                Arc::new(ConfigLaneRouter::new(
+                    nexus.routing_policy.clone(),
+                    dataspace_catalog.clone(),
+                    lane_catalog.clone(),
+                )),
+                true,
+            )
+        } else {
+            (Arc::new(SingleLaneRouter::new()), false)
+        }
+    }
+
+    fn nexus_routing_matches(&self, nexus: &Nexus) -> bool {
+        let expected_limits = QueueLimits::from_nexus(nexus);
+        *self.routing_uses_config_router.read() == Self::nexus_uses_config_router(nexus)
+            && *self.routing_policy.read() == nexus.routing_policy
+            && self.lane_catalog.read().as_ref() == &nexus.lane_catalog
+            && self.dataspace_catalog.read().as_ref() == &nexus.dataspace_catalog
+            && *self.nexus_limits.read() == expected_limits
+    }
+
+    /// Ensure the queue router and cached catalogs match the committed Nexus state.
+    ///
+    /// Proposal leaders use cached queue routing to build block execution contexts, while
+    /// validators recompute those contexts from committed state. This guard keeps those two
+    /// surfaces aligned even after startup replay or runtime Nexus updates.
+    pub fn reconfigure_nexus_with_state_if_needed(
+        &self,
+        nexus: &Nexus,
+        state: &State,
+        lane_compliance: Option<Arc<LaneComplianceEngine>>,
+    ) -> bool {
+        if self.nexus_routing_matches(nexus) {
+            return false;
+        }
+
+        self.reconfigure_nexus_with_state(nexus, state, lane_compliance);
+        true
+    }
+
     /// Returns the queue capacity limits enforced when admitting transactions.
     #[must_use]
     pub fn queue_limits(&self) -> QueueLimits {
@@ -4955,15 +5425,14 @@ impl Queue {
     ) {
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
-        let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
-            nexus.routing_policy.clone(),
-            (*dataspace_catalog).clone(),
-            (*lane_catalog).clone(),
-        ));
+        let (router, uses_config_router) =
+            Self::router_for_nexus(nexus, &lane_catalog, &dataspace_catalog);
         *self.router.write() = Arc::clone(&router);
         *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
         *self.lane_catalog.write() = Arc::clone(&lane_catalog);
         *self.dataspace_catalog.write() = Arc::clone(&dataspace_catalog);
+        *self.routing_policy.write() = nexus.routing_policy.clone();
+        *self.routing_uses_config_router.write() = uses_config_router;
         *self.lane_compliance.write() = lane_compliance;
 
         let registry = Arc::new(LaneManifestRegistry::from_config(
@@ -4992,15 +5461,14 @@ impl Queue {
     ) {
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
-        let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
-            nexus.routing_policy.clone(),
-            (*dataspace_catalog).clone(),
-            (*lane_catalog).clone(),
-        ));
+        let (router, uses_config_router) =
+            Self::router_for_nexus(nexus, &lane_catalog, &dataspace_catalog);
         *self.router.write() = Arc::clone(&router);
         *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
         *self.lane_catalog.write() = Arc::clone(&lane_catalog);
         *self.dataspace_catalog.write() = Arc::clone(&dataspace_catalog);
+        *self.routing_policy.write() = nexus.routing_policy.clone();
+        *self.routing_uses_config_router.write() = uses_config_router;
         *self.lane_compliance.write() = lane_compliance;
 
         let registry = Arc::new(LaneManifestRegistry::from_config(
@@ -5339,6 +5807,77 @@ pub mod tests {
         assert_eq!(routing.lane_id, lane_b.id);
         assert_eq!(queue.queue_limits().for_lane(lane_b.id).teu_capacity, 123);
         assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
+    }
+
+    #[test]
+    fn proposal_queue_syncs_stale_router_from_committed_nexus() {
+        let NexusFeeFixture {
+            mut state,
+            authority_id,
+            authority_keypair,
+            ..
+        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let lane_id = LaneId::new(3);
+        let dataspace_id = DataSpaceId::new(10);
+        let (lane_catalog, dataspace_catalog) =
+            Queue::test_catalogs_for_routes(&[(lane_id, dataspace_id)]);
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = (*lane_catalog).clone();
+        nexus.dataspace_catalog = (*dataspace_catalog).clone();
+        nexus.routing_policy.default_lane = lane_id;
+        nexus.routing_policy.default_dataspace = dataspace_id;
+        nexus.fees.base_fee = Numeric::zero();
+        state.set_nexus(nexus.clone()).expect("set Nexus config");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_secs(60),
+                capacity: nonzero!(8_usize),
+                capacity_per_user: nonzero!(4_usize),
+                ..Config::default()
+            },
+            &time_source,
+        ));
+
+        let tx = accepted_tx_with(
+            authority_id,
+            &authority_keypair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "stale router sync".into(),
+            ))],
+            Metadata::default(),
+        );
+        let tx_hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push");
+        assert_eq!(
+            *queue
+                .routing_decisions
+                .get(&tx_hash)
+                .expect("initial routing"),
+            RoutingDecision::default()
+        );
+
+        assert!(queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
+        assert_eq!(
+            *queue
+                .routing_decisions
+                .get(&tx_hash)
+                .expect("refreshed routing"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+        assert!(!queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
+
+        let mut popped = Vec::new();
+        queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut popped);
+        assert_eq!(popped.len(), 1);
+        assert_eq!(
+            popped[0].routing(),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
     }
 
     impl LaneRouter for StaticRouter {
@@ -6658,6 +7197,150 @@ pub mod tests {
     }
 
     #[test]
+    fn queue_plan_journal_replays_matching_plan_after_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+        assert_eq!(
+            queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install journal"),
+            0
+        );
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+        let payload = tx.entrypoint_bytes();
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(
+                tx,
+                &state,
+                plan.clone(),
+                Some(payload.clone()),
+            )
+            .expect("push with plan");
+        drop(queue);
+
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install replay journal"),
+            1
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay journal");
+
+        assert_eq!(summary.records, 1);
+        assert_eq!(summary.replayed, 1);
+        assert_eq!(summary.tombstoned_stale, 0);
+        assert!(replay_queue.txs.contains_key(&hash));
+        assert_eq!(
+            *replay_queue
+                .routing_plans
+                .get(&hash)
+                .expect("replayed plan"),
+            plan
+        );
+        assert_eq!(
+            replay_queue
+                .tx_gossip_payloads
+                .get(&hash)
+                .expect("replayed payload")
+                .as_slice(),
+            payload.as_slice()
+        );
+    }
+
+    #[test]
+    fn queue_plan_journal_tombstones_stale_plan_after_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let lane = LaneId::new(2);
+        let dataspace = DataSpaceId::new(20);
+        let router = Arc::new(MutableRouter::new(RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        )));
+        let queue_router: Arc<dyn LaneRouter> = router.clone();
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            queue_router,
+            &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL), (lane, dataspace)],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(tx, &state, plan, None)
+            .expect("push with plan");
+        drop(queue);
+
+        router.set(RoutingDecision::new(lane, dataspace));
+        let replay_router: Arc<dyn LaneRouter> = router.clone();
+        let replay_queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            replay_router,
+            &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL), (lane, dataspace)],
+        );
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install replay journal"),
+            1
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay journal");
+
+        assert_eq!(summary.records, 1);
+        assert_eq!(summary.replayed, 0);
+        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(!replay_queue.txs.contains_key(&hash));
+        drop(replay_queue);
+
+        let final_router: Arc<dyn LaneRouter> = router;
+        let final_queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            final_router,
+            &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL), (lane, dataspace)],
+        );
+        assert_eq!(
+            final_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install tombstoned journal"),
+            0
+        );
+    }
+
+    #[test]
     fn push_wakes_sumeragi_when_configured() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -7427,7 +8110,7 @@ pub mod tests {
     }
 
     #[test]
-    fn push_with_gossip_payload_with_state_and_routing_rejects_fee_insolvent_transaction() {
+    fn push_with_gossip_payload_with_state_and_routing_plan_rejects_fee_insolvent_transaction() {
         let fixture = nexus_fee_fixture(None, None);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
@@ -7438,10 +8121,10 @@ pub mod tests {
         );
 
         let err = queue
-            .push_with_gossip_payload_with_state_and_routing(
+            .push_with_gossip_payload_with_state_and_routing_plan(
                 tx,
                 &fixture.state,
-                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)),
                 Some(Arc::new(vec![1_u8])),
             )
             .expect_err("fee-insolvent gossip should be rejected before enqueue");
@@ -8275,7 +8958,8 @@ pub mod tests {
 
         let tx = accepted_tx_by_someone(&time_source);
         let routing = queue
-            .route_for_gossip_with_state(&tx, state.as_ref())
+            .route_plan_for_gossip_with_state(&tx, state.as_ref())
+            .map(|plan| plan.coordinator_route())
             .expect("route should resolve with configured catalogs");
 
         assert_eq!(routing.lane_id, expected_lane);
@@ -8320,7 +9004,8 @@ pub mod tests {
 
         let tx = accepted_tx_by_someone(&time_source);
         let routing = queue
-            .route_for_gossip_with_state(&tx, state.as_ref())
+            .route_plan_for_gossip_with_state(&tx, state.as_ref())
+            .map(|plan| plan.coordinator_route())
             .expect("route should resolve with configured catalogs");
 
         assert_eq!(routing.lane_id, expected_lane);
@@ -8373,7 +9058,8 @@ pub mod tests {
 
         let tx = accepted_tx_by_someone(&time_source);
         let routing = queue
-            .route_for_gossip_with_state(&tx, state.as_ref())
+            .route_plan_for_gossip_with_state(&tx, state.as_ref())
+            .map(|plan| plan.coordinator_route())
             .expect("route should resolve with configured catalogs");
 
         assert_eq!(routing.lane_id, expected_lane);
@@ -8462,10 +9148,10 @@ pub mod tests {
         let hash = tx.as_ref().hash();
         let payload = tx.entrypoint_bytes();
         queue
-            .push_with_gossip_payload_with_state_and_routing(
+            .push_with_gossip_payload_with_state_and_routing_plan(
                 tx,
                 state.as_ref(),
-                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)),
                 Some(Arc::clone(&payload)),
             )
             .expect("push with precomputed routing should succeed");
@@ -8506,8 +9192,11 @@ pub mod tests {
         let second_payload = second.entrypoint_bytes();
 
         let accepted = queue
-            .push_batch_with_lane_with_state_and_routing(
-                vec![(first, routing), (second, routing)],
+            .push_batch_with_lane_with_state_and_routing_plans(
+                vec![
+                    (first, RoutingPlan::single(routing)),
+                    (second, RoutingPlan::single(routing)),
+                ],
                 &state,
             )
             .expect("batch should be accepted");
@@ -8538,8 +9227,11 @@ pub mod tests {
 
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let result = queue.push_batch_with_lane_with_state_and_routing(
-            vec![(tx.clone(), routing), (tx, routing)],
+        let result = queue.push_batch_with_lane_with_state_and_routing_plans(
+            vec![
+                (tx.clone(), RoutingPlan::single(routing)),
+                (tx, RoutingPlan::single(routing)),
+            ],
             &state,
         );
 
@@ -8585,8 +9277,11 @@ pub mod tests {
         time_handle.advance(Duration::from_millis(1));
         let second = accepted_tx_by_someone(&time_source);
 
-        let result = queue.push_batch_with_lane_with_state_and_routing(
-            vec![(first, routing), (second, routing)],
+        let result = queue.push_batch_with_lane_with_state_and_routing_plans(
+            vec![
+                (first, RoutingPlan::single(routing)),
+                (second, RoutingPlan::single(routing)),
+            ],
             &state,
         );
 
@@ -8625,8 +9320,11 @@ pub mod tests {
         time_handle.advance(Duration::from_millis(1));
         let second = accepted_tx_by(account_id.clone(), &key_pair, &time_source);
 
-        let result = queue.push_batch_with_lane_with_state_and_routing(
-            vec![(first, routing), (second, routing)],
+        let result = queue.push_batch_with_lane_with_state_and_routing_plans(
+            vec![
+                (first, RoutingPlan::single(routing)),
+                (second, RoutingPlan::single(routing)),
+            ],
             &state,
         );
 
@@ -8795,7 +9493,7 @@ pub mod tests {
     }
 
     #[test]
-    fn enforce_lane_teu_limits_with_routing_returns_requeue_hint() {
+    fn enforce_lane_teu_limits_with_routing_plans_returns_requeue_hint() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
@@ -8842,8 +9540,8 @@ pub mod tests {
         assert_eq!(guards.len(), 2, "expected both transactions before gating");
 
         let mut consumed = BTreeMap::new();
-        let deferred =
-            queue.enforce_lane_teu_limits_with_consumption_and_routing(&mut guards, &mut consumed);
+        let deferred = queue
+            .enforce_lane_teu_limits_with_consumption_and_routing_plans(&mut guards, &mut consumed);
         assert_eq!(guards.len(), 1, "one transaction should remain");
         assert_eq!(deferred.len(), 1, "one transaction should defer");
         assert_eq!(
@@ -8852,15 +9550,16 @@ pub mod tests {
             "first transaction should remain executable"
         );
 
-        let (deferred_tx, deferred_routing) = deferred.into_iter().next().expect("deferred tx");
+        let (deferred_tx, deferred_plan) = deferred.into_iter().next().expect("deferred tx");
+        let deferred_routing = deferred_plan.coordinator_route();
         assert_eq!(deferred_tx.as_ref().hash(), second_hash);
         assert_eq!(deferred_routing.lane_id, test_lane);
         assert_eq!(deferred_routing.dataspace_id, test_dataspace);
 
         drop(guards);
         queue
-            .push_requeued_with_routing(deferred_tx, deferred_routing, state.as_ref())
-            .expect("requeue with explicit routing should succeed");
+            .push_requeued_with_routing_plan(deferred_tx, deferred_plan, state.as_ref())
+            .expect("requeue with explicit routing plan should succeed");
 
         let next = queue.collect_transactions_for_block(&state.view(), nonzero!(1usize));
         assert_eq!(next.len(), 1, "deferred transaction should be queued next");
@@ -10233,7 +10932,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn push_requeued_with_routing_accepts_pending_transaction() {
+    async fn push_requeued_with_routing_plan_accepts_pending_transaction() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -10244,7 +10943,7 @@ pub mod tests {
         let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
 
         queue
-            .push_requeued_with_routing(tx, routing, &state)
+            .push_requeued_with_routing_plan(tx, RoutingPlan::single(routing), &state)
             .expect("requeue push succeeds");
 
         assert_eq!(queue.txs.len(), 1);
@@ -10272,7 +10971,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn push_requeued_with_routing_rejects_committed_transaction() {
+    async fn push_requeued_with_routing_plan_rejects_committed_transaction() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -10298,7 +10997,7 @@ pub mod tests {
         let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
 
         assert!(matches!(
-            queue.push_requeued_with_routing(tx, routing, &state),
+            queue.push_requeued_with_routing_plan(tx, RoutingPlan::single(routing), &state),
             Err(Failure {
                 err: Error::InBlockchain,
                 ..

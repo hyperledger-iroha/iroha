@@ -326,6 +326,19 @@ public enum Halo2OfflineNoteV2Prover {
         return ipaOK && transcript.remainingBytes == 0
     }
 
+    public static func verifyOpenVerifyEnvelope(_ envelope: Data, publicValues: [UInt64]) throws -> Bool {
+        try verifyZK1Payload(
+            proofPayload(fromOpenVerifyEnvelope: envelope),
+            publicValues: publicValues
+        )
+    }
+
+    public static func publicValues(fromOpenVerifyEnvelope envelope: Data) throws -> [UInt64] {
+        let proofPayload = try proofPayload(fromOpenVerifyEnvelope: envelope)
+        let (_, publicValues) = try decodeZK1ProofPayload(proofPayload)
+        return publicValues
+    }
+
     public static func verifyAudit(_ audit: OfflineNoteAuditBundleV2) throws -> Bool {
         try audit.validateProofBinding()
         let instanceValues = try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: audit)
@@ -361,7 +374,7 @@ public enum Halo2OfflineNoteV2Prover {
         )
     }
 
-    private static func proofPayload(fromOpenVerifyEnvelope envelope: Data) throws -> Data {
+    public static func proofPayload(fromOpenVerifyEnvelope envelope: Data) throws -> Data {
         guard let frame = noritoDecodeFrame(envelope),
               frame.header.schema == noritoSchemaHash(forTypeName: "iroha_data_model::zk::OpenVerifyEnvelope"),
               frame.header.compression == .none,

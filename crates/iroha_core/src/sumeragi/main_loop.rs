@@ -31,7 +31,10 @@ use iroha_data_model::{
     account::AccountId,
     block::{
         BlockHeader, BlockSignature, SignedBlock,
-        consensus::{RbcEncoding, RbcReadySignature, SumeragiMembershipStatus},
+        consensus::{
+            NativeAmxAttestationBodyV1, NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt,
+            RbcEncoding, RbcReadySignature, SumeragiMembershipStatus,
+        },
     },
     consensus::{
         NposConsensusEffects, VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome,
@@ -97,6 +100,10 @@ use crate::{
     EventsSender, IrohaNetwork, NetworkMessage,
     block::{BlockBuilder, BlockValidationError, ValidBlock, valid::ValidationTimings},
     kura::{BlockCount, Kura},
+    native_amx::{
+        NativeAmxMessage, NativeAmxSessionCache, NativeAmxSessionError, NativeAmxSessionKey,
+        NativeAmxVoteV1, aggregate_votes_to_qc,
+    },
     nexus::lane_relay::LaneRelayBroadcaster,
     peers_gossiper::PeersGossiperHandle,
     queue::{BackpressureState, Queue, RoutingDecision},
@@ -214,6 +221,8 @@ const RBC_DELIVER_REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_secs(1);
 const RBC_DELIVER_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 8;
 /// Cap the number of missing READY senders logged per deferral.
 const READY_MISSING_LOG_LIMIT: usize = 8;
+/// Bound native AMX vote sessions retained while proposer collection is in progress.
+const NATIVE_AMX_SESSION_CACHE_MAX: usize = 1024;
 /// Minimum interval between RBC DELIVER deferral log emissions per session.
 const RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
 
@@ -630,10 +639,10 @@ fn requeue_block_transactions(
     for tx in txs {
         let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(tx));
         let tx_hash = accepted.hash();
-        let routing_decision = if let Some(decision) = crate::queue::routing_ledger::get(&tx_hash) {
-            decision
-        } else if let Some(decision) = match queue.route_for_gossip_without_state(&accepted) {
-            Ok(decision) => decision,
+        let routing_plan = if let Some(plan) = crate::queue::routing_ledger::get_plan(&tx_hash) {
+            plan
+        } else if let Some(plan) = match queue.route_plan_for_gossip_without_state(&accepted) {
+            Ok(plan) => plan,
             Err(err) => {
                 warn!(
                     tx = %tx_hash,
@@ -644,10 +653,10 @@ fn requeue_block_transactions(
                 None
             }
         } {
-            decision
+            plan
         } else {
-            match queue.route_for_gossip_with_state(&accepted, state) {
-                Ok(decision) => decision,
+            match queue.route_plan_for_gossip_with_state(&accepted, state) {
+                Ok(plan) => plan,
                 Err(err) => {
                     failures = failures.saturating_add(1);
                     warn!(
@@ -660,7 +669,7 @@ fn requeue_block_transactions(
                 }
             }
         };
-        match queue.push_requeued_with_routing(accepted, routing_decision, state) {
+        match queue.push_requeued_with_routing_plan(accepted, routing_plan, state) {
             Ok(()) => {
                 requeued = requeued.saturating_add(1);
                 gossip_hashes.push(tx_hash);
@@ -10841,6 +10850,7 @@ pub(super) struct Actor {
     kura: Arc<Kura>,
     network: IrohaNetwork,
     subsystems: ActorSubsystems,
+    native_amx_sessions: NativeAmxSessionCache,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     frontier_block_sync_hint: Arc<super::FrontierBlockSyncHint>,
     #[allow(dead_code)] // Retained until background broadcast wiring consumes the gossiper handle.
@@ -11063,6 +11073,8 @@ enum BackgroundRequestLogKind {
     Broadcast,
     PostControlFlow,
     BroadcastControlFlow,
+    PostNativeAmx,
+    BroadcastNativeAmx,
 }
 
 #[derive(Debug, Clone)]
@@ -18626,6 +18638,9 @@ impl Actor {
             kura,
             network,
             subsystems,
+            native_amx_sessions: NativeAmxSessionCache::new(
+                NonZeroUsize::new(NATIVE_AMX_SESSION_CACHE_MAX).expect("non-zero"),
+            ),
             block_payload_dedup,
             frontier_block_sync_hint,
             peers_gossiper,
@@ -22918,6 +22933,144 @@ impl Actor {
                 self.on_merge_signature(signature)?;
                 self.handle_merge_entry_candidates()
             }
+            super::LaneRelayMessage::NativeAmx { sender, message } => {
+                self.on_native_amx_message(sender, message)
+            }
+        }
+    }
+
+    fn on_native_amx_message(&mut self, sender: PeerId, message: NativeAmxMessage) -> Result<()> {
+        match message {
+            NativeAmxMessage::PrepareRequest(body) => {
+                self.handle_native_amx_attestation_request(sender, body, NativeAmxPhase::Prepare);
+            }
+            NativeAmxMessage::CommitRequest(body) => {
+                self.handle_native_amx_attestation_request(sender, body, NativeAmxPhase::Commit);
+            }
+            NativeAmxMessage::PrepareVote(vote) | NativeAmxMessage::CommitVote(vote) => {
+                self.record_native_amx_vote(vote);
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_native_amx_attestation_request(
+        &mut self,
+        sender: PeerId,
+        body: NativeAmxAttestationBodyV1,
+        expected_phase: NativeAmxPhase,
+    ) {
+        if body.phase != expected_phase {
+            iroha_logger::warn!(
+                expected = ?expected_phase,
+                actual = ?body.phase,
+                %sender,
+                "dropping native AMX request with wrong phase"
+            );
+            return;
+        }
+
+        let local_peer = self.common_config.peer.id().clone();
+        if !roster_member_allowed_bls(&local_peer) {
+            iroha_logger::warn!(
+                %sender,
+                "dropping native AMX request because local consensus key is not BLS-normal"
+            );
+            return;
+        }
+        {
+            let world = self.state.world_view();
+            if crate::state::live_consensus_key_pop_for_peer(
+                &world,
+                &local_peer,
+                body.planned_coordinator_block_height,
+            )
+            .is_none()
+            {
+                iroha_logger::warn!(
+                    %sender,
+                    %local_peer,
+                    height = body.planned_coordinator_block_height,
+                    "dropping native AMX request because local consensus key has no live PoP"
+                );
+                return;
+            }
+        }
+
+        let bls_signature = Signature::new(
+            self.common_config.key_pair.private_key(),
+            &body.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let vote = NativeAmxVoteV1 {
+            body,
+            signer: local_peer,
+            bls_signature,
+        };
+        let message = match expected_phase {
+            NativeAmxPhase::Prepare => NativeAmxMessage::PrepareVote(vote),
+            NativeAmxPhase::Commit => NativeAmxMessage::CommitVote(vote),
+        };
+        self.schedule_background(BackgroundRequest::PostNativeAmx {
+            peer: sender,
+            message,
+        });
+    }
+
+    fn record_native_amx_vote(&mut self, vote: NativeAmxVoteV1) {
+        if !roster_member_allowed_bls(&vote.signer) {
+            iroha_logger::warn!(
+                signer = %vote.signer,
+                "dropping native AMX vote because signer is not BLS-normal"
+            );
+            return;
+        }
+        {
+            let world = self.state.world_view();
+            let Some(pop) = crate::state::live_consensus_key_pop_for_peer(
+                &world,
+                &vote.signer,
+                vote.body.planned_coordinator_block_height,
+            ) else {
+                iroha_logger::warn!(
+                    signer = %vote.signer,
+                    height = vote.body.planned_coordinator_block_height,
+                    "dropping native AMX vote because signer has no live PoP"
+                );
+                return;
+            };
+            if let Err(err) = iroha_crypto::bls_normal_pop_verify(vote.signer.public_key(), &pop) {
+                iroha_logger::warn!(
+                    signer = %vote.signer,
+                    ?err,
+                    "dropping native AMX vote with invalid signer PoP"
+                );
+                return;
+            }
+        }
+        if let Err(err) = Signature::from_bytes(&vote.bls_signature)
+            .verify(vote.signer.public_key(), &vote.body.signature_preimage())
+        {
+            iroha_logger::warn!(
+                signer = %vote.signer,
+                ?err,
+                "dropping native AMX vote with invalid signature"
+            );
+            return;
+        }
+        let phase = vote.body.phase;
+        let signer = vote.signer.clone();
+        match self.native_amx_sessions.insert_vote(vote) {
+            Ok(()) => {
+                iroha_logger::debug!(%signer, ?phase, "cached native AMX vote");
+            }
+            Err(NativeAmxSessionError::DuplicateSigner) => {
+                iroha_logger::debug!(%signer, ?phase, "ignoring duplicate native AMX vote");
+            }
+            Err(NativeAmxSessionError::PhaseMismatch) => {
+                iroha_logger::warn!(%signer, ?phase, "dropping native AMX vote with phase mismatch");
+            }
         }
     }
 
@@ -23636,6 +23789,16 @@ impl Actor {
                 msg_kind: None,
                 peer: None,
             },
+            BackgroundRequest::PostNativeAmx { peer, message } => BackgroundRequestLogEntry {
+                kind: BackgroundRequestLogKind::PostNativeAmx,
+                msg_kind: Some(Self::native_amx_message_kind(message)),
+                peer: Some(peer.clone()),
+            },
+            BackgroundRequest::BroadcastNativeAmx { message } => BackgroundRequestLogEntry {
+                kind: BackgroundRequestLogKind::BroadcastNativeAmx,
+                msg_kind: Some(Self::native_amx_message_kind(message)),
+                peer: None,
+            },
         };
         log.lock()
             .expect("background request log mutex poisoned")
@@ -23655,6 +23818,10 @@ impl Actor {
             }
             BackgroundRequest::Broadcast { msg } => ("Broadcast", None, Some(msg.as_ref())),
             BackgroundRequest::BroadcastControlFlow { .. } => ("BroadcastControlFlow", None, None),
+            BackgroundRequest::PostNativeAmx { peer, .. } => {
+                ("PostNativeAmx", Some(peer.clone()), None)
+            }
+            BackgroundRequest::BroadcastNativeAmx { .. } => ("BroadcastNativeAmx", None, None),
         };
 
         #[cfg(feature = "telemetry")]
@@ -23709,6 +23876,19 @@ impl Actor {
             BackgroundRequest::BroadcastControlFlow { frame } => {
                 self.network.broadcast(iroha_p2p::Broadcast {
                     data: NetworkMessage::SumeragiControlFlow(Box::new(frame)),
+                    priority: iroha_p2p::Priority::High,
+                });
+            }
+            BackgroundRequest::PostNativeAmx { peer, message } => {
+                self.network.post(iroha_p2p::Post {
+                    data: NetworkMessage::NativeAmx(Box::new(message)),
+                    peer_id: peer,
+                    priority: iroha_p2p::Priority::High,
+                });
+            }
+            BackgroundRequest::BroadcastNativeAmx { message } => {
+                self.network.broadcast(iroha_p2p::Broadcast {
+                    data: NetworkMessage::NativeAmx(Box::new(message)),
                     priority: iroha_p2p::Priority::High,
                 });
             }
@@ -23806,6 +23986,15 @@ impl Actor {
     fn consensus_control_kind(msg: &ControlFlow) -> &'static str {
         match msg {
             ControlFlow::Evidence(_) => "Evidence",
+        }
+    }
+
+    fn native_amx_message_kind(msg: &NativeAmxMessage) -> &'static str {
+        match msg {
+            NativeAmxMessage::PrepareRequest(_) => "NativeAmxPrepareRequest",
+            NativeAmxMessage::PrepareVote(_) => "NativeAmxPrepareVote",
+            NativeAmxMessage::CommitRequest(_) => "NativeAmxCommitRequest",
+            NativeAmxMessage::CommitVote(_) => "NativeAmxCommitVote",
         }
     }
 

@@ -7,11 +7,27 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 import org.hyperledger.iroha.android.client.ClientResponse;
 
 /** One-call Offline Note V2 wallet facade for load, receive, pay, accept, redeem, and sync. */
 public final class OfflineNoteV2Wallet {
+  private static final AtomicInteger LOAD_THREAD_COUNTER = new AtomicInteger();
+  private static final ExecutorService LOAD_EXECUTOR =
+      Executors.newCachedThreadPool(
+          task -> {
+            final Thread thread =
+                new Thread(
+                    task,
+                    "iroha-offline-note-v2-wallet-" + LOAD_THREAD_COUNTER.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+          });
+
   private final String chainId;
   private final String accountId;
   private final OfflineNoteV2AttestationProvider attestationProvider;
@@ -226,49 +242,106 @@ public final class OfflineNoteV2Wallet {
       return failedFuture(new IllegalStateException("Offline Note V2 issuer client is required for load"));
     }
     final String assetId = walletAssetId(assetDefinitionId, accountId);
-    return issuerClient.prepareLoad(chainId, accountId, assetDefinition(assetId), amount)
-        .thenCompose(context -> {
-          requireTrustedCertificate(context.keyCertificate(), accountId);
-          final byte[] noteSecret = random32();
-          final OfflineNoteV2.CommitmentOriginV2.IssuerLoad origin =
-              new OfflineNoteV2.CommitmentOriginV2.IssuerLoad(
-                  context.operationId(), context.lineageId(), context.localRevision());
-          final byte[] noteCommitment =
-              deriveNoteCommitment(context.keyCertificate(), assetId, amount, noteSecret, origin);
-          final OfflineNoteV2IssueRequest request =
-              new OfflineNoteV2IssueRequest(
-                  chainId,
-                  accountId,
-                  assetDefinition(assetId),
-                  assetId,
-                  amount,
-                  context,
-                  noteCommitment);
-          return issuerClient.issueNote(request).thenApply(response -> {
-            if (!Arrays.equals(response.noteCommitment(), noteCommitment)) {
-              throw new IllegalStateException("issuer returned a different Offline Note V2 commitment");
-            }
-            final OfflineNoteV2.KeyCertificateV2 certificate =
-                response.keyCertificate() == null ? context.keyCertificate() : response.keyCertificate();
-            requireTrustedCertificate(certificate, accountId);
-            final long now = clock.getAsLong();
-            final OfflineNoteV2WalletNote note =
-                new OfflineNoteV2WalletNote(
-                    chainId,
-                    accountId,
-                    assetId,
-                    amount,
-                    certificate,
-                    noteCommitment,
-                    noteSecret,
-                    origin,
-                    OfflineNoteV2WalletNoteState.SPENDABLE,
-                    now,
-                    now);
-            store.upsert(note);
-            return note;
-          });
-        });
+    final CompletableFuture<OfflineNoteV2WalletNote> result = new CompletableFuture<>();
+    issuerClient.prepareLoad(chainId, accountId, assetDefinition(assetId), amount)
+        .whenComplete(
+            (context, prepareError) ->
+                LOAD_EXECUTOR.execute(
+                    () -> {
+                      if (prepareError != null) {
+                        result.completeExceptionally(unwrapCompletion(prepareError));
+                        return;
+                      }
+                      if (context == null) {
+                        result.completeExceptionally(
+                            new IllegalStateException(
+                                "Offline Note V2 issuer returned no load context"));
+                        return;
+                      }
+                      final byte[] noteSecret;
+                      final OfflineNoteV2.CommitmentOriginV2.IssuerLoad origin;
+                      final byte[] noteCommitment;
+                      final OfflineNoteV2IssueRequest request;
+                      try {
+                        requireTrustedCertificate(context.keyCertificate(), accountId);
+                        noteSecret = random32();
+                        origin =
+                            new OfflineNoteV2.CommitmentOriginV2.IssuerLoad(
+                                context.operationId(),
+                                context.lineageId(),
+                                context.localRevision());
+                        noteCommitment =
+                            deriveNoteCommitment(
+                                context.keyCertificate(), assetId, amount, noteSecret, origin);
+                        request =
+                            new OfflineNoteV2IssueRequest(
+                                chainId,
+                                accountId,
+                                assetDefinition(assetId),
+                                assetId,
+                                amount,
+                                context,
+                                noteCommitment);
+                      } catch (final Throwable error) {
+                        result.completeExceptionally(error);
+                        return;
+                      }
+                      final CompletableFuture<OfflineNoteV2IssueResponse> issueFuture;
+                      try {
+                        issueFuture = issuerClient.issueNote(request);
+                      } catch (final Throwable error) {
+                        result.completeExceptionally(error);
+                        return;
+                      }
+                      issueFuture
+                          .whenComplete(
+                              (response, issueError) ->
+                                  LOAD_EXECUTOR.execute(
+                                      () -> {
+                                        if (issueError != null) {
+                                          result.completeExceptionally(
+                                              unwrapCompletion(issueError));
+                                          return;
+                                        }
+                                        if (response == null) {
+                                          result.completeExceptionally(
+                                              new IllegalStateException(
+                                                  "Offline Note V2 issuer returned no issue response"));
+                                          return;
+                                        }
+                                        try {
+                                          if (!Arrays.equals(
+                                              response.noteCommitment(), noteCommitment)) {
+                                            throw new IllegalStateException(
+                                                "issuer returned a different Offline Note V2 commitment");
+                                          }
+                                          final OfflineNoteV2.KeyCertificateV2 certificate =
+                                              response.keyCertificate() == null
+                                                  ? context.keyCertificate()
+                                                  : response.keyCertificate();
+                                          requireTrustedCertificate(certificate, accountId);
+                                          final long now = clock.getAsLong();
+                                          final OfflineNoteV2WalletNote note =
+                                              new OfflineNoteV2WalletNote(
+                                                  chainId,
+                                                  accountId,
+                                                  assetId,
+                                                  amount,
+                                                  certificate,
+                                                  noteCommitment,
+                                                  noteSecret,
+                                                  origin,
+                                                  OfflineNoteV2WalletNoteState.SPENDABLE,
+                                                  now,
+                                                  now);
+                                          store.upsert(note);
+                                          result.complete(note);
+                                        } catch (final Throwable error) {
+                                          result.completeExceptionally(error);
+                                        }
+                                      }));
+                    }));
+    return result;
   }
 
   public OfflineNoteV2ReceiveRequest prepareReceive(
@@ -731,6 +804,13 @@ public final class OfflineNoteV2Wallet {
     final CompletableFuture<T> future = new CompletableFuture<>();
     future.completeExceptionally(error);
     return future;
+  }
+
+  private static Throwable unwrapCompletion(final Throwable error) {
+    if (error instanceof CompletionException && error.getCause() != null) {
+      return error.getCause();
+    }
+    return error;
   }
 
   private static String requireNonBlank(final String value, final String field) {

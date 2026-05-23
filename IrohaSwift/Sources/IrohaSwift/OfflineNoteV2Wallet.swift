@@ -380,6 +380,191 @@ public struct OfflineNoteV2ReceiveRequest: Equatable, Sendable {
     }
 }
 
+public enum OfflineNoteV2ReceiveRequestCodecError: Error, LocalizedError, Equatable {
+    case invalidField(String)
+    case invalidPrefix
+
+    public var errorDescription: String? {
+        switch self {
+        case let .invalidField(field):
+            return "Offline Note V2 receive request field \(field) is invalid."
+        case .invalidPrefix:
+            return "Offline Note V2 receive request prefix missing."
+        }
+    }
+}
+
+public enum OfflineNoteV2ReceiveRequestCodec {
+    public static let type = "offline_receive_request_v2"
+    public static let version: UInt64 = 2
+    public static let textPrefix = "wallet-offline-receive-v2:"
+    private static let envelopeTypeName = "iroha_data_model::offline::model::OfflineNoteReceiveRequestEnvelopeV2"
+
+    public static func encodeNorito(_ request: OfflineNoteV2ReceiveRequest) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeUInt64(version))
+        writer.writeField(OfflineCompactNorito.encodeString(request.chainId))
+        writer.writeField(OfflineCompactNorito.encodeString(request.paymentRequestId))
+        writer.writeField(OfflineCompactNorito.encodeString(request.accountId))
+        writer.writeField(OfflineCompactNorito.encodeString(request.assetDefinitionId))
+        writer.writeField(OfflineCompactNorito.encodeString(request.assetId))
+        writer.writeField(OfflineCompactNorito.encodeString(request.amount))
+        writer.writeField(OfflineNorito.encodeBytesVec(try request.keyCertificate.noritoEncoded()))
+        writer.writeField(try OfflineCompactNorito.encodeHash(request.outputCommitment))
+        return noritoEncode(typeName: envelopeTypeName, payload: writer.data, flags: NoritoHeader.compactLen)
+    }
+
+    public static func decodeNorito(_ payload: Data) throws -> OfflineNoteV2ReceiveRequest {
+        guard let frame = noritoDecodeFrame(payload) else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidField("payload")
+        }
+        guard frame.header.schema == noritoSchemaHash(forTypeName: envelopeTypeName) else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidField("schema")
+        }
+        guard frame.header.compression == .none,
+              (frame.header.flags & NoritoHeader.compactLen) != 0
+        else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidField("layout")
+        }
+        var reader = OfflineNoritoReader(data: frame.payload)
+        let decodedVersion = try field(&reader, "version") { try $0.readUInt64LE() }
+        guard decodedVersion == version else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidField("version")
+        }
+        let chainId = try field(&reader, "chain_id", readString)
+        let paymentRequestId = try field(&reader, "payment_request_id", readString)
+        let accountId = try field(&reader, "account_id", readString)
+        let assetDefinitionId = try field(&reader, "asset_definition_id", readString)
+        let assetId = try field(&reader, "asset_id", readString)
+        let amount = try field(&reader, "amount", readString)
+        let certificateBytes = try field(&reader, "key_certificate", readBytesVec)
+        let outputCommitment = try field(&reader, "output_commitment") {
+            try readHash(reader: &$0, field: "output_commitment")
+        }
+        guard reader.remaining() == 0 else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidField("trailing_bytes")
+        }
+        return try OfflineNoteV2ReceiveRequest(
+            chainId: chainId,
+            paymentRequestId: paymentRequestId,
+            accountId: accountId,
+            assetDefinitionId: assetDefinitionId,
+            assetId: assetId,
+            amount: amount,
+            keyCertificate: OfflineNoteV2Decoding.decodeKeyCertificate(certificateBytes),
+            outputCommitment: outputCommitment
+        )
+    }
+
+    public static func encodeJson(_ request: OfflineNoteV2ReceiveRequest) throws -> Data {
+        try encodeNorito(request)
+    }
+
+    public static func decodeJson(_ payload: Data) throws -> OfflineNoteV2ReceiveRequest {
+        try decodeNorito(payload)
+    }
+
+    public static func encodeText(_ request: OfflineNoteV2ReceiveRequest) throws -> String {
+        textPrefix + base64UrlEncode(try encodeNorito(request))
+    }
+
+    public static func decodeText(_ text: String) throws -> OfflineNoteV2ReceiveRequest {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix(textPrefix) else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidPrefix
+        }
+        guard let payload = base64UrlDecode(String(trimmed.dropFirst(textPrefix.count))) else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidField("payload")
+        }
+        return try decodeNorito(payload)
+    }
+
+    public static func encodeQrFrameBytes(
+        _ request: OfflineNoteV2ReceiveRequest,
+        options: OfflineQrStreamOptions = OfflineQrStreamOptions()
+    ) throws -> [Data] {
+        try OfflineQrStreamEncoder.encodeFrameBytes(
+            payload: encodeNorito(request),
+            payloadKind: .offlineReceiveRequestV2,
+            options: options
+        )
+    }
+
+    public static func decodeQrPayload(_ payload: Data) throws -> OfflineNoteV2ReceiveRequest {
+        try decodeNorito(payload)
+    }
+
+    private static func field<T>(
+        _ reader: inout OfflineNoritoReader,
+        _ field: String,
+        _ decode: (inout OfflineNoritoReader) throws -> T
+    ) throws -> T {
+        var child = OfflineNoritoReader(data: try reader.readCompactField())
+        let value = try decode(&child)
+        guard child.remaining() == 0 else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidField(field)
+        }
+        return value
+    }
+
+    private static func readString(_ reader: inout OfflineNoritoReader) throws -> String {
+        let length = try reader.readVarint()
+        guard length <= UInt64(Int.max) else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidField("string")
+        }
+        guard let value = String(data: try reader.readBytes(Int(length)), encoding: .utf8),
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidField("string")
+        }
+        return value
+    }
+
+    private static func readBytesVec(_ reader: inout OfflineNoritoReader) throws -> Data {
+        let length = try reader.readUInt64LE()
+        guard length <= UInt64(Int.max) else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidField("bytes")
+        }
+        return try reader.readBytes(Int(length))
+    }
+
+    private static func readHash(reader: inout OfflineNoritoReader, field: String) throws -> Data {
+        let bytes = try reader.readBytes(32)
+        guard bytes.count == 32 else {
+            throw OfflineNoteV2ReceiveRequestCodecError.invalidField(field)
+        }
+        return bytes
+    }
+
+    private static func base64UrlEncode(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
+    }
+
+    private static func base64UrlDecode(_ value: String) -> Data? {
+        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !value.contains("="),
+              value.unicodeScalars.allSatisfy({ scalar in
+                  let byte = scalar.value
+                  return (65...90).contains(byte)
+                      || (97...122).contains(byte)
+                      || (48...57).contains(byte)
+                      || byte == 45
+                      || byte == 95
+              }) else {
+            return nil
+        }
+        var normalized = value
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padding = (4 - normalized.count % 4) % 4
+        normalized.append(String(repeating: "=", count: padding))
+        return Data(base64Encoded: normalized)
+    }
+}
+
 public struct OfflineNoteV2PaymentToken: Equatable, Sendable {
     public let chainId: String
     public let paymentRequestId: String
@@ -573,6 +758,244 @@ public enum OfflineNoteV2PaymentTokenCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
+        var normalized = value
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padding = (4 - normalized.count % 4) % 4
+        normalized.append(String(repeating: "=", count: padding))
+        return Data(base64Encoded: normalized)
+    }
+}
+
+public struct OfflineNoteV2ReceiptAck: Equatable, Sendable {
+    public let chainId: String
+    public let paymentRequestId: String
+    public let tokenId: Data
+    public let recipientAccountId: String
+    public let acceptedAtMs: UInt64
+
+    public init(chainId: String,
+                paymentRequestId: String,
+                tokenId: Data,
+                recipientAccountId: String,
+                acceptedAtMs: UInt64) throws {
+        guard !chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("chain_id")
+        }
+        guard !paymentRequestId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("payment_request_id")
+        }
+        try OfflineNoteV2Validation.validateHash(tokenId, field: "token_id")
+        guard !recipientAccountId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("recipient_account_id")
+        }
+        self.chainId = chainId
+        self.paymentRequestId = paymentRequestId
+        self.tokenId = tokenId
+        self.recipientAccountId = recipientAccountId
+        self.acceptedAtMs = acceptedAtMs
+    }
+
+    public var tokenIdHex: String {
+        tokenId.hexLowercased()
+    }
+
+    public static func fromPaymentToken(
+        _ token: OfflineNoteV2PaymentToken,
+        recipientAccountId: String,
+        acceptedAtMs: UInt64
+    ) throws -> OfflineNoteV2ReceiptAck {
+        let checkedRecipient = recipientAccountId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !checkedRecipient.isEmpty else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("recipient_account_id")
+        }
+        guard tokenHasRecipientOutput(token, recipientAccountId: checkedRecipient) else {
+            throw OfflineNoteV2ReceiptAckCodecError.tokenMismatch
+        }
+        return try OfflineNoteV2ReceiptAck(
+            chainId: token.chainId,
+            paymentRequestId: token.paymentRequestId,
+            tokenId: token.tokenId,
+            recipientAccountId: checkedRecipient,
+            acceptedAtMs: acceptedAtMs
+        )
+    }
+
+    public func matchesPaymentToken(_ token: OfflineNoteV2PaymentToken) -> Bool {
+        chainId == token.chainId
+            && paymentRequestId == token.paymentRequestId
+            && tokenId == token.tokenId
+            && Self.tokenHasRecipientOutput(token, recipientAccountId: recipientAccountId)
+    }
+
+    public func requireMatchesPaymentToken(_ token: OfflineNoteV2PaymentToken) throws {
+        guard matchesPaymentToken(token) else {
+            throw OfflineNoteV2ReceiptAckCodecError.tokenMismatch
+        }
+    }
+
+    private static func tokenHasRecipientOutput(
+        _ token: OfflineNoteV2PaymentToken,
+        recipientAccountId: String
+    ) -> Bool {
+        token.audit.outputClaims.contains { claim in
+            claim.keyCertificate.accountId == recipientAccountId
+        }
+    }
+}
+
+public enum OfflineNoteV2ReceiptAckCodecError: Error, LocalizedError, Equatable {
+    case invalidField(String)
+    case invalidPrefix
+    case tokenMismatch
+
+    public var errorDescription: String? {
+        switch self {
+        case let .invalidField(field):
+            return "Offline Note V2 receipt ACK field \(field) is invalid."
+        case .invalidPrefix:
+            return "Offline Note V2 receipt ACK prefix missing."
+        case .tokenMismatch:
+            return "Offline Note V2 receipt ACK does not match payment token."
+        }
+    }
+}
+
+public enum OfflineNoteV2ReceiptAckCodec {
+    public static let type = "offline_receipt_ack_v2"
+    public static let version: UInt64 = 2
+    public static let textPrefix = "wallet-offline-ack-v2:"
+    private static let envelopeTypeName = "iroha_data_model::offline::model::OfflineNoteReceiptAckEnvelopeV2"
+
+    public static func encodeNorito(_ ack: OfflineNoteV2ReceiptAck) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeUInt64(version))
+        writer.writeField(OfflineCompactNorito.encodeString(ack.chainId))
+        writer.writeField(OfflineCompactNorito.encodeString(ack.paymentRequestId))
+        writer.writeField(try OfflineCompactNorito.encodeHash(ack.tokenId))
+        writer.writeField(OfflineCompactNorito.encodeString(ack.recipientAccountId))
+        writer.writeField(OfflineCompactNorito.encodeUInt64(ack.acceptedAtMs))
+        return noritoEncode(typeName: envelopeTypeName, payload: writer.data, flags: NoritoHeader.compactLen)
+    }
+
+    public static func decodeNorito(_ payload: Data) throws -> OfflineNoteV2ReceiptAck {
+        guard let frame = noritoDecodeFrame(payload) else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("payload")
+        }
+        guard frame.header.schema == noritoSchemaHash(forTypeName: envelopeTypeName) else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("schema")
+        }
+        guard frame.header.compression == .none,
+              (frame.header.flags & NoritoHeader.compactLen) != 0
+        else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("layout")
+        }
+        var reader = OfflineNoritoReader(data: frame.payload)
+        let decodedVersion = try field(&reader, "version") { try $0.readUInt64LE() }
+        guard decodedVersion == version else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("version")
+        }
+        let chainId = try field(&reader, "chain_id", readString)
+        let paymentRequestId = try field(&reader, "payment_request_id", readString)
+        let tokenId = try field(&reader, "token_id") { try readHash(reader: &$0, field: "token_id") }
+        let recipientAccountId = try field(&reader, "recipient_account_id", readString)
+        let acceptedAtMs = try field(&reader, "accepted_at_ms") { try $0.readUInt64LE() }
+        guard reader.remaining() == 0 else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("trailing_bytes")
+        }
+        return try OfflineNoteV2ReceiptAck(
+            chainId: chainId,
+            paymentRequestId: paymentRequestId,
+            tokenId: tokenId,
+            recipientAccountId: recipientAccountId,
+            acceptedAtMs: acceptedAtMs
+        )
+    }
+
+    public static func encodeText(_ ack: OfflineNoteV2ReceiptAck) throws -> String {
+        textPrefix + base64UrlEncode(try encodeNorito(ack))
+    }
+
+    public static func decodeText(_ text: String) throws -> OfflineNoteV2ReceiptAck {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix(textPrefix) else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidPrefix
+        }
+        guard let payload = base64UrlDecode(String(trimmed.dropFirst(textPrefix.count))) else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("payload")
+        }
+        return try decodeNorito(payload)
+    }
+
+    public static func encodeQrFrameBytes(
+        _ ack: OfflineNoteV2ReceiptAck,
+        options: OfflineQrStreamOptions = OfflineQrStreamOptions()
+    ) throws -> [Data] {
+        try OfflineQrStreamEncoder.encodeFrameBytes(
+            payload: encodeNorito(ack),
+            payloadKind: .offlineReceiptAckV2,
+            options: options
+        )
+    }
+
+    public static func decodeQrPayload(_ payload: Data) throws -> OfflineNoteV2ReceiptAck {
+        try decodeNorito(payload)
+    }
+
+    private static func field<T>(
+        _ reader: inout OfflineNoritoReader,
+        _ field: String,
+        _ decode: (inout OfflineNoritoReader) throws -> T
+    ) throws -> T {
+        var child = OfflineNoritoReader(data: try reader.readCompactField())
+        let value = try decode(&child)
+        guard child.remaining() == 0 else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField(field)
+        }
+        return value
+    }
+
+    private static func readString(_ reader: inout OfflineNoritoReader) throws -> String {
+        let length = try reader.readVarint()
+        guard length <= UInt64(Int.max) else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("string")
+        }
+        guard let value = String(data: try reader.readBytes(Int(length)), encoding: .utf8),
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField("string")
+        }
+        return value
+    }
+
+    private static func readHash(reader: inout OfflineNoritoReader, field: String) throws -> Data {
+        let bytes = try reader.readBytes(32)
+        guard bytes.count == 32 else {
+            throw OfflineNoteV2ReceiptAckCodecError.invalidField(field)
+        }
+        return bytes
+    }
+
+    private static func base64UrlEncode(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
+    }
+
+    private static func base64UrlDecode(_ value: String) -> Data? {
+        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !value.contains("="),
+              value.unicodeScalars.allSatisfy({ scalar in
+                  let byte = scalar.value
+                  return (65...90).contains(byte)
+                      || (97...122).contains(byte)
+                      || (48...57).contains(byte)
+                      || byte == 45
+                      || byte == 95
+              }) else {
+            return nil
+        }
         var normalized = value
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
@@ -879,10 +1302,16 @@ public final class OfflineNoteV2Wallet {
             throw OfflineNoteV2WalletError.missingIssuerClient
         }
         let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)
+        // Pass the full `name#domain` assetDefinitionId to Torii — the
+        // internal `assetId` is the SDK's 2-part `name#account` form
+        // (domain stripped by walletAssetId), so deriving the definition
+        // id from it would drop the domain and the server would reject
+        // with `OFFLINE_V2_INVALID_ASSET` (400) because Iroha asset
+        // definition ids are always `name#domain`.
         let context = try await issuerClient.prepareLoad(
             chainId: chainId,
             accountId: accountId,
-            assetDefinitionId: assetDefinition(from: assetId),
+            assetDefinitionId: assetDefinitionId,
             amount: amount
         )
         try requireTrustedCertificate(context.keyCertificate, expectedAccountId: accountId)
@@ -902,7 +1331,7 @@ public final class OfflineNoteV2Wallet {
         let request = OfflineNoteV2IssueRequest(
             chainId: chainId,
             accountId: accountId,
-            assetDefinitionId: assetDefinition(from: assetId),
+            assetDefinitionId: assetDefinitionId,
             assetId: assetId,
             amount: amount,
             loadContext: context,
@@ -968,7 +1397,10 @@ public final class OfflineNoteV2Wallet {
             chainId: chainId,
             paymentRequestId: paymentRequestId,
             accountId: accountId,
-            assetDefinitionId: assetDefinition(from: assetId),
+            // Preserve the full `name#domain` assetDefinitionId for the
+            // peer / Torii — the SDK-internal `assetId` is the 2-part
+            // `name#account` form and would drop the domain otherwise.
+            assetDefinitionId: assetDefinitionId,
             assetId: assetId,
             amount: note.amount,
             keyCertificate: keyCertificate,

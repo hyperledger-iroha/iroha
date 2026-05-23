@@ -688,6 +688,57 @@ public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
         self.proofVerifier = proofVerifier
         self.note = note
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            policyId: try container.decode(String.self, forKey: .policyId),
+            programId: try container.decodeIfPresent(String.self, forKey: .programId) ?? "",
+            owner: try container.decode(String.self, forKey: .owner),
+            active: try container.decode(Bool.self, forKey: .active),
+            normalization: try container.decode(ToriiIdentifierNormalization.self, forKey: .normalization),
+            resolverPublicKey: try container.decode(String.self, forKey: .resolverPublicKey),
+            outputOpeningPublicKey: try container.decodeIfPresent(String.self, forKey: .outputOpeningPublicKey) ?? "",
+            backend: try container.decode(String.self, forKey: .backend),
+            inputEncryption: try container.decodeIfPresent(String.self, forKey: .inputEncryption),
+            inputEncryptionPublicParameters: try container.decodeIfPresent(
+                String.self,
+                forKey: .inputEncryptionPublicParameters
+            ),
+            inputEncryptionPublicParametersDecoded: try container.decodeIfPresent(
+                ToriiIdentifierBfvPublicParameters.self,
+                forKey: .inputEncryptionPublicParametersDecoded
+            ),
+            ramFheProfile: try container.decodeIfPresent(
+                ToriiIdentifierRamFheProfile.self,
+                forKey: .ramFheProfile
+            ),
+            proofVerifier: try container.decodeIfPresent(
+                ToriiRamLfeProofVerifierMetadata.self,
+                forKey: .proofVerifier
+            ),
+            note: try container.decodeIfPresent(String.self, forKey: .note)
+        )
+    }
+
+    public func withProgramPolicy(_ programPolicy: ToriiRamLfeProgramPolicySummary) -> ToriiIdentifierPolicySummary {
+        ToriiIdentifierPolicySummary(
+            policyId: policyId,
+            programId: programPolicy.programId,
+            owner: owner,
+            active: active,
+            normalization: normalization,
+            resolverPublicKey: resolverPublicKey,
+            outputOpeningPublicKey: outputOpeningPublicKey,
+            backend: backend,
+            inputEncryption: inputEncryption,
+            inputEncryptionPublicParameters: inputEncryptionPublicParameters,
+            inputEncryptionPublicParametersDecoded: inputEncryptionPublicParametersDecoded,
+            ramFheProfile: ramFheProfile,
+            proofVerifier: proofVerifier,
+            note: note
+        )
+    }
 }
 
 public struct ToriiIdentifierPolicyListResponse: Decodable, Sendable {
@@ -763,6 +814,7 @@ public struct ToriiIdentifierBfvPublicParameters: Decodable, Sendable {
 
 public enum ToriiIdentifierRamFheEncryptedInputMode: String, Codable, Sendable {
     case encryptedEnvelopeV1 = "encrypted_envelope_v1"
+    case resolverCanonicalizedEnvelopeV1 = "resolver_canonicalized_envelope_v1"
 
     private struct TaggedModePayload: Decodable {
         let mode: String
@@ -772,6 +824,8 @@ public enum ToriiIdentifierRamFheEncryptedInputMode: String, Codable, Sendable {
         switch raw.trimmingCharacters(in: .whitespacesAndNewlines) {
         case "encrypted_envelope_v1", "EncryptedEnvelopeV1":
             return .encryptedEnvelopeV1
+        case "resolver_canonicalized_envelope_v1", "ResolverCanonicalizedEnvelopeV1":
+            return .resolverCanonicalizedEnvelopeV1
         default:
             return nil
         }

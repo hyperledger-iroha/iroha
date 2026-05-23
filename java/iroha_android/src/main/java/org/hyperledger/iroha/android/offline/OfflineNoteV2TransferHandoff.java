@@ -9,10 +9,16 @@ import java.util.Objects;
 public final class OfflineNoteV2TransferHandoff {
   public static final String PAYMENT_TOKEN_CONTENT_TYPE =
       "application/vnd.iroha.offline.payment-token-v2+norito";
-  public static final String RECEIVE_CHALLENGE_CONTENT_TYPE =
-      "application/vnd.iroha.offline.receive-challenge-v1+octet-stream";
+  public static final String RECEIVE_REQUEST_CONTENT_TYPE =
+      "application/vnd.iroha.offline.receive-request-v2+norito";
   public static final String RECEIPT_ACK_CONTENT_TYPE =
-      "application/vnd.iroha.offline.receipt-ack-v1+octet-stream";
+      "application/vnd.iroha.offline.receipt-ack-v2+norito";
+  public static final String TEXT_PAYMENT_TOKEN_CONTENT_TYPE =
+      "text/vnd.iroha.offline.payment-token-v2";
+  public static final String TEXT_RECEIVE_REQUEST_CONTENT_TYPE =
+      "text/vnd.iroha.offline.receive-request-v2";
+  public static final String TEXT_RECEIPT_ACK_CONTENT_TYPE =
+      "text/vnd.iroha.offline.receipt-ack-v2";
   public static final String NEARBY_SERVICE_NAME = "iroha-pay-v2";
   public static final String NFC_EXTERNAL_TYPE = "org.hyperledger.iroha:offline-payment-v2";
   public static final String DEFAULT_NFC_AID_HEX = OfflineNoteV2NfcApduProtocol.AID_HEX;
@@ -53,6 +59,59 @@ public final class OfflineNoteV2TransferHandoff {
         Objects.requireNonNull(rawPayload, "rawPayload"));
   }
 
+  public static byte[] rawReceiveRequestBytes(final OfflineNoteV2ReceiveRequest request) {
+    return OfflineNoteV2ReceiveRequestCodec.encodeNorito(
+        Objects.requireNonNull(request, "request"));
+  }
+
+  public static OfflineNoteV2TransferPayload receiveRequestPayload(
+      final OfflineNoteV2ReceiveRequest request, final OfflineNoteV2TransferModality modality) {
+    return new OfflineNoteV2TransferPayload(
+        Objects.requireNonNull(modality, "modality"),
+        RECEIVE_REQUEST_CONTENT_TYPE,
+        rawReceiveRequestBytes(request));
+  }
+
+  public static OfflineNoteV2ReceiveRequest decodeReceiveRequest(
+      final OfflineNoteV2TransferPayload payload) {
+    final OfflineNoteV2TransferPayload checkedPayload = Objects.requireNonNull(payload, "payload");
+    if (!RECEIVE_REQUEST_CONTENT_TYPE.equals(checkedPayload.contentType())) {
+      throw new IllegalArgumentException("Transfer payload content type is not a receive request");
+    }
+    return OfflineNoteV2ReceiveRequestCodec.decodeNorito(checkedPayload.payload());
+  }
+
+  public static OfflineNoteV2ReceiveRequest decodeReceiveRequest(final byte[] rawPayload) {
+    return OfflineNoteV2ReceiveRequestCodec.decodeNorito(
+        Objects.requireNonNull(rawPayload, "rawPayload"));
+  }
+
+  public static byte[] rawReceiptAckBytes(final OfflineNoteV2ReceiptAck ack) {
+    return OfflineNoteV2ReceiptAckCodec.encodeNorito(Objects.requireNonNull(ack, "ack"));
+  }
+
+  public static OfflineNoteV2TransferPayload receiptAckPayload(
+      final OfflineNoteV2ReceiptAck ack, final OfflineNoteV2TransferModality modality) {
+    return new OfflineNoteV2TransferPayload(
+        Objects.requireNonNull(modality, "modality"),
+        RECEIPT_ACK_CONTENT_TYPE,
+        rawReceiptAckBytes(ack));
+  }
+
+  public static OfflineNoteV2ReceiptAck decodeReceiptAck(
+      final OfflineNoteV2TransferPayload payload) {
+    final OfflineNoteV2TransferPayload checkedPayload = Objects.requireNonNull(payload, "payload");
+    if (!RECEIPT_ACK_CONTENT_TYPE.equals(checkedPayload.contentType())) {
+      throw new IllegalArgumentException("Transfer payload content type is not a receipt ACK");
+    }
+    return OfflineNoteV2ReceiptAckCodec.decodeNorito(checkedPayload.payload());
+  }
+
+  public static OfflineNoteV2ReceiptAck decodeReceiptAck(final byte[] rawPayload) {
+    return OfflineNoteV2ReceiptAckCodec.decodeNorito(
+        Objects.requireNonNull(rawPayload, "rawPayload"));
+  }
+
   public static List<byte[]> qrStreamingFrameBytes(final OfflineNoteV2PaymentToken token) {
     return qrStreamingFrameBytes(token, QR_STREAMING_OPTIONS);
   }
@@ -61,6 +120,26 @@ public final class OfflineNoteV2TransferHandoff {
       final OfflineNoteV2PaymentToken token, final OfflineQrStream.Options options) {
     return OfflineNoteV2PaymentTokenCodec.encodeQrFrameBytes(
         Objects.requireNonNull(token, "token"), Objects.requireNonNull(options, "options"));
+  }
+
+  public static List<byte[]> qrStreamingFrameBytes(final OfflineNoteV2ReceiveRequest request) {
+    return qrStreamingFrameBytes(request, QR_STREAMING_OPTIONS);
+  }
+
+  public static List<byte[]> qrStreamingFrameBytes(
+      final OfflineNoteV2ReceiveRequest request, final OfflineQrStream.Options options) {
+    return OfflineNoteV2ReceiveRequestCodec.encodeQrFrameBytes(
+        Objects.requireNonNull(request, "request"), Objects.requireNonNull(options, "options"));
+  }
+
+  public static List<byte[]> qrStreamingFrameBytes(final OfflineNoteV2ReceiptAck ack) {
+    return qrStreamingFrameBytes(ack, QR_STREAMING_OPTIONS);
+  }
+
+  public static List<byte[]> qrStreamingFrameBytes(
+      final OfflineNoteV2ReceiptAck ack, final OfflineQrStream.Options options) {
+    return OfflineNoteV2ReceiptAckCodec.encodeQrFrameBytes(
+        Objects.requireNonNull(ack, "ack"), Objects.requireNonNull(options, "options"));
   }
 
   public static List<byte[]> nfcFrameBytes(final OfflineNoteV2PaymentToken token) {
@@ -84,6 +163,18 @@ public final class OfflineNoteV2TransferHandoff {
         maxChunkLength);
   }
 
+  public static List<byte[]> nfcReceiptAckWriteApdus(final OfflineNoteV2ReceiptAck ack) {
+    return nfcReceiptAckWriteApdus(ack, OfflineNoteV2NfcApduProtocol.ANDROID_SAFE_CHUNK_BYTES);
+  }
+
+  public static List<byte[]> nfcReceiptAckWriteApdus(
+      final OfflineNoteV2ReceiptAck ack, final int maxChunkLength) {
+    return OfflineNoteV2NfcApduProtocol.writePayloadApdus(
+        OfflineNoteV2NfcApduProtocol.PayloadKind.RECEIPT_ACK,
+        rawReceiptAckBytes(ack),
+        maxChunkLength);
+  }
+
   public static OfflineNoteV2TransferPayload nearbyPayload(final OfflineNoteV2PaymentToken token) {
     return paymentTokenPayload(token, OfflineNoteV2TransferModality.NEARBY);
   }
@@ -99,6 +190,19 @@ public final class OfflineNoteV2TransferHandoff {
   public static OfflineNoteV2PaymentToken decodeNearbyPaymentToken(final byte[] envelopeBytes) {
     return OfflineNoteV2NearbyEnvelope.decode(Objects.requireNonNull(envelopeBytes, "envelopeBytes"))
         .paymentToken();
+  }
+
+  public static byte[] nearbyReceiptAckEnvelopeBytes(final OfflineNoteV2ReceiptAck ack) {
+    return new OfflineNoteV2NearbyEnvelope(
+            OfflineNoteV2NearbyEnvelope.Kind.RECEIPT_ACK,
+            rawReceiptAckBytes(ack),
+            RECEIPT_ACK_CONTENT_TYPE)
+        .encoded();
+  }
+
+  public static OfflineNoteV2ReceiptAck decodeNearbyReceiptAck(final byte[] envelopeBytes) {
+    return OfflineNoteV2NearbyEnvelope.decode(Objects.requireNonNull(envelopeBytes, "envelopeBytes"))
+        .receiptAck();
   }
 
   public static List<byte[]> nearbyFrameBytes(final OfflineNoteV2PaymentToken token) {
@@ -234,6 +338,8 @@ public final class OfflineNoteV2TransferHandoff {
   public static final class OfflineNoteV2TransferStreamResult {
     private final byte[] payload;
     private final OfflineNoteV2PaymentToken token;
+    private final OfflineNoteV2ReceiveRequest receiveRequest;
+    private final OfflineNoteV2ReceiptAck receiptAck;
     private final int receivedChunks;
     private final int totalChunks;
     private final int recoveredChunks;
@@ -241,11 +347,15 @@ public final class OfflineNoteV2TransferHandoff {
     private OfflineNoteV2TransferStreamResult(
         final byte[] payload,
         final OfflineNoteV2PaymentToken token,
+        final OfflineNoteV2ReceiveRequest receiveRequest,
+        final OfflineNoteV2ReceiptAck receiptAck,
         final int receivedChunks,
         final int totalChunks,
         final int recoveredChunks) {
       this.payload = payload == null ? null : payload.clone();
       this.token = token;
+      this.receiveRequest = receiveRequest;
+      this.receiptAck = receiptAck;
       this.receivedChunks = receivedChunks;
       this.totalChunks = totalChunks;
       this.recoveredChunks = recoveredChunks;
@@ -259,8 +369,16 @@ public final class OfflineNoteV2TransferHandoff {
       return token;
     }
 
+    public OfflineNoteV2ReceiveRequest receiveRequest() {
+      return receiveRequest;
+    }
+
+    public OfflineNoteV2ReceiptAck receiptAck() {
+      return receiptAck;
+    }
+
     public boolean isComplete() {
-      return token != null;
+      return payload != null;
     }
 
     public int receivedChunks() {
@@ -287,24 +405,51 @@ public final class OfflineNoteV2TransferHandoff {
     public OfflineNoteV2TransferStreamResult ingestFrame(final byte[] frameBytes) {
       final OfflineQrStream.DecodeResult result =
           decoder.ingest(Objects.requireNonNull(frameBytes, "frameBytes"));
-      final OfflineNoteV2PaymentToken token =
-          result.payload() == null
-              ? null
-              : decodeStreamPaymentToken(result);
+      final StreamPayload streamPayload =
+          result.payload() == null ? StreamPayload.empty() : decodeStreamPayload(result);
       return new OfflineNoteV2TransferStreamResult(
           result.payload(),
-          token,
+          streamPayload.token,
+          streamPayload.receiveRequest,
+          streamPayload.receiptAck,
           result.receivedChunks(),
           result.totalChunks(),
           result.recoveredChunks());
     }
 
-    private static OfflineNoteV2PaymentToken decodeStreamPaymentToken(
-        final OfflineQrStream.DecodeResult result) {
-      if (result.payloadKind() != OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2) {
-        throw new IllegalArgumentException("QR stream payload kind is not a payment token");
+    private static StreamPayload decodeStreamPayload(final OfflineQrStream.DecodeResult result) {
+      if (result.payloadKind() == OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2) {
+        return new StreamPayload(
+            OfflineNoteV2PaymentTokenCodec.decodeQrPayload(result.payload()), null, null);
       }
-      return OfflineNoteV2PaymentTokenCodec.decodeQrPayload(result.payload());
+      if (result.payloadKind() == OfflineQrStream.PayloadKind.OFFLINE_RECEIVE_REQUEST_V2) {
+        return new StreamPayload(
+            null, OfflineNoteV2ReceiveRequestCodec.decodeQrPayload(result.payload()), null);
+      }
+      if (result.payloadKind() == OfflineQrStream.PayloadKind.OFFLINE_RECEIPT_ACK_V2) {
+        return new StreamPayload(
+            null, null, OfflineNoteV2ReceiptAckCodec.decodeQrPayload(result.payload()));
+      }
+      throw new IllegalArgumentException("QR stream payload kind is not an Offline Note V2 payload");
+    }
+
+    private static final class StreamPayload {
+      private final OfflineNoteV2PaymentToken token;
+      private final OfflineNoteV2ReceiveRequest receiveRequest;
+      private final OfflineNoteV2ReceiptAck receiptAck;
+
+      private StreamPayload(
+          final OfflineNoteV2PaymentToken token,
+          final OfflineNoteV2ReceiveRequest receiveRequest,
+          final OfflineNoteV2ReceiptAck receiptAck) {
+        this.token = token;
+        this.receiveRequest = receiveRequest;
+        this.receiptAck = receiptAck;
+      }
+
+      static StreamPayload empty() {
+        return new StreamPayload(null, null, null);
+      }
     }
   }
 }

@@ -105,21 +105,55 @@ public final class UaidPortfolioResponse {
 
   /** Asset balance entry associated with an account. */
   public static final class UaidPortfolioAsset {
-    private final String asset;
+    private final String assetId;
+    private final String assetDefinitionId;
     private final String scope;
     private final String quantity;
 
-    public UaidPortfolioAsset(
-        final String asset, final String scope, final String quantity) {
-      this.asset = Objects.requireNonNull(asset, "asset");
-      this.scope = Objects.requireNonNull(scope, "scope");
+    public UaidPortfolioAsset(final String assetId, final String assetDefinitionId, final String quantity) {
+      this(assetId, assetDefinitionId, null, quantity);
+    }
+
+    private UaidPortfolioAsset(
+        final String assetId,
+        final String assetDefinitionId,
+        final String scope,
+        final String quantity) {
+      this.assetId = Objects.requireNonNull(assetId, "assetId");
+      this.assetDefinitionId = Objects.requireNonNull(assetDefinitionId, "assetDefinitionId");
+      this.scope = scope;
       this.quantity = Objects.requireNonNull(quantity, "quantity");
     }
 
-    public String asset() {
-      return asset;
+    static UaidPortfolioAsset legacy(
+        final String assetDefinitionId, final String scope, final String quantity) {
+      return new UaidPortfolioAsset(assetDefinitionId, assetDefinitionId, scope, quantity);
     }
 
+    public String assetId() {
+      return assetId;
+    }
+
+    public String assetDefinitionId() {
+      return assetDefinitionId;
+    }
+
+    /**
+     * Legacy name for the asset definition field used by early UAID portfolio payloads.
+     *
+     * @deprecated Use {@link #assetDefinitionId()} for Torii's native portfolio schema.
+     */
+    @Deprecated
+    public String asset() {
+      return assetDefinitionId;
+    }
+
+    /**
+     * Legacy balance scope used by early UAID portfolio payloads.
+     *
+     * @deprecated Torii's native portfolio schema exposes {@link #assetId()} instead.
+     */
+    @Deprecated
     public String scope() {
       return scope;
     }

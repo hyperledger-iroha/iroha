@@ -41,6 +41,12 @@ class OfflineNoteV2IssuerDeviceBinding(
         }
     }
 
+    fun attestationKeyId(): String =
+        (_deviceBinding["attestation_key_id"] as? String)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalStateException("device_binding.attestation_key_id is required")
+
     fun deviceBinding(): Map<String, Any?> = deepCopyObject(_deviceBinding)
 }
 
@@ -168,7 +174,10 @@ class ToriiOfflineNoteV2IssuerClient @JvmOverloads constructor(
             "operation_id" to operationId,
             "device_id" to binding.deviceId,
             "offline_public_key" to binding.offlinePublicKey,
+            "attestation_key_id" to binding.attestationKeyId(),
             "asset_definition_id" to assetDefinitionId,
+            "local_revision" to (existing?.revision ?: 0L),
+            "local_state_hash" to ((existing?.lineageState?.get("server_state_hash") as? String)?.trim() ?: ""),
             "device_binding" to binding.deviceBinding(),
         )
         if (existing != null) {

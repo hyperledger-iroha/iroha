@@ -9962,6 +9962,12 @@ pub struct Queue {
     /// Maximum number of entries scanned per expired-transaction sweep.
     #[config(default = "defaults::queue::EXPIRED_CULL_BATCH")]
     pub expired_cull_batch: NonZeroUsize,
+    /// Persist pending transaction routing plans for local restart replay.
+    #[config(default = "defaults::queue::PLAN_JOURNAL_ENABLED")]
+    pub plan_journal_enabled: bool,
+    /// Maximum queue-plan journal size before atomic compaction is considered.
+    #[config(default = "defaults::queue::PLAN_JOURNAL_MAX_BYTES")]
+    pub plan_journal_max_bytes: u64,
 }
 
 impl Queue {
@@ -9973,6 +9979,8 @@ impl Queue {
             transaction_time_to_live_ms: transaction_time_to_live,
             expired_cull_interval_ms: expired_cull_interval,
             expired_cull_batch,
+            plan_journal_enabled,
+            plan_journal_max_bytes,
         } = self;
         actual::Queue {
             capacity,
@@ -9980,6 +9988,8 @@ impl Queue {
             transaction_time_to_live: transaction_time_to_live.0,
             expired_cull_interval: expired_cull_interval.0,
             expired_cull_batch,
+            plan_journal_enabled,
+            plan_journal_max_bytes,
         }
     }
 }
@@ -13868,15 +13878,15 @@ impl Nexus {
                     continue;
                 }
 
-                let id = if let Some(raw) = descriptor.id {
-                    DataSpaceId::new(raw)
-                } else if let Some(hash) = Self::normalize_opt(descriptor.manifest_hash) {
+                let decoded_manifest_id = if let Some(hash) =
+                    Self::normalize_opt(descriptor.manifest_hash)
+                {
                     let trimmed = hash.trim_start_matches("0x");
                     match hex::decode(trimmed) {
                         Ok(bytes) if bytes.len() == 32 => {
                             let mut array = [0u8; 32];
                             array.copy_from_slice(&bytes);
-                            DataSpaceId::from_hash(&array)
+                            Some(DataSpaceId::from_hash(&array))
                         }
                         Ok(bytes) => {
                             dataspace_errors = true;
@@ -13898,23 +13908,68 @@ impl Nexus {
                         }
                     }
                 } else {
-                    dataspace_errors = true;
-                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                        "dataspace[{idx}] must specify either `id` or `manifest_hash`"
-                    )));
-                    continue;
+                    None
                 };
 
-                if alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS && id != DataSpaceId::UNIVERSAL
-                {
-                    dataspace_errors = true;
-                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                        "dataspace[{idx}] alias \"{}\" must map to id {}",
-                        defaults::nexus::DEFAULT_DATASPACE_ALIAS,
-                        DataSpaceId::UNIVERSAL.as_u64()
-                    )));
-                    continue;
-                }
+                let explicit_id = descriptor.id.map(DataSpaceId::new);
+                let alias_is_universal = alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS;
+                let id = if alias_is_universal {
+                    if let Some(raw_id) = explicit_id
+                        && raw_id != DataSpaceId::UNIVERSAL
+                    {
+                        dataspace_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "dataspace[{idx}] alias \"{}\" must map to id {}",
+                            defaults::nexus::DEFAULT_DATASPACE_ALIAS,
+                            DataSpaceId::UNIVERSAL.as_u64()
+                        )));
+                        continue;
+                    }
+                    if let Some(manifest_id) = decoded_manifest_id
+                        && manifest_id != DataSpaceId::UNIVERSAL
+                    {
+                        dataspace_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "dataspace[{idx}] universal manifest_hash derives id {}, expected {}",
+                            manifest_id.as_u64(),
+                            DataSpaceId::UNIVERSAL.as_u64()
+                        )));
+                        continue;
+                    }
+                    DataSpaceId::UNIVERSAL
+                } else {
+                    let Some(manifest_id) = decoded_manifest_id else {
+                        dataspace_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                            format!(
+                                "dataspace[{idx}] must specify `manifest_hash`; explicit numeric ids are not canonical"
+                            ),
+                        ));
+                        continue;
+                    };
+                    if manifest_id == DataSpaceId::UNIVERSAL {
+                        dataspace_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "dataspace[{idx}] non-universal manifest_hash derives reserved id {}",
+                            DataSpaceId::UNIVERSAL.as_u64()
+                        )));
+                        continue;
+                    }
+                    if let Some(raw_id) = explicit_id
+                        && raw_id != manifest_id
+                    {
+                        dataspace_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                            format!(
+                                "dataspace[{idx}] explicit id {} does not match manifest_hash-derived id {}",
+                                raw_id.as_u64(),
+                                manifest_id.as_u64()
+                            ),
+                        ));
+                        continue;
+                    }
+                    manifest_id
+                };
 
                 if let Some(sponsor) = Self::normalize_opt(descriptor.fee_sponsor_account_id) {
                     dataspace_fee_sponsors.insert(id, sponsor);

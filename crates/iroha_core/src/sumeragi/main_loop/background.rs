@@ -46,6 +46,23 @@ pub(super) fn dispatch_background_request(
                 enqueued_at: Instant::now(),
             },
         ),
+        BackgroundRequest::PostNativeAmx { peer, message } => (
+            "PostNativeAmx",
+            Some(peer.clone()),
+            BackgroundPost::PostNativeAmx {
+                peer,
+                message,
+                enqueued_at: Instant::now(),
+            },
+        ),
+        BackgroundRequest::BroadcastNativeAmx { message } => (
+            "BroadcastNativeAmx",
+            None,
+            BackgroundPost::BroadcastNativeAmx {
+                message,
+                enqueued_at: Instant::now(),
+            },
+        ),
     };
     let request_from_post = |post| match post {
         BackgroundPost::Post { peer, msg, .. } => BackgroundRequest::Post { peer, msg },
@@ -55,6 +72,12 @@ pub(super) fn dispatch_background_request(
         BackgroundPost::Broadcast { msg, .. } => BackgroundRequest::Broadcast { msg },
         BackgroundPost::BroadcastControlFlow { frame, .. } => {
             BackgroundRequest::BroadcastControlFlow { frame }
+        }
+        BackgroundPost::PostNativeAmx { peer, message, .. } => {
+            BackgroundRequest::PostNativeAmx { peer, message }
+        }
+        BackgroundPost::BroadcastNativeAmx { message, .. } => {
+            BackgroundRequest::BroadcastNativeAmx { message }
         }
     };
 
@@ -131,6 +154,21 @@ pub(super) fn dispatch_background_request(
                 enqueued_at: Instant::now(),
             },
         ),
+        BackgroundRequest::PostNativeAmx { peer, message } => (
+            "PostNativeAmx",
+            BackgroundPost::PostNativeAmx {
+                peer,
+                message,
+                enqueued_at: Instant::now(),
+            },
+        ),
+        BackgroundRequest::BroadcastNativeAmx { message } => (
+            "BroadcastNativeAmx",
+            BackgroundPost::BroadcastNativeAmx {
+                message,
+                enqueued_at: Instant::now(),
+            },
+        ),
     };
     let request_from_post = |post| match post {
         BackgroundPost::Post { peer, msg, .. } => BackgroundRequest::Post { peer, msg },
@@ -140,6 +178,12 @@ pub(super) fn dispatch_background_request(
         BackgroundPost::Broadcast { msg, .. } => BackgroundRequest::Broadcast { msg },
         BackgroundPost::BroadcastControlFlow { frame, .. } => {
             BackgroundRequest::BroadcastControlFlow { frame }
+        }
+        BackgroundPost::PostNativeAmx { peer, message, .. } => {
+            BackgroundRequest::PostNativeAmx { peer, message }
+        }
+        BackgroundPost::BroadcastNativeAmx { message, .. } => {
+            BackgroundRequest::BroadcastNativeAmx { message }
         }
     };
 
@@ -174,7 +218,9 @@ fn background_request_allows_blocking(request: &BackgroundRequest) -> bool {
         BackgroundRequest::Post { .. }
         | BackgroundRequest::Broadcast { .. }
         | BackgroundRequest::PostControlFlow { .. }
-        | BackgroundRequest::BroadcastControlFlow { .. } => true,
+        | BackgroundRequest::BroadcastControlFlow { .. }
+        | BackgroundRequest::PostNativeAmx { .. }
+        | BackgroundRequest::BroadcastNativeAmx { .. } => true,
     }
 }
 
