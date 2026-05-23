@@ -185,6 +185,12 @@ use ivm::IVM;
 pub(crate) use tiered::TieredStateBackend;
 use tiered::{TieredKeyHandle, TieredSnapshotDiff, TieredSnapshotPayload};
 
+const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
+
+fn hard_fork_snapshot_bootstrap_enabled() -> bool {
+    std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
+}
+
 #[cfg(feature = "telemetry")]
 use crate::telemetry::ConfidentialTreeStats;
 #[allow(unused_imports)]
@@ -195,7 +201,9 @@ use crate::{
     Peers,
     block::{CommittedBlock, ValidBlock},
     compliance::LaneComplianceEngine,
-    executor::{Executor, parse_contract_call_execution_context},
+    executor::{
+        Executor, initial_executor_data_model_fallback, parse_contract_call_execution_context,
+    },
     governance::manifest::{
         LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
     },
@@ -33343,6 +33351,26 @@ pub(crate) mod deserialize {
         )
     }
 
+    fn take_required_hard_fork_default<T>(
+        map: &mut json::native::Map,
+        key: &str,
+        default: T,
+    ) -> Result<T, json::Error>
+    where
+        T: JsonDeserialize,
+    {
+        match take_required(map, key) {
+            Ok(parsed) => Ok(parsed),
+            Err(err) if hard_fork_snapshot_bootstrap_enabled() => {
+                eprintln!(
+                    "snapshot hard-fork compatibility: replacing persisted `{key}` value because it could not be decoded: {err}"
+                );
+                Ok(default)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     fn take_parameters_cell(
         map: &mut json::native::Map,
         key: &str,
@@ -33455,9 +33483,13 @@ pub(crate) mod deserialize {
             Some(value) => ivm_seed.cast::<TriggerSet>().parse_trigger_set(&value)?,
             None => TriggerSet::default(),
         };
-        let executor: Cell<Executor> = take_required(&mut map, "executor")?;
-        let executor_data_model: Cell<ExecutorDataModel> =
-            take_required(&mut map, "executor_data_model")?;
+        let executor: Cell<Executor> =
+            take_required_hard_fork_default(&mut map, "executor", Cell::new(Executor::default()))?;
+        let executor_data_model: Cell<ExecutorDataModel> = take_required_hard_fork_default(
+            &mut map,
+            "executor_data_model",
+            Cell::new(initial_executor_data_model_fallback()),
+        )?;
         let external_event_buf: Cell<Vec<EventBox>> =
             take_required(&mut map, "external_event_buf")?;
         let verifying_keys = take_optional_default(&mut map, "verifying_keys")?;

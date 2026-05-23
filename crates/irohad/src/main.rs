@@ -119,9 +119,14 @@ use tokio::{
 };
 
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
 
 fn startup_trace_enabled() -> bool {
     env::var_os("IROHA_STARTUP_TRACE").is_some()
+}
+
+fn hard_fork_snapshot_bootstrap_enabled() -> bool {
+    env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
 }
 
 fn log_startup_trace(stage: &'static str, started_at: Instant) {
@@ -5734,6 +5739,13 @@ fn read_stored_genesis_block(
     if block_count.0 == 0 {
         return Ok(None);
     }
+    if hard_fork_snapshot_bootstrap_enabled() {
+        iroha_logger::warn!(
+            block_count = block_count.0,
+            "hard-fork snapshot bootstrap: using configured genesis public key without decoding stored legacy genesis block"
+        );
+        return Ok(None);
+    }
 
     let nz = std::num::NonZeroUsize::new(1).expect("nonzero");
     let stored = kura.get_block(nz).ok_or_else(|| {
@@ -6150,9 +6162,17 @@ pub fn read_config_and_genesis(
     );
 
     let genesis = if let Some(signed_file) = &config.genesis.file {
-        let genesis = read_genesis(&signed_file.resolve_relative_path())
-            .attach(signed_file.clone().into_attachment().display_path())?;
-        Some(genesis)
+        if hard_fork_snapshot_bootstrap_enabled() {
+            iroha_logger::warn!(
+                path = %signed_file.resolve_relative_path().display(),
+                "hard-fork snapshot bootstrap: skipping configured legacy genesis file decode"
+            );
+            None
+        } else {
+            let genesis = read_genesis(&signed_file.resolve_relative_path())
+                .attach(signed_file.clone().into_attachment().display_path())?;
+            Some(genesis)
+        }
     } else {
         None
     };
