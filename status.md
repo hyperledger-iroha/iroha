@@ -2,6 +2,44 @@
 
 Last updated: 2026-05-24
 
+## 2026-05-24 Sumeragi engine certificate prefilter state-handoff formal slice
+
+- Added
+  `docs/formal/sumeragi/SumeragiEngineCertificatePrefilterStateGate.tla`, a
+  bounded TLA+ model for the side-effect-free state handoff performed by the
+  shared `ConsensusEngine::on_certificate(...)` prefilter.
+- The model proves rejected certificates for committed heights, wrong
+  height/epoch/validator-set context, wrong quorum policy, and stale
+  Prepare/Commit views return without mutating phase, round, lock, highest-QC,
+  pending-finality, or validation-owner state.
+- Rejected certificates are also proved to emit no output because no
+  phase-specific handler runs.
+- Accepted certificates are proved to reach the correct Prepare, Commit, or
+  NewView handler with the original prefilter-visible state unchanged; all
+  certificate-driven state mutation remains owned by the phase-specific
+  handlers.
+- Added 14 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineCertificatePrefilterStateGate_bug_*.cfg`
+  and wired `engine-certificate-prefilter-state-fast` /
+  `engine-certificate-prefilter-state-bug-*` through the formal runner and CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the certificate prefilter state-handoff gate is visible in the formal
+  coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-certificate-prefilter-state-fast`
+  - all 14 `engine-certificate-prefilter-state-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineCertificatePrefilterStateGate.tla docs/formal/sumeragi/SumeragiEngineCertificatePrefilterStateGate_fast.cfg docs/formal/sumeragi/SumeragiEngineCertificatePrefilterStateGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-certificate-prefilter-state-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
 ## 2026-05-24 SCCP Solana user-side proof generation hardening
 
 - Hardened the SCCP Solana lane to stay fail-closed for production until the
