@@ -114,6 +114,7 @@ use iroha_data_model::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode, RemoveSmartContractBytes,
         },
+        sns::RegisterSnsName,
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         zk::{
             CancelConfidentialPolicyTransition, CreateElection, FinalizeElection, RegisterZkAsset,
@@ -144,6 +145,7 @@ use iroha_data_model::{
         encode_bundle_with_materials_provenance_payload,
         encode_hf_shared_lease_join_provenance_payload,
     },
+    sns::RegisterNameRequestV1,
     sorafs::pin_registry::StorageClass,
     transaction::{
         Executable, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
@@ -6358,6 +6360,12 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     napi::Status::InvalidArg,
                     "unsupported Unregister instruction variant; expected keys: Peer, Domain, Account, AssetDefinition, Nft, Role, Trigger",
                 ));
+            }
+            if let Some(register_sns_value) = remove_case_insensitive(&mut map, "RegisterSnsName")
+            {
+                let request: RegisterNameRequestV1 =
+                    json::from_value(register_sns_value).map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(RegisterSnsName::new(request)));
             }
             if let Some(json::Value::Object(mut burn_map)) = map.remove("Burn") {
                 if let Some(json::Value::Object(mut asset_fields)) = burn_map.remove("Asset") {
