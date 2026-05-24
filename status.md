@@ -1,6 +1,22 @@
 # Status
 
-Last updated: 2026-05-23
+Last updated: 2026-05-24
+
+## 2026-05-24 peer frame recovery and availability fairness
+
+- Preserved already decoded inner peer messages when a later inner frame in
+  the same decrypted payload is malformed, so the reader reports the malformed
+  frame only after delivering the valid prefix.
+- Tightened consensus payload/chunk high-lane fairness so chunk repair frames
+  get a turn after one payload frame in both outbound post draining and
+  encrypted-frame batching.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_p2p --lib peer::run::tests::message_sender_isolates_consensus_payload_and_chunk_encrypted_frames -- --nocapture`
+  - `cargo test -p iroha_p2p --lib peer::run::tests::malformed_payload_frame_salvages_decoded_messages_before_error -- --nocapture`
+  - `cargo test -p iroha_p2p --lib peer::run::tests -- --nocapture`
+  - `cargo test -p iroha_p2p --lib`
+  - `git diff --check`
 
 ## 2026-05-23 Norito block header golden refresh
 
