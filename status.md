@@ -2,6 +2,16 @@
 
 Last updated: 2026-05-23
 
+## 2026-05-23 Norito block header golden refresh
+
+- Refreshed the `BlockHeader` Norito scaffold golden bytes so the fixture
+  includes the default confidential feature digest committed by
+  `BlockHeader::new`.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `git diff --check`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_data_model --test norito_golden_scaffold -- --nocapture`
+
 ## 2026-05-23 Confidential default policy hash alignment
 
 - Aligned `iroha_data_model::confidential::DEFAULT_ZK_CONSENSUS_POLICY_HASH`
