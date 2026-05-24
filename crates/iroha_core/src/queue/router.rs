@@ -327,17 +327,22 @@ fn evaluate_policy_with_view(
     if let Some(account_id) = account_permission_holder_routing_target(tx) {
         return evaluate_query_policy_with_view(policy, account_id, Some(state_view));
     }
-    let target_dataspace = transaction_dataspace_routing_target(
+    let mut target = transaction_dataspace_routing_target_info(
         tx,
         Some(&state_view.nexus().dataspace_catalog),
         Some(state_view),
     )
-    .unwrap_or(None)
-    .or_else(|| authority_dataspace_target(Some(state_view), tx));
+    .unwrap_or_default();
     let matched_rule = policy
         .rules
         .iter()
         .find(|rule| rule_matches(rule, tx, Some(state_view)));
+    apply_authority_dataspace_target(
+        &mut target,
+        authority_dataspace_target(Some(state_view), tx),
+        matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
+    );
+    let target_dataspace = target.dataspace_id;
     if matched_rule.is_none()
         && let Some(dataspace_id) = target_dataspace
     {
@@ -347,6 +352,50 @@ fn evaluate_policy_with_view(
             &state_view.nexus().dataspace_catalog,
         )
         .unwrap_or_else(|_| RoutingDecision::new(policy.default_lane, dataspace_id));
+    }
+    let lane_id = matched_rule.map_or(policy.default_lane, |rule| rule.lane);
+    let dataspace_id = matched_rule
+        .and_then(|rule| rule.dataspace)
+        .or(target_dataspace)
+        .unwrap_or(policy.default_dataspace);
+    RoutingDecision::new(lane_id, dataspace_id)
+}
+
+fn evaluate_policy_with_catalog_hint(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    tx: &AcceptedTransaction<'_>,
+) -> RoutingDecision {
+    if let Some(decision) = dataspace_scoped_permission_routing_decision(
+        tx,
+        Some(lane_catalog),
+        Some(dataspace_catalog),
+        None,
+    )
+    .unwrap_or(None)
+    {
+        return decision;
+    }
+    if let Some(decision) =
+        settlement_routing_decision(tx, lane_catalog, dataspace_catalog, None).unwrap_or(None)
+    {
+        return decision;
+    }
+    if let Some(account_id) = account_permission_holder_routing_target(tx) {
+        return evaluate_query_policy_with_view(policy, account_id, None);
+    }
+    let target_dataspace =
+        transaction_dataspace_routing_target(tx, Some(dataspace_catalog), None).unwrap_or(None);
+    let matched_rule = policy
+        .rules
+        .iter()
+        .find(|rule| rule_matches(rule, tx, None));
+    if matched_rule.is_none()
+        && let Some(dataspace_id) = target_dataspace
+    {
+        return canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog)
+            .unwrap_or_else(|_| RoutingDecision::new(policy.default_lane, dataspace_id));
     }
     let lane_id = matched_rule.map_or(policy.default_lane, |rule| rule.lane);
     let dataspace_id = matched_rule
@@ -475,14 +524,15 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
     }
     let mut target =
         transaction_dataspace_routing_target_info_with_world(tx, Some(dataspace_catalog), world)?;
-    if target.dataspace_id.is_none() {
-        target.dataspace_id = authority_dataspace_target_with_world(Some(world), tx);
-        target.coordinator_route = target.dataspace_id == Some(DataSpaceId::UNIVERSAL);
-    }
     let matched_rule = policy
         .rules
         .iter()
         .find(|rule| rule_matches_with_world(rule, tx, dataspace_catalog, world));
+    apply_authority_dataspace_target(
+        &mut target,
+        authority_dataspace_target_with_world(Some(world), tx),
+        matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
+    );
     resolve_policy_routing_decision(
         policy,
         matched_rule,
@@ -526,14 +576,15 @@ pub fn evaluate_policy_plan_with_catalog_and_world<W: WorldReadOnly>(
     }
     let mut target =
         transaction_dataspace_routing_target_info_with_world(tx, Some(dataspace_catalog), world)?;
-    if target.dataspace_id.is_none() {
-        target.dataspace_id = authority_dataspace_target_with_world(Some(world), tx);
-        target.coordinator_route = target.dataspace_id == Some(DataSpaceId::UNIVERSAL);
-    }
     let matched_rule = policy
         .rules
         .iter()
         .find(|rule| rule_matches_with_world(rule, tx, dataspace_catalog, world));
+    apply_authority_dataspace_target(
+        &mut target,
+        authority_dataspace_target_with_world(Some(world), tx),
+        matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
+    );
     resolve_policy_routing_plan(
         policy,
         matched_rule,
@@ -1131,8 +1182,6 @@ fn merge_transaction_target_dataspace(
     };
     if candidate != DataSpaceId::UNIVERSAL {
         target.participants.insert(candidate);
-    } else {
-        target.coordinator_route = true;
     }
 
     match target.dataspace_id {
@@ -1146,14 +1195,40 @@ fn merge_transaction_target_dataspace(
                 ));
             }
             target.dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            target.coordinator_route =
+                existing == DataSpaceId::UNIVERSAL || candidate == DataSpaceId::UNIVERSAL;
         }
         None => {
             target.dataspace_id = Some(candidate);
-            target.coordinator_route = candidate == DataSpaceId::UNIVERSAL;
         }
     }
 
     Ok(())
+}
+
+fn apply_authority_dataspace_target(
+    target: &mut TransactionDataspaceTarget,
+    authority_target: Option<DataSpaceId>,
+    allow_universal_override: bool,
+) {
+    let Some(authority_target) = authority_target else {
+        return;
+    };
+
+    if target.dataspace_id.is_none() {
+        target.dataspace_id = Some(authority_target);
+        target.coordinator_route = authority_target == DataSpaceId::UNIVERSAL;
+        return;
+    }
+
+    if target.dataspace_id == Some(DataSpaceId::UNIVERSAL)
+        && authority_target != DataSpaceId::UNIVERSAL
+        && allow_universal_override
+        && !target.coordinator_route
+        && target.participants.is_empty()
+    {
+        target.dataspace_id = Some(authority_target);
+    }
 }
 
 fn transaction_dataspace_routing_target(
@@ -2703,6 +2778,9 @@ fn resolve_policy_routing_decision(
     if let Some(dataspace_id) = target_dataspace {
         if let Some(rule) = matched_rule {
             let decision = RoutingDecision::new(rule.lane, dataspace_id);
+            if !lane_catalog.lanes().iter().any(|lane| lane.id == rule.lane) {
+                return resolve_routing_decision(decision, lane_catalog, dataspace_catalog);
+            }
             if let Some(rule_dataspace) = rule.dataspace
                 && rule_dataspace != dataspace_id
             {
@@ -3679,7 +3757,21 @@ impl LaneRouter for ConfigLaneRouter {
     }
 
     fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
-        self.try_route_without_state(tx).ok().flatten()
+        if policy_needs_state(self.policy.as_ref())
+            || dataspace_scoped_permission_routing_requires_state(tx)
+            || transaction_target_routing_requires_state(tx)
+        {
+            return None;
+        }
+        if self.authority_scope_routing_requires_state(tx).ok()? {
+            return None;
+        }
+        Some(evaluate_policy_with_catalog_hint(
+            &self.policy,
+            self.lane_catalog.as_ref(),
+            self.dataspace_catalog.as_ref(),
+            tx,
+        ))
     }
 
     fn try_route(
@@ -3824,15 +3916,16 @@ impl LaneRouter for ConfigLaneRouter {
             Some(&nexus.dataspace_catalog),
             Some(state_view),
         )?;
-        if target.dataspace_id.is_none() {
-            target.dataspace_id = authority_dataspace_target(Some(state_view), tx);
-            target.coordinator_route = target.dataspace_id == Some(DataSpaceId::UNIVERSAL);
-        }
         let matched_rule = self
             .policy
             .rules
             .iter()
             .find(|rule| rule_matches(rule, tx, Some(state_view)));
+        apply_authority_dataspace_target(
+            &mut target,
+            authority_dataspace_target(Some(state_view), tx),
+            matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
+        );
         resolve_policy_routing_decision(
             &self.policy,
             matched_rule,
@@ -3888,15 +3981,16 @@ impl LaneRouter for ConfigLaneRouter {
             Some(&nexus.dataspace_catalog),
             Some(state_view),
         )?;
-        if target.dataspace_id.is_none() {
-            target.dataspace_id = authority_dataspace_target(Some(state_view), tx);
-            target.coordinator_route = target.dataspace_id == Some(DataSpaceId::UNIVERSAL);
-        }
         let matched_rule = self
             .policy
             .rules
             .iter()
             .find(|rule| rule_matches(rule, tx, Some(state_view)));
+        apply_authority_dataspace_target(
+            &mut target,
+            authority_dataspace_target(Some(state_view), tx),
+            matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
+        );
         resolve_policy_routing_plan(
             &self.policy,
             matched_rule,

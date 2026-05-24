@@ -32648,6 +32648,120 @@ async fn known_block_commit_qc_recovery_requests_pending_block_fetch() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_allows_stale_view_for_locally_voted_frontier_block() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("validated pending block")
+        .note_local_commit_vote_emitted();
+
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view + 3, now);
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view + 3),
+        "test requires the local view to have advanced beyond the voted block"
+    );
+
+    let targets = actor.effective_commit_topology();
+    let before = super::status::snapshot();
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_stale_view_locally_voted_commit_qc_recovery",
+        ),
+        "a locally voted frontier block should still fetch its missing commit QC after local view advancement"
+    );
+    let after = super::status::snapshot();
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("stale-view commit-QC recovery request retained");
+    assert_eq!(request.height, height);
+    assert_eq!(request.view, view);
+    assert_eq!(request.phase, Phase::Commit);
+    assert_eq!(
+        after.missing_block_fetch_total,
+        before.missing_block_fetch_total.saturating_add(1),
+        "stale-view cert recovery should record a peer fetch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_suppresses_stale_view_without_local_vote() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block);
+
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view + 3, now);
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view + 3),
+        "test requires the local view to have advanced beyond the pending block"
+    );
+
+    let targets = actor.effective_commit_topology();
+    let before = super::status::snapshot();
+    assert!(
+        !actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_stale_view_unvoted_commit_qc_recovery",
+        ),
+        "unvoted stale-view pending blocks should still be treated as obsolete"
+    );
+    let after = super::status::snapshot();
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "suppressed stale-view recovery should not leave a request behind"
+    );
+    assert_eq!(
+        after.missing_block_fetch_total, before.missing_block_fetch_total,
+        "suppressed stale-view recovery should not record a fetch"
+    );
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn known_block_commit_qc_recovery_request_plan_prefers_cert_only_for_local_payload() {
     assert_eq!(
@@ -33578,6 +33692,123 @@ async fn known_block_commit_qc_recovery_rotates_after_bounded_retries_without_pr
             .missing_qc_total,
         1,
         "rotation should be recorded as MissingQc"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_defers_rotation_for_partial_new_view_convergence() {
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 1_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit();
+    let view_change_required = topology.min_votes_for_view_change();
+    assert!(
+        view_change_required < required,
+        "test requires partial NEW_VIEW support below commit quorum"
+    );
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: parent_hash,
+        height: height.saturating_sub(1),
+        view: 0,
+        epoch: actor.epoch_for_height(height.saturating_sub(1)),
+        phase: Phase::Commit,
+    };
+    let remote_peer = topology
+        .as_ref()
+        .iter()
+        .find(|peer| *peer != actor.common_config.peer.id())
+        .cloned()
+        .expect("remote validator");
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(height, view, remote_peer, highest_qc);
+    assert!(
+        actor.emit_new_view_vote(height, view, highest_qc, &topology),
+        "local NEW_VIEW vote should be available for convergence rebroadcast"
+    );
+    let _ = take_background_log(&background_log);
+    actor.new_view_rebroadcast_log.clear();
+
+    let now = Instant::now();
+    let stall_window = actor
+        .frontier_slot_lag_window()
+        .max(Duration::from_millis(1));
+    let stale_at = now
+        .checked_sub(stall_window.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor.phase_tracker.start_new_round(height, stale_at);
+    actor.phase_tracker.on_view_change(height, view, stale_at);
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_millis(1)),
+            first_seen: stale_at,
+            last_requested: stale_at,
+            last_dependency_progress: stale_at,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 2,
+        },
+    );
+
+    let _ = actor.retry_known_block_commit_qc_requests(now, None);
+
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view),
+        "partial NEW_VIEW support should keep known-block repair on the current view"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "deferral should keep the known-block commit-QC repair active"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        0,
+        "deferral must not count a MissingQc rotation"
+    );
+    let posts = take_background_log(&background_log);
+    assert!(
+        posts.iter().any(|entry| matches!(
+            entry,
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("QcVote"),
+                ..
+            }
+        )),
+        "deferral should rebroadcast NEW_VIEW votes"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -38630,6 +38861,44 @@ async fn handle_vote_drops_stale_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn validation_reject_for_committed_height_does_not_rotate_view() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+
+    let height = 1_u64;
+    let view = 0_u64;
+    actor.phase_tracker.start_new_round(height, Instant::now());
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view),
+        "test setup should start at the committed height base view"
+    );
+
+    let stale_block = sample_block(1, 1, None);
+    actor.trigger_view_change_after_validation_reject(height, view, stale_block.hash());
+
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view),
+        "validation rejects for already committed heights must not rotate the committed slot"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "suppressed stale validation rejects must not install a forced recovery view"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_vote_drops_below_locked_height() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -41258,9 +41527,16 @@ async fn qc_missing_block_defer_contiguous_frontier_commit_quorum_fetches_exact_
     }
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let required = topology.min_votes_for_commit().max(1);
-    let signers: BTreeSet<ValidatorIndex> = (0..required)
-        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
+    assert!(
+        signers.len() > 1,
+        "certified fetch needs at least one remote signer target"
+    );
 
     let _ = take_background_log(&background_log);
     let before = super::status::snapshot();
@@ -41309,11 +41585,11 @@ async fn qc_missing_block_defer_contiguous_frontier_commit_quorum_fetches_exact_
         "contiguous frontier QC deferral must not re-enter generic missing-block recovery"
     );
     assert!(
-        !actor
+        actor
             .block_sync_fetch_log
             .last_sent
             .contains_key(&block_hash),
-        "contiguous frontier QC deferral must not arm block-sync fast recovery"
+        "contiguous frontier QC deferral should throttle certified block fetches"
     );
     let after_defer_entries = take_background_log(&background_log);
     assert!(
@@ -41327,6 +41603,12 @@ async fn qc_missing_block_defer_contiguous_frontier_commit_quorum_fetches_exact_
             .iter()
             .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
         "commit-quorum exact frontier repair should bypass ingress grace and emit FetchBlockBody immediately"
+    );
+    assert!(
+        after_defer_entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("CertifiedBlockFetchRequest")),
+        "commit-quorum missing payload repair should request a certified block from QC signers"
     );
     let after = super::status::snapshot();
     assert_eq!(
@@ -62280,6 +62562,74 @@ async fn frontier_sidecar_hint_retargets_uncommitted_tracked_missing_request_dur
         !actor.sidecar_quarantined_for_height(height),
         "vote-backed frontier-stall recovery should not quarantine on first observation"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_sidecar_hint_seeds_untracked_missing_request_for_vote_roster_lookup() {
+    let (kura, _kura_dir) = persistent_kura_for_tests();
+    let mut harness = test_actor_harness_with_config_and_height_and_kura(
+        4,
+        test_sumeragi_config(),
+        None,
+        0,
+        Arc::clone(&kura),
+    )
+    .await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+    let committed_height = u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX);
+    let height = committed_height.saturating_add(1).max(1);
+    let expected_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD1; Hash::LENGTH]));
+    let sidecar_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD2; Hash::LENGTH]));
+    assert_ne!(
+        expected_hash, sidecar_hash,
+        "test requires distinct expected and sidecar hashes"
+    );
+    assert!(
+        !actor.authoritative_block_payload_available(sidecar_hash),
+        "test setup requires the sidecar hash to be unresolved"
+    );
+    actor
+        .kura
+        .write_roster_metadata(&crate::kura::RosterSidecar::new(
+            height,
+            sidecar_hash,
+            None,
+            None,
+            None,
+        ));
+    actor.sidecar_observation_suppression_depth = 0;
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .values()
+            .all(|request| request.height != height),
+        "test setup must start without a tracked missing-block request at the frontier"
+    );
+
+    actor.observe_sidecar_mismatch_for_height(height, expected_hash, "vote_roster_lookup");
+
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&expected_hash),
+        "untracked sidecar recovery should not seed the stale expected hash"
+    );
+    let request = actor
+        .pending
+        .missing_block_requests
+        .get(&sidecar_hash)
+        .expect("sidecar hash should be tracked for missing-block recovery");
+    assert_eq!(request.height, height);
+    assert_eq!(request.view, 0);
+    assert_eq!(request.phase, Phase::Commit);
+    assert_eq!(request.priority, super::MissingBlockPriority::Consensus);
 
     harness.shutdown.send();
 }
@@ -87635,6 +87985,81 @@ async fn round_liveness_ignores_prior_view_local_same_height_vote() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn local_same_height_vote_prefers_commit_over_prepare_for_fresh_proposal_guard() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let vote_view = 0_u64;
+    let fresh_view = vote_view.saturating_add(1);
+    let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, vote_view, mode_tag, prf_seed);
+    let local_signer = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local validator index");
+    let prepare_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x65; Hash::LENGTH]));
+    let commit_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x66; Hash::LENGTH]));
+
+    actor.vote_log.insert(
+        default_vote_log_key(Phase::Prepare, height, vote_view, epoch, local_signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Prepare,
+            block_hash: prepare_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: vote_view,
+            epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: local_signer,
+            bls_sig: Vec::new(),
+        },
+    );
+    actor.vote_log.insert(
+        default_vote_log_key(Phase::Commit, height, vote_view, epoch, local_signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: commit_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: vote_view,
+            epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: local_signer,
+            bls_sig: Vec::new(),
+        },
+    );
+
+    let selected = actor
+        .local_same_height_vote(height, epoch)
+        .expect("local same-height vote should be present");
+    assert_eq!(selected.phase, Phase::Commit);
+    assert_eq!(selected.block_hash, commit_hash);
+    assert!(
+        actor.local_same_height_vote_blocks_fresh_proposal(
+            height,
+            fresh_view,
+            &selected,
+            Instant::now(),
+            false,
+        ),
+        "fresh proposal guard must see the binding local commit vote"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_rotates_empty_frontier_local_vote_evidence_with_remote_higher_view_votes()
  {
     use std::borrow::Cow;
@@ -90495,6 +90920,298 @@ async fn maybe_force_view_change_for_stalled_pending_non_near_path_waits_for_fro
     assert_eq!(
         actor.subsystems.propose.forced_view_after_timeout,
         Some((height, view_idx.saturating_add(1)))
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_force_view_change_for_stalled_pending_defers_to_commit_qc_repair_under_tx_backlog() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 0_u64;
+    let block = sample_block(height, view_idx, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
+    let backlog_timeout = actor.backlog_extended_view_change_timeout(base_timeout, true);
+    let frontier_pending_timeout =
+        super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
+    let repair_exhaustion_window = actor.cap_active_block_production_gap(
+        frontier_pending_timeout.saturating_add(
+            actor
+                .frontier_slot_lag_window()
+                .max(actor.rebroadcast_cooldown())
+                .max(Duration::from_millis(1)),
+        ),
+        true,
+    );
+
+    let now = Instant::now();
+    let stalled_age = repair_exhaustion_window.saturating_add(Duration::from_millis(2));
+    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.note_validated_commit_artifact(
+        block_hash,
+        height,
+        view_idx,
+        zero_state_root(),
+        zero_state_root(),
+    );
+    pending.note_local_commit_vote_emitted();
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view: view_idx,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(actor.known_block_commit_qc_recovery_view_change_window()),
+            first_seen: stalled_at,
+            last_requested: stalled_at,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+    actor.note_proposal_seen(height, view_idx, payload_hash);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+    let backlog_signals =
+        actor.idle_backlog_signals_for_height(height, super::status::worker_queue_depth_snapshot());
+    assert!(
+        backlog_signals.queue_active_backlog,
+        "test setup should expose queued transaction pressure"
+    );
+    let decision = actor.stalled_pending_timeout_decision(
+        block_hash,
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("pending retained"),
+        backlog_signals,
+        now,
+    );
+    assert_eq!(
+        decision.class,
+        super::StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout,
+        "locally voted pending blocks with active commit-QC repair should use the recovery timeout path"
+    );
+
+    assert!(
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "active-pending timeout should defer while known-block commit-QC repair still owns the view"
+    );
+    assert_eq!(actor.phase_tracker.current_view(height), Some(view_idx));
+    assert!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "deferral should keep the active commit-QC repair request alive"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_force_view_change_for_stalled_pending_defers_for_partial_new_view_convergence() {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height.saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let view_idx = 1_u64;
+    let block = sample_block(height, view_idx, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
+    let backlog_timeout = actor.backlog_extended_view_change_timeout(base_timeout, true);
+    let frontier_pending_timeout =
+        super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
+    let repair_exhaustion_window = actor.cap_active_block_production_gap(
+        frontier_pending_timeout.saturating_add(
+            actor
+                .frontier_slot_lag_window()
+                .max(actor.rebroadcast_cooldown())
+                .max(Duration::from_millis(1)),
+        ),
+        true,
+    );
+
+    let now = Instant::now();
+    let stalled_age = repair_exhaustion_window.saturating_add(Duration::from_millis(2));
+    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view_idx, payload_hash);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view_idx,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 24,
+            started_at: now,
+            frontier_generation: None,
+        },
+    );
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: parent.expect("frontier parent hash"),
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+        phase: Phase::Commit,
+    };
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit();
+    let view_change_required = topology.min_votes_for_view_change();
+    assert!(
+        view_change_required < required,
+        "test requires partial NEW_VIEW support below commit quorum"
+    );
+    let remote_peer = topology
+        .as_ref()
+        .iter()
+        .find(|peer| *peer != actor.common_config.peer.id())
+        .cloned()
+        .expect("remote validator");
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(height, view_idx, remote_peer, highest_qc);
+    assert!(
+        actor.emit_new_view_vote(height, view_idx, highest_qc, &topology),
+        "local NEW_VIEW vote should be recorded for convergence"
+    );
+    let _ = take_background_log(&background_log);
+
+    let convergence = actor
+        .frontier_partial_new_view_convergence(
+            height,
+            view_idx,
+            stalled_age,
+            repair_exhaustion_window,
+        )
+        .expect("test setup should expose bounded partial NEW_VIEW convergence");
+    assert_eq!(convergence.support, view_change_required);
+    assert_eq!(convergence.required, required);
+
+    actor.new_view_rebroadcast_log.clear();
+    assert!(
+        actor.maybe_defer_frontier_advance_for_new_view_convergence(
+            height,
+            view_idx,
+            stalled_age,
+            repair_exhaustion_window,
+            now,
+        ),
+        "partial same-view NEW_VIEW support should defer and rebroadcast before forcing"
+    );
+    assert_eq!(actor.phase_tracker.current_view(height), Some(view_idx));
+    assert_eq!(
+        actor.frontier_slot.as_ref().map(|slot| slot.active_view),
+        Some(view_idx)
+    );
+    let posts = take_background_log(&background_log);
+    assert!(
+        posts.iter().any(|entry| matches!(
+            entry,
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("QcVote"),
+                ..
+            }
+        )),
+        "deferral should rebroadcast NEW_VIEW votes"
+    );
+    assert!(
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "active-pending timeout should remain deferred inside the bounded NEW_VIEW convergence window"
+    );
+
+    let later = stalled_at
+        .checked_add(convergence.convergence_deadline + Duration::from_millis(2))
+        .expect("later instant");
+    assert!(
+        !actor.maybe_defer_frontier_advance_for_new_view_convergence(
+            height,
+            view_idx,
+            convergence.convergence_deadline + Duration::from_millis(2),
+            repair_exhaustion_window,
+            later,
+        ),
+        "bounded NEW_VIEW convergence must expire instead of deferring forever"
     );
 
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -95418,7 +96135,7 @@ async fn proposal_yields_local_voted_stale_frontier_owner_without_quorum_lock() 
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn local_same_height_vote_allows_hard_stale_active_tip_owner_without_qc_lock() {
+async fn local_same_height_vote_blocks_hard_stale_active_tip_owner_without_new_view_qc() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -95549,14 +96266,14 @@ async fn local_same_height_vote_allows_hard_stale_active_tip_owner_without_qc_lo
         "test setup should still be the same active tip-owner state"
     );
     assert!(
-        !actor.local_same_height_vote_blocks_fresh_proposal(
+        actor.local_same_height_vote_blocks_fresh_proposal(
             frontier_height,
             fresh_view,
             &existing_vote,
             now,
             true,
         ),
-        "hard-stale active tip owner without QC or lock must not wedge fresh proposal assembly"
+        "a raw local commit vote must remain binding until a full NEW_VIEW QC supersedes it"
     );
 
     harness.shutdown.send();
@@ -96183,7 +96900,7 @@ async fn proposal_does_not_yield_recovery_exhausted_owner_with_prepare_qc() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn pacemaker_assembles_after_hard_stale_active_tip_owner_without_qc_lock() {
+async fn pacemaker_keeps_hard_stale_local_commit_owner_without_new_view_qc() {
     use std::borrow::Cow;
 
     let _commit_history_guard = isolate_commit_history_state();
@@ -96363,21 +97080,20 @@ async fn pacemaker_assembles_after_hard_stale_active_tip_owner_without_qc_lock()
 
     let proposed = actor.on_pacemaker_propose_ready(now);
     assert!(
-        proposed,
-        "pacemaker should yield hard-stale no-QC owner and assemble a fresh proposal"
+        !proposed,
+        "pacemaker must not double-vote a fresh branch while a raw local commit vote remains unsuperseded"
     );
     assert!(
-        !actor.pending.pending_blocks.contains_key(&stale_owner_hash),
-        "fresh proposal assembly should drop the stale no-QC owner"
+        actor.pending.pending_blocks.contains_key(&stale_owner_hash),
+        "unsuperseded local commit vote owner must remain available for repair"
     );
     assert!(
-        actor.slot_has_proposal_evidence(frontier_height, fresh_view)
-            || actor
-                .pending
-                .pending_blocks
-                .values()
-                .any(|pending| pending.height == frontier_height && pending.view == fresh_view),
-        "fresh proposal should leave durable evidence for the later view"
+        actor.frontier_slot.is_some(),
+        "unsuperseded local commit vote owner should retain frontier ownership metadata"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(frontier_height, fresh_view),
+        "blocked fresh branch must not leave proposal evidence for the later view"
     );
 
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -103207,6 +103923,9 @@ async fn future_new_view_commit_quorum_advances_local_view_and_emits_vote() {
     actor.phase_tracker.start_new_round(height, now);
     actor.phase_tracker.on_view_change(height, local_view, now);
     actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    let _ = actor.process_committed_blocks_before_consensus(
+        "new_view_qc_completion_emits_late_local_vote_for_installable_future_view",
+    );
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
@@ -111065,14 +111784,18 @@ async fn pacemaker_bootstraps_missing_qc_frontier_from_committed_qc_without_new_
         .expect("find non-zero view where local peer is leader");
 
     let now = Instant::now();
+    let ingress_grace = actor.frontier_ingress_drain_grace(actor.runtime_da_enabled());
+    let stale_start = now
+        .checked_sub(ingress_grace.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
     actor
         .phase_tracker
-        .on_view_change(tracked_height, view, now);
+        .on_view_change(tracked_height, view, stale_start);
     actor.mark_proposal_liveness_state(
         tracked_height,
         view,
         super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
-        now,
+        stale_start,
     );
 
     assert_eq!(
@@ -111147,14 +111870,18 @@ async fn pacemaker_defers_missing_qc_frontier_while_proposal_ingress_is_fresh() 
         .expect("find non-zero view where local peer is leader");
 
     let now = Instant::now();
+    let ingress_grace = actor.frontier_ingress_drain_grace(actor.runtime_da_enabled());
+    let stale_start = now
+        .checked_sub(ingress_grace.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
     actor
         .phase_tracker
-        .on_view_change(tracked_height, view, now);
+        .on_view_change(tracked_height, view, stale_start);
     actor.mark_proposal_liveness_state(
         tracked_height,
         view,
         super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
-        now,
+        stale_start,
     );
     record_test_worker_slot_ingress(
         super::status::WorkerQueueKind::BlockPayload,
@@ -111196,6 +111923,134 @@ async fn pacemaker_defers_missing_qc_frontier_while_proposal_ingress_is_fresh() 
         super::status::ConsensusMessageKind::Proposal,
         None,
     );
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_qc_forced_proposal_retries_after_transient_ingress_deferral() {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let mut committed_qc = actor
+        .latest_committed_qc()
+        .unwrap_or_else(|| sample_qc_ref(committed_height, 0));
+    committed_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(committed_qc);
+
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let view = (1..search_limit)
+        .find(|candidate_view| actor.local_is_round_leader(tracked_height, *candidate_view))
+        .expect("find non-zero view where local peer is leader");
+
+    let now = Instant::now();
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, now);
+    actor.mark_proposal_liveness_state(
+        tracked_height,
+        view,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        now,
+    );
+    actor.subsystems.propose.last_successful_proposal = Some(now);
+    record_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        tracked_height,
+        view,
+        super::status::ConsensusMessageKind::Proposal,
+        None,
+    );
+
+    let timeout = actor.commit_quorum_timeout();
+    let age = actor
+        .subsystems
+        .propose
+        .pacemaker
+        .propose_interval
+        .max(Duration::from_millis(2));
+    let deferred =
+        actor.maybe_force_missing_qc_leader_proposal(tracked_height, view, age, timeout, now);
+    assert!(
+        deferred,
+        "transient ingress should keep the missing-QC retry window open"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_none(),
+        "fresh-ingress deferral should not assemble the proposal"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .proposal_liveness
+            .expect("liveness slot")
+            .forced_proposal_attempts,
+        0,
+        "a deferred force attempt must not consume the bounded assembly budget"
+    );
+
+    drain_test_worker_slot_ingress(
+        super::status::WorkerQueueKind::BlockPayload,
+        tracked_height,
+        view,
+        super::status::ConsensusMessageKind::Proposal,
+        None,
+    );
+    let retry_delay = super::PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL + Duration::from_millis(1);
+    let later = now.checked_add(retry_delay).unwrap_or(now);
+    let proposed = actor.maybe_force_missing_qc_leader_proposal(
+        tracked_height,
+        view,
+        age.saturating_add(retry_delay),
+        timeout,
+        later,
+    );
+    assert!(
+        proposed,
+        "leader should retry and assemble once transient ingress clears"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_some(),
+        "retry should populate the recovery proposal slot"
+    );
+
     super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
@@ -111297,6 +112152,237 @@ async fn pacemaker_bootstraps_missing_qc_frontier_after_proposal_ingress_goes_st
         super::status::ConsensusMessageKind::Proposal,
         None,
     );
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_defers_committed_qc_fallback_while_partial_new_view_support_converges() {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let mut committed_qc = actor
+        .latest_committed_qc()
+        .unwrap_or_else(|| sample_qc_ref(committed_height, 0));
+    committed_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(committed_qc);
+
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let view = (1..search_limit)
+        .find(|candidate_view| actor.local_is_round_leader(tracked_height, *candidate_view))
+        .expect("find non-zero view where local peer is leader");
+
+    let now = Instant::now();
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, now);
+    actor.mark_proposal_liveness_state(
+        tracked_height,
+        view,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        now,
+    );
+
+    let topology = actor.effective_commit_topology();
+    let vote_topology = super::network_topology::Topology::new(topology.clone());
+    let required = vote_topology.min_votes_for_commit();
+    let epoch = actor.epoch_for_height(tracked_height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(tracked_height, view);
+    let signer = ValidatorIndex::try_from(0_usize).expect("signer index fits");
+    actor.vote_log.insert(
+        default_vote_log_key(Phase::NewView, tracked_height, view, epoch, signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::NewView,
+            block_hash: committed_qc.subject_block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height: tracked_height,
+            view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+            highest_qc: Some(committed_qc),
+            signer,
+            bls_sig: Vec::new(),
+        },
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(tracked_height, view),
+        0,
+        "test setup keeps partial NEW_VIEW support only in the raw vote log"
+    );
+    let partial_support = 1_usize;
+    assert!(
+        partial_support > 0 && partial_support < required,
+        "test setup requires partial NEW_VIEW support below quorum; support={partial_support}, required={required}"
+    );
+    assert!(
+        actor.frontier_partial_new_view_vote_support(
+            tracked_height,
+            view,
+            required,
+            &vote_topology,
+        ),
+        "raw NEW_VIEW vote support should be visible even before the tracker records it"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "partial NEW_VIEW support should converge before the committed-QC fallback assembles a fresh branch"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_none(),
+        "partial NEW_VIEW convergence must not populate the proposal slot"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_allows_committed_qc_fallback_after_partial_new_view_convergence_expires() {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let mut committed_qc = actor
+        .latest_committed_qc()
+        .unwrap_or_else(|| sample_qc_ref(committed_height, 0));
+    committed_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(committed_qc);
+
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let view = (1..search_limit)
+        .find(|candidate_view| actor.local_is_round_leader(tracked_height, *candidate_view))
+        .expect("find non-zero view where local peer is leader");
+
+    let now = Instant::now();
+    let expired_start = now
+        .checked_sub(
+            actor
+                .frontier_partial_new_view_convergence_grace()
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, expired_start);
+    actor.mark_proposal_liveness_state(
+        tracked_height,
+        view,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        expired_start,
+    );
+
+    let topology = actor.effective_commit_topology();
+    let vote_topology = super::network_topology::Topology::new(topology);
+    let required = vote_topology.min_votes_for_commit();
+    let epoch = actor.epoch_for_height(tracked_height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(tracked_height, view);
+    let signer = ValidatorIndex::try_from(0_usize).expect("signer index fits");
+    actor.vote_log.insert(
+        default_vote_log_key(Phase::NewView, tracked_height, view, epoch, signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::NewView,
+            block_hash: committed_qc.subject_block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height: tracked_height,
+            view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+            highest_qc: Some(committed_qc),
+            signer,
+            bls_sig: Vec::new(),
+        },
+    );
+    assert!(
+        actor.frontier_partial_new_view_vote_support(
+            tracked_height,
+            view,
+            required,
+            &vote_topology,
+        ),
+        "raw NEW_VIEW vote support should still be visible after the convergence grace expires"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        proposed,
+        "expired partial NEW_VIEW support must not suppress committed-QC frontier recovery forever"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_some(),
+        "expired partial NEW_VIEW convergence should allow the recovery proposal slot"
+    );
+
     super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
@@ -112275,6 +113361,54 @@ async fn frontier_recovery_ingress_override_allows_starved_exact_repair() {
     assert!(
         actor.frontier_recovery_ingress_override_active(height, view, now, ingress_grace),
         "starved exact-frontier repair should bypass proposal ingress damping"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_recovery_ingress_override_uses_stale_view_without_prior_proposal() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(&actor.state);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 1_u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA8; Hash::LENGTH]));
+    let now = Instant::now();
+    let ingress_grace = actor.frontier_ingress_drain_grace(actor.runtime_da_enabled());
+    let view_started_at = now
+        .checked_sub(ingress_grace.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, view, view_started_at);
+    actor.subsystems.propose.last_successful_proposal = None;
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        0,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+
+    assert!(
+        actor.exact_frontier_body_repair_active_at_height(height),
+        "test setup should arm exact frontier body repair"
+    );
+    assert!(
+        actor.frontier_recovery_ingress_override_active(height, view, now, ingress_grace),
+        "a stale recovery view should bypass ingress damping even before the local peer has proposed"
     );
 
     harness.shutdown.send();
@@ -115837,6 +116971,156 @@ async fn future_new_view_f_plus_one_support_does_not_emit_non_installable_vote()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn new_view_qc_completion_emits_late_local_vote_for_installable_future_view() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.gating.future_view_window = 8;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let local_view = 0_u64;
+    let future_view = 1_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let topology =
+        super::network_topology::Topology::new(super::roster::canonicalize_roster_for_mode(
+            actor.effective_commit_topology(),
+            consensus_mode,
+        ));
+    let required = topology.min_votes_for_commit();
+    assert_eq!(
+        required, 3,
+        "four-validator setup should require three votes"
+    );
+    let signature_topology =
+        super::topology_for_view(&topology, height, future_view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        future_view,
+        consensus_mode,
+        &signature_topology,
+    );
+    let local_peer = actor.common_config.peer.id().clone();
+    let remote_signers: Vec<_> = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, peer)| {
+            (peer != &local_peer).then(|| ValidatorIndex::try_from(idx).expect("signer fits"))
+        })
+        .take(required.saturating_sub(1))
+        .collect();
+    assert_eq!(
+        remote_signers.len(),
+        required.saturating_sub(1),
+        "test requires enough remote signers to leave only the local vote missing"
+    );
+    let epoch = actor.epoch_for_height(height);
+
+    for remote_signer in remote_signers {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::NewView,
+            block_hash: committed_qc.subject_block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: future_view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+            highest_qc: Some(committed_qc),
+            signer: remote_signer,
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view_with_seed(
+            &mut vote,
+            &actor.common_config.chain,
+            &topology,
+            &harness.key_pairs,
+            mode_tag,
+            prf_seed,
+        );
+        actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
+    }
+
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(local_view),
+        "raw future-view vote support should not move the pacemaker before local completion"
+    );
+
+    actor.try_form_qc_from_votes(
+        Phase::NewView,
+        committed_qc.subject_block_hash,
+        height,
+        future_view,
+        epoch,
+        &topology,
+    );
+
+    let accepted = actor.accepted_votes_for_qc_slot(
+        Phase::NewView,
+        committed_qc.subject_block_hash,
+        height,
+        future_view,
+        epoch,
+        &signature_topology,
+    );
+    let accepted_signers: BTreeSet<_> = accepted.keys().copied().collect();
+    let groups = super::new_view_highest_qc_signer_groups(
+        &accepted,
+        &accepted_signers,
+        height,
+        future_view,
+        epoch,
+    );
+    let local_new_view_votes: Vec<_> = actor
+        .stored_votes()
+        .filter(|vote| {
+            vote.phase == Phase::NewView
+                && vote.height == height
+                && vote.view == future_view
+                && actor
+                    .vote_signer_peer(vote)
+                    .as_ref()
+                    .is_some_and(|peer| peer == &local_peer)
+        })
+        .cloned()
+        .collect();
+    assert!(
+        !local_new_view_votes.is_empty(),
+        "local vote should resolve back to the local peer (expected_chain={chain_order_hash}, accepted={accepted_signers:?}, groups={groups:?})"
+    );
+    assert!(
+        actor
+            .qc_cache
+            .keys()
+            .any(|(phase, hash, qc_height, qc_view, _, _, _)| {
+                *phase == Phase::NewView
+                    && *hash == committed_qc.subject_block_hash
+                    && *qc_height == height
+                    && *qc_view == future_view
+            }),
+        "completed future NEW_VIEW quorum should cache a QC (expected_chain={chain_order_hash}, accepted={accepted_signers:?}, groups={groups:?}, local={local_new_view_votes:?})"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(future_view),
+        "completed future NEW_VIEW quorum should install the view"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn new_view_qc_completion_emits_late_local_vote_after_higher_local_view() {
     let mut harness = test_actor_harness(7).await;
     let actor = &mut harness.actor;
@@ -116071,6 +117355,92 @@ async fn new_view_qc_completion_emits_local_vote_for_current_near_quorum() {
     assert!(
         signers.contains(&local_canonical_idx),
         "completed NEW_VIEW QC should include the local signer"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn new_view_qc_partial_support_rebroadcasts_to_full_topology() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+    let _ = take_background_log(&background_log);
+    actor.new_view_rebroadcast_log.clear();
+
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let view = 1_u64;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit();
+    assert!(required > 1, "test needs a non-trivial quorum");
+
+    actor
+        .phase_tracker
+        .on_view_change(height, view, Instant::now());
+
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
+        height,
+        view,
+        consensus_mode,
+        &signature_topology,
+    );
+    let local_peer = actor.common_config.peer.id().clone();
+    let remote_signer = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .find_map(|(idx, peer)| {
+            (peer != &local_peer).then(|| ValidatorIndex::try_from(idx).expect("signer fits"))
+        })
+        .expect("test requires a remote signer");
+    let epoch = actor.epoch_for_height(height);
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash: committed_qc.subject_block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        chain_order_hash,
+        rechain_seq,
+        highest_qc: Some(committed_qc),
+        signer: remote_signer,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &actor.common_config.chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+    actor.handle_vote(vote);
+
+    let posts = take_background_log(&background_log);
+    let mut targets = BTreeSet::new();
+    for entry in posts {
+        if let super::BackgroundRequestLogEntry {
+            kind: super::BackgroundRequestLogKind::Post,
+            msg_kind: Some("QcVote"),
+            peer: Some(peer),
+        } = entry
+        {
+            targets.insert(peer);
+        }
+    }
+    assert_eq!(
+        targets.len(),
+        topology.as_ref().len().saturating_sub(1),
+        "partial NEW_VIEW support should be replayed to every remote validator"
     );
 
     harness.shutdown.send();
@@ -116317,6 +117687,7 @@ async fn pacemaker_rebroadcasts_new_view_votes_when_quorum_missing() {
 
     let _ = harness.background_rx.try_iter().count();
     let _ = take_background_log(&background_log);
+    actor.new_view_rebroadcast_log.clear();
 
     let offline_grace = actor.commit_quorum_timeout();
     let now = Instant::now();
@@ -116351,6 +117722,10 @@ async fn pacemaker_rebroadcasts_new_view_votes_when_quorum_missing() {
     assert!(
         new_view_posts > 0,
         "expected NEW_VIEW vote rebroadcasts when quorum is missing"
+    );
+    assert!(
+        new_view_posts >= topology.as_ref().len().saturating_sub(1),
+        "NEW_VIEW rebroadcast should cover the full remote topology"
     );
 
     harness.shutdown.send();
@@ -141922,22 +143297,6 @@ fn max_tx_budget_applies_configured_fast_finality_cap() {
 }
 
 #[test]
-fn recovery_view_caps_proposal_tx_budget() {
-    let (target, max_in_block, capped) = Actor::cap_tx_budget_for_recovery_view(20_000, 128, 1);
-    assert_eq!(target, 32);
-    assert_eq!(max_in_block.get(), 32);
-    assert!(capped);
-}
-
-#[test]
-fn recovery_view_cap_preserves_normal_view_budget() {
-    let (target, max_in_block, capped) = Actor::cap_tx_budget_for_recovery_view(20_000, 128, 0);
-    assert_eq!(target, 128);
-    assert_eq!(max_in_block.get(), 128);
-    assert!(!capped);
-}
-
-#[test]
 fn fast_commit_gas_cap_applies_under_fast_finality() {
     let base = NonZeroU64::new(10_000).expect("non-zero");
     let cap = NonZeroU64::new(2_000).expect("non-zero");
@@ -142831,6 +144190,85 @@ fn build_consensus_proposal_populates_defaults() {
     assert_eq!(proposal.header.tx_root, zero_hash);
     assert_eq!(proposal.header.state_root, zero_hash);
     assert_eq!(proposal.header.highest_qc, qc_ref);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cached_frontier_recovery_proposal_rebroadcasts_under_relay_backpressure() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let view = (1..search_limit)
+        .find(|candidate_view| actor.local_is_round_leader(height, *candidate_view))
+        .expect("find non-zero recovery view where local peer is leader");
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block.clone());
+    let payload_hash = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending tracked")
+        .payload_hash;
+    let highest_qc = actor.latest_committed_qc().expect("committed qc");
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_proposal(Actor::build_consensus_proposal(
+            &block,
+            payload_hash,
+            highest_qc,
+            0,
+            view,
+            actor.epoch_for_height(height),
+        ));
+    let _ = take_background_log(&background_log);
+
+    let now = Instant::now();
+    let payload_cooldown = actor.payload_rebroadcast_cooldown();
+    actor.relay_backpressure.reset_to_current();
+    iroha_p2p::network::inc_subscriber_queue_full_for_test(
+        iroha_p2p::network::message::Topic::Consensus,
+        1,
+    );
+    assert!(
+        actor.relay_backpressure.active(now, payload_cooldown),
+        "test setup should make generic relay backpressure active"
+    );
+
+    actor.maybe_rebroadcast_cached_proposal(height, view, 1, now);
+
+    let actual_targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("BlockCreated"),
+                peer: Some(peer),
+            } => Some(peer),
+            _ => None,
+        })
+        .collect();
+    let local_peer = actor.common_config.peer.id().clone();
+    let expected_targets: BTreeSet<_> = actor
+        .effective_commit_topology()
+        .into_iter()
+        .filter(|peer| peer != &local_peer)
+        .collect();
+    assert_eq!(
+        actual_targets, expected_targets,
+        "frontier recovery cached proposal replay should reach every remote validator despite relay backpressure"
+    );
+
+    harness.shutdown.send();
 }
 
 #[test]

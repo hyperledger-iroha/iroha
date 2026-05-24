@@ -90,6 +90,11 @@ pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = 256 * 1024 * 1024;
 const EVICTED_BLOCK_START: u64 = u64::MAX;
 /// Upper bound for merge-ledger entry payloads to avoid unbounded allocations on recovery.
 const MERGE_LEDGER_MAX_ENTRY_BYTES: usize = 16 * 1024 * 1024;
+const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
+
+fn hard_fork_snapshot_bootstrap_enabled() -> bool {
+    std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
+}
 
 fn default_fastpq_proof_sidecar_queue_cap() -> usize {
     FASTPQ_DEFAULTS::PROOF_SIDECAR_QUEUE_CAP.get()
@@ -2058,15 +2063,19 @@ impl Kura {
             .try_into()
             .expect("INTERNAL BUG: block index count exceeds usize::MAX");
 
-        let chain_validation = match mode {
-            InitMode::Fast => {
-                Kura::init_fast_mode(block_store, block_index_count).or_else(|error| {
-                    warn!(%error, "Hashes file is broken. Falling back to strict init mode.");
-                    Kura::init_strict_mode(block_store, block_index_count)
-                })
-            }
-            InitMode::Strict => Kura::init_strict_mode(block_store, block_index_count),
-        }?;
+        let chain_validation = if hard_fork_snapshot_bootstrap_enabled() {
+            Kura::init_hash_only_hard_fork_mode(block_store, block_index_count)?
+        } else {
+            match mode {
+                InitMode::Fast => {
+                    Kura::init_fast_mode(block_store, block_index_count).or_else(|error| {
+                        warn!(%error, "Hashes file is broken. Falling back to strict init mode.");
+                        Kura::init_strict_mode(block_store, block_index_count)
+                    })
+                }
+                InitMode::Strict => Kura::init_strict_mode(block_store, block_index_count),
+            }?
+        };
 
         if chain_validation.truncated {
             warn!(
@@ -2086,6 +2095,33 @@ impl Kura {
             .map(|hash| (hash, None))
             .collect();
         Ok((block_data, chain_validation))
+    }
+
+    fn init_hash_only_hard_fork_mode(
+        block_store: &mut BlockStore,
+        block_index_count: usize,
+    ) -> Result<ChainValidation, Error> {
+        let block_hashes_count: usize = block_store
+            .read_hashes_count()?
+            .try_into()
+            .expect("INTERNAL BUG: block hashes count exceeds usize::MAX");
+        if block_hashes_count != block_index_count {
+            return Err(Error::HardForkSnapshotBootstrapHashHeightMismatch {
+                index_count: block_index_count,
+                hashes_count: block_hashes_count,
+            });
+        }
+
+        let hashes = block_store.read_block_hashes(0, block_hashes_count)?;
+        info!(
+            block_count = hashes.len(),
+            "hard-fork snapshot bootstrap: trusting existing Kura hash journal without decoding legacy block bodies"
+        );
+        Ok(ChainValidation {
+            hashes,
+            truncated: false,
+            hash_mismatch: false,
+        })
     }
 
     fn init_fast_mode(
@@ -4472,6 +4508,14 @@ impl Kura {
             .ok()
             .and_then(|count| usize::try_from(count).ok())
             .unwrap_or_else(|| self.blocks_count())
+    }
+
+    /// Return the canonical block hash recorded at `height` without decoding the block body.
+    pub fn block_hash_at_height(&self, height: NonZeroUsize) -> Option<HashOf<BlockHeader>> {
+        self.block_data
+            .lock()
+            .get(height.get().saturating_sub(1))
+            .map(|(hash, _)| *hash)
     }
 }
 
@@ -8320,6 +8364,13 @@ pub enum Error {
     IntConversion(#[from] std::num::TryFromIntError),
     /// Blocks count differs hashes file and index file
     HashesFileHeightMismatch,
+    /// Hard-fork snapshot bootstrap requires Kura hashes height `{hashes_count}` to match index height `{index_count}`
+    HardForkSnapshotBootstrapHashHeightMismatch {
+        /// Number of durable block index entries.
+        index_count: usize,
+        /// Number of block hashes recorded in the hashes journal.
+        hashes_count: usize,
+    },
     /// Block index length {length} exceeds strict-init guard {limit} bytes
     CorruptedBlockLength {
         /// Length of the corrupted block index entry in bytes.

@@ -185,6 +185,12 @@ use ivm::IVM;
 pub(crate) use tiered::TieredStateBackend;
 use tiered::{TieredKeyHandle, TieredSnapshotDiff, TieredSnapshotPayload};
 
+const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
+
+fn hard_fork_snapshot_bootstrap_enabled() -> bool {
+    std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
+}
+
 #[cfg(feature = "telemetry")]
 use crate::telemetry::ConfidentialTreeStats;
 #[allow(unused_imports)]
@@ -195,7 +201,9 @@ use crate::{
     Peers,
     block::{CommittedBlock, ValidBlock},
     compliance::LaneComplianceEngine,
-    executor::{Executor, parse_contract_call_execution_context},
+    executor::{
+        Executor, initial_executor_data_model_fallback, parse_contract_call_execution_context,
+    },
     governance::manifest::{
         LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
     },
@@ -19566,6 +19574,8 @@ impl State {
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
                 bridge_proof_max_future_drift_blocks:
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+                sccp_allow_unready_transparent_proofs: false,
+                sccp_source_verifier_materials: Vec::new(),
                 poseidon_params_id:
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:
@@ -24513,6 +24523,8 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
         bridge_proof_max_future_drift_blocks:
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+        sccp_allow_unready_transparent_proofs: false,
+        sccp_source_verifier_materials: Vec::new(),
         poseidon_params_id: iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
         kaigi_roster_join_vk: None,
@@ -24635,6 +24647,106 @@ fn zk_policy_put_option_vk_ref(
     }
 }
 
+fn zk_policy_put_sccp_source_verifier_materials(
+    hasher: &mut Sha256,
+    materials: &[iroha_config::parameters::actual::SccpSourceVerifierMaterial],
+) {
+    if materials.is_empty() {
+        return;
+    }
+
+    let mut materials = materials.iter().collect::<Vec<_>>();
+    materials.sort_by(|left, right| {
+        left.version
+            .cmp(&right.version)
+            .then_with(|| left.source_domain.cmp(&right.source_domain))
+            .then_with(|| left.source_chain.cmp(&right.source_chain))
+            .then_with(|| left.source_proof_plan.cmp(&right.source_proof_plan))
+            .then_with(|| left.finality_model.cmp(&right.finality_model))
+            .then_with(|| left.adapter_circuit_id.cmp(&right.adapter_circuit_id))
+            .then_with(|| {
+                left.source_trust_anchor_id
+                    .cmp(&right.source_trust_anchor_id)
+            })
+            .then_with(|| {
+                left.source_trust_anchor_hash
+                    .cmp(&right.source_trust_anchor_hash)
+            })
+            .then_with(|| left.consensus_verifier_id.cmp(&right.consensus_verifier_id))
+            .then_with(|| {
+                left.consensus_verifier_hash
+                    .cmp(&right.consensus_verifier_hash)
+            })
+            .then_with(|| {
+                left.message_inclusion_verifier_id
+                    .cmp(&right.message_inclusion_verifier_id)
+            })
+            .then_with(|| {
+                left.message_inclusion_verifier_hash
+                    .cmp(&right.message_inclusion_verifier_hash)
+            })
+            .then_with(|| left.finality_policy_id.cmp(&right.finality_policy_id))
+            .then_with(|| left.finality_policy_hash.cmp(&right.finality_policy_hash))
+            .then_with(|| left.placeholder_material.cmp(&right.placeholder_material))
+    });
+    zk_policy_put_field(hasher, "sccp_source_verifier_materials");
+    Sha2Digest::update(
+        hasher,
+        u64::try_from(materials.len())
+            .expect("SCCP source verifier material count must fit into u64")
+            .to_be_bytes(),
+    );
+    for material in materials {
+        zk_policy_put_u8(hasher, "version", material.version);
+        zk_policy_put_u32(hasher, "source_domain", material.source_domain);
+        zk_policy_put_str(hasher, "source_chain", &material.source_chain);
+        zk_policy_put_str(hasher, "source_proof_plan", &material.source_proof_plan);
+        zk_policy_put_str(hasher, "finality_model", &material.finality_model);
+        zk_policy_put_str(hasher, "adapter_circuit_id", &material.adapter_circuit_id);
+        zk_policy_put_str(
+            hasher,
+            "source_trust_anchor_id",
+            &material.source_trust_anchor_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "source_trust_anchor_hash",
+            &material.source_trust_anchor_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "consensus_verifier_id",
+            &material.consensus_verifier_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "consensus_verifier_hash",
+            &material.consensus_verifier_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "message_inclusion_verifier_id",
+            &material.message_inclusion_verifier_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "message_inclusion_verifier_hash",
+            &material.message_inclusion_verifier_hash,
+        );
+        zk_policy_put_str(hasher, "finality_policy_id", &material.finality_policy_id);
+        zk_policy_put_str(
+            hasher,
+            "finality_policy_hash",
+            &material.finality_policy_hash,
+        );
+        zk_policy_put_bool(
+            hasher,
+            "placeholder_material",
+            material.placeholder_material,
+        );
+    }
+}
+
 fn zk_curve_tag(curve: iroha_config::parameters::actual::ZkCurve) -> &'static str {
     match curve {
         iroha_config::parameters::actual::ZkCurve::Pallas => "pallas",
@@ -24740,6 +24852,12 @@ pub fn compute_zk_consensus_policy_hash(
         "bridge_proof_max_future_drift_blocks",
         zk_config.bridge_proof_max_future_drift_blocks,
     );
+    zk_policy_put_bool(
+        &mut h,
+        "sccp_allow_unready_transparent_proofs",
+        zk_config.sccp_allow_unready_transparent_proofs,
+    );
+    zk_policy_put_sccp_source_verifier_materials(&mut h, &zk_config.sccp_source_verifier_materials);
     zk_policy_put_option_u32(&mut h, "poseidon_params_id", zk_config.poseidon_params_id);
     zk_policy_put_option_u32(&mut h, "pedersen_params_id", zk_config.pedersen_params_id);
     zk_policy_put_option_vk_ref(
@@ -33336,6 +33454,26 @@ pub(crate) mod deserialize {
         )
     }
 
+    fn take_required_hard_fork_default<T>(
+        map: &mut json::native::Map,
+        key: &str,
+        default: T,
+    ) -> Result<T, json::Error>
+    where
+        T: JsonDeserialize,
+    {
+        match take_required(map, key) {
+            Ok(parsed) => Ok(parsed),
+            Err(err) if hard_fork_snapshot_bootstrap_enabled() => {
+                eprintln!(
+                    "snapshot hard-fork compatibility: replacing persisted `{key}` value because it could not be decoded: {err}"
+                );
+                Ok(default)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     fn take_parameters_cell(
         map: &mut json::native::Map,
         key: &str,
@@ -33448,9 +33586,13 @@ pub(crate) mod deserialize {
             Some(value) => ivm_seed.cast::<TriggerSet>().parse_trigger_set(&value)?,
             None => TriggerSet::default(),
         };
-        let executor: Cell<Executor> = take_required(&mut map, "executor")?;
-        let executor_data_model: Cell<ExecutorDataModel> =
-            take_required(&mut map, "executor_data_model")?;
+        let executor: Cell<Executor> =
+            take_required_hard_fork_default(&mut map, "executor", Cell::new(Executor::default()))?;
+        let executor_data_model: Cell<ExecutorDataModel> = take_required_hard_fork_default(
+            &mut map,
+            "executor_data_model",
+            Cell::new(initial_executor_data_model_fallback()),
+        )?;
         let external_event_buf: Cell<Vec<EventBox>> =
             take_required(&mut map, "external_event_buf")?;
         let verifying_keys = take_optional_default(&mut map, "verifying_keys")?;
@@ -34121,6 +34263,8 @@ pub(crate) mod deserialize {
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
             bridge_proof_max_future_drift_blocks:
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+            sccp_allow_unready_transparent_proofs: false,
+            sccp_source_verifier_materials: Vec::new(),
             poseidon_params_id:
                 iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id:
@@ -48969,6 +49113,10 @@ mod tests {
             default_zk_consensus_policy_hash(),
             compute_zk_consensus_policy_hash(&default_zk_config())
         );
+        assert_eq!(
+            iroha_data_model::confidential::DEFAULT_ZK_CONSENSUS_POLICY_HASH,
+            default_zk_consensus_policy_hash()
+        );
     }
 
     #[test]
@@ -49004,6 +49152,66 @@ mod tests {
         assert_ne!(
             compute_zk_consensus_policy_hash(&base),
             compute_zk_consensus_policy_hash(&changed)
+        );
+    }
+
+    #[test]
+    fn zk_policy_hash_tracks_sccp_source_verifier_materials() {
+        let base = default_zk();
+        let mut changed = base.clone();
+        changed.sccp_source_verifier_materials.push(
+            iroha_config::parameters::actual::SccpSourceVerifierMaterial {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                source_chain: "eth".to_owned(),
+                source_proof_plan: "EthereumBeaconReceiptProof".to_owned(),
+                finality_model: "EthereumBeaconExecution".to_owned(),
+                adapter_circuit_id: "sccp-source-adapter-v1".to_owned(),
+                source_trust_anchor_id: "eth-finalized-checkpoint-v1".to_owned(),
+                source_trust_anchor_hash: hex::encode([0x11; 32]),
+                consensus_verifier_id: "eth-beacon-consensus-v1".to_owned(),
+                consensus_verifier_hash: hex::encode([0x22; 32]),
+                message_inclusion_verifier_id: "eth-receipt-inclusion-v1".to_owned(),
+                message_inclusion_verifier_hash: hex::encode([0x33; 32]),
+                finality_policy_id: "eth-finality-policy-v1".to_owned(),
+                finality_policy_hash: hex::encode([0x44; 32]),
+                placeholder_material: false,
+            },
+        );
+
+        assert_ne!(
+            compute_zk_consensus_policy_hash(&base),
+            compute_zk_consensus_policy_hash(&changed)
+        );
+
+        let mut reversed = base.clone();
+        reversed
+            .sccp_source_verifier_materials
+            .push(changed.sccp_source_verifier_materials[0].clone());
+        reversed.sccp_source_verifier_materials.push(
+            iroha_config::parameters::actual::SccpSourceVerifierMaterial {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_SOL,
+                source_chain: "sol".to_owned(),
+                source_proof_plan: "SolanaFinalizedTransactionProof".to_owned(),
+                finality_model: "SolanaFinalizedSlot".to_owned(),
+                adapter_circuit_id: "sccp-source-adapter-v1".to_owned(),
+                source_trust_anchor_id: "sol-root-anchor-v1".to_owned(),
+                source_trust_anchor_hash: hex::encode([0x55; 32]),
+                consensus_verifier_id: "sol-slot-consensus-v1".to_owned(),
+                consensus_verifier_hash: hex::encode([0x66; 32]),
+                message_inclusion_verifier_id: "sol-message-inclusion-v1".to_owned(),
+                message_inclusion_verifier_hash: hex::encode([0x77; 32]),
+                finality_policy_id: "sol-finality-policy-v1".to_owned(),
+                finality_policy_hash: hex::encode([0x88; 32]),
+                placeholder_material: false,
+            },
+        );
+        let mut sorted_equivalent = reversed.clone();
+        sorted_equivalent.sccp_source_verifier_materials.reverse();
+        assert_eq!(
+            compute_zk_consensus_policy_hash(&reversed),
+            compute_zk_consensus_policy_hash(&sorted_equivalent)
         );
     }
 

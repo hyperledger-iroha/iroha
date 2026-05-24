@@ -1,6 +1,2639 @@
 # Status
 
-Last updated: 2026-05-23
+Last updated: 2026-05-24
+
+## 2026-05-24 SCCP Solana user-side proof generation hardening
+
+- Hardened the SCCP Solana lane to stay fail-closed for production until the
+  real mainnet Solana recursive verifier, finality policy, and source trust
+  anchor material are wired into `SccpSourceVerifierMaterialV1`.
+- Kept configured Solana source verifier material useful for structural and
+  diagnostic fixtures without letting it bypass disabled-manifest or
+  production-readiness gates.
+- Added local-first Solana SCCP proof request helpers to the JavaScript, Swift,
+  Kotlin, and Java Android SDK surfaces. The SDK helpers normalize UI-provided
+  witnesses, require a caller-supplied source event digest, expose canonical
+  witness hashes/public inputs, and wrap proof bytes from an app-linked local
+  prover without fabricating placeholder proofs.
+- Updated SCCP bridge proof docs and the roadmap to describe the user portal /
+  mobile proof-generation flow and the remaining production cutover work.
+- Focused validation passed:
+  - `cd javascript/iroha_js && node --test test/sccpSolanaProver.test.js`
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests`
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest' --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core:test --tests 'org.hyperledger.iroha.android.sccp.SolanaSccpProverTests' --console=plain`
+  - `cargo test -p iroha_sccp configured_source_material_does_not_bypass_disabled_manifest_gate -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs source_verifier_material -- --nocapture`
+
+## 2026-05-24 Sumeragi engine proposal state-mutation formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineProposalStateGate.tla`, a bounded
+  TLA+ model for the exact state mutation performed by
+  `ConsensusEngine::on_proposal(...)`.
+- The model proves accepted proposals only move the engine phase from
+  `Proposal` to `Prepare`; the current round, locked QC, highest QC, and
+  pending-finality marker are preserved exactly.
+- Proposal-carried highest-QC evidence may unlock a conflicting proposal but is
+  proved not to overwrite the engine's stored highest QC during proposal
+  ingress.
+- Rejected proposals for wrong phase, wrong round, incompatible highest-QC, and
+  lock failures are proved to preserve the whole modeled state exactly.
+- Added 11 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineProposalStateGate_bug_*.cfg` and wired
+  `engine-proposal-state-fast` / `engine-proposal-state-bug-*` through the
+  formal runner and CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact proposal state-mutation gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-state-fast`
+  - all 11 `engine-proposal-state-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineProposalStateGate.tla docs/formal/sumeragi/SumeragiEngineProposalStateGate_fast.cfg docs/formal/sumeragi/SumeragiEngineProposalStateGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for `engine-proposal-state-bug-*`
+    modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine proposal output-field formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineProposalOutputGate.tla`, a
+  bounded TLA+ model for the exact `ConsensusOutput` payloads emitted by
+  `ConsensusEngine::on_proposal(...)`.
+- The model proves accepted proposals emit `ValidateBlock` for exactly the
+  proposal subject followed by one prepare `SignVote` over exactly the
+  proposal round and subject.
+- Proposal prepare votes are proved to carry no highest-QC reference, including
+  the accepted conflicting-proposal case where the proposal itself carries a
+  higher QC to satisfy the lock.
+- Rejected proposals for phase, round, incompatible highest-QC, and lock
+  failures are proved to emit no validation or prepare-vote output.
+- Added 9 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineProposalOutputGate_bug_*.cfg` and wired
+  `engine-proposal-output-fast` / `engine-proposal-output-bug-*` through the
+  formal runner and CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact proposal output-field gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-output-fast`
+  - all 9 `engine-proposal-output-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineProposalOutputGate.tla docs/formal/sumeragi/SumeragiEngineProposalOutputGate_fast.cfg docs/formal/sumeragi/SumeragiEngineProposalOutputGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for `engine-proposal-output-bug-*`
+    modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 SCCP TON user-side proof packaging
+
+- Replaced the placeholder TON submission envelope with a deterministic
+  `ton_message_body_boc_v1` payload. TON submission packages now expose one
+  `message_body_boc` argument encoded as `ton_boc`, plus typed platform
+  metadata for the query id, destination binding hash, statement hash, proof
+  bytes, public inputs, and SCCP bundle bytes.
+- Added a minimal deterministic TON BOC encoder to `iroha_sccp` for the SCCP
+  verifier message body. The root cell binds the SCCP operation code, schema
+  version, query id, destination binding hash, statement hash, and payload
+  hashes, while snake-cell references carry proof bytes, public inputs, and the
+  bundle without relying on a node-side TON prover.
+- Updated JavaScript, Swift, Kotlin, and Java Android SDK surfaces with TON
+  local proof request helpers. Web portals and mobile apps can now normalize
+  UI/RPC-collected TON witnesses, derive public inputs and a `query_id`, invoke
+  an app-linked prover, and package externally generated proof bytes for
+  on-chain submission.
+- Kept SCCP source verifier material fail-closed by default by making the
+  default configured material explicitly placeholder-only; production lanes
+  still require configured non-placeholder trust anchors and immutable verifier
+  hashes.
+- Focused validation passed:
+  - `cargo test -p iroha_sccp`
+  - `cargo check -p iroha_cli`
+  - `cargo check -p iroha_torii`
+  - `cargo test -p iroha --lib --no-run`
+  - `cd javascript/iroha_js && node --test test/sccpSolanaProver.test.js`
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests`
+- Kotlin and Java Android focused tests could not run in this environment
+  because no Java runtime is installed.
+
+## 2026-05-24 Sumeragi engine proposal validation-owner formal slice
+
+- Added
+  `docs/formal/sumeragi/SumeragiEngineProposalValidationOwnerGate.tla`, a
+  bounded TLA+ model for the exact
+  `self.validating = Some(proposal.subject)` side effect in
+  `ConsensusEngine::on_proposal(...)`.
+- The model proves accepted proposals record exactly the accepted proposal
+  subject as the validation owner and overwrite any stale in-flight validation
+  owner.
+- Rejected proposals, including wrong phase/round, incompatible highest-QC,
+  and locked-conflict cases, preserve the previous validation owner exactly,
+  including preserving `None` for rejected candidates that started without an
+  owner.
+- Added 7 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineProposalValidationOwnerGate_bug_*.cfg`
+  and wired `engine-proposal-validation-owner-fast` /
+  `engine-proposal-validation-owner-bug-*` through the formal runner and CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact proposal validation-owner gate is visible in the formal
+  coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-validation-owner-fast`
+  - all 7 `engine-proposal-validation-owner-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineProposalValidationOwnerGate.tla docs/formal/sumeragi/SumeragiEngineProposalValidationOwnerGate_fast.cfg docs/formal/sumeragi/SumeragiEngineProposalValidationOwnerGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-proposal-validation-owner-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine exact validation-owner cleanup formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineValidationOwnershipGate.tla`, a
+  bounded TLA+ model for the exact `self.validating = None` cleanup in
+  `ConsensusEngine::on_validation_result(...)`.
+- The model proves matching valid and invalid current validation callbacks
+  clear the in-flight validation owner exactly.
+- Wrong-round callbacks preserve the owner because the round guard runs before
+  owner lookup; wrong-block callbacks preserve the owner after lookup; and
+  no-in-flight, replayed, and superseded callbacks preserve `None` exactly
+  without synthesizing a new owner.
+- Added 9 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineValidationOwnershipGate_bug_*.cfg` and
+  wired `engine-validation-ownership-fast` /
+  `engine-validation-ownership-bug-*` through the formal runner and CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact validation-owner cleanup gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-validation-ownership-fast`
+  - all 9 `engine-validation-ownership-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineValidationOwnershipGate.tla docs/formal/sumeragi/SumeragiEngineValidationOwnershipGate_fast.cfg docs/formal/sumeragi/SumeragiEngineValidationOwnershipGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-validation-ownership-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine exact invalid-validation advance formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineValidationInvalidAdvanceGate.tla`,
+  a bounded TLA+ model for the exact invalid validation-result next-round
+  computation in `ConsensusEngine::on_validation_result(...)`.
+- The model proves invalid current validation results store the exact next
+  round from `view.saturating_add(1)` while preserving height, epoch, and
+  validator set, including the max-view saturating case.
+- The NewView vote and `AdvanceView` output must both carry the same exact
+  next round that is stored in engine state; valid current results and ignored
+  callbacks preserve the current round and emit no view-advance outputs.
+- Added 12 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineValidationInvalidAdvanceGate_bug_*.cfg`
+  and wired `engine-validation-invalid-advance-fast` /
+  `engine-validation-invalid-advance-bug-*` through the formal runner and CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact invalid-validation round/output advance gate is visible in the
+  formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-validation-invalid-advance-fast`
+  - all 12 `engine-validation-invalid-advance-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineValidationInvalidAdvanceGate.tla docs/formal/sumeragi/SumeragiEngineValidationInvalidAdvanceGate_fast.cfg docs/formal/sumeragi/SumeragiEngineValidationInvalidAdvanceGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-validation-invalid-advance-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 SCCP Solana user-side proof generation hardening
+
+- Hardened the SCCP Solana lane to stay fail-closed for production until the
+  real mainnet Solana recursive verifier, finality policy, and source trust
+  anchor material are wired into `SccpSourceVerifierMaterialV1`.
+- Kept configured Solana source verifier material useful for structural and
+  diagnostic fixtures without letting it bypass disabled-manifest or
+  production-readiness gates.
+- Added local-first Solana SCCP proof request helpers to the JavaScript, Swift,
+  Kotlin, and Java Android SDK surfaces. The SDK helpers normalize UI-provided
+  witnesses, require a caller-supplied source event digest, expose canonical
+  witness hashes/public inputs, and wrap proof bytes from an app-linked local
+  prover without fabricating placeholder proofs.
+- Updated SCCP bridge proof docs and the roadmap to describe the user portal /
+  mobile proof-generation flow and the remaining production cutover work.
+- Focused validation passed:
+  - `cd javascript/iroha_js && node --test test/sccpSolanaProver.test.js`
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests`
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest' --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core:test --tests 'org.hyperledger.iroha.android.sccp.SolanaSccpProverTests' --console=plain`
+- Rust focused validation is currently blocked by pre-existing Cargo processes
+  holding `target/debug/.cargo-lock`; the queued command is
+  `cargo test -p iroha_sccp configured_source_material_does_not_bypass_disabled_manifest_gate -- --nocapture`.
+
+## 2026-05-24 Sumeragi engine exact payload-availability record formal slice
+
+- Added
+  `docs/formal/sumeragi/SumeragiEnginePayloadAvailabilityRecordGate.tla`, a
+  bounded TLA+ model for the exact
+  `available_payloads.insert((subject.block_hash, subject.payload_hash))`
+  mutation in `ConsensusEngine::on_payload_available(...)`.
+- The model proves every payload-availability input records exactly the input
+  subject's block/payload pair before pending-finality lookup, including
+  no-pending, matching-pending, mismatched-pending, and duplicate
+  notifications.
+- Parent mismatches do not affect the availability key because the store is
+  keyed only by block hash and payload hash, and previously recorded unrelated
+  availability pairs are preserved.
+- Added 9 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEnginePayloadAvailabilityRecordGate_bug_*.cfg`
+  and wired `engine-payload-record-fast` / `engine-payload-record-bug-*`
+  through the formal runner and CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact payload-availability record gate is visible in the formal
+  coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-record-fast`
+  - all 9 `engine-payload-record-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEnginePayloadAvailabilityRecordGate.tla docs/formal/sumeragi/SumeragiEnginePayloadAvailabilityRecordGate_fast.cfg docs/formal/sumeragi/SumeragiEnginePayloadAvailabilityRecordGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-payload-record-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine Prepare-QC exact phase formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEnginePreparePhaseGate.tla`, a bounded
+  TLA+ model for exact phase state after Prepare-QC handling in
+  `ConsensusEngine::on_prepare_qc(...)`, including the shared
+  `on_certificate(...)` prefilter, prepare-vote replay/conflict guard, and
+  pending-finality guard.
+- The model proves every accepted fresh Prepare QC moves the engine to
+  `Commit` phase, whether the previous non-pending phase was `Proposal`,
+  `Prepare`, or already `Commit`.
+- Shared-prefilter rejections, replayed/conflicting same-round Prepare QCs, and
+  pending-finality returns preserve the pre-existing phase exactly instead of
+  advancing, regressing, or corrupting phase state.
+- Added 8 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEnginePreparePhaseGate_bug_*.cfg` and wired
+  `engine-prepare-phase-fast` / `engine-prepare-phase-bug-*` through the
+  formal runner and CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact Prepare-QC phase-transition gate is visible in the formal
+  coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-phase-fast`
+  - all 8 `engine-prepare-phase-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEnginePreparePhaseGate.tla docs/formal/sumeragi/SumeragiEnginePreparePhaseGate_fast.cfg docs/formal/sumeragi/SumeragiEnginePreparePhaseGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-prepare-phase-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine Prepare-QC exact lock/highest-QC formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEnginePrepareLockHighestGate.tla`, a
+  bounded TLA+ model for exact lock and highest-QC state after Prepare-QC
+  handling in `ConsensusEngine::on_prepare_qc(...)`, including the shared
+  `on_certificate(...)` prefilter and prepare-vote replay/conflict guard.
+- The model proves every accepted Prepare QC derives the candidate from the
+  exact certificate round, `Prepare` phase, and subject block hash, then writes
+  exactly that QC into `state.locked_qc`.
+- Accepted Prepare QCs record the exact derived QC as highest only when no
+  current highest QC exists or when the derived QC improves the stored QC;
+  accepted lower/equal derived Prepare QCs preserve the stored highest QC while
+  still updating the lock.
+- Shared-prefilter rejections, replayed/conflicting same-round Prepare QCs, and
+  pending-finality returns preserve stored lock and highest-QC state exactly.
+- Added 14 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEnginePrepareLockHighestGate_bug_*.cfg` and
+  wired `engine-prepare-lock-highest-fast` /
+  `engine-prepare-lock-highest-bug-*` through the formal runner and CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact Prepare-QC lock/highest-QC record gate is visible in the formal
+  coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-lock-highest-fast`
+  - all 14 `engine-prepare-lock-highest-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEnginePrepareLockHighestGate.tla docs/formal/sumeragi/SumeragiEnginePrepareLockHighestGate_fast.cfg docs/formal/sumeragi/SumeragiEnginePrepareLockHighestGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-prepare-lock-highest-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine Commit-QC exact highest-QC formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineCommitQcHighestRecordGate.tla`, a
+  bounded TLA+ model for exact highest-QC state after Commit-QC handling in
+  `ConsensusEngine::on_commit_qc(...)`, including the shared
+  `on_certificate(...)` prefilter.
+- The model proves accepted Commit QCs derive the candidate highest-QC
+  reference from the exact certificate round, `Commit` phase, and subject block
+  hash, and record exactly that reference only when no current highest QC
+  exists or when it improves the stored QC.
+- Accepted lower/equal derived Commit QCs, shared-prefilter rejections,
+  committed-height rejections, and pending-finality replay/conflict returns
+  preserve the stored highest-QC reference exactly.
+- Added 9 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineCommitQcHighestRecordGate_bug_*.cfg` and
+  wired `engine-commit-highest-qc-fast` / `engine-commit-highest-qc-bug-*`
+  through the formal runner and CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact Commit-QC highest-QC record gate is visible in the formal
+  coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-highest-qc-fast`
+  - all 9 `engine-commit-highest-qc-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineCommitQcHighestRecordGate.tla docs/formal/sumeragi/SumeragiEngineCommitQcHighestRecordGate_fast.cfg docs/formal/sumeragi/SumeragiEngineCommitQcHighestRecordGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-commit-highest-qc-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine NewView-QC exact highest-QC formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineNewViewHighestQcGate.tla`, a
+  bounded TLA+ model for exact highest-QC state after NewView-QC handling in
+  `ConsensusEngine::on_new_view_qc(...)`, including the shared
+  `on_certificate(...)` prefilter.
+- The model proves accepted NewView certificates without carried highest-QC
+  evidence preserve stored highest-QC state, while compatible carried
+  highest-QC evidence records exactly that QC only when no current QC exists or
+  when the carried QC improves the stored QC.
+- Accepted lower/equal carried highest-QC evidence and rejected NewView
+  certificates, including stale/same-view, incompatible-highest, wrong-context,
+  and wrong-quorum cases, preserve the stored highest-QC reference exactly.
+- Added 11 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineNewViewHighestQcGate_bug_*.cfg` and wired
+  `engine-new-view-highest-qc-fast` / `engine-new-view-highest-qc-bug-*`
+  through the formal runner and CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact NewView-QC highest-QC record gate is visible in the formal
+  coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-highest-qc-fast`
+  - all 11 `engine-new-view-highest-qc-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineNewViewHighestQcGate.tla docs/formal/sumeragi/SumeragiEngineNewViewHighestQcGate_fast.cfg docs/formal/sumeragi/SumeragiEngineNewViewHighestQcGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-new-view-highest-qc-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine top-level handle dispatch formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineHandleDispatchGate.tla`, a bounded
+  TLA+ model for `ConsensusEngine::handle(...)` top-level dispatch.
+- The model proves every `ConsensusInput` variant dispatches to exactly one
+  matching handler: `Tick` to `on_tick`, `Proposal` to `on_proposal`, all
+  certificate phases to `on_certificate`, payload availability to
+  `on_payload_available`, validation results to `on_validation_result`, and
+  committed-block notifications to `on_committed_block`.
+- The slice covers dropped input, cross-routed input, and double-dispatch
+  mutations while leaving phase-specific certificate semantics to the existing
+  `SumeragiEngineCertificateDispatchGate.tla` model.
+- Added 13 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineHandleDispatchGate_bug_*.cfg` and wired
+  `engine-handle-dispatch-fast` / `engine-handle-dispatch-bug-*` through the
+  formal runner and CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the top-level handle dispatch gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-handle-dispatch-fast`
+  - all 13 `engine-handle-dispatch-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineHandleDispatchGate.tla docs/formal/sumeragi/SumeragiEngineHandleDispatchGate_fast.cfg docs/formal/sumeragi/SumeragiEngineHandleDispatchGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-handle-dispatch-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine committed-block exact record formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineCommittedBlockRecordGate.tla`, a
+  bounded TLA+ model for the exact `self.committed` map mutation in
+  `ConsensusEngine::on_committed_block(...)`.
+- The model proves fresh committed-block notifications insert exactly
+  `committed[round.height] = block_hash`, preserve unrelated committed
+  heights, and never write a spurious committed height.
+- Duplicate and conflicting same-height notifications preserve the existing
+  committed map, including the previously recorded block hash for that height.
+- Added 11 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineCommittedBlockRecordGate_bug_*.cfg` and
+  wired `engine-committed-block-record-fast` /
+  `engine-committed-block-record-bug-*` through the formal runner and CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact committed-block record gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-record-fast`
+  - all 11 `engine-committed-block-record-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineCommittedBlockRecordGate.tla docs/formal/sumeragi/SumeragiEngineCommittedBlockRecordGate_fast.cfg docs/formal/sumeragi/SumeragiEngineCommittedBlockRecordGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-committed-block-record-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine NewView-QC exact advance formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineNewViewAdvanceGate.tla`, a
+  bounded TLA+ model for the exact stored-round and `AdvanceView` output fields
+  in `ConsensusEngine::on_new_view_qc(...)`.
+- The model covers compatible NewView certificates with strictly newer views
+  setting `state.round = certificate.round`, emitting exactly
+  `AdvanceView { round: certificate.round }`, returning to proposal phase,
+  clearing validation ownership, and preserving pending finality.
+- The same slice covers shared-prefilter rejections, stale/same-view
+  certificates, and certificates with incompatible carried highest-QC evidence
+  leaving the stored round unchanged and emitting no `AdvanceView`.
+- Added 15 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineNewViewAdvanceGate_bug_*.cfg` and wired
+  `engine-new-view-advance-fast` / `engine-new-view-advance-bug-*` through the
+  formal runner and CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the exact NewView-QC advance/output gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-advance-fast`
+  - all 15 `engine-new-view-advance-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineNewViewAdvanceGate.tla docs/formal/sumeragi/SumeragiEngineNewViewAdvanceGate_fast.cfg docs/formal/sumeragi/SumeragiEngineNewViewAdvanceGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-new-view-advance-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine payload-available Commit-QC formal slice
+
+- Added
+  `docs/formal/sumeragi/SumeragiEngineCommitQcAvailableCommitGate.tla`, a
+  bounded TLA+ model for the payload-available branch in
+  `ConsensusEngine::on_commit_qc(...)`.
+- The model covers current-context Commit QCs with locally available payloads
+  committing the exact certified subject at the current height, clearing
+  validation ownership, returning to proposal phase, emitting exactly one
+  `CommitBlock { subject: certificate.subject }`, and creating no pending
+  finality or fetch side effects.
+- The same slice covers shared-prefilter rejections, already committed heights,
+  and pending-finality replay/conflict returns creating no finality output,
+  while replay/conflict returns preserve the existing pending subject/map entry
+  and clear validation ownership because they reach `on_commit_qc(...)`.
+- Added 14 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineCommitQcAvailableCommitGate_bug_*.cfg`
+  and wired `engine-commit-available-commit-fast` /
+  `engine-commit-available-commit-bug-*` through the formal runner and CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the payload-available Commit-QC exact finality gate is visible in the
+  formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-available-commit-fast`
+  - all 14 `engine-commit-available-commit-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineCommitQcAvailableCommitGate.tla docs/formal/sumeragi/SumeragiEngineCommitQcAvailableCommitGate_fast.cfg docs/formal/sumeragi/SumeragiEngineCommitQcAvailableCommitGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-commit-available-commit-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine Prepare-QC vote-cache formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEnginePrepareVoteCacheGate.tla`, a
+  bounded TLA+ model for the commit-vote cache and output fields in
+  `ConsensusEngine::on_prepare_qc(...)`.
+- The model covers accepted safe Prepare QCs inserting exactly
+  `commit_votes[certificate.round] = certificate.subject` and emitting exactly
+  one commit `SignVote` with the certificate round, certificate subject, and
+  no carried highest-QC reference.
+- The same slice covers shared-prefilter rejections, pending-finality returns,
+  and replay/conflict same-round Prepare QCs creating no new commit-vote output
+  while preserving the existing same-round cached subject.
+- Added 13 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEnginePrepareVoteCacheGate_bug_*.cfg` and
+  wired `engine-prepare-vote-cache-fast` /
+  `engine-prepare-vote-cache-bug-*` through the formal runner and CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the Prepare-QC vote-cache/output gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-vote-cache-fast`
+  - all 13 `engine-prepare-vote-cache-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEnginePrepareVoteCacheGate.tla docs/formal/sumeragi/SumeragiEnginePrepareVoteCacheGate_fast.cfg docs/formal/sumeragi/SumeragiEnginePrepareVoteCacheGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-prepare-vote-cache-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine Commit-QC pending/fetch formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineCommitQcPendingFetchGate.tla`, a
+  bounded TLA+ model for the missing-payload branch in
+  `ConsensusEngine::on_commit_qc(...)`.
+- The model covers missing-payload Commit QCs setting `state.pending_finality`
+  to the certified subject, inserting the cloned certificate into the pending
+  certificate map under the certified block hash, and emitting `FetchPayload`
+  with the exact certificate round, certified block hash, and certified payload
+  hash.
+- The same slice covers payload-available Commit QCs, shared-prefilter
+  rejections, and pending-finality replay/conflict returns creating no new
+  pending entries or fetch requests, while replay/conflict returns preserve the
+  already pending subject and certificate-map entry.
+- Added 15 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineCommitQcPendingFetchGate_bug_*.cfg` and
+  wired `engine-commit-pending-fetch-fast` /
+  `engine-commit-pending-fetch-bug-*` through the formal runner and CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the missing-payload Commit-QC pending/fetch gate is visible in the formal
+  coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-pending-fetch-fast`
+  - all 15 `engine-commit-pending-fetch-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineCommitQcPendingFetchGate.tla docs/formal/sumeragi/SumeragiEngineCommitQcPendingFetchGate_fast.cfg docs/formal/sumeragi/SumeragiEngineCommitQcPendingFetchGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-commit-pending-fetch-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine reconfiguration-staging formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineReconfigurationStagingGate.tla`,
+  a bounded TLA+ model for the committed-block reconfiguration staging side
+  effect in `ConsensusEngine::on_committed_block(...)`.
+- The model covers fresh boundary reconfiguration notifications staging
+  exactly the same `ValidatorSetChange` that they emit through
+  `ActivateValidatorSet`, boundary reconfiguration replacing a previously
+  staged change, and plain commits, non-boundary reconfigurations, duplicate
+  notifications, and conflicting notifications preserving existing staging
+  while emitting no activation.
+- Added 14 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineReconfigurationStagingGate_bug_*.cfg`
+  and wired `engine-reconfiguration-staging-fast` /
+  `engine-reconfiguration-staging-bug-*` through the formal runner and CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the reconfiguration staging gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-reconfiguration-staging-fast`
+  - all 14 `engine-reconfiguration-staging-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineReconfigurationStagingGate.tla docs/formal/sumeragi/SumeragiEngineReconfigurationStagingGate_fast.cfg docs/formal/sumeragi/SumeragiEngineReconfigurationStagingGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-reconfiguration-staging-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine Commit-QC validation cleanup formal slice
+
+- Added
+  `docs/formal/sumeragi/SumeragiEngineCommitQcValidationCleanupGate.tla`, a
+  bounded TLA+ model for the early validation-owner cleanup in
+  `ConsensusEngine::on_commit_qc(...)` as reached through
+  `ConsensusEngine::on_certificate(...)`.
+- The model covers current-context Commit QCs clearing in-flight validation
+  before payload-available, missing-payload, pending-finality replay, and
+  pending-finality conflict paths return; shared-prefilter rejections preserving
+  validation ownership; and late invalid validation callbacks being suppressed
+  after a handler-reached Commit QC supersedes the validation owner.
+- Added 8 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineCommitQcValidationCleanupGate_bug_*.cfg`
+  and wired `engine-commit-validation-cleanup-fast` /
+  `engine-commit-validation-cleanup-bug-*` through the formal runner and CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the Commit-QC validation cleanup gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-validation-cleanup-fast`
+  - all 8 `engine-commit-validation-cleanup-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineCommitQcValidationCleanupGate.tla docs/formal/sumeragi/SumeragiEngineCommitQcValidationCleanupGate_fast.cfg docs/formal/sumeragi/SumeragiEngineCommitQcValidationCleanupGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-commit-validation-cleanup-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine certificate-dispatch formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineCertificateDispatchGate.tla`, a
+  bounded TLA+ model for the shared pure-engine
+  `ConsensusEngine::on_certificate(...)` prefilter and phase dispatch
+  boundary.
+- The model covers rejecting already committed heights, wrong
+  height/epoch/validator-set context, wrong quorum policy, and stale
+  Prepare/Commit views before phase handlers run; dispatching matching
+  Prepare and Commit certificates only to their corresponding handlers; and
+  dispatching matching NewView certificates to `on_new_view_qc(...)` for lower,
+  same, and future views so the strict newer-view check remains owned by the
+  NewView handler.
+- Added 13 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineCertificateDispatchGate_bug_*.cfg` and
+  wired `engine-certificate-dispatch-fast` /
+  `engine-certificate-dispatch-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the certificate prefilter dispatch gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-certificate-dispatch-fast`
+  - all 13 `engine-certificate-dispatch-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineCertificateDispatchGate.tla docs/formal/sumeragi/SumeragiEngineCertificateDispatchGate_fast.cfg docs/formal/sumeragi/SumeragiEngineCertificateDispatchGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-certificate-dispatch-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine committed-block cleanup formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineCommittedBlockCleanupGate.tla`, a
+  bounded TLA+ model for the current-height cleanup side effects in
+  `ConsensusEngine::on_committed_block(...)`.
+- The model covers fresh current-height storage finality recording and cleanup,
+  in-flight validation clearing, pending-finality state and pending-certificate
+  map cleanup for both matching and conflicting storage commits, preservation
+  of current ownership for other-height notifications, no-op behavior for
+  duplicate/conflicting already-committed heights, and the absence of
+  `CommitBlock` outputs from storage-finality notifications.
+- Added 11 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineCommittedBlockCleanupGate_bug_*.cfg` and
+  wired `engine-committed-block-cleanup-fast` /
+  `engine-committed-block-cleanup-bug-*` through the formal runner plus CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the committed-block cleanup side-effect gate is visible in the formal
+  coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-cleanup-fast`
+  - all 11 `engine-committed-block-cleanup-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineCommittedBlockCleanupGate.tla docs/formal/sumeragi/SumeragiEngineCommittedBlockCleanupGate_fast.cfg docs/formal/sumeragi/SumeragiEngineCommittedBlockCleanupGate_bug_*.cfg`
+  - config-to-CI/readme consistency check for
+    `engine-committed-block-cleanup-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine NewView subject formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineNewViewSubjectGate.tla`, a
+  bounded TLA+ model for the NewView vote subject projection shared by
+  `ConsensusEngine::on_tick(...)`, the invalid branch of
+  `ConsensusEngine::on_validation_result(...)`, `qc_subject(...)`, and
+  `zero_subject()`.
+- The model covers highest-QC subject projection into both parent and block
+  fields, zero payload hashes, highest-QC reference binding when present,
+  zero-subject fallback for ticks without highest QC, and rejected-block
+  fallback for invalid validation without highest QC.
+- Added 10 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineNewViewSubjectGate_bug_*.cfg` and wired
+  `engine-new-view-subject-fast` /
+  `engine-new-view-subject-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the NewView subject projection helper is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-subject-fast`
+  - all 10 `engine-new-view-subject-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiEngineNewViewSubjectGate.tla docs/formal/sumeragi/SumeragiEngineNewViewSubjectGate_fast.cfg docs/formal/sumeragi/SumeragiEngineNewViewSubjectGate_bug_*.cfg`
+  - config-to-CI consistency check for
+    `engine-new-view-subject-bug-*` modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine proposal-lock formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineProposalLockGate.tla`, a bounded
+  TLA+ model for the pure engine's `proposal_satisfies_lock(...)` helper.
+- The model covers accepting proposals when no lock exists, accepting the
+  locked subject without extra evidence, rejecting conflicting proposals with
+  no QC, rejecting equal or lower QCs, and accepting conflicting proposals only
+  with strictly greater QCs under `qc_ref_cmp(...)`.
+- Added 8 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineProposalLockGate_bug_*.cfg` and wired
+  `engine-proposal-lock-fast` /
+  `engine-proposal-lock-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the proposal-lock helper is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-lock-fast`
+  - all 8 `engine-proposal-lock-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiEngineProposalLockGate.tla docs/formal/sumeragi/SumeragiEngineProposalLockGate_fast.cfg docs/formal/sumeragi/SumeragiEngineProposalLockGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine QC reference projection formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineQcRefProjectionGate.tla`, a
+  bounded TLA+ model for the pure engine's `qc_ref_from_certificate(...)`
+  helper.
+- The model covers exact projection of certificate round height, view, and
+  epoch, certified block hash as the QC subject, and certificate phase for
+  Prepare, Commit, and NewView certificates. It also rejects height
+  advancement, metadata collapse, parent-hash substitution, synthesized zero
+  subjects, and forced phase rewrites.
+- Added 9 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineQcRefProjectionGate_bug_*.cfg` and wired
+  `engine-qc-ref-projection-fast` /
+  `engine-qc-ref-projection-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the QC reference projection helper is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-qc-ref-projection-fast`
+  - all 9 `engine-qc-ref-projection-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiEngineQcRefProjectionGate.tla docs/formal/sumeragi/SumeragiEngineQcRefProjectionGate_fast.cfg docs/formal/sumeragi/SumeragiEngineQcRefProjectionGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine payload-lookup formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEnginePayloadLookupGate.tla`, a
+  bounded TLA+ model for the pure engine's `ConsensusEngine::has_payload(...)`
+  helper.
+- The model covers exact `(block_hash, payload_hash)` availability matching,
+  rejection of same-block/wrong-payload entries, rejection of
+  wrong-block/same-payload entries, rejection of unrelated recorded payloads,
+  and rejection when the availability store is empty.
+- Added 6 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEnginePayloadLookupGate_bug_*.cfg` and wired
+  `engine-payload-lookup-fast` /
+  `engine-payload-lookup-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the payload lookup helper is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-lookup-fast`
+  - all 6 `engine-payload-lookup-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiEnginePayloadLookupGate.tla docs/formal/sumeragi/SumeragiEnginePayloadLookupGate_fast.cfg docs/formal/sumeragi/SumeragiEnginePayloadLookupGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine commit-subject formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineCommitSubjectGate.tla`, a
+  bounded TLA+ model for the pure engine's
+  `ConsensusEngine::commit_subject(...)` finality side-effect helper.
+- The model covers refusing conflicting already-committed heights without
+  mutation or output, fresh and matching committed subjects recording or
+  retaining the subject hash, clearing pending-finality and validation
+  ownership, returning to proposal phase, and emitting exactly one
+  `CommitBlock` on successful commits.
+- Added 10 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineCommitSubjectGate_bug_*.cfg` and wired
+  `engine-commit-subject-fast` /
+  `engine-commit-subject-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the commit-subject helper is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-subject-fast`
+  - all 10 `engine-commit-subject-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiEngineCommitSubjectGate.tla docs/formal/sumeragi/SumeragiEngineCommitSubjectGate_fast.cfg docs/formal/sumeragi/SumeragiEngineCommitSubjectGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine highest-QC record formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineHighestQcRecordGate.tla`, a
+  bounded TLA+ model for the pure engine's
+  `ConsensusEngine::record_highest_qc(...)` helper and its `qc_ref_cmp(...)`
+  ordering.
+- The model covers empty-state recording, strict greater-than updates by
+  height, then view, then phase rank, then subject hash, no overwrite for equal
+  candidates, no regression for lower candidates, height dominance over view,
+  Commit phase dominance at the same slot, and deterministic subject tie-breaks.
+- Added 13 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineHighestQcRecordGate_bug_*.cfg` and wired
+  `engine-highest-qc-record-fast` /
+  `engine-highest-qc-record-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the highest-QC record helper is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-highest-qc-record-fast`
+  - all 13 `engine-highest-qc-record-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiEngineHighestQcRecordGate.tla docs/formal/sumeragi/SumeragiEngineHighestQcRecordGate_fast.cfg docs/formal/sumeragi/SumeragiEngineHighestQcRecordGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi engine view-advance saturation formal slice
+
+- Added `docs/formal/sumeragi/SumeragiEngineViewAdvanceSaturationGate.tla`, a
+  bounded TLA+ model for the pure engine's saturated view advancement in
+  `ConsensusEngine::on_tick(...)` and the invalid branch of
+  `ConsensusEngine::on_validation_result(...)`.
+- The model covers ordinary view increments by exactly one, maximum-view
+  saturation without wraparound, `NewView`/`AdvanceView` outputs binding the
+  same saturated view stored in engine state, and no view advance for valid,
+  stale, wrong-block, or no-in-flight validation callbacks.
+- Added 8 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiEngineViewAdvanceSaturationGate_bug_*.cfg` and
+  wired `engine-view-advance-saturation-fast` /
+  `engine-view-advance-saturation-bug-*` through the formal runner plus CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the view-advance saturation boundary is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-view-advance-saturation-fast`
+  - all 8 `engine-view-advance-saturation-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiEngineViewAdvanceSaturationGate.tla docs/formal/sumeragi/SumeragiEngineViewAdvanceSaturationGate_fast.cfg docs/formal/sumeragi/SumeragiEngineViewAdvanceSaturationGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi QC-round compatibility formal slice
+
+- Added `docs/formal/sumeragi/SumeragiQcRoundCompatibilityGate.tla`, a
+  bounded TLA+ model for the pure engine's
+  `qc_ref_is_compatible_with_round(...)` helper.
+- The model covers same-epoch acceptance for lower-height QCs regardless of
+  view, same-height QCs only when their view is no greater than the candidate
+  round view, and rejection of wrong-epoch, same-height future-view, and
+  future-height QCs before proposal or NewView admission can use carried
+  highest-QC evidence.
+- Added 8 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiQcRoundCompatibilityGate_bug_*.cfg` and wired
+  `qc-round-compatibility-fast` /
+  `qc-round-compatibility-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the QC-round compatibility helper is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-round-compatibility-fast`
+  - all 8 `qc-round-compatibility-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiQcRoundCompatibilityGate.tla docs/formal/sumeragi/SumeragiQcRoundCompatibilityGate_fast.cfg docs/formal/sumeragi/SumeragiQcRoundCompatibilityGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi precommit-QC view-change selector formal slice
+
+- Added `docs/formal/sumeragi/SumeragiPrecommitQcViewChangeGate.tla`, a
+  bounded TLA+ model for `precommit_qc_for_view_change(...)`.
+- The model covers filtering local highest QC to Commit phase before NewView
+  context, committed-QC fallback when highest is absent or non-Commit,
+  selecting a sole Commit-phase highest QC, selecting a sole committed QC,
+  `(height, view)` lexicographic ordering when both Commit-phase candidates
+  exist, equal-slot tie preference for highest, and lower-height/higher-view
+  losing to higher height.
+- Added 19 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiPrecommitQcViewChangeGate_bug_*.cfg` and
+  wired `precommit-qc-view-change-fast` /
+  `precommit-qc-view-change-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the precommit-QC view-change selector is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-qc-view-change-fast`
+  - all 19 `precommit-qc-view-change-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiPrecommitQcViewChangeGate.tla docs/formal/sumeragi/SumeragiPrecommitQcViewChangeGate_fast.cfg docs/formal/sumeragi/SumeragiPrecommitQcViewChangeGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi proposal parent resolution formal slice
+
+- Added `docs/formal/sumeragi/SumeragiProposalParentResolutionGate.tla`, a
+  bounded TLA+ model for `resolve_prev_block_for_proposal(...)` and
+  `should_seed_frontier_backup_transport(...)`.
+- The model covers genesis/height-zero suppression, Kura parent precedence
+  over pending parents, pending fallback only for highest-QC-subject and
+  height-adjacent pending blocks, parent-missing proposal deferral above
+  genesis, `usize` overflow logging without blocking matching pending fallback,
+  DA inline backup seeding, and RBC transport selection for primary RBC or
+  inline backup paths.
+- Added 22 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiProposalParentResolutionGate_bug_*.cfg` and
+  wired `proposal-parent-resolution-fast` /
+  `proposal-parent-resolution-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so proposal parent resolution and inline backup transport behavior are
+  visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-parent-resolution-fast`
+  - all 22 `proposal-parent-resolution-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiProposalParentResolutionGate.tla docs/formal/sumeragi/SumeragiProposalParentResolutionGate_fast.cfg docs/formal/sumeragi/SumeragiProposalParentResolutionGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi cached-slot timeout formal slice
+
+- Added `docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate.tla`, a bounded
+  TLA+ model for `cached_slot_effective_quorum_timeout(...)`,
+  `next_cached_slot_timeout_streak(...)`, and
+  `cached_slot_timeout_hysteresis_remaining(...)`.
+- The model covers near-commit-quorum fast timeout selection only when one
+  more precommit vote can satisfy quorum, local payload data is missing, and
+  consensus queue/RBC backlog are absent; capping the near-quorum timeout by
+  the ordinary quorum timeout; keeping the ordinary timeout for zero votes,
+  far-from-quorum votes, already-satisfied quorum, missing-data absence, and
+  backlog; NPoS-only repeated-timeout hysteresis; strict elapsed-boundary
+  behavior; next-streak incrementing; and capped hysteresis factors.
+- Added 25 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate_bug_*.cfg` and wired
+  `cached-slot-timeout-fast` / `cached-slot-timeout-bug-*` through the formal
+  runner plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so cached proposal-slot timeout behavior is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-fast`
+  - all 25 `cached-slot-timeout-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate.tla docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate_fast.cfg docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi pacemaker evaluation formal slice
+
+- Added `docs/formal/sumeragi/SumeragiPacemakerEvaluationGate.tla`, a
+  bounded TLA+ model for `Actor::evaluate_pacemaker(...)`.
+- The model covers first-versus-subsequent backpressure deferral logging,
+  deadline advancement from `Pacemaker::should_fire(now)` before backpressure
+  branching, pacing-only due proposal attempts, before-deadline pacing
+  suppression, hard-backpressure proposal suppression, fire-deferral logging
+  for due hard pressure, and tracker reset when pressure clears.
+- Covered 40 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiPacemakerEvaluationGate_bug_*.cfg` and wired
+  `pacemaker-evaluation-fast` / `pacemaker-evaluation-bug-*` through the
+  formal runner plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so pacemaker evaluation behavior is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pacemaker-evaluation-fast`
+  - all 40 `pacemaker-evaluation-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiPacemakerEvaluationGate.tla docs/formal/sumeragi/SumeragiPacemakerEvaluationGate_fast.cfg docs/formal/sumeragi/SumeragiPacemakerEvaluationGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi idle-view proposal budget formal slice
+
+- Added `docs/formal/sumeragi/SumeragiIdleViewProposalBudgetGate.tla`, a
+  bounded TLA+ model for `should_preserve_idle_view_budget_for_proposal(...)`
+  and `should_retry_idle_view_after_proposal(...)`.
+- The model covers due proposal budget preservation only when queued work
+  exists, no mode flip is pending, no commit job is inflight, and proposal
+  pressure is healthy or pacing-only; keeping idle-view repair available under
+  active pending blocks, RBC backlog, relay backpressure, absent queue, early
+  proposal deadlines, mode flips, and commit inflight ownership; deferring
+  idle repair while reserving proposal work on preserved paths; and retrying
+  idle repair after proposal handling only when the skip happened, queued work
+  remains, the frontier is empty, and no commit job owns it.
+- Added 23 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiIdleViewProposalBudgetGate_bug_*.cfg` and
+  wired `idle-view-proposal-budget-fast` /
+  `idle-view-proposal-budget-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so proposal idle-view budget behavior is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-fast`
+  - all 23 `idle-view-proposal-budget-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiIdleViewProposalBudgetGate.tla docs/formal/sumeragi/SumeragiIdleViewProposalBudgetGate_fast.cfg docs/formal/sumeragi/SumeragiIdleViewProposalBudgetGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi post-commit pacemaker kick formal slice
+
+- Added `docs/formal/sumeragi/SumeragiPostCommitPacemakerKickGate.tla`, a
+  bounded TLA+ model for `kickstart_pacemaker_after_commit(...)`.
+- The model covers post-commit kickstart eligibility only with queued
+  transaction work; allowing healthy and pacing-only backpressure from queue
+  saturation or consensus ingress backlog; suppressing kickstart under active
+  pending blocks, RBC backlog, or relay backpressure even when pacing pressure
+  is also present; capturing the trigger timestamp only on attempted kicks;
+  and returning whether a kick was attempted rather than returning the trigger
+  callback's result.
+- Added 17 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiPostCommitPacemakerKickGate_bug_*.cfg` and
+  wired `post-commit-pacemaker-kick-fast` /
+  `post-commit-pacemaker-kick-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so post-commit pacemaker kick behavior is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-fast`
+  - all 17 `post-commit-pacemaker-kick-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiPostCommitPacemakerKickGate.tla docs/formal/sumeragi/SumeragiPostCommitPacemakerKickGate_fast.cfg docs/formal/sumeragi/SumeragiPostCommitPacemakerKickGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi commit-inflight timeout formal slice
+
+- Added `docs/formal/sumeragi/SumeragiCommitInflightTimeoutGate.tla`, a
+  bounded TLA+ model for `Actor::report_inflight_commit_if_timed_out(...)`.
+- The model covers disabled timeout reporting, absent inflight jobs, clock
+  skew before enqueue time, below-boundary elapsed time, at/above-boundary
+  first reports, already-reported one-shot behavior, preserving the inflight
+  owner so late worker results remain attachable, and prohibiting timeout
+  reporting from requeueing or aborting pending work, pruning proposals,
+  forcing/advancing views, recording commit failure, applying commit outcomes,
+  or kickstarting the pacemaker.
+- Added 25 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiCommitInflightTimeoutGate_bug_*.cfg` and
+  wired `commit-inflight-timeout-fast` /
+  `commit-inflight-timeout-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so commit-inflight timeout behavior is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-fast`
+  - all 25 `commit-inflight-timeout-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiCommitInflightTimeoutGate.tla docs/formal/sumeragi/SumeragiCommitInflightTimeoutGate_fast.cfg docs/formal/sumeragi/SumeragiCommitInflightTimeoutGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi commit-job dispatch formal slice
+
+- Added `docs/formal/sumeragi/SumeragiCommitJobDispatchGate.tla`, a bounded
+  TLA+ model for the ownership and fallback boundary in
+  `Actor::start_commit_job(...)`.
+- The model covers duplicate same-block finalize suppression; preserving a
+  different candidate as pending while another commit remains inflight; worker
+  enqueue only when both worker channel ends are present; queue-full behavior
+  retaining pending work without installing an inflight marker; missing worker
+  channels falling back to inline execution; disconnected sends clearing commit
+  worker state before inline fallback; return values matching worker/inline
+  outcomes; and single-owner recoverability through existing inflight, worker
+  queue, pending retry, or inline commit.
+- Added 26 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiCommitJobDispatchGate_bug_*.cfg` and wired
+  `commit-job-dispatch-fast` / `commit-job-dispatch-bug-*` through the formal
+  runner plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so commit-job dispatch behavior is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-job-dispatch-fast`
+  - all 26 `commit-job-dispatch-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiCommitJobDispatchGate.tla docs/formal/sumeragi/SumeragiCommitJobDispatchGate_fast.cfg docs/formal/sumeragi/SumeragiCommitJobDispatchGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi commit-result drain formal slice
+
+- Added `docs/formal/sumeragi/SumeragiCommitResultDrainGate.tla`, a bounded
+  TLA+ model for the asynchronous commit-result drain boundary in
+  `Actor::drain_commit_results(...)`.
+- The model covers applying worker results only when the result id matches the
+  active inflight commit; ignoring id-mismatched results while restoring the
+  real inflight job; ignoring ownerless results; no-op behavior for absent or
+  empty result receivers; disconnected result channels clearing worker state;
+  inline fallback only with an inflight commit; signature-index recovery only
+  when the local peer is outside the commit topology and a commit QC exists;
+  summary/progress recording only after applying an outcome; inflight clearing
+  after applied outcomes; and pacemaker kickstart only after a durable commit
+  outcome is applied.
+- Added 27 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiCommitResultDrainGate_bug_*.cfg` and wired
+  `commit-result-drain-fast` / `commit-result-drain-bug-*` through the formal
+  runner plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so commit-result drain behavior is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-result-drain-fast`
+  - all 27 `commit-result-drain-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiCommitResultDrainGate.tla docs/formal/sumeragi/SumeragiCommitResultDrainGate_fast.cfg docs/formal/sumeragi/SumeragiCommitResultDrainGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi commit-pipeline scheduling formal slice
+
+- Added `docs/formal/sumeragi/SumeragiCommitPipelineSchedulingGate.tla`, a
+  bounded TLA+ model for the commit-pipeline scheduling guard before recovery
+  and finalization candidates are processed.
+- The model covers tick entry only with active candidates, commit inflight
+  work, or explicit wakeups; event-triggered entry and stale-pending
+  reschedule ordering; queue-backlog observation without suppressing or
+  fabricating work; recovery-candidate inclusion under commit wakeup or queue
+  saturation; active-recovery filtering when an active pending block lacks
+  commit-certificate evidence; tick-budget bypass only for active pending
+  work under wakeup/saturation; budget exhaustion re-arming the commit wakeup;
+  `last_commit_pipeline_run` updates only after candidate admission; and
+  idle-view repair yielding only to a woken commit pipeline with active
+  candidates.
+- Added 32 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiCommitPipelineSchedulingGate_bug_*.cfg` and
+  wired `commit-pipeline-scheduling-fast` /
+  `commit-pipeline-scheduling-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so commit-pipeline scheduling is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-scheduling-fast`
+  - all 32 `commit-pipeline-scheduling-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiCommitPipelineSchedulingGate.tla docs/formal/sumeragi/SumeragiCommitPipelineSchedulingGate_fast.cfg docs/formal/sumeragi/SumeragiCommitPipelineSchedulingGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi pending RBC stash formal slice
+
+- Added `docs/formal/sumeragi/SumeragiPendingRbcStashGate.tla`, a bounded
+  TLA+ model for the pending RBC stash used before the corresponding
+  `BlockCreated` INIT arrives.
+- The model covers per-session chunk and byte caps, oldest-frame eviction,
+  zero-cap and oversize drops, READY/DELIVER byte caps, drop accounting,
+  `last_seen` TTL refreshes, inactive-only TTL eviction, active-session
+  retention, session-limit eviction and rejection, flush replay after INIT,
+  dedup release, metrics recording, missing-block repair requests, backlog
+  publication, and the guarantee that dropped or evicted frames are not
+  replayed.
+- Added 44 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiPendingRbcStashGate_bug_*.cfg` and wired
+  `pending-rbc-stash-fast` / `pending-rbc-stash-bug-*` through the formal
+  runner plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so pending-RBC stash behavior is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-rbc-stash-fast`
+  - all 44 `pending-rbc-stash-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiPendingRbcStashGate.tla docs/formal/sumeragi/SumeragiPendingRbcStashGate_fast.cfg docs/formal/sumeragi/SumeragiPendingRbcStashGate_bug_*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi BlockCreated admission formal slice
+
+- Added `docs/formal/sumeragi/SumeragiBlockCreatedAdmissionGate.tla`, a
+  bounded TLA+ model for direct `BlockCreated` payload admission through
+  `handle_block_created_with_preserve_policy(...)`.
+- The model covers local-removed, stale-height/view, lock-rejected,
+  authoritative-owner conflict, empty-payload, hint-mismatch, missing-highest,
+  locked-QC, proposal-mismatch, and RBC-payload mismatch exits; duplicate
+  refresh without ownership; replay preservation while payload processing or
+  commit is already inflight; future-parent/gap repair requests; passive
+  same-height retention; accepted payload phase sampling; inline proposal
+  context caching; missing-request cleanup; and commit-pipeline wakeup only
+  after payload admission.
+- Added 54 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiBlockCreatedAdmissionGate_bug_*.cfg` and wired
+  `block-created-admission-fast` / `block-created-admission-bug-*` through the
+  formal runner plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so direct `BlockCreated` admission is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-created-admission-fast`
+  - all 54 `block-created-admission-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiBlockCreatedAdmissionGate.tla docs/formal/sumeragi/SumeragiBlockCreatedAdmissionGate*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi proposal admission formal slice
+
+- Added `docs/formal/sumeragi/SumeragiProposalAdmissionGate.tla`, a bounded
+  TLA+ model for inbound proposal metadata admission in
+  `handle_proposal(...)`.
+- The model covers stale height/view drops, proposal epoch validation,
+  highest-QC height/epoch gates, parent/highest-QC hash binding, stored/local
+  metadata mismatches, committed-edge conflict suppression, missing future
+  highest-QC repair without accepting the slot, PRF and leader-context ordering
+  before locked-QC rejection, accepted proposal cache/observe side effects,
+  deferred-vote replay, observed-slot pruning, highest-QC update eligibility,
+  Commit phase promotion, lock-lag update deferral, and the guarantee that
+  proposal metadata alone does not wake the commit pipeline or record
+  payload-phase progress.
+- Added 43 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiProposalAdmissionGate_bug_*.cfg` and wired
+  `proposal-admission-fast` / `proposal-admission-bug-*` through the formal
+  runner plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the proposal metadata admission gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-admission-fast`
+  - all 43 `proposal-admission-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiProposalAdmissionGate.tla docs/formal/sumeragi/SumeragiProposalAdmissionGate*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 SCCP TRON/source-material production hardening
+
+- TRON SCCP manifests now advertise `tron-groth16-bn254-v1` as the production
+  TVM verifier backend while keeping the diagnostic message proof family split
+  under `sccp/stark-fri-v1/tron`.
+- `SccpSourceVerifierMaterialV1` readiness now rejects any record that reuses a
+  built-in placeholder id or digest, so flipping `placeholder_material = false`
+  cannot promote the placeholder catalog into a production source verifier.
+- Explicit source-verifier material can still be used to build diagnostic
+  allow-unready artifacts, but strict transparent proof/package builders require
+  the destination manifest to be production-ready; configured source material no
+  longer bypasses disabled manifests.
+- Torii no longer synthesizes non-SORA source-chain proof envelopes from local
+  Iroha/Nexus finality data. Non-SORA message proof generation must be supplied
+  by a source-chain adapter envelope.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp source_verifier_material_production_gate_rejects_placeholder_and_mutations -- --nocapture`
+  - `cargo test -p iroha_sccp source_chain_production_verifier_accepts_explicit_ready_material_and_rejects_replays -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-sccp-fix cargo test -p iroha_sccp configured_source_material_does_not_bypass_disabled_manifest_gate -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-sccp-fix cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_rejects_configured_source_verifier_material_for_unready_lane -- --nocapture`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_torii/src/routing.rs docs/source/bridge_proofs.md status.md roadmap.md`
+
+## 2026-05-24 SCCP source-verifier material config gate
+
+- Added `zk.sccp_source_verifier_materials` as config-sourced SCCP
+  source-chain verifier material. The config model keeps defaults empty, Taira
+  sets the list explicitly empty, and non-empty material is committed into the
+  ZK consensus policy hash with deterministic ordering.
+- On-chain SCCP transparent message admission now converts the configured
+  record into `SccpSourceVerifierMaterialV1` and uses it for non-SORA source
+  proof bundle verification, transparent public-input derivation, inner proof
+  verification, and submission-package checks. The lane opens only for exactly
+  one production-ready, non-placeholder material record matching the source
+  domain; duplicate, malformed, placeholder, wrong-domain, or replayed
+  verifier material fails closed.
+- Added adversarial bridge tests for configured source material acceptance,
+  duplicate material rejection, placeholder material rejection, malformed
+  digest rejection, and verifier-hash replay rejection.
+- Focused validation:
+  - `cargo test -p iroha_sccp source_chain_production -- --nocapture`
+  - `cargo test -p iroha_sccp --lib -- --nocapture`
+  - `cargo test -p iroha_config -- --nocapture`
+  - `cargo test -p iroha_core submit_sccp_inbound_message --test bridge_proofs -- --nocapture`
+  - `cargo test -p iroha_core zk_policy_hash_tracks_sccp_source_verifier_materials -- --nocapture`
+  - `cargo fmt -p iroha_config -p iroha_sccp -p iroha_core -p iroha_torii`
+  - `git diff --check -- configs/soranexus/taira/config.toml crates/iroha_config/src/parameters/actual.rs crates/iroha_config/src/parameters/user.rs crates/iroha_config/tests/fixtures.rs crates/iroha_sccp/src/lib.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/src/state.rs crates/iroha_core/tests/bridge_proofs.rs docs/source/bridge_proofs.md status.md roadmap.md`
+
+## 2026-05-24 Sumeragi proposal-hint admission formal slice
+
+- Added `docs/formal/sumeragi/SumeragiProposalHintAdmissionGate.tla`, a bounded
+  TLA+ model for inbound proposal-hint admission in
+  `handle_proposal_hint(...)`.
+- The model covers stale height/view drops, highest-QC height/epoch gates,
+  cached-hint conflicts and committed-edge replacement, stored/local metadata
+  mismatches, committed-edge conflict suppression, missing future highest-QC
+  repair without accepting the slot, cross-view dependency-context caching,
+  PRF update ordering before locked-QC rejection, accepted hint cache/observe
+  side effects, deferred-vote replay, observed-slot pruning, highest-QC update
+  eligibility, Commit phase promotion, and lock-lag update deferral.
+- Added 40 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiProposalHintAdmissionGate_bug_*.cfg` and wired
+  `proposal-hint-fast` / `proposal-hint-bug-*` through the formal runner plus
+  CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the proposal-hint admission gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-hint-fast`
+  - all 40 `proposal-hint-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md docs/formal/sumeragi/SumeragiProposalHintAdmissionGate.tla docs/formal/sumeragi/SumeragiProposalHintAdmissionGate*.cfg`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi vote admission formal slice
+
+- Added `docs/formal/sumeragi/SumeragiVoteAdmissionGate.tla`, a bounded TLA+
+  model for classic inbound vote admission across `handle_vote(...)`,
+  `validate_and_record_vote_with_signature_result(...)`, and
+  `apply_validated_vote(...)`.
+- The model covers height/view and lock drops, missing-roster deferral,
+  duplicate rejection, non-NEW_VIEW highest-QC rejection, vNext chain-order
+  binding, signature failure, NEW_VIEW highest-QC reference validation,
+  same-slot conflict rejection/defer/supersession, same-key conflict rejection,
+  cross-phase double-vote evidence, accepted-vote recording, QC aggregation
+  attempts, roster caching only for PREPARE/COMMIT votes, stale NEW_VIEW
+  aggregation-only behavior, normal NEW_VIEW tracker updates, commit-pipeline
+  requests, and pending-progress touches.
+- Added 31 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiVoteAdmissionGate_bug_*.cfg` and wired
+  `vote-admission-fast` / `vote-admission-bug-*` through the formal runner plus
+  CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the inbound vote-admission gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-admission-fast`
+  - all 31 `vote-admission-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi VRF message admission formal slice
+
+- Added `docs/formal/sumeragi/SumeragiVrfMessageAdmissionGate.tla`, a bounded
+  TLA+ model for VRF commit/reveal message admission.
+- The model covers supported-mode and epoch-manager gates, signer topology
+  bounds, non-empty signature and signature-verification admission, epoch and
+  roster checks, commit/reveal window checks, duplicate same-value acceptance,
+  commitment/reveal rewrite rejection, reveal-to-commitment matching, late
+  reveal acceptance without PRF refresh, external rebroadcast gating, accepted
+  snapshot staging, and local VRF state updates only for the local validator.
+- Added 21 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiVrfMessageAdmissionGate_bug_*.cfg` and wired
+  `vrf-admission-fast` / `vrf-admission-bug-*` through the formal runner plus
+  CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the VRF message-admission gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-admission-fast`
+  - all 21 `vrf-admission-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi classic signature formal slice
+
+- Added `docs/formal/sumeragi/SumeragiClassicSignatureGate.tla`, a bounded
+  TLA+ model for classic `Vote`/`Qc` signature verification and QC admission.
+- The model covers mode-tag and validator-set binding, signer-bitmap length and
+  out-of-range checks, non-empty signer selection, permissioned count quorum,
+  strict NPoS stake quorum, missing stake-snapshot rejection, aggregate
+  signature/PoP verification inputs, permissioned missing-vote rejection, NPoS
+  aggregate-authenticated missing-vote tolerance, vote subject/root/signature
+  checks, canonical-to-view signer mapping, NewView highest-QC validation, and
+  the success/failure signer-return contract.
+- Added 27 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiClassicSignatureGate_bug_*.cfg` and wired
+  `classic-signature-fast` / `classic-signature-bug-*` through the formal
+  runner plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the classic signature gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh classic-signature-fast`
+  - all 27 `classic-signature-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi classic signing-preimage formal slice
+
+- Added `docs/formal/sumeragi/SumeragiClassicSigningPreimageGate.tla`, a
+  bounded TLA+ model for classic `Vote`, `VrfCommit`, and `VrfReveal`
+  signing-preimage construction.
+- The model covers consensus-domain binding for the domain protocol, chain id,
+  Sumeragi mode tag, protocol version, v1 preimage version, and message type;
+  vote subject binding for block hash, parent/post-state roots, height, view,
+  epoch, chain-order hash, rechain sequence, and phase; highest-QC present and
+  absent encodings; VRF commit/reveal signer and commitment/reveal bytes; and
+  exclusion of mutable signature, aggregate-signature, and signer-bitmap
+  material.
+- Added 32 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiClassicSigningPreimageGate_bug_*.cfg` and wired
+  `classic-preimage-fast` / `classic-preimage-bug-*` through the formal runner
+  plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the classic signing-preimage gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh classic-preimage-fast`
+  - all 32 `classic-preimage-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi RBC causality formal slice
+
+- Added `docs/formal/sumeragi/SumeragiRbcCausalityGate.tla`, a bounded TLA+
+  model for RBC INIT/chunk/READY/DELIVER causality.
+- The model covers INIT evidence binding for epoch, roster, header, leader
+  signature, payload hash, chunk digests, chunk root, and layout; chunk
+  stashing/digest checks; local READY emission after complete payload and
+  chunk-root evidence; remote READY roster/signature/root validation and
+  conflict invalidation; DELIVER stashing, duplicate suppression,
+  signature/root validation, embedded READY-bundle validation, and commit
+  pipeline wakeup after first delivery.
+- Added 25 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiRbcCausalityGate_bug_*.cfg` and wired
+  `rbc-causality-fast` / `rbc-causality-bug-*` through the formal runner plus
+  CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the RBC causality gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-causality-fast`
+  - all 25 `rbc-causality-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- docs/formal/sumeragi/SumeragiRbcCausalityGate.tla docs/formal/sumeragi/SumeragiRbcCausalityGate*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi RBC signing-preimage formal slice
+
+- Added `docs/formal/sumeragi/SumeragiRbcSigningPreimageGate.tla`, a bounded
+  TLA+ model for RBC READY/DELIVER signing-preimage construction.
+- The model covers domain separation, chain id, Sumeragi mode tag, v1 domain
+  binding, exact RBC subject fields, self-signature exclusion, and DELIVER's
+  embedded READY-signature bundle count, entry order, sender, signature length,
+  and signature bytes.
+- Added 20 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiRbcSigningPreimageGate_bug_*.cfg` and wired
+  `rbc-preimage-fast` / `rbc-preimage-bug-*` through the formal runner plus CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the RBC signing-preimage gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-preimage-fast`
+  - all 20 `rbc-preimage-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n ci/check_sumeragi_formal.sh`
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- docs/formal/sumeragi/SumeragiRbcSigningPreimageGate.tla docs/formal/sumeragi/SumeragiRbcSigningPreimageGate*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi direct certified-block fetch formal slice
+
+- Added `docs/formal/sumeragi/SumeragiCertifiedBlockFetchGate.tla`, a bounded
+  TLA+ model for direct certified-block fetch recovery.
+- The model covers commit-QC-only request admission, signer/topology target
+  selection, local-target removal, high-priority direct fetches, service-side
+  request rejection, NPoS stake-snapshot attachment, oversized response
+  splitting/fallbacks, response/proof/checkpoint validation, proof/body
+  pairing, invalid-owner rejection, retry-aborted revival, and
+  materialization cleanup before commit-pipeline wakeup.
+- Added 36 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiCertifiedBlockFetchGate_bug_*.cfg` and wired
+  `certified-fetch-fast` / `certified-fetch-bug-*` through the formal runner
+  plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the direct certified-block fetch gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh certified-fetch-fast`
+  - all 36 `certified-fetch-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- docs/formal/sumeragi/SumeragiCertifiedBlockFetchGate.tla docs/formal/sumeragi/SumeragiCertifiedBlockFetchGate*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi frontier-gap realignment formal slice
+
+- Added `docs/formal/sumeragi/SumeragiFrontierGapRealignGate.tla`, a bounded
+  TLA+ model for post-commit frontier-gap realignment and committed-anchor
+  range-pull pacing.
+- The model covers future-evidence admission, strict contiguous-frontier
+  height checks, local tip payload suppression, exact-body repair suppression
+  and retry behavior, deep catch-up bypass, canonical previous/latest anchor
+  selection, non-canonical latest/latest anchors, target fallback from voting
+  roster to commit topology to trusted peers, local-target removal,
+  deterministic target sort/dedup, empty-target and cooldown suppression,
+  direct response permit recording, canonical window marking, already-emitted
+  shared-window suppression, stride pacing, all-peer versus two-peer cadence,
+  recovery-FSM suppression, missing-QC stall window marking, high-priority
+  next-height recovery, lock-lag cooldown extension, metrics, and dependency
+  watermark recording.
+- Added 31 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiFrontierGapRealignGate_bug_*.cfg` and wired
+  `frontier-gap-realign-fast` / `frontier-gap-realign-bug-*` through the
+  formal runner plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the frontier-gap realignment gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-gap-realign-fast`
+  - all 31 `frontier-gap-realign-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierGapRealignGate.tla docs/formal/sumeragi/SumeragiFrontierGapRealignGate*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi post-commit cleanup formal slice
+
+- Added `docs/formal/sumeragi/SumeragiPostCommitCleanupGate.tla`, a bounded
+  TLA+ model for post-commit cleanup and stale-evidence pruning after the
+  durable committed head advances.
+- The model covers DA-backed committed RBC retention, settled/invalid/no-DA
+  RBC runtime draining, committed-tip descendant preservation, divergent and
+  unknown-parent requeueing, committed duplicate drops without transaction
+  requeue, stale validation/RBC/QC/proposal/missing/vote/slot/recovery
+  pruning, payload-available versus obsolete missing-block clear guards,
+  active vote-window preservation, and committed-edge frontier evidence
+  preservation.
+- Added 31 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiPostCommitCleanupGate_bug_*.cfg` and wired
+  `post-commit-cleanup-fast` / `post-commit-cleanup-bug-*` through the formal
+  runner plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the post-commit cleanup gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh post-commit-cleanup-fast`
+  - all 31 `post-commit-cleanup-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- docs/formal/sumeragi/SumeragiPostCommitCleanupGate.tla docs/formal/sumeragi/SumeragiPostCommitCleanupGate*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi restarted-peer replay formal slice
+
+- Added `docs/formal/sumeragi/SumeragiRestartReplayGate.tla`, a bounded
+  TLA+ model for restarted-peer snapshot/Kura consistency and canonical WSV
+  replay checkpoint behavior.
+- The model covers snapshot digest/signature/Merkle and chain-id verification,
+  snapshot height checks against durable Kura, required Offline Note V2 replay
+  keys, normal restart block-body requirements, hard-fork hash-journal
+  bootstrap checks, interior versus latest hash-mismatch handling, legacy
+  Space Directory manifest replay from Kura, state write-back Kura backing,
+  temporary-file promotion for snapshot writes, and canonical replay
+  checkpoint redaction/normalization that ignores consensus sidecars while
+  preserving committed ledger WSV changes.
+- Added 28 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiRestartReplayGate_bug_*.cfg` and wired
+  `restart-replay-fast` / `restart-replay-bug-*` through the formal runner
+  plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the restarted-peer replay gate is visible in the formal coverage map and
+  the roadmap now distinguishes this bounded snapshot/Kura gate from remaining
+  longer-running restarted-peer replay soak work.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh restart-replay-fast`
+  - all 28 `restart-replay-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- docs/formal/sumeragi/SumeragiRestartReplayGate.tla docs/formal/sumeragi/SumeragiRestartReplayGate*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi Kura durability commit retry formal slice
+
+- Added `docs/formal/sumeragi/SumeragiKuraCommitRetryGate.tla`, a bounded
+  TLA+ model for Kura/state alignment, Kura retry backoff, Kura abort cleanup,
+  already-durable replay, already-committed duplicate skipping, and
+  state-commit failure handling in the Sumeragi commit pipeline.
+- The model covers fail-closed Kura/state alignment, backoff-only pending
+  retention, retry-exhaustion cleanup and view-change recovery, retry reset
+  when a block is already durable, duplicate committed-block skipping, state
+  height-mismatch handling for aligned versus conflicting heads, transaction
+  requeueing only on conflicting state advancement, non-height state-commit
+  retry behavior with Kura persistence recorded, and aborted/retired block
+  revival only when commit-QC evidence makes finalization safe.
+- Added 30 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiKuraCommitRetryGate_bug_*.cfg` and wired
+  `kura-commit-fast` / `kura-commit-bug-*` through the formal runner plus CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the Kura durability commit retry gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh kura-commit-fast`
+  - all 30 `kura-commit-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- docs/formal/sumeragi/SumeragiKuraCommitRetryGate.tla docs/formal/sumeragi/SumeragiKuraCommitRetryGate*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi NPoS VRF epoch-seal formal slice
+
+- Added `docs/formal/sumeragi/SumeragiNposVrfEpochSealGate.tla`, a bounded
+  TLA+ model for NPoS VRF epoch-seal staging, compatible record merges,
+  pending/committed reconciliation, committed block-effect admission, and
+  elected-roster activation timing.
+- The model covers immutable epoch-record headers, same-signer commitment and
+  reveal stickiness, penalty-height/marker stickiness, finalized offender
+  stickiness, unfinalized offender stripping, offender/roster separation,
+  monotonic update heights, observation-preserving merges, sticky validator
+  elections, committed-covered pending cleanup, committed progress extension,
+  incompatible snapshot rejection, activation-margin enforcement, and
+  block-level NPoS VRF effect admission checks.
+- Added 30 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiNposVrfEpochSealGate_bug_*.cfg` and wired
+  `npos-vrf-fast` / `npos-vrf-bug-*` through the formal runner plus CI helper
+  scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the NPoS VRF epoch-seal staging gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh npos-vrf-fast`
+  - all 30 `npos-vrf-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- docs/formal/sumeragi/SumeragiNposVrfEpochSealGate.tla docs/formal/sumeragi/SumeragiNposVrfEpochSealGate*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi worker-ingress routing formal slice
+
+- Added `docs/formal/sumeragi/SumeragiWorkerIngressRoutingGate.tla`, a
+  bounded TLA+ model for Sumeragi worker ingress routing and parallel
+  queue-worker execution envelopes around `SumeragiHandle` enqueue paths,
+  `PriorityTier::queue_kind`, `PriorityTier::stage`, `run_parallel_worker`,
+  `spawn_queue_worker`, and `drain_queue_batch`.
+- The model covers vote/payload/RBC/block/control/lane/background message
+  routing, enqueue metadata and accounting, blocking/nonblocking wake/drop
+  behavior, queue-to-gate-priority mappings, queue-to-stage mappings,
+  queue-to-handler mappings, vote/RBC batch limits, batch-limit flooring,
+  empty-queue stopping, worker-result polling after each handled message,
+  drain accounting, and idle-stage restoration by the last active worker.
+- Added 34 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiWorkerIngressRoutingGate_bug_*.cfg` and wired
+  `worker-ingress-fast` / `worker-ingress-bug-*` through the formal runner
+  plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the worker ingress routing gate is visible in the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh worker-ingress-fast`
+  - all 34 `worker-ingress-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- docs/formal/sumeragi/SumeragiWorkerIngressRoutingGate.tla docs/formal/sumeragi/SumeragiWorkerIngressRoutingGate*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi worker-budget adaptive-cap formal slice
+
+- Added `docs/formal/sumeragi/SumeragiWorkerBudgetAdaptiveGate.tla`, a
+  bounded TLA+ model for worker-loop budget and adaptive-cap helpers around
+  `worker_time_budget`, `vote_rx_drain_budget`, `cap_*_drain_budget`,
+  `idle_tick_gap`, `busy_tick_gap`, `block_backlog_drain_cap`, and
+  `apply_adaptive_drain_caps`.
+- The model covers worker time-budget floor/global/config caps, the rule that
+  worker iteration budgets ignore DA quorum multipliers, DA-aware vote drain
+  budgets with max/config caps and a nonzero floor, generic drain caps,
+  idle/busy tick-gap floors and max bounds, deterministic block backlog depth
+  tiers, vote-backlog payload throttling without RBC throttling, block-backlog
+  block/payload/RBC throttling, and no-backlog preservation.
+- Added 32 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiWorkerBudgetAdaptiveGate_bug_*.cfg` and wired
+  `worker-budget-fast` / `worker-budget-bug-*` through the formal runner plus
+  CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the worker-loop budget/adaptive-cap gate is visible in the formal
+  coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh worker-budget-fast`
+  - all 32 `worker-budget-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- docs/formal/sumeragi/SumeragiWorkerBudgetAdaptiveGate.tla docs/formal/sumeragi/SumeragiWorkerBudgetAdaptiveGate*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi actor-gate priority formal slice
+
+- Added `docs/formal/sumeragi/SumeragiActorGatePriorityGate.tla`, a bounded
+  TLA+ model for `ActorGate::can_enter`, `ActorGate::enter`, and
+  `ActorGuard::drop`.
+- The model covers in-flight serialization, availability body/critical burst
+  ordering, bounded availability bursts before urgent and DA-critical waiters,
+  urgent yielding to DA-critical and regular waiters after configured caps,
+  regular admission after urgent burst caps, entry waiter/streak side effects,
+  and drop wakeup/streak behavior.
+- Added 26 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiActorGatePriorityGate_bug_*.cfg` and wired
+  `actor-gate-fast` / `actor-gate-bug-*` through the formal runner plus CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the actor-gate priority/fairness gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh actor-gate-fast`
+  - all 26 `actor-gate-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs
+    files
+  - `git diff --check -- docs/formal/sumeragi/SumeragiActorGatePriorityGate.tla docs/formal/sumeragi/SumeragiActorGatePriorityGate_fast.cfg docs/formal/sumeragi/SumeragiActorGatePriorityGate_bug_*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi worker-drain scheduler formal slice
+
+- Added `docs/formal/sumeragi/SumeragiWorkerDrainSchedulerGate.tla`, a bounded
+  TLA+ model for worker-loop drain scheduling around `run_worker_iteration`,
+  `drain_mailbox`, and `select_next_tier`.
+- The model covers vote-burst priority, frontier body-repair priority,
+  quorum-recovery vote-drain priority, one non-vote payload/RBC escape after a
+  vote-only time-budget slice, block backlog escape, low-priority control
+  service after high-priority queues empty, per-envelope drain accounting,
+  result polling before ticks, busy tick-gap selection, explicit tick-gap
+  bypass, and post-tick suppression after budget exhaustion.
+- Added 34 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiWorkerDrainSchedulerGate_bug_*.cfg` and wired
+  `worker-drain-fast` / `worker-drain-bug-*` through the formal runner plus CI
+  helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and `roadmap.md`
+  so the worker-loop drain scheduler gate is visible in the formal coverage
+  map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh worker-drain-fast`
+  - all 34 `worker-drain-bug-*` expected-failure modes
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 SCCP plan-specific source adapter proof formats
+
+- `SccpSourceConsensusProofV1` now carries a plan-specific
+  `SccpSourceAdapterProofV1` variant instead of only a generic source
+  finality/root tuple. The accepted variants are
+  `EthereumBeaconReceipt`, `BscValidatorSetReceipt`,
+  `SolanaFinalizedTransaction`, `TonMasterchainShard`, `TronDposReceipt`, and
+  `SubstrateGrandpaEvent`.
+- The structural verifier now rejects source envelopes whose adapter variant
+  does not match the source domain/proof plan/finality model, whose adapter
+  height/block/root fields do not match the enclosing envelope, or whose
+  chain-specific witness hashes are zero. It also requires
+  `adapter_transcript_hash` to match the domain-separated transcript over the
+  source/target domains, proof plan, finality model, finality height/block,
+  receipt/message root, source-event digest, and canonical adapter proof, so
+  stale or witness-substituted adapter material fails structural verification.
+  The consensus proof now also carries a `SccpSourceAdapterVerificationProofV1`
+  FastPQ/OpenVerify capsule over the canonical adapter statement, and the
+  verifier rejects stale OpenVerify metadata, wrong adapter public inputs, and
+  tampered FastPQ proof public IO. Production remains fail-closed until these
+  typed adapter variants are backed by real external consensus and
+  receipt/message inclusion engines.
+- `SccpSourceConsensusProofV1` now also carries
+  `SccpSourceVerifierEvidenceV1`, an explicit binding for the source trust
+  anchor id/hash, source consensus verifier id/hash, message-inclusion
+  verifier id/hash, finality policy id/hash, adapter proof hash, adapter
+  transcript hash, and adapter circuit id. The adapter OpenVerify public
+  inputs include the resulting evidence hash, and the canonical adapter
+  statement includes that hash, so zeroed anchors, domain replays, stale
+  adapter hashes, wrong circuit ids, wrong finality policies, and mismatched
+  verifier evidence are rejected structurally.
+- Source verifier IDs and hashes now come from a typed
+  `SccpSourceVerifierMaterialV1` record. The built-in catalog marks every
+  record as `placeholder_material = true`, and readiness derives external
+  consensus verifier, message-inclusion verifier, and source trust-anchor
+  readiness from `sccp_source_verifier_material_is_production_ready(...)`, so
+  placeholder material cannot accidentally open a production SCCP source lane.
+  Negative tests cover placeholder material, domain/chain/proof-plan/finality
+  replays, wrong adapter circuit ids, empty ids, and zero anchor/verifier/policy
+  hashes.
+- Source-adapter production readiness is now an explicit nested checklist on
+  `SccpLaneProductionReadinessV1`: the adapter statement binding,
+  FastPQ/OpenVerify capsule, and finality-model declaration are visible as
+  ready, while external consensus verification, external receipt/message
+  inclusion verification, and source-chain trust anchors remain false blockers
+  for every advertised lane.
+- Torii's non-SORA SCCP bundle construction now emits the same typed adapter
+  proof shape in the source-chain consensus proof envelope so API-generated
+  diagnostic bundles exercise the stricter wire format.
+- Taira's confidential proof byte caps now allow SCCP transparent artifacts
+  that embed both the message proof and source-adapter FastPQ capsule
+  (`max_proof_size_bytes = 4194304`,
+  `max_proof_bytes_block = 16777216`) while still keeping unready SCCP
+  transparent proof consumption disabled.
+- Focused validation passed:
+  - `cargo check -p iroha_sccp`
+  - `cargo fmt -p iroha_sccp -p iroha_torii -p iroha_core`
+  - `cargo test -p iroha_sccp readiness -- --nocapture`
+  - `cargo test -p iroha_sccp source_verifier_material_production_gate_rejects_placeholder_and_mutations -- --nocapture`
+  - `cargo test -p iroha_sccp source_chain_proof_material_requires_plan_specific_adapter_proofs -- --nocapture`
+  - `cargo test -p iroha_sccp --lib -- --nocapture`
+  - `cargo test -p iroha_torii --lib sccp_ -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs sccp -- --nocapture`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_torii/src/routing.rs docs/source/bridge_proofs.md status.md roadmap.md configs/soranexus/taira/config.toml`
+
+## 2026-05-24 Sumeragi async QC verification formal slice
+
+- Added `docs/formal/sumeragi/SumeragiQcVerifyAsyncGate.tla`, a bounded TLA+
+  model for actor-side QC aggregate-verification ownership around
+  `handle_qc_with_aggregate(...)`, `dispatch_known_block_qc_verify(...)`,
+  `apply_known_block_qc_work(...)`, and `poll_qc_verify_results(...)`.
+- The model covers verified-cache bypass, consensus-QC inline fallback,
+  consensus-QC worker ownership, known-block stale-lock drops before dispatch,
+  known-block inline fallback, known-block worker ownership, duplicate
+  in-flight suppression, worker-result key/id ownership, consensus vs.
+  known-block result routing, aggregate-result propagation, and disconnected
+  worker/result-channel cleanup.
+- Added 39 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiQcVerifyAsyncGate_bug_*.cfg` and wired
+  `qc-verify-async-fast` / `qc-verify-async-bug-*` through the formal runner
+  plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and
+  `roadmap.md` so the new async QC aggregate-verification gate is visible in
+  the formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-verify-async-fast`
+  - all 39 `qc-verify-async-bug-*` expected-failure configs
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi async vote-verification formal slice
+
+- Added `docs/formal/sumeragi/SumeragiVoteVerifyAsyncGate.tla`, a bounded
+  TLA+ model for actor-side async vote-verification ownership around
+  `try_dispatch_vote_verification(...)`,
+  `dispatch_pending_vote_verifications(...)`, and
+  `poll_vote_verify_results(...)`.
+- The model covers no-worker inline fallback, duplicate suppression,
+  successful worker deferral, full-lane pending retention, pending retry,
+  mismatched worker-result id handling, stale/locked/penalized vote drops,
+  invalid-signature rejection, valid-result application, and disconnected
+  result-channel cleanup.
+- Added 30 expected-failure configs under
+  `docs/formal/sumeragi/SumeragiVoteVerifyAsyncGate_bug_*.cfg` and wired
+  `vote-verify-async-fast` / `vote-verify-async-bug-*` through the formal
+  runner plus CI helper scripts.
+- Updated `docs/formal/sumeragi/README.md`, `ci/README.md`, and
+  `roadmap.md` so the new vote-verification ownership gate is visible in the
+  formal coverage map.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-verify-async-fast`
+  - all 30 `vote-verify-async-bug-*` expected-failure configs
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md`
+- Rust tests were not run for this slice because it adds formal/docs/CI
+  coverage only and does not change Rust implementation logic.
+
+## 2026-05-24 SCCP unready-lane submission fail-closed slice
+
+- `SubmitBridgeProof` now validates SCCP message proof artifacts with the
+  production verifier path only. The `sccp_allow_unready_transparent_proofs`
+  configuration flag no longer lets disabled SCCP lanes enter the on-chain
+  bridge proof registry.
+- Non-SORA SCCP source-chain envelopes now have a separate production adapter
+  gate. The structural verifier still checks typed proof binding for diagnostics,
+  but production helpers reject structural-only source envelopes until the
+  matching external consensus/receipt adapter is marked ready.
+- State-changing Torii endpoints (`POST /v1/bridge/proofs/submit` and
+  `POST /v1/bridge/messages`) now force the same production lane gate even when
+  node configuration enables unready proof generation for diagnostics.
+- Torii SCCP proof artifact/job discovery routes now also force the production
+  lane gate; the legacy unready flag is not a public disabled-lane bypass.
+- Taira's SCCP config now sets `sccp_allow_unready_transparent_proofs = false`
+  so deployed configuration matches the fail-closed launch posture.
+- Added regression coverage for an unready non-SORA SCCP bridge proof being
+  rejected on-chain even with the flag enabled, for artifact/job generation
+  rejecting disabled lanes with the flag enabled, and for
+  `POST /v1/bridge/messages` rejecting a disabled inbound lane with the flag
+  enabled.
+- Focused validation passed:
+  - `cargo fmt -p iroha_sccp -p iroha_core -p iroha_torii`
+  - `cargo test -p iroha_sccp source_chain_production_verifier_rejects_structural_envelopes_until_adapter_ready -- --nocapture`
+  - `cargo test -p iroha_sccp --lib -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_rejects_unready_lane_even_if_config_allows -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs sccp -- --nocapture`
+  - `cargo test -p iroha_torii --lib unready_config_allows -- --nocapture`
+  - `cargo test -p iroha_torii --lib sccp_ -- --nocapture`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/lib.rs docs/source/bridge_proofs.md status.md roadmap.md configs/soranexus/taira/config.toml`
+
+## 2026-05-24 Sumeragi vNext control-certificate ingress formal slice
+
+- Added `docs/formal/sumeragi/SumeragiVNextControlIngressGate.tla`, a bounded
+  TLA+ model for actor-level vNext re-chain and view-change certificate ingress
+  in `crates/iroha_core/src/sumeragi/main_loop.rs`.
+- The model checks that missing-round re-chain certificates do not mutate live
+  round state; already-current re-chain certificates are no-ops; invalid
+  re-chain certificates reject without installation or escalation; valid
+  within-bound re-chain certificates update chain order, record re-chain
+  progress, and install; over-taint and quorum-weakening re-chain evidence
+  requires a live view change; required view changes clear validation-worker
+  ownership, vote, and trigger live view-change handling; and view-change
+  certificates abort only installed highest slots while triggering only nonzero
+  new views.
+- Formal CI now runs `vnext-control-ingress-fast` plus expected-failure
+  mutations for missing-round mutation, already-current side effects,
+  re-chain rejection, valid re-chain update/install progress, over-taint and
+  quorum-weakening escalation, required-view-change side effects, and
+  view-change certificate abort/trigger/install behavior.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-control-ingress-fast`
+  - all 28 `vnext-control-ingress-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust validation for this slice was not run because it only adds
+  formal/docs/CI coverage and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi vNext slot-lifecycle formal slice
+
+- Added `docs/formal/sumeragi/SumeragiVNextSlotLifecycleGate.tla`, a bounded
+  TLA+ model for actor-owned vNext slot lifecycle behavior around validation,
+  availability, commit persistence, timeout recovery, and stale callback
+  handling in `crates/iroha_core/src/sumeragi/main_loop.rs`.
+- The model checks that proposal, availability, validation, and commit events
+  cannot install missing rounds accidentally; committed slots are sticky;
+  validation dispatch requires an installed, non-committed, unqueued slot;
+  matching worker-start/queue-full/result events own their validation state;
+  stale and terminal validation results are ignored; deferral preserves
+  committed slots; due unprotected validation timeouts start recovery; and
+  recovery does not emit validation-result side effects.
+- Formal CI now runs `vnext-slot-lifecycle-fast` plus expected-failure
+  mutations for no-base installation, committed-state overwrites, invalid
+  validation dispatch, worker ownership, queue-full ownership, valid/invalid
+  result handling, stale/terminal result handling, deferral, timeout recovery,
+  commit stickiness, progress marking, and recovery side effects.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-slot-lifecycle-fast`
+  - all 32 `vnext-slot-lifecycle-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust validation for this slice was not run because it only adds
+  formal/docs/CI coverage and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi vNext signing-preimage formal slice
+
+- Added `docs/formal/sumeragi/SumeragiVNextSigningPreimageGate.tla`, a
+  bounded TLA+ model for vNext aggregate signing preimages, unsigned vote
+  projection, and suspicion signing-body hashes in
+  `crates/iroha_core/src/sumeragi/vnext.rs`.
+- The model checks that re-chain votes and certificates share the same
+  re-chain certificate preimage; view-change votes and certificates share the
+  same view-change certificate preimage; every aggregate preimage binds chain
+  id, message type, vNext version, mode tag, and body fields; signature and
+  signer-bitmap material is excluded from preimages; unsigned vote helpers
+  initialize empty signatures; and suspicion hashes bind canonical evidence
+  fields while excluding signatures.
+- Formal CI now runs `vnext-signing-preimage-fast` plus expected-failure
+  mutations for dropped domain fields, swapped message-type tags, dropped
+  re-chain/view body fields, included signature or bitmap material, broken
+  unsigned-vote projection, and mutable suspicion-hash identity.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-signing-preimage-fast`
+  - all 27 `vnext-signing-preimage-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust validation for this slice was not run because it only adds
+  formal/docs/CI coverage and does not change Rust implementation logic.
+
+## 2026-05-24 SCCP direction-sensitive bridge proof admission
+
+- Added verified SCCP message-finality helpers that expose
+  `NexusBridgeFinalityProofV1` only for SORA-origin bundles and
+  `SccpSourceChainProofEnvelopeV1` only for non-SORA-origin bundles.
+- Updated `SubmitBridgeProof` validation so SCCP message proof artifacts no
+  longer parse every `finality_proof` as Nexus finality. SORA-origin messages
+  still require locally anchored Nexus finality; non-SORA messages now require
+  the typed source-chain envelope to be structurally verified and bundle-bound.
+- Added regression coverage for direction-sensitive helper behavior and the
+  initial source-chain envelope admission path. The later unready-lane
+  fail-closed slice makes disabled lane artifacts reject before on-chain
+  recording, even if the historical test-only flag is enabled.
+- Tightened `RecordSccpMessage` execution so Nexus block-level SCCP message
+  records only accept SORA-origin payloads. Non-SORA source messages must enter
+  through bridge proof submission with their source-chain proof envelope instead
+  of being reconstructed as if Nexus originated them.
+- The remaining production gate is unchanged: non-SORA lanes must stay disabled
+  until chain-specific adapters verify real external consensus/finality and
+  receipt/message inclusion against the typed source proof payloads.
+- Focused validation passed:
+  - `cargo fmt -p iroha_sccp -p iroha_core`
+  - `cargo test -p iroha_sccp verified_message_finality_helpers_are_direction_sensitive -- --nocapture`
+  - `cargo test -p iroha_sccp --lib -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs sccp -- --nocapture`
+  - `cargo test -p iroha_core record_sccp_message_rejects_non_sora_origin_payloads -- --nocapture`
+  - `cargo test -p iroha_torii --lib sccp_ -- --nocapture`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/tests/bridge_proofs.rs docs/source/bridge_proofs.md status.md roadmap.md crates/iroha_torii/src/routing.rs crates/iroha_torii/src/lib.rs`
+
+## 2026-05-24 Sumeragi vNext chain-order helper formal slice
+
+- Added `docs/formal/sumeragi/SumeragiVNextChainOrderGate.tla`, a bounded
+  TLA+ model for `ChainOrder::new(...)`, `critical_path()`,
+  `successor_of(...)`, `QuorumPolicy::smallest_satisfying_prefix_len(...)`,
+  and `build_signer_bitmap(...)` in
+  `crates/iroha_core/src/sumeragi/vnext.rs`.
+- The model checks fail-closed order construction for empty orders, invalid
+  critical-prefix bounds, and invalid quarantine bounds; accepted orders expose
+  exactly the critical prefix; successor lookup never returns quarantine-tail,
+  critical-tail, or unknown peers; count/stake quorum prefixes are minimal and
+  strict; missing stake weights and zero total stake fail closed; signer
+  bitmaps use canonical byte lengths and reject duplicate or out-of-range
+  indices.
+- Formal CI now runs `vnext-chain-order-fast` plus expected-failure mutations
+  for invalid order acceptance, critical-path projection mistakes, successor
+  lookup mistakes, count/stake prefix mistakes, and signer-bitmap construction
+  mistakes.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-chain-order-fast`
+  - all 19 `vnext-chain-order-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust validation for this slice was not run because it only adds
+  formal/docs/CI coverage and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi vNext validation ownership formal slice
+
+- Added `docs/formal/sumeragi/SumeragiVNextValidationGate.tla`, a bounded
+  TLA+ model for `ValidationState::decision_at(...)`,
+  `ValidationState::worker_started(...)`, and
+  `ValidationState::apply_worker_result(...)` in
+  `crates/iroha_core/src/sumeragi/vnext.rs`.
+- The model checks unqueued dispatch, queued await, terminal valid/invalid
+  accept/reject decisions, running and backpressured timeout boundaries,
+  saturating elapsed-time behavior when `now_ms` is before `started_at_ms`,
+  worker-start ownership recording, matching result application, and stale
+  wrong-id/wrong-generation/non-running result rejection without mutation.
+- Formal CI now runs `vnext-validation-fast` plus expected-failure mutations
+  for queued dispatch, early or missed timeout suspicion, terminal await
+  mistakes, elapsed underflow, worker-start owner loss, wrong-owner result
+  application, matching-result drops, and stale-result state mutation.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-validation-fast`
+  - all 15 `vnext-validation-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust validation for this slice was not run because it only adds
+  formal/docs/CI coverage and does not change Rust implementation logic.
+
+## 2026-05-24 SCCP source proof material verification
+
+- Added typed source proof payloads inside `SccpSourceChainProofEnvelopeV1`:
+  `SccpSourceConsensusProofV1` for the source finality/header binding and
+  `SccpSourceMessageInclusionProofV1` for the source event inclusion binding.
+- The SCCP verifier now decodes those proof blobs, recomputes the source-event
+  leaf, folds the 32-byte inclusion branch into the receipt/message root, and
+  recomputes the finalized-header hash from source domain, finality model,
+  finality height, finality block hash, and the reconstructed root.
+- Non-SORA source bundles now reject arbitrary non-empty proof bytes, malformed
+  Norito proof payloads, bad branch widths, branch/root mismatches,
+  finality/header mismatches, and tampered consensus or inclusion proof fields.
+- Torii committed-message reconstruction now emits the typed proof material
+  shape for non-SORA source messages instead of placing raw payload or Nexus
+  finality bytes into the source proof slots. The lane remains
+  production-disabled until inbound admission persists real source-chain proof
+  bytes and the chain-specific adapters validate external finality.
+- Added adversarial coverage for malformed proof blobs, 32-byte branch shape,
+  branch sibling tampering, consensus proof version/domain/chain/proof-plan/
+  finality-model/finality-height/block-hash/root/header-hash tampering, and
+  inclusion proof version/domain/target/message-id/payload-hash/event-digest/
+  leaf/root/index tampering.
+- Focused validation passed:
+  - `cargo fmt -p iroha_sccp -p iroha_torii -p iroha_core -p iroha -p iroha_cli`
+  - `cargo test -p iroha_sccp source_chain_proof -- --nocapture`
+  - `cargo test -p iroha_sccp --lib -- --nocapture`
+  - `cargo test -p iroha_torii --lib sccp_ -- --nocapture`
+  - `cargo test -p iroha get_sccp_capabilities_requests_norito_and_decodes_typed_payload -- --nocapture`
+  - `cargo test -p iroha_cli --features bridge sccp_capabilities_text_command_prints_summary -- --nocapture`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/lib.rs crates/iroha_core/src/sumeragi/main_loop.rs docs/source/bridge_proofs.md status.md roadmap.md crates/iroha/src/client.rs crates/iroha_cli/src/bridge.rs contracts/evm/sccp/README.md contracts/evm/sccp/SccpSecp256k1MessageVerifier.sol`
+
+## 2026-05-24 Sumeragi vNext aggregate signature formal slice
+
+- Added `docs/formal/sumeragi/SumeragiVNextSignatureGate.tla`, a bounded TLA+
+  model for vNext aggregate certificate verification in
+  `crates/iroha_core/src/sumeragi/vnext.rs`.
+- The model checks that re-chain certificates validate embedded slot,
+  chain-order hash, and re-chain sequence consistency before aggregate
+  verification, while both re-chain and view-change certificates reject missing
+  aggregate signatures, empty rosters, malformed signer bitmaps, out-of-range
+  signer bits, empty signer sets, signer PoP length mismatches, under-quorum
+  signers, non-BLS signer keys, and bad aggregate signatures.
+- It also checks that accepted certificates return exactly the bitmap-selected
+  signer set, rejected certificates return no signers, count quorum is enforced,
+  and exact two-thirds stake remains insufficient under the strict NPoS quorum
+  comparison.
+- Formal CI now runs `vnext-signature-fast` plus expected-failure mutations for
+  missing/bad signatures, empty roster/signer set, malformed bitmap shape,
+  signer PoP mismatch, count/stake quorum mistakes, non-BLS signer acceptance,
+  re-chain body consistency mistakes, and incorrect returned-signer projection.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-signature-fast`
+  - all 16 `vnext-signature-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust validation for this slice was not run because it only adds
+  formal/docs/CI coverage and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi vNext re-chain formal slice
+
+- Added `docs/formal/sumeragi/SumeragiVNextRechainGate.tla`, a bounded TLA+
+  model for the quarantined `ChainOrder::rechain_after_suspicions(...)`
+  helper in `crates/iroha_core/src/sumeragi/vnext.rs`.
+- The model checks that re-chain evidence must match the current slot,
+  chain-order hash, and re-chain sequence; accusations must be
+  successor-scoped; empty, duplicate, non-successor, tail-accuser, and
+  no-longer-successor-after-canonical-ordering evidence fail closed.
+- It also checks that accepted evidence moves both accuser and accused into the
+  quarantine tail, excludes tainted validators from the new critical path,
+  increments `rechain_seq` once per applied suspicion, changes the chain-order
+  hash, and rechecks count/stake quorum after quarantine with strict
+  greater-than-two-thirds stake semantics.
+- Formal CI now runs `vnext-rechain-fast` plus expected-failure mutations for
+  empty/invalid evidence, successor-scope mistakes, duplicate evidence,
+  quarantine-capacity and quorum mistakes, taint placement, sequence mutation,
+  certificate slot mutation, and unchanged chain-order hash mistakes.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-rechain-fast`
+  - all 17 `vnext-rechain-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust validation for this slice was not run because it only adds
+  formal/docs/CI coverage and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi missing-block hard-cap cleanup formal slice
+
+- Added `docs/formal/sumeragi/SumeragiMissingBlockHardCapCleanupGate.tla`, a
+  bounded TLA+ model for hard-cap cleanup preservation around
+  `apply_frontier_recovery_cleanup(...)`.
+- The model checks that hard-cap cleanup preserves the live contiguous frontier
+  only when the height is `committed + 1` and live material exists. Live
+  material includes active ownership, valid tip-extending pending or inflight
+  blocks, valid RBC sessions, and pending RBC work.
+- It also checks that invalid and non-tip material fail closed, live cleanup
+  skips same-height pruning, keeps metadata/recovery state/valid RBC/pacing,
+  prunes invalid or future cleanup state, preserves quorum-backed
+  missing-payload repair, and applies frontier `NewView` and same-view owner
+  rules.
+- Formal CI now runs `missing-block-hard-cap-cleanup-fast` plus
+  expected-failure mutations for frontier/material requirements, each live
+  material source, invalid live-material classification, same-height live
+  preservation, invalid/future cleanup pruning, quorum-backed repair, and
+  evidence/owner pruning rules.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-block-hard-cap-cleanup-fast`
+  - all 25 `missing-block-hard-cap-cleanup-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust validation for this slice was not run because it only adds
+  formal/docs/CI coverage and does not change Rust implementation logic.
+
+## 2026-05-24 SCCP source-chain proof envelope binding
+
+- Added `SccpSourceChainProofEnvelopeV1` as the typed finality/inclusion proof
+  envelope for non-SORA SCCP source messages. The envelope binds source/target
+  domains, canonical chain key, source proof plan, finality model, message id,
+  payload hash, commitment root, finality height/block hash, finalized header,
+  receipt/message root, source-event digest, and non-empty consensus/inclusion
+  proof material.
+- `NexusSccpMessageProofV1.finality_proof` is now direction-sensitive:
+  SORA-origin bundles must carry a Nexus finality proof, while non-SORA source
+  bundles must carry the source-chain envelope. Wrong-format proofs are rejected
+  before public-input or runtime-envelope projection.
+- SCCP message public inputs and runtime-scale projection now derive finality
+  height/block hash from the source-chain envelope for non-SORA source bundles,
+  and continue to use Nexus commit-QC finality for SORA-origin bundles.
+- Torii SCCP message-bundle reconstruction and publication now preserve the
+  direction-sensitive proof format, and bridge-proof range derivation now uses
+  SCCP public inputs instead of assuming every message carries a Nexus finality
+  proof. Test-only SCCP bundle registry access is serialized so parallel Torii
+  SCCP endpoint tests cannot clear each other's fixtures.
+- Added adversarial coverage for all advertised non-SORA source domains and
+  negative cases covering raw Nexus finality on external-source bundles,
+  source-chain envelopes on SORA-origin bundles, cross-lane/cross-target replay,
+  message-id/payload-hash/commitment-root replay, wrong chain key, wrong proof
+  plan, wrong finality model, bad source-event digest, zero hashes/heights, and
+  missing consensus or inclusion proof data.
+- Remaining production blocker: chain-specific verifier adapters still need to
+  validate real ETH/BSC/Solana/TON/TRON/Substrate consensus/finality and
+  receipt/message inclusion, and inbound admission still needs to persist the
+  verified source-chain proof bytes, before any lane can be marked
+  production-ready.
+- Focused validation passed:
+  - `cargo fmt -p iroha_core -p iroha_sccp -p iroha_torii`
+  - `cargo test -p iroha_sccp source_chain -- --nocapture`
+  - `cargo test -p iroha_sccp message_bundle_structure_rejects_wrong_finality_format_for_source_direction -- --nocapture`
+  - `cargo test -p iroha_sccp runtime_envelope_from_message_bundle_exports_scale_inputs_for_pallet -- --nocapture`
+  - `cargo test -p iroha_sccp --lib -- --nocapture`
+  - `cargo test -p iroha_torii --lib sccp_ -- --nocapture`
+  - `cargo test -p iroha get_sccp_capabilities_requests_norito_and_decodes_typed_payload -- --nocapture`
+  - `cargo test -p iroha_cli --features bridge sccp_capabilities_text_command_prints_summary -- --nocapture`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/lib.rs crates/iroha_core/src/sumeragi/main_loop.rs docs/source/bridge_proofs.md status.md roadmap.md crates/iroha/src/client.rs crates/iroha_cli/src/bridge.rs contracts/evm/sccp/README.md contracts/evm/sccp/SccpSecp256k1MessageVerifier.sol`
+
+## 2026-05-24 Sumeragi missing-block hard-cap formal slice
+
+- Added `docs/formal/sumeragi/SumeragiMissingBlockHardCapGate.tla`, a bounded
+  TLA+ model for `maybe_escalate_missing_block_height_recovery(...)` hard-cap
+  escalation.
+- The model checks that active contiguous consensus-priority missing-block
+  recovery can rotate only after the hard cap is due and convergence,
+  duplicate-trigger, view, priority, tier-deferral, backlog-deferral, and
+  stall-window guards allow it.
+- It also checks the lock-lag override, duplicate same-view budget sealing,
+  escalated-view and request-latch side effects, `MissingPayload` cause
+  selection, no-actionable cleanup/no-progress behavior, and range-pull-only
+  progress that must not become a view change before the hard cap.
+- Formal CI now runs `missing-block-hard-cap-fast` plus expected-failure
+  mutations for hard-cap timing, progress deferral, duplicate latches,
+  height/priority/current-view/escalated-view guards, tier/view-change/stall
+  window guards, lock-lag override guards, trigger side effects,
+  no-actionable cleanup, and range-pull-only rotation mistakes.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-block-hard-cap-fast`
+  - all 28 `missing-block-hard-cap-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust validation for this slice was not run because it only adds
+  formal/docs/CI coverage and does not change Rust implementation logic.
+
+## 2026-05-24 Sumeragi missing-block view-change formal slice
+
+- Added `docs/formal/sumeragi/SumeragiMissingBlockViewChangeGate.tla`, a
+  bounded TLA+ model for missing-block view-change escalation.
+- The model checks that only consensus-priority missing-block requests can arm
+  a view change, missing or zero windows fail closed, dwell and last-trigger
+  boundary times are accepted, current-view latches suppress repeated
+  escalation, and prior-view latches do not block a later view.
+- It also checks `mark_view_change_if_due` latch/timestamp mutation,
+  `clear_missing_block_view_change` window/latch clearing without request
+  removal, scheduler deadline inclusion only for armed untriggered windows,
+  and deferral on recent dependency/RBC/range-pull progress or active backlog
+  windows.
+- Formal CI now runs `missing-block-view-change-fast` plus expected-failure
+  mutations for priority/window/latch mistakes, trigger timestamp/latch
+  mutation mistakes, clear-state mistakes, scheduler deadline mistakes, and
+  progress/backlog deferral mistakes.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-block-view-change-fast`
+  - all 30 `missing-block-view-change-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - trailing-whitespace scan over the new formal files and touched CI/docs files
+  - `git diff --check -- scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md status.md roadmap.md`
+- Rust validation for this slice was not run in this turn because unrelated
+  Cargo/rustc jobs were active.
+
+## 2026-05-24 SCCP production proof gating hardening
+
+- SCCP now advertises an explicit all-lanes-at-once production policy: proof
+  submission is permissionless, deployment governance may only install/halt
+  verifier anchors and allowlisted routes, and per-message human approval is
+  not part of the validity path.
+- ETH/BSC manifests now target the production `evm-groth16-bn254-v1` verifier
+  backend. The secp256k1 EVM contract path is labeled and gated as
+  reference-only so it cannot be mistaken for the production cryptographic
+  verifier.
+- Added `contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol`, an
+  `ISccpMessageVerifier` implementation that uses the EVM BN254 pairing
+  precompile, an immutable constructor-supplied Groth16 verifying key, and nine
+  public signals derived from SCCP public-input words, source domain,
+  statement hash, and destination binding hash. The EVM smoke test now covers
+  invalid G1/G2 verifying keys, wrong IC length, malformed proof bytes,
+  invalid Groth16 proof rejection through the bridge, wrong proof version,
+  source-domain overflow, zero and invalid proof points, commitment-root
+  mismatch, and public-input mismatch.
+- Each advertised SCCP lane exposes source-proof, destination-verifier,
+  anchor, and route-allowlist readiness blockers. All lanes remain
+  `production_ready = false` until the chain-specific finality/inclusion
+  verifiers, immutable destination verifiers, trust anchors, and route
+  allowlists are actually deployed.
+- Destination rollout readiness is now domain/chain-bound and fail-closed:
+  rollout material must match the target domain, chain key, and verifier plan,
+  carry ready flags, non-empty verifier identity and anchor id, a non-zero
+  32-byte verifier code hash, and no rollout blockers. Negative tests cover
+  missing material, cross-domain/cross-chain replay, wrong verifier plan,
+  empty ids, malformed/non-hex/zero code hashes, and blocker leakage.
+- The Rust EVM submission package path now has a signer-free
+  `EvmGroth16ContractCall` variant for `evm-groth16-bn254-v1`. It carries the
+  Groth16 proof ABI tuple directly and rejects malformed proof length, wrong
+  version, message-id/source-domain/commitment-root replay, source-domain
+  overflow, zero or out-of-field proof points, signer-supplied production
+  packages, reference-manifest/Groth16 cross-use, and bad destination-binding
+  metadata.
+- The normalized counterparty proof-job path now has the same explicit
+  signer-free EVM Groth16 builder. Generic job construction cannot package
+  native FastPQ bytes as a Groth16 EVM proof, strict artifact-to-job conversion
+  keeps disabled production lanes closed, and the diagnostic allow-unready path
+  only opens when supplied with the actual Groth16 ABI proof plus deployment
+  binding. Torii JSON now reports Groth16 packages with
+  `groth16_proof_summary` rather than an OpenVerify envelope summary.
+- Source-chain production verification now has explicit-material helper APIs
+  for verifier evidence, adapter OpenVerify capsules, proof-envelope
+  production checks, and bundle-level production checks. This lets a future
+  governance/config material catalog replace the built-in placeholder catalog
+  without changing the proof envelope. Negative coverage verifies that ready
+  material opens only the explicit-material path, while the default production
+  path stays closed, and that placeholder, cross-domain, trust-anchor, and
+  verifier-id replays are rejected.
+- Focused validation passed:
+  - `cargo fmt -p iroha_sccp -p iroha_torii -p iroha -p iroha_cli`
+  - `cargo fmt -p iroha_sccp`
+  - `cargo fmt -p iroha_sccp -p iroha_torii`
+  - `cargo test -p iroha_sccp production_evm -- --nocapture`
+  - `cargo test -p iroha_torii sccp_job_json_value_includes_groth16_summary_without_open_verify_summary -- --nocapture`
+  - `cargo test -p iroha_sccp source_chain_production -- --nocapture`
+  - `cargo test -p iroha_sccp destination_rollout_production_gate_rejects_incomplete_or_replayed_material -- --nocapture`
+  - `cargo test -p iroha_sccp rollout -- --nocapture`
+  - `cargo test -p iroha_sccp readiness -- --nocapture`
+  - `cargo test -p iroha_sccp --lib -- --nocapture`
+  - `cargo test -p iroha_torii --lib sccp_capabilities_snapshot_lists_remote_domains_and_codecs -- --nocapture`
+  - `cargo test -p iroha get_sccp_capabilities_requests_norito_and_decodes_typed_payload -- --nocapture`
+  - `cargo test -p iroha_torii --lib sccp_ -- --nocapture`
+  - `cargo test -p iroha_cli --features bridge sccp_capabilities_text_command_prints_summary -- --nocapture`
+  - `scripts/sccp_evm_contract_smoke.sh`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha/src/client.rs crates/iroha_cli/src/bridge.rs contracts/evm/sccp/README.md contracts/evm/sccp/SccpSecp256k1MessageVerifier.sol contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol contracts/evm/sccp/test/sccp_message_bridge_smoke.js scripts/sccp_evm_contract_smoke.sh docs/source/bridge_proofs.md status.md roadmap.md`
+
+## 2026-05-24 Sumeragi missing-block fetch formal slice
+
+- Added `docs/formal/sumeragi/SumeragiMissingBlockFetchGate.tla`, a bounded
+  TLA+ model for the QC-first missing-block fetch planner.
+- The model checks that request state is keyed by block hash, conflicting
+  heights cannot rewrite an existing request identity, views and phases advance
+  monotonically, stale views are ignored, consensus-priority upgrades retry
+  immediately, equal-priority retry windows use min-before-attempt and
+  max-after-attempt behavior, and explicit view-change deferral clears an armed
+  same-priority view-change window.
+- It also checks attempts accounting, known-block no-op behavior, default
+  signer-first/topology-fallback target selection, strict-signer fail-closed
+  behavior, aggressive topology targeting, out-of-range signer rejection, local
+  peer filtering in send helpers, and fetch request field preservation.
+- Formal CI now runs `missing-block-fetch-fast` plus expected-failure mutations
+  for dropped or spurious fetches, retry/backoff/force/priority mistakes,
+  request identity/view/phase/window mistakes, attempts accounting mistakes,
+  no-target and target-mode mistakes, local-peer sends, known-block deferral,
+  and malformed fetch request fields.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-block-fetch-fast`
+  - all 26 `missing-block-fetch-bug-*` expected-failure modes
+- Rust validation for this slice was not run in this turn because unrelated
+  Cargo/rustc jobs were active.
+
+## 2026-05-24 Sumeragi native AMX routing-plan formal slice
+
+- Added `docs/formal/sumeragi/SumeragiNativeAmxRoutingPlanGate.tla`, a bounded
+  TLA+ model for native AMX routing-plan canonicalization and block
+  execution-context projection.
+- The model checks that multi-dataspace and universal-coordinator targets stay
+  native AMX while single-route targets stay single-route; participant legs are
+  sorted by `(dataspace_id, lane_id)`, exact duplicates are deduplicated, and
+  distinct lanes in one dataspace remain distinct.
+- It also checks role forcing, coordinator-first durable route projection,
+  single/native digest domain separation, digest binding for coordinator and
+  canonical participants, digest independence from input order, block
+  revalidation of coordinator/digest/legs, receipt presence by plan kind, and
+  fail-closed routing when a participant lane cannot resolve.
+- Formal CI now runs `native-amx-routing-plan-fast` plus expected-failure
+  mutations for native/single collapse, unknown-lane acceptance, coordinator
+  selection, participant order/dedup mistakes, role/projection mistakes, digest
+  domain/binding/order mistakes, context revalidation mistakes, receipt presence
+  mistakes, and highest-lane selection.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-routing-plan-fast`
+  - all 26 `native-amx-routing-plan-bug-*` expected-failure modes
+- Rust validation for this slice was not run in this turn because unrelated
+  Cargo/rustc jobs were active.
+
+## 2026-05-24 Sumeragi native AMX ingress gate formal slice
+
+- Added `docs/formal/sumeragi/SumeragiNativeAmxIngressGate.tla`, a bounded
+  TLA+ model for native AMX control-plane request/vote ingress.
+- The model checks that prepare/commit attestation requests reply only when the
+  request body phase matches the request kind, the local consensus key is
+  BLS-normal, and the local key has a live proof-of-possession at the planned
+  coordinator height. Replies must target the sender, use the requested phase,
+  use the local signer, and sign the exact request body.
+- Inbound votes are cached only when the signer is BLS-normal, has a live and
+  valid proof-of-possession, and the BLS signature verifies over the canonical
+  body preimage. Duplicate same-body signer votes stay single-entry, while
+  retried bodies and distinct participant legs remain separately cacheable.
+- Formal CI now runs `native-amx-ingress-fast` plus expected-failure mutations
+  for wrong-phase request replies, ineligible local signers, dropped valid
+  requests, malformed reply target/phase/signer/body, invalid vote signer/PoP
+  or signature acceptance, dropped valid votes, duplicate signer double-cache,
+  and collapsed retried-body or participant-leg cache entries.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-ingress-fast`
+  - all 19 `native-amx-ingress-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+- Rust bridge validation for this slice was not rerun in this turn because
+  unrelated Cargo/rustc jobs were active.
+
+## 2026-05-24 Sumeragi native AMX receipt validation formal slice
+
+- Added `docs/formal/sumeragi/SumeragiNativeAmxReceiptValidation.tla`, a
+  bounded TLA+ model for native AMX receipt admission during block
+  execution-context validation.
+- The model checks that native AMX contexts require receipts, single-route
+  contexts reject receipts, unsigned transaction entrypoints cannot carry
+  receipts, receipt headers match source/coordinator/height/plan digest,
+  participant legs exactly match the routing plan, prepare/commit QC bodies
+  match their receipt and leg, and validator-set, signer bitmap, BLS
+  proof-of-possession, quorum, and aggregate signature checks fail closed.
+- Formal CI now runs `native-amx-receipt-fast` plus expected-failure mutations
+  for missing/extra receipts, unsigned entrypoints, malformed receipt headers,
+  missing/unexpected/duplicate participant legs, malformed QC bodies,
+  validator-set/hash/dataspace/committee mistakes, bad signer bitmaps, non-BLS
+  or missing-PoP signers, under-quorum attestations, missing/invalid aggregate
+  signatures, and valid native/single-route false rejection.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-fast`
+  - all 31 `native-amx-receipt-bug-*` expected-failure modes
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+- Rust bridge validation for this slice was not rerun in this turn because
+  unrelated Cargo/rustc jobs were active.
 
 ## 2026-05-23 Sumeragi native AMX journal replay formal slice
 
@@ -18,7 +2651,12 @@ Last updated: 2026-05-23
   corruption, hash-only tombstones, ignored exact tombstones, unsupported-version
   replay, first-put-wins replacement, compaction live/removed record mistakes,
   torn-tail retention, and complete-prefix loss during tail repair.
-- Focused validation is pending in this worktree.
+- Focused validation passed:
+  - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-journal-fast`
+  - all 17 `native-amx-journal-bug-*` expected-failure modes
+  - `cargo test -p iroha_core --lib journal_ -- --nocapture`
+  - `cargo test -p iroha_core --lib mixed_domain_write_targets_across_dataspaces_build_native_amx_plan -- --nocapture`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
 
 ## 2026-05-23 Sumeragi native AMX attestation gate formal slice
 
@@ -858,6 +3496,52 @@ Last updated: 2026-05-23
   - `cargo fmt --all`
   - `cargo test -p iroha_core certified_block_fetch --lib -- --nocapture`
   - `cargo check -p irohad --bin irohad`
+
+## 2026-05-23 Confidential default policy hash alignment
+
+- Aligned `iroha_data_model::confidential::DEFAULT_ZK_CONSENSUS_POLICY_HASH`
+  with the hash computed by `iroha_core` from the bundled default ZK config, so
+  block builders and state validation agree on the default confidential feature
+  digest.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core default_zk_policy_hash_uses_default_zk_config --lib -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --lib`
+
+## 2026-05-23 Nexus lane commitment fixture refresh
+
+- Regenerated the deterministic Nexus lane commitment JSON and Norito `.to`
+  fixtures so the checked-in payloads match the current canonical generator,
+  including explicit empty `native_amx_receipts` and `nexus_fee_receipts`
+  arrays.
+- Focused validation passed:
+  - `cargo test -p iroha_data_model --features transparent_api --test consensus_roundtrip lane_commitment_fixtures_roundtrip -- --nocapture`
+  - `cargo test -p iroha_data_model --features transparent_api --test consensus_roundtrip -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- nexus-fixtures --verify`
+
+## 2026-05-23 SCCP IVM-proved helper replay fix
+
+- `gov_instruction` now publishes the generated `RecordSccpMessage` literal TLV
+  into the IVM INPUT region before invoking
+  `SMARTCONTRACT_EXECUTE_INSTRUCTION`, so derived/replayed SCCP IVM-proved
+  helper bytecode passes pointer-ABI TLV validation.
+- The shared VK lookup client now appends backend and name as encoded URL path
+  segments, so slash-containing backends such as `halo2/ipa` resolve
+  idempotently through `/v1/zk/vk/halo2%2Fipa/...`.
+- Focused validation passed:
+  - `rustfmt --edition 2024 crates/iroha_cli/src/bin/gov_instruction.rs crates/iroha/src/client.rs`
+  - `CARGO_TARGET_DIR=target/codex-review-fixes CARGO_BUILD_JOBS=2 cargo test -p iroha_cli --bin gov_instruction -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-review-fixes CARGO_BUILD_JOBS=2 cargo test -p iroha url_join_tests -- --nocapture`
+  - `cargo fmt --all --check`
+
+## 2026-05-23 iroha_config minimal snapshot refresh
+
+- Refreshed `minimal_config_snapshot` so the expected Torii SoraFS discovery
+  defaults include the config-backed publish hints: no `gateway_base_url` and
+  an empty `pin_torii_urls` list.
+- Focused validation passed:
+  - `cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `cargo test -p iroha_config --test fixtures -- --nocapture`
 
 ## 2026-05-23 Nexus template manifest hashes
 

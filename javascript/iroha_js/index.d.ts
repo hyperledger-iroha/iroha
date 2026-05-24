@@ -504,6 +504,10 @@ export const SCCP_DOMAIN_SORA_KUSAMA: number;
 export const SCCP_DOMAIN_SORA_POLKADOT: number;
 export const SCCP_DOMAIN_SORA2: number;
 export const SCCP_STARK_FRI_PROOF_FAMILY_V1: string;
+export const SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1: string;
+export const SCCP_SOLANA_MAINNET_GENESIS_HASH: string;
+export const SCCP_TON_CONTRACT_PROOF_BACKEND_V1: string;
+export const SCCP_TON_MESSAGE_BODY_BOC_V1: string;
 export const SCCP_CORE_REMOTE_DOMAINS: number[];
 
 export interface SccpBurnPayload {
@@ -613,7 +617,301 @@ export interface SccpGovernanceBundleSurfaceValidation extends SccpBundleSurface
   expectedCertificateHash: string;
 }
 
+export interface SolanaSccpWitnessInput {
+  bundle?: {
+    commitment?: Partial<SccpHubCommitment>;
+    payload?: unknown;
+    commitment_root?: string;
+  };
+  commitment?: Partial<SccpHubCommitment>;
+  payload?: unknown;
+  targetDomain?: number;
+  target_domain?: number;
+  mainnetGenesisHash?: string;
+  mainnet_genesis_hash?: string;
+  finalizedSlot?: string | number | bigint;
+  finalized_slot?: string | number | bigint;
+  slot?: string | number | bigint;
+  blockhash: string;
+  bankHash?: string;
+  bank_hash?: string;
+  transactionStatusRoot?: string;
+  transaction_status_root?: string;
+  messageProofHash?: string;
+  message_proof_hash?: string;
+  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  transactionSignature?: string;
+  transaction_signature?: string;
+  emitterProgramId?: string;
+  emitter_program_id?: string;
+  messageId?: string;
+  message_id?: string;
+  payloadHash?: string;
+  payload_hash?: string;
+  commitmentRoot?: string;
+  commitment_root?: string;
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+}
+
+export interface SolanaSccpWitness {
+  version: 1;
+  sourceDomain: typeof SCCP_DOMAIN_SOL;
+  targetDomain: number;
+  mainnetGenesisHash: string;
+  finalizedSlot: string;
+  blockhash: string;
+  bankHash: string;
+  transactionStatusRoot: string;
+  messageProofHash: string;
+  transactionSignature: string;
+  emitterProgramId: string;
+  messageId: string;
+  payloadHash: string;
+  commitmentRoot: string;
+  sourceEventDigest: string;
+  inclusionBranch?: string[];
+  payload: unknown;
+}
+
+export interface SolanaSccpMessageProofInput {
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+  transactionStatusRoot?: string;
+  transaction_status_root?: string;
+  receiptOrMessageRoot?: string;
+  receipt_or_message_root?: string;
+  inclusionBranch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+  inclusion_branch?: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[];
+}
+
+export interface SolanaSccpProofRequest {
+  version: 1;
+  backend: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
+  sourceDomain: typeof SCCP_DOMAIN_SOL;
+  targetDomain: number;
+  mainnetGenesisHash: string;
+  witnessHash: string;
+  publicInputs: {
+    messageId: string;
+    payloadHash: string;
+    commitmentRoot: string;
+    finalizedSlot: string;
+    blockhash: string;
+    sourceEventDigest: string;
+  };
+  witness: SolanaSccpWitness;
+}
+
+export interface SolanaSccpProofResult {
+  version: 1;
+  backend: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
+  proofBytes: Uint8Array;
+  proofBase64: string;
+  publicInputs: SolanaSccpProofRequest["publicInputs"];
+  witnessHash: string;
+  envelopeHash: string;
+}
+
+export interface SccpMessageTransparentPublicInputsInput {
+  version?: number;
+  messageId?: string;
+  message_id?: string;
+  payloadHash?: string;
+  payload_hash?: string;
+  targetDomain?: number;
+  target_domain?: number;
+  commitmentRoot?: string;
+  commitment_root?: string;
+  finalityHeight?: string | number | bigint;
+  finality_height?: string | number | bigint;
+  finalityBlockHash?: string;
+  finality_block_hash?: string;
+}
+
+export interface TonSccpDestinationBindingInput {
+  key: string;
+  bindingHash?: string;
+  binding_hash?: string;
+}
+
+export interface TonSccpManifestInput {
+  localDomain?: number;
+  local_domain?: number;
+  counterpartyDomain?: number;
+  counterparty_domain?: number;
+  securityModel?: "RecursiveZk";
+  security_model?: "RecursiveZk";
+  anchorGovernance?: "CryptographicProof";
+  anchor_governance?: "CryptographicProof";
+  verifierTarget?: "TonContract";
+  verifier_target?: "TonContract";
+  verifierBackendFamily?: "TonContract";
+  verifier_backend_family?: "TonContract";
+  proofFamily?: string;
+  proof_family?: string;
+  verifierBackendKey?: string;
+  verifier_backend_key?: string;
+  verifierBackend?: { key: string; family?: "TonContract" };
+  verifier_backend?: { key: string; family?: "TonContract" };
+  messageBackend?: string;
+  message_backend?: string;
+  registryBackend?: string;
+  registry_backend?: string;
+  manifestSeed?: string;
+  manifest_seed?: string;
+  destinationBinding?: TonSccpDestinationBindingInput;
+  destination_binding?: TonSccpDestinationBindingInput;
+}
+
+export interface TonSccpMessageBodyInput {
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  destinationBinding?: TonSccpDestinationBindingInput;
+  destination_binding?: TonSccpDestinationBindingInput;
+  metadataBytes?: BinaryLike;
+  metadata_bytes?: BinaryLike;
+  manifest?: TonSccpManifestInput;
+  queryId?: string | number | bigint;
+  query_id?: string | number | bigint;
+}
+
+export interface TonSccpProofRequest {
+  version: 1;
+  backend: string;
+  sourceDomain: number;
+  targetDomain: number;
+  publicInputs: Required<{
+    version: number;
+    messageId: string;
+    payloadHash: string;
+    targetDomain: number;
+    commitmentRoot: string;
+    finalityHeight: string;
+    finalityBlockHash: string;
+  }>;
+  publicInputsBytes: Uint8Array;
+  bundleBytes: Uint8Array;
+  sourceProofBytes: Uint8Array;
+  requestHash: string;
+}
+
+export interface TonSccpSubmission {
+  version: 1;
+  envelopeEncoding: typeof SCCP_TON_MESSAGE_BODY_BOC_V1;
+  submissionKind: "internal_message";
+  verifierEntrypoint: "op::submit_sccp_message_proof";
+  messageBodyBoc: Uint8Array;
+  messageBodyBocHex: string;
+  arguments: ReadonlyArray<{ key: "message_body_boc"; encoding: "ton_boc"; bytes: string }>;
+  envelopeBytes: Uint8Array;
+  envelopeHex: string;
+}
+
+export interface TonSccpProofResult {
+  version: 1;
+  backend: string;
+  proofBytes: Uint8Array;
+  proofBase64: string;
+  publicInputs: TonSccpProofRequest["publicInputs"];
+  requestHash: string;
+}
+
+export interface TonSccpWitnessProvider {
+  resolveWitness(
+    input: TonSccpMessageBodyInput,
+    options?: Record<string, unknown>,
+  ): TonSccpMessageBodyInput | Promise<TonSccpMessageBodyInput>;
+}
+
+export type TonSccpProveFn = (
+  request: TonSccpProofRequest,
+  options?: Record<string, unknown>,
+) =>
+  | { proofBytes?: BinaryLike; proof_bytes?: BinaryLike; proof?: BinaryLike }
+  | Promise<{ proofBytes?: BinaryLike; proof_bytes?: BinaryLike; proof?: BinaryLike }>;
+
+export interface TonSccpProverOptions {
+  witnessProvider?: TonSccpWitnessProvider;
+  witness_provider?: TonSccpWitnessProvider;
+  prove?: TonSccpProveFn;
+  proveFn?: TonSccpProveFn;
+  prove_fn?: TonSccpProveFn;
+}
+
+export class TonSccpProver {
+  constructor(options?: TonSccpProverOptions);
+  buildRequest(
+    input: TonSccpMessageBodyInput,
+    options?: Record<string, unknown>,
+  ): Promise<TonSccpProofRequest>;
+  prove(
+    input: TonSccpMessageBodyInput,
+    options?: Record<string, unknown>,
+  ): Promise<TonSccpProofResult>;
+}
+
+export interface SolanaSccpWitnessProvider {
+  resolveWitness(
+    input: SolanaSccpWitnessInput,
+    options?: Record<string, unknown>,
+  ): SolanaSccpWitnessInput | Promise<SolanaSccpWitnessInput>;
+}
+
+export type SolanaSccpProveFn = (
+  request: SolanaSccpProofRequest,
+  options?: Record<string, unknown>,
+) =>
+  | { proofBytes?: BinaryLike; proof_bytes?: BinaryLike; proof?: BinaryLike }
+  | Promise<{ proofBytes?: BinaryLike; proof_bytes?: BinaryLike; proof?: BinaryLike }>;
+
+export interface SolanaSccpProverOptions {
+  witnessProvider?: SolanaSccpWitnessProvider;
+  witness_provider?: SolanaSccpWitnessProvider;
+  prove?: SolanaSccpProveFn;
+  proveFn?: SolanaSccpProveFn;
+  prove_fn?: SolanaSccpProveFn;
+}
+
+export class SolanaSccpProver {
+  constructor(options?: SolanaSccpProverOptions);
+  buildRequest(
+    input: SolanaSccpWitnessInput,
+    options?: Record<string, unknown>,
+  ): Promise<SolanaSccpProofRequest>;
+  prove(
+    input: SolanaSccpWitnessInput,
+    options?: Record<string, unknown>,
+  ): Promise<SolanaSccpProofResult>;
+}
+
 export function isSupportedSccpDomain(domainId: number): boolean;
+export function canonicalSccpMessageTransparentPublicInputsBytes(
+  input: SccpMessageTransparentPublicInputsInput,
+): Uint8Array;
+export function sccpTonSubmissionQueryId(
+  publicInputs: SccpMessageTransparentPublicInputsInput,
+): bigint;
+export function canonicalSccpTonSubmissionMetadataBytes(
+  input: TonSccpMessageBodyInput & { manifest: TonSccpManifestInput },
+): Uint8Array;
+export function buildSccpTonMessageBodyBoc(input: TonSccpMessageBodyInput): Uint8Array;
+export function buildTonSccpProofRequest(input: TonSccpMessageBodyInput): TonSccpProofRequest;
+export function buildTonSccpSubmission(input: TonSccpMessageBodyInput): TonSccpSubmission;
+export function canonicalSolanaSccpMessageProofBytes(input: SolanaSccpMessageProofInput): Uint8Array;
+export function solanaSccpMessageProofHash(input: SolanaSccpMessageProofInput): string;
+export function normalizeSolanaSccpWitness(input: SolanaSccpWitnessInput): SolanaSccpWitness;
+export function canonicalSolanaSccpWitnessBytes(input: SolanaSccpWitnessInput): Uint8Array;
+export function buildSolanaSccpProofRequest(input: SolanaSccpWitnessInput): SolanaSccpProofRequest;
 export function canonicalSccpBurnPayloadBytes(payload: SccpBurnPayload): Uint8Array;
 export function canonicalSccpTokenAddPayloadBytes(payload: SccpTokenAddPayload): Uint8Array;
 export function canonicalSccpTokenControlPayloadBytes(payload: SccpTokenControlPayload): Uint8Array;
@@ -4070,9 +4368,14 @@ export type ToriiSccpPlatformSubmissionPayload =
   | {
       kind: "ton_internal_message";
       value: {
-        proofCell: string;
-        publicInputsCell: string;
-        bundleCell: string;
+        messageBodyBoc: string;
+        queryId: number;
+        destinationBinding: ToriiSccpDestinationBinding;
+        destinationBindingHash: string;
+        proofBytes: string;
+        publicInputsBytes: string;
+        bundleBytes: string;
+        statementHash: string;
       };
     };
 

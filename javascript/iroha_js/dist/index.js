@@ -315,6 +315,8 @@ export {
   SCCP_DOMAIN_SORA_KUSAMA,
   SCCP_DOMAIN_SORA_POLKADOT,
   SCCP_CORE_REMOTE_DOMAINS,
+  SCCP_SOLANA_MAINNET_GENESIS_HASH,
+  SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1,
   isSupportedSccpDomain,
   canonicalSccpBurnPayloadBytes,
   canonicalSccpTokenAddPayloadBytes,
@@ -333,6 +335,10 @@ export {
   sccpPayloadHash,
   sccpCommitmentLeafHash,
   sccpMerkleRootFromCommitment,
+  normalizeSolanaSccpWitness,
+  canonicalSolanaSccpWitnessBytes,
+  buildSolanaSccpProofRequest,
+  SolanaSccpProver,
   validateSccpBurnBundleSurface,
   validateSccpTokenMessageBundleSurface,
   validateSccpGovernanceBundleSurface,
@@ -341,7 +347,7 @@ export { decodeReplicationOrder, SorafsGatewayFetchError, sorafsGatewayFetch } f
 export {
   queryOracleFeeds,
   queryOracleFeedHistory,
-  getLatestSoraSwapOracleAttestation,
+  getLatestDefiOracleAttestation,
 } from "./soracles.js";
 export { ConnectRetryPolicy } from "./connectRetryPolicy.js";
 

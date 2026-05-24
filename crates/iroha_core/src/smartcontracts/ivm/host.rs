@@ -7097,10 +7097,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             // Accept a Norito-encoded InstructionBox and enqueue it for later execution.
             ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
                 let p = vm.register(10);
-                let tlv = vm.memory.validate_tlv(p)?;
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
+                let tlv = Self::decode_pointer_tlv(vm, p, PointerType::NoritoBytes)?;
                 let ib: iroha_data_model::isi::InstructionBox =
                     norito::decode_from_bytes(tlv.payload)
                         .map_err(|_| ivm::VMError::NoritoInvalid)?;
@@ -7173,6 +7170,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     Ok(self.queue_instruction(instr))
                 } else if any_ref.downcast_ref::<DMZk::VerifyProof>().is_some() {
                     // Allow explicit VerifyProof if issued via vendor bridge; pass-through
+                    Ok(self.queue_instruction(ib))
+                } else if any_ref
+                    .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+                    .is_some()
+                {
+                    // SCCP message recording is proof-gated at overlay admission; this syscall
+                    // only lets proved IVM execution materialize the standard ISI overlay.
                     Ok(self.queue_instruction(ib))
                 } else {
                     Err(ivm::VMError::PermissionDenied)
@@ -12961,6 +12965,73 @@ seiyaku AliasPayout {{
 
         assert_eq!(gas, expected);
         assert_eq!(host.queued, vec![instr_one, instr_two]);
+    }
+
+    #[test]
+    fn execute_instruction_syscall_allows_sccp_record_message() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        let mut vm = ivm::IVM::new(1_000_000);
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![
+                1, 2, 3, 4,
+            ]));
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, ptr);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
+            .expect("SCCP record instruction should be queued");
+
+        assert_eq!(gas, crate::gas::meter_instruction(&instruction));
+        assert_eq!(host.queued, vec![instruction]);
+    }
+
+    #[test]
+    fn execute_instruction_syscall_accepts_code_literal_sccp_record_message() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![
+                1, 2, 3, 4,
+            ]));
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
+        let post_pad = (4 - ((16 + tlv.len()) % 4)) % 4;
+
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 1_000_000,
+            mode: ivm::ivm_mode::ZK,
+            vector_length: 4,
+            ..Default::default()
+        }
+        .encode();
+        program.extend_from_slice(b"LTLB");
+        program.extend_from_slice(&0u32.to_le_bytes());
+        program.extend_from_slice(&(post_pad as u32).to_le_bytes());
+        program.extend_from_slice(&(tlv.len() as u32).to_le_bytes());
+        program.extend_from_slice(&tlv);
+        program.extend(std::iter::repeat_n(0u8, post_pad));
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 0, 16)
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
+            )
+            .to_le_bytes(),
+        );
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+        let mut vm = ivm::IVM::new(50_000_000);
+        vm.load_program(&program).expect("load program");
+        vm.run_with_host(&mut host)
+            .expect("code literal SCCP record instruction should be queued");
+
+        assert_eq!(host.queued, vec![instruction]);
     }
 
     #[test]

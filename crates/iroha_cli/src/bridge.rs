@@ -388,6 +388,19 @@ fn render_sccp_payload_projection_summary(
             render_sccp_normalized_codec_value(&transfer.recipient),
             render_sccp_normalized_codec_value(&transfer.route_id)
         ),
+        iroha_sccp::SccpPayloadProjectionV1::TokenAdd(token) => format!(
+            "token_add sora_asset_id={} decimals={} name={} symbol={}",
+            hex::encode(token.sora_asset_id),
+            token.decimals,
+            hex::encode(token.name),
+            hex::encode(token.symbol)
+        ),
+        iroha_sccp::SccpPayloadProjectionV1::TokenPause(token) => {
+            format!("token_pause sora_asset_id={}", hex::encode(token.sora_asset_id))
+        }
+        iroha_sccp::SccpPayloadProjectionV1::TokenResume(token) => {
+            format!("token_resume sora_asset_id={}", hex::encode(token.sora_asset_id))
+        }
     }
 }
 
@@ -664,6 +677,8 @@ mod tests {
             legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             message_submit_path: Some("/v1/bridge/messages".to_owned()),
+            production_policy: iroha_sccp::sccp_production_policy_v1(),
+            launch_ready: false,
             message_payload_kinds: vec![
                 "asset_register".to_owned(),
                 "route_activate".to_owned(),
@@ -706,6 +721,10 @@ mod tests {
                         .expect("ton disabled reason")
                         .to_owned(),
                     ),
+                    production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_TON,
+                    )
+                    .expect("ton production readiness"),
                 },
                 SccpCounterpartyCapability {
                     domain: iroha_sccp::SCCP_DOMAIN_ETH,
@@ -730,6 +749,10 @@ mod tests {
                         .expect("eth disabled reason")
                         .to_owned(),
                     ),
+                    production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_ETH,
+                    )
+                    .expect("eth production readiness"),
                 },
             ],
         }
@@ -774,9 +797,8 @@ mod tests {
             NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
             SccpCounterpartySubmissionPackageV1, SccpHubCommitmentV1, SccpHubMessageKind,
             SccpMerkleProofV1, SccpPayloadV1, SccpPlatformSubmissionPayloadV1,
-            SccpTonInternalMessageSubmissionPayloadV1, TransferPayloadV1,
-            canonical_nexus_sccp_message_bundle_bytes,
-            canonical_sccp_message_transparent_public_inputs_bytes, canonical_sccp_payload_bytes,
+            TransferPayloadV1, build_sccp_message_transparent_inner_proof,
+            build_sccp_ton_internal_message_submission_payload, canonical_sccp_payload_bytes,
             merkle_root_from_commitment, payload_hash, sccp_message_id,
             sccp_message_transparent_public_inputs, sccp_proof_manifest_for_domain,
         };
@@ -855,14 +877,18 @@ mod tests {
             aux: vec![0xDE, 0xAD],
         })
         .expect("encode open verify envelope");
+        let inner =
+            build_sccp_message_transparent_inner_proof(&bundle, &manifest).expect("inner proof");
         let platform_payload = SccpPlatformSubmissionPayloadV1::TonInternalMessage(
-            SccpTonInternalMessageSubmissionPayloadV1 {
-                proof_cell: proof_bytes.clone(),
-                public_inputs_cell: canonical_sccp_message_transparent_public_inputs_bytes(
-                    &public_inputs,
-                ),
-                bundle_cell: canonical_nexus_sccp_message_bundle_bytes(&bundle),
-            },
+            build_sccp_ton_internal_message_submission_payload(
+                &manifest,
+                &proof_bytes,
+                &public_inputs,
+                &bundle,
+                inner.statement_hash,
+                &manifest.destination_binding,
+            )
+            .expect("ton payload"),
         );
         NexusSccpMessageTransparentProofV1 {
             version: 1,
@@ -882,9 +908,9 @@ mod tests {
             proof_bytes: proof_bytes.clone(),
             submission_package: SccpCounterpartySubmissionPackageV1 {
                 version: 1,
-                proof_family: manifest.proof_family,
-                verifier_backend: manifest.verifier_backend,
-                envelope_encoding: "ton_message_body_v1".to_owned(),
+                proof_family: manifest.proof_family.clone(),
+                verifier_backend: manifest.verifier_backend.clone(),
+                envelope_encoding: "ton_message_body_boc_v1".to_owned(),
                 submission_kind: manifest.submission_template.submission_kind.clone(),
                 verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
                 platform_payload,
@@ -996,7 +1022,7 @@ mod tests {
             "ton(4:ton_raw:ton-contract-v1:TonContractNativeRecursive/verifier_live=false/anchors_live=false:disabled)"
         ));
         assert!(rendered.contains(
-            "eth(1:evm_hex:evm-secp256k1-keccak-v1:EvmGroth16Bn254Adapter/verifier_live=false/anchors_live=false:disabled)"
+            "eth(1:evm_hex:evm-groth16-bn254-v1:EvmGroth16Bn254Adapter/verifier_live=false/anchors_live=false:disabled)"
         ));
     }
 
@@ -1060,7 +1086,7 @@ mod tests {
         assert!(rendered.contains("inner_payload=transfer"));
         assert!(rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
         assert!(rendered.contains(&format!("vk_hash={}", "66".repeat(32))));
-        assert!(rendered.contains("package=internal_message/ton_message_body_v1"));
+        assert!(rendered.contains("package=internal_message/ton_message_body_boc_v1"));
     }
 
     #[test]
@@ -1093,9 +1119,9 @@ mod tests {
             "recipient=ton:0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ));
         assert!(rendered.contains(
-            "submit=internal_message/ton_cell_v1/op::submit_sccp_message_proof args=[proof_cell,public_inputs_cell,bundle_cell]"
+            "submit=internal_message/ton_message_body_boc_v1/op::submit_sccp_message_proof args=[message_body_boc]"
         ));
         assert!(rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
-        assert!(rendered.contains("package=internal_message/ton_message_body_v1"));
+        assert!(rendered.contains("package=internal_message/ton_message_body_boc_v1"));
     }
 }

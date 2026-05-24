@@ -160,9 +160,20 @@ enabled = true
 
 [confidential]
 enabled = true
+max_proof_size_bytes = 4194304
+max_proof_bytes_block = 16777216
+
+[zk]
+sccp_allow_unready_transparent_proofs = false
+sccp_source_verifier_materials = []
 
 [zk.halo2]
 enabled = true
+
+[pipeline.ivm_proved]
+enabled = true
+skip_replay = false
+allowed_circuits = ["ivm-execution-v1"]
 
 [pipeline.gas]
 # `gas_asset_id` transaction metadata is canonicalized to the Base58 asset

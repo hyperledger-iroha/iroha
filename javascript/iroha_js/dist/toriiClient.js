@@ -13630,14 +13630,35 @@ function normalizeSccpPlatformSubmissionPayload(value, context) {
       return {
         kind: platform,
         value: {
-          proofCell: normalizeArbitraryHex(payload.proof_cell, `${context}.payload.proof_cell`),
-          publicInputsCell: normalizeArbitraryHex(
-            payload.public_inputs_cell,
-            `${context}.payload.public_inputs_cell`,
+          messageBodyBoc: normalizeArbitraryHex(
+            payload.message_body_boc,
+            `${context}.payload.message_body_boc`,
           ),
-          bundleCell: normalizeArbitraryHex(
-            payload.bundle_cell,
-            `${context}.payload.bundle_cell`,
+          queryId: ToriiClient._normalizeUnsignedInteger(
+            payload.query_id,
+            `${context}.payload.query_id`,
+            { allowZero: true },
+          ),
+          destinationBinding: normalizeSccpDestinationBinding(
+            payload.destination_binding,
+            `${context}.payload.destination_binding`,
+          ),
+          destinationBindingHash: normalizeHex32String(
+            payload.destination_binding_hash,
+            `${context}.payload.destination_binding_hash`,
+          ),
+          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
+          publicInputsBytes: normalizeArbitraryHex(
+            payload.public_inputs_bytes,
+            `${context}.payload.public_inputs_bytes`,
+          ),
+          bundleBytes: normalizeArbitraryHex(
+            payload.bundle_bytes,
+            `${context}.payload.bundle_bytes`,
+          ),
+          statementHash: normalizeHex32String(
+            payload.statement_hash,
+            `${context}.payload.statement_hash`,
           ),
         },
       };

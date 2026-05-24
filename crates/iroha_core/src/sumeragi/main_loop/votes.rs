@@ -368,17 +368,16 @@ impl Actor {
         epoch: u64,
     ) -> Option<crate::sumeragi::consensus::Vote> {
         let local_peer = self.common_config.peer.id();
-        self.stored_votes().find_map(|existing| {
-            if !matches!(
-                existing.phase,
-                crate::sumeragi::consensus::Phase::Prepare
-                    | crate::sumeragi::consensus::Phase::Commit
-            ) || existing.height != height
-                || existing.epoch != epoch
-            {
-                return None;
-            }
-            let signer_matches_local = match self.vote_signer_peer(existing) {
+        self.stored_votes()
+            .filter(|existing| {
+                matches!(
+                    existing.phase,
+                    crate::sumeragi::consensus::Phase::Prepare
+                        | crate::sumeragi::consensus::Phase::Commit
+                ) && existing.height == height
+                    && existing.epoch == epoch
+            })
+            .filter(|existing| match self.vote_signer_peer(existing) {
                 Some(peer) => peer == *local_peer,
                 None => {
                     let (consensus_mode, mode_tag, prf_seed) =
@@ -400,9 +399,17 @@ impl Actor {
                             == Some(existing.signer)
                     }
                 }
-            };
-            signer_matches_local.then(|| existing.clone())
-        })
+            })
+            .max_by_key(|vote| {
+                (
+                    u8::from(matches!(
+                        vote.phase,
+                        crate::sumeragi::consensus::Phase::Commit
+                    )),
+                    vote.view,
+                )
+            })
+            .cloned()
     }
 
     pub(super) fn local_same_slot_vote(

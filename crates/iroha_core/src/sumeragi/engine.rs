@@ -425,20 +425,27 @@ impl ConsensusEngine {
         block_hash: HashOf<BlockHeader>,
         reconfiguration: Option<ValidatorSetChange>,
     ) -> Vec<ConsensusOutput> {
-        if self.committed.contains_key(&round.height) {
-            return Vec::new();
-        }
-        self.committed.insert(round.height, block_hash);
-        if round.height == self.state.round.height {
-            self.validating = None;
-            self.state.phase = EnginePhase::Proposal;
-            if let Some(pending) = self.state.pending_finality.take() {
-                self.pending_finality.remove(&pending.block_hash);
+        if let Some(committed) = self.committed.get(&round.height) {
+            if committed != &block_hash {
+                return Vec::new();
+            }
+        } else {
+            self.committed.insert(round.height, block_hash);
+            if round.height == self.state.round.height {
+                self.validating = None;
+                self.state.phase = EnginePhase::Proposal;
+                if let Some(pending) = self.state.pending_finality.take() {
+                    self.pending_finality.remove(&pending.block_hash);
+                }
             }
         }
         let mut outputs = Vec::new();
         if let Some(change) = reconfiguration {
-            if change.activation_height == round.height.saturating_add(1) {
+            let already_scheduled = self
+                .pending_reconfiguration
+                .as_ref()
+                .is_some_and(|pending| pending.activation_height == change.activation_height);
+            if change.activation_height == round.height.saturating_add(1) && !already_scheduled {
                 self.pending_reconfiguration = Some(change.clone());
                 outputs.push(ConsensusOutput::ActivateValidatorSet(change));
             }
@@ -2290,6 +2297,72 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(engine.committed_at(1), Some(first));
+    }
+
+    #[test]
+    fn same_hash_committed_block_notification_can_later_activate_reconfiguration() {
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let block_hash = block_hash(b"same-hash-reconfig-commit");
+        assert!(
+            engine
+                .handle(ConsensusInput::CommittedBlock {
+                    round: round(0),
+                    block_hash,
+                    reconfiguration: None,
+                })
+                .is_empty()
+        );
+        assert_eq!(engine.committed_at(1), Some(block_hash));
+
+        let change = ValidatorSetChange {
+            activation_height: 2,
+            validator_set_id: validator_set(b"same-hash-next-set"),
+            quorum_policy: QuorumPolicy::PermissionedCount(5),
+        };
+        assert_eq!(
+            engine.handle(ConsensusInput::CommittedBlock {
+                round: round(0),
+                block_hash,
+                reconfiguration: Some(change.clone()),
+            }),
+            vec![ConsensusOutput::ActivateValidatorSet(change)]
+        );
+        assert_eq!(engine.committed_at(1), Some(block_hash));
+    }
+
+    #[test]
+    fn locally_committed_block_notification_can_later_activate_reconfiguration() {
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let subject = subject(b"local-commit-later-reconfig");
+        assert!(
+            engine
+                .handle(ConsensusInput::PayloadAvailable(subject))
+                .is_empty()
+        );
+        assert_eq!(
+            engine.handle(ConsensusInput::Certificate(certificate(
+                CertPhase::Commit,
+                round(0),
+                subject,
+            ))),
+            vec![ConsensusOutput::CommitBlock { subject }]
+        );
+        assert_eq!(engine.committed_at(1), Some(subject.block_hash));
+
+        let change = ValidatorSetChange {
+            activation_height: 2,
+            validator_set_id: validator_set(b"local-commit-next-set"),
+            quorum_policy: QuorumPolicy::PermissionedCount(5),
+        };
+        assert_eq!(
+            engine.handle(ConsensusInput::CommittedBlock {
+                round: round(0),
+                block_hash: subject.block_hash,
+                reconfiguration: Some(change.clone()),
+            }),
+            vec![ConsensusOutput::ActivateValidatorSet(change)]
+        );
+        assert_eq!(engine.committed_at(1), Some(subject.block_hash));
     }
 
     #[test]

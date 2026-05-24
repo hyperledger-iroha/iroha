@@ -2046,11 +2046,20 @@ pub fn decode_instruction_from_pair(
         registry.entry_for_key(name).copied()
     };
     if let Some(entry) = entry {
-        return InstructionRegistry::decode_entry(&entry, 0, payload);
+        let header_flags = framed_instruction_payload_header_flags(payload)?;
+        return InstructionRegistry::decode_entry(&entry, header_flags, payload);
     }
     Err(norito::Error::Message(format!(
         "unknown instruction `{name}` (not registered)"
     )))
+}
+
+fn framed_instruction_payload_header_flags(payload: &[u8]) -> Result<u8, norito::Error> {
+    let flags = *payload
+        .get(norito::core::Header::SIZE - 1)
+        .ok_or(norito::Error::LengthMismatch)?;
+    norito::core::validate_header_flags(flags)?;
+    Ok(flags)
 }
 
 fn instruction_canonical_framing_error() -> norito::Error {
@@ -2468,7 +2477,10 @@ impl InstructionRegistry {
         name: &str,
         bytes: &[u8],
     ) -> Option<Result<InstructionBox, norito::Error>> {
-        self.decode_with_flags(name, 0, bytes)
+        self.entry_for_key(name).map(|entry| {
+            let header_flags = framed_instruction_payload_header_flags(bytes)?;
+            Self::decode_entry(entry, header_flags, bytes)
+        })
     }
 
     /// Decode an [`crate::isi::Instruction`] providing explicit Norito layout flags.
@@ -2533,7 +2545,7 @@ where
     T: Instruction + Decode + 'static + norito::NoritoSerialize,
     for<'a> T: norito::NoritoDeserialize<'a>,
 {
-    let _ = header_flags;
+    let _guard = norito::core::DecodeFlagsGuard::enter(header_flags);
     let instruction = norito::decode_from_bytes::<T>(input)?;
     Ok(InstructionBox(Box::new(instruction)))
 }
@@ -2546,7 +2558,7 @@ where
     T: Instruction + Decode + 'static + norito::NoritoSerialize,
     for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
 {
-    let _ = header_flags;
+    let _guard = norito::core::DecodeFlagsGuard::enter(header_flags);
     let instruction = norito::core::from_bytes_view(input)?.decode::<T>()?;
     Ok(InstructionBox(Box::new(instruction)))
 }
@@ -4230,6 +4242,31 @@ mod tests {
         norito::core::NoritoSerialize::serialize(&expected, &mut bytes)
             .expect("serialize instruction box tuple");
 
+        let (decoded, used) =
+            super::decode_instruction_from_borrowed_pair(&bytes).expect("borrowed pair decode");
+
+        assert_eq!(used, bytes.len());
+        assert_eq!(Instruction::id(&*decoded), Instruction::id(&*expected));
+        assert_eq!(
+            Instruction::dyn_encode(&*decoded),
+            Instruction::dyn_encode(&*expected)
+        );
+    }
+
+    #[test]
+    fn borrowed_instruction_pair_honors_inner_frame_flags_under_outer_canonical_layout() {
+        let _guard = RegistryGuard::set(crate::instruction_registry::default());
+        let log = Log::new(Level::INFO, "inner compact frame".to_owned());
+        let expected = InstructionBox::from(log.clone());
+        let framed_payload = framed_instruction_payload(&log);
+        assert_eq!(
+            framed_payload[norito::core::Header::SIZE - 1]
+                & norito::core::header_flags::COMPACT_LEN,
+            norito::core::header_flags::COMPACT_LEN
+        );
+
+        let _layout = norito::core::DecodeFlagsGuard::enter(0);
+        let bytes = bare_instruction_pair(Log::WIRE_ID, framed_payload);
         let (decoded, used) =
             super::decode_instruction_from_borrowed_pair(&bytes).expect("borrowed pair decode");
 

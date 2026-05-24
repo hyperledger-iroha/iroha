@@ -7740,6 +7740,10 @@ pub struct Zk {
     pub bridge_proof_max_past_age_blocks: u64,
     /// Maximum future drift (in blocks) a bridge proof's end height may lead the current block (0 = unlimited).
     pub bridge_proof_max_future_drift_blocks: u64,
+    /// Allow SCCP transparent proof consumption for lanes whose destination verifiers are not production-ready.
+    pub sccp_allow_unready_transparent_proofs: bool,
+    /// SCCP source-chain verifier material that can enable non-SORA source lanes.
+    pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
     /// Poseidon parameter set identifier to embed into policies (if any).
     pub poseidon_params_id: Option<u32>,
     /// Pedersen parameter set identifier to embed into policies (if any).
@@ -7788,6 +7792,41 @@ pub struct Zk {
     pub registry_max_delta_per_block: u32,
     /// Gas schedule applied to confidential verification.
     pub gas: ConfidentialGas,
+}
+
+/// Configured SCCP source-chain verifier material.
+#[derive(Debug, Clone)]
+pub struct SccpSourceVerifierMaterial {
+    /// Material format version.
+    pub version: u8,
+    /// SCCP source domain identifier.
+    pub source_domain: u32,
+    /// Canonical source-chain key such as `eth`, `bsc`, or `sol`.
+    pub source_chain: String,
+    /// Source proof plan name.
+    pub source_proof_plan: String,
+    /// Source-chain finality model name.
+    pub finality_model: String,
+    /// Source adapter circuit identifier.
+    pub adapter_circuit_id: String,
+    /// Trust-anchor record identifier.
+    pub source_trust_anchor_id: String,
+    /// Hex-encoded 32-byte trust-anchor digest.
+    pub source_trust_anchor_hash: String,
+    /// Consensus verifier identifier.
+    pub consensus_verifier_id: String,
+    /// Hex-encoded 32-byte consensus verifier digest.
+    pub consensus_verifier_hash: String,
+    /// Message inclusion verifier identifier.
+    pub message_inclusion_verifier_id: String,
+    /// Hex-encoded 32-byte message inclusion verifier digest.
+    pub message_inclusion_verifier_hash: String,
+    /// Finality policy identifier.
+    pub finality_policy_id: String,
+    /// Hex-encoded 32-byte finality policy digest.
+    pub finality_policy_hash: String,
+    /// Whether this record is placeholder material and must remain disabled.
+    pub placeholder_material: bool,
 }
 
 /// CABAC runtime mode compiled into the host.

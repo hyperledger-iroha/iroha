@@ -6990,19 +6990,155 @@ pub mod isi {
         validate_sccp_finality_against_state(&finality, state_transaction)
     }
 
+    fn parse_sccp_source_material_h256(raw: &str, field: &str) -> Result<[u8; 32], Error> {
+        let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
+            invalid_bridge_proof(format!(
+                "SCCP source verifier material `{field}` must be 32-byte hex"
+            ))
+        })?;
+        if bytes.len() != 32 {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP source verifier material `{field}` must be 32-byte hex"
+            )));
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&bytes);
+        Ok(out)
+    }
+
+    fn configured_sccp_source_verifier_material_for_domain(
+        zk_config: &iroha_config::parameters::actual::Zk,
+        source_domain: u32,
+    ) -> Result<Option<iroha_sccp::SccpSourceVerifierMaterialV1>, Error> {
+        let mut matches = zk_config
+            .sccp_source_verifier_materials
+            .iter()
+            .filter(|material| material.source_domain == source_domain);
+        let Some(configured) = matches.next() else {
+            return Ok(None);
+        };
+        if matches.next().is_some() {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP source verifier material for domain {source_domain} is duplicated"
+            )));
+        }
+
+        let source_proof_plan = iroha_sccp::SccpSourceProofPlanV1::from_str(
+            &configured.source_proof_plan,
+        )
+        .map_err(|err| {
+            invalid_bridge_proof(format!(
+                "SCCP source verifier material `source_proof_plan` is invalid: {err}"
+            ))
+        })?;
+        let finality_model = iroha_sccp::SccpProofFinalityModelV1::from_str(
+            &configured.finality_model,
+        )
+        .map_err(|err| {
+            invalid_bridge_proof(format!(
+                "SCCP source verifier material `finality_model` is invalid: {err}"
+            ))
+        })?;
+        let material = iroha_sccp::SccpSourceVerifierMaterialV1 {
+            version: configured.version,
+            source_domain: configured.source_domain,
+            source_chain: configured.source_chain.clone(),
+            source_proof_plan,
+            finality_model,
+            adapter_circuit_id: configured.adapter_circuit_id.clone(),
+            source_trust_anchor_id: configured.source_trust_anchor_id.clone(),
+            source_trust_anchor_hash: parse_sccp_source_material_h256(
+                &configured.source_trust_anchor_hash,
+                "source_trust_anchor_hash",
+            )?,
+            consensus_verifier_id: configured.consensus_verifier_id.clone(),
+            consensus_verifier_hash: parse_sccp_source_material_h256(
+                &configured.consensus_verifier_hash,
+                "consensus_verifier_hash",
+            )?,
+            message_inclusion_verifier_id: configured.message_inclusion_verifier_id.clone(),
+            message_inclusion_verifier_hash: parse_sccp_source_material_h256(
+                &configured.message_inclusion_verifier_hash,
+                "message_inclusion_verifier_hash",
+            )?,
+            finality_policy_id: configured.finality_policy_id.clone(),
+            finality_policy_hash: parse_sccp_source_material_h256(
+                &configured.finality_policy_hash,
+                "finality_policy_hash",
+            )?,
+            placeholder_material: configured.placeholder_material,
+        };
+        if !iroha_sccp::sccp_source_verifier_material_is_production_ready(&material) {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP source verifier material for domain {source_domain} is not production-ready"
+            )));
+        }
+        Ok(Some(material))
+    }
+
     fn validate_sccp_message_transparent_bridge_proof(
         artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if !iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(artifact)
-            || !iroha_sccp::verify_message_bundle_structure(&artifact.bundle)
+        let source_domain = iroha_sccp::sccp_message_source_domain(&artifact.bundle.payload);
+        let configured_source_material = if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+            None
+        } else {
+            configured_sccp_source_verifier_material_for_domain(
+                &state_transaction.zk,
+                source_domain,
+            )?
+        };
+        let artifact_structure_is_valid = if let Some(material) =
+            configured_source_material.as_ref()
         {
+            iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material(
+                    artifact,
+                    material,
+                ) && iroha_sccp::verify_message_bundle_structure_with_source_verifier_material(
+                    &artifact.bundle,
+                    material,
+                )
+        } else {
+            iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(artifact)
+                && iroha_sccp::verify_message_bundle_structure(&artifact.bundle)
+        };
+        if !artifact_structure_is_valid {
             return Err(invalid_bridge_proof(
                 "SCCP transparent message proof failed structural verification",
             ));
         }
-        let finality = sccp_decode_finality_proof(&artifact.bundle.finality_proof)?;
-        validate_sccp_finality_against_state(&finality, state_transaction)
+        if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+            let finality = iroha_sccp::verified_sccp_message_nexus_finality_proof(&artifact.bundle)
+                .ok_or_else(|| {
+                    invalid_bridge_proof(
+                        "SCCP SORA-source message proof is not bound to Nexus finality",
+                    )
+                })?;
+            validate_sccp_finality_against_state(&finality, state_transaction)
+        } else {
+            if let Some(material) = configured_source_material.as_ref() {
+                iroha_sccp::verified_sccp_message_source_chain_proof_envelope_for_production_with_material(
+                    &artifact.bundle,
+                    material,
+                )
+                .ok_or_else(|| {
+                    invalid_bridge_proof(
+                        "SCCP non-SORA message proof is not bound to configured production source verifier material",
+                    )
+                })?;
+            } else {
+                iroha_sccp::verified_sccp_message_source_chain_proof_envelope_for_production(
+                    &artifact.bundle,
+                )
+                    .ok_or_else(|| {
+                        invalid_bridge_proof(
+                            "SCCP non-SORA message proof is not bound to a production-ready source-chain proof adapter",
+                        )
+                    })?;
+            }
+            Ok(())
+        }
     }
 
     fn encode_and_validate_bridge_proof(
@@ -7111,8 +7247,7 @@ pub mod isi {
                     }
                     backend if backend.starts_with("sccp/stark-fri-v1/") => {
                         let Some(artifact) =
-                            iroha_sccp::recover_nexus_sccp_message_transparent_proof(
-                                backend,
+                            iroha_sccp::decode_nexus_sccp_message_transparent_proof(
                                 &tp.proof.bytes,
                             )
                         else {
@@ -7120,6 +7255,11 @@ pub mod isi {
                                 "SCCP transparent bridge proofs must decode as valid typed message artifacts",
                             ));
                         };
+                        if artifact.message_backend != backend {
+                            return Err(invalid_bridge_proof(
+                                "SCCP transparent bridge proof backend mismatch",
+                            ));
+                        }
                         if proof.manifest_hash
                             != iroha_sccp::sccp_bridge_manifest_hash_for_seed(
                                 &artifact.manifest_seed,
@@ -7477,6 +7617,13 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
                         "SCCP payload bytes failed structural verification".into(),
+                    ),
+                ));
+            }
+            if iroha_sccp::sccp_message_source_domain(&payload) != iroha_sccp::SCCP_DOMAIN_SORA {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP message recording only accepts SORA-origin payloads; submit non-SORA source messages with a verified source-chain proof envelope".into(),
                     ),
                 ));
             }
@@ -12763,6 +12910,52 @@ pub mod isi {
 
         fn new_dummy_block() -> crate::block::CommittedBlock {
             new_dummy_block_at_height(NonZeroU64::new(1).unwrap())
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_non_sora_origin_payloads() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.sccp_recording_proof_verified = true;
+
+            let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                nonce: 42,
+                asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"weth#eth".to_vec(),
+                amount: 1,
+                sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                sender: b"0x1111111111111111111111111111111111111111".to_vec(),
+                recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                recipient: b"alice@universal".to_vec(),
+                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                route_id: b"eth:sora:weth".to_vec(),
+            });
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction.execute(&ALICE_ID, &mut stx).expect_err(
+                "non-SORA source messages must not be recorded as Nexus-origin SCCP messages",
+            );
+            assert!(
+                format!("{err:?}").contains("only accepts SORA-origin payloads"),
+                "unexpected error: {err:?}"
+            );
         }
 
         fn minimal_contract_artifact() -> (Vec<u8>, ContractManifest) {

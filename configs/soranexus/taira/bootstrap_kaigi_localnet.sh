@@ -531,7 +531,12 @@ trap cleanup HUP INT TERM EXIT
 for i in 0 1 2 3; do
   snapshot_dir="\$DIR/storage/peer\${i}/snapshot"
   mkdir -p "\$snapshot_dir"
-  launch_env=(SNAPSHOT_STORE_DIR="\$snapshot_dir" RUST_LOG="\${RUST_LOG:-info}")
+  launch_env=(
+    SNAPSHOT_STORE_DIR="\$snapshot_dir"
+    RUST_LOG="\${RUST_LOG:-info}"
+    ZK_HALO2_ENABLED="\${ZK_HALO2_ENABLED:-true}"
+    ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS="\${ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS:-true}"
+  )
   if [[ -f "\$SITE_BINDINGS_FILE" ]]; then
     launch_env+=(IROHA_SORAFS_SITE_BINDINGS_FILE="\$SITE_BINDINGS_FILE")
   fi

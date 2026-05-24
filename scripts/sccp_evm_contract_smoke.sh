@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 cleanup() {
   rm -rf node_modules
+  rm -f contracts_evm_sccp_*.bin
 }
 
 trap cleanup EXIT
@@ -14,6 +15,7 @@ npx --yes solc@0.7.4 --bin --base-path . \
   contracts/evm/sccp/SccpMessageBridge.sol \
   contracts/evm/sccp/SccpMessageBridgeDeployer.sol \
   contracts/evm/sccp/ISccpMessageVerifier.sol \
+  contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol \
   contracts/evm/sccp/SccpSecp256k1MessageVerifier.sol \
   contracts/evm/sccp/Ownable.sol
 

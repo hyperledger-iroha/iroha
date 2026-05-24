@@ -135,18 +135,19 @@ use iroha_sccp::{
     NexusSccpBurnProofV1, NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
     SccpCounterpartyProofJobV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
     SccpNormalizedCodecValueV1, SccpOpenVerifyEnvelopeSummaryV1, SccpPayloadProjectionV1,
-    SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof,
-    build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer,
-    build_nexus_sccp_message_transparent_proof_with_signer,
-    build_sccp_counterparty_proof_job_from_bundle,
-    build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer,
-    build_sccp_counterparty_proof_job_from_bundle_with_signer,
+    SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof_allow_unready,
+    build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer_allow_unready,
+    build_nexus_sccp_message_transparent_proof_with_signer_allow_unready,
+    build_sccp_counterparty_proof_job_from_bundle_allow_unready,
+    build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer_allow_unready,
+    build_sccp_counterparty_proof_job_from_bundle_with_signer_allow_unready,
     build_sccp_message_transparent_inner_proof_from_artifact,
     build_sccp_message_transparent_open_verify_summary_from_bundle, burn_message_id,
     canonical_burn_payload_bytes, canonical_sccp_payload_bytes, commitment_leaf_hash,
     decode_nexus_bridge_finality_proof, decode_nexus_sccp_message_transparent_proof, payload_hash,
     recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
-    sccp_message_payload_kind_key, sccp_message_target_domain, sccp_payload_projection,
+    sccp_message_payload_kind_key, sccp_message_source_domain, sccp_message_target_domain,
+    sccp_message_transparent_public_inputs, sccp_payload_projection,
     summarize_sccp_message_transparent_open_verify_proof_from_artifact,
     verify_burn_bundle_structure, verify_burn_payload_structure, verify_message_bundle_structure,
     verify_sccp_payload_structure,
@@ -5553,6 +5554,7 @@ fn parse_sccp_fixed_hex<const N: usize>(label: &str, value: &str) -> Result<[u8;
 fn sccp_evm_destination_binding_for_bundle(
     bundle: &NexusSccpMessageProofV1,
     fields: &SccpEvmDestinationQuery,
+    allow_unready: bool,
 ) -> Result<Option<iroha_sccp::SccpDestinationBindingV1>> {
     let manifest = sccp_message_manifest_for_bundle(bundle)?;
     let has_any = sccp_evm_destination_fields_present(fields);
@@ -5568,8 +5570,11 @@ fn sccp_evm_destination_binding_for_bundle(
         }
         return Ok(None);
     }
-    if !manifest.production_ready {
+    if !manifest.production_ready && !allow_unready {
         return Ok(None);
+    }
+    if !manifest.production_ready && !has_any {
+        return Ok(Some(manifest.destination_binding.clone()));
     }
     let (Some(network_id_hex), Some(verifier_address_hex), Some(bridge_address_hex)) = (
         fields.network_id_hex.as_deref(),
@@ -5729,6 +5734,37 @@ fn sccp_open_verify_summary_to_serde_json(
     })
 }
 
+fn sccp_groth16_summary_to_serde_json(
+    platform_payload: &iroha_sccp::SccpPlatformSubmissionPayloadV1,
+) -> Option<serde_json::Value> {
+    let (platform, proof_bytes, destination_binding) = match platform_payload {
+        iroha_sccp::SccpPlatformSubmissionPayloadV1::EvmGroth16ContractCall(payload) => (
+            "evm_groth16_contract_call",
+            payload.proof_bytes.as_slice(),
+            &payload.destination_binding,
+        ),
+        iroha_sccp::SccpPlatformSubmissionPayloadV1::TronContractCall(payload) => (
+            "tron_contract_call",
+            payload.proof_bytes.as_slice(),
+            &payload.destination_binding,
+        ),
+        _ => return None,
+    };
+    let proof = iroha_sccp::decode_sccp_evm_groth16_bn254_proof_bytes(proof_bytes)?;
+    Some(serde_json::json!({
+        "platform_payload": platform,
+        "version": proof.version,
+        "proof_len_bytes": proof_bytes.len(),
+        "public_input_word_count": 6,
+        "groth16_public_signal_count": 9,
+        "message_id": hex::encode(proof.message_id),
+        "source_domain": proof.source_domain,
+        "commitment_root": hex::encode(proof.commitment_root),
+        "destination_binding_key": destination_binding.key.as_str(),
+        "destination_binding_hash": hex::encode(destination_binding.binding_hash),
+    }))
+}
+
 fn sccp_artifact_json_value(
     artifact: &NexusSccpMessageTransparentProofV1,
 ) -> Result<serde_json::Value> {
@@ -5743,6 +5779,10 @@ fn sccp_artifact_json_value(
         ));
     };
     if let Some(summary) =
+        sccp_groth16_summary_to_serde_json(&artifact.submission_package.platform_payload)
+    {
+        map.insert("groth16_proof_summary".into(), summary);
+    } else if let Some(summary) =
         summarize_sccp_message_transparent_open_verify_proof_from_artifact(artifact)
     {
         map.insert(
@@ -5765,6 +5805,10 @@ fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<serde_json::V
         ));
     };
     if let Some(summary) =
+        sccp_groth16_summary_to_serde_json(&job.submission_package.platform_payload)
+    {
+        map.insert("groth16_proof_summary".into(), summary);
+    } else if let Some(summary) =
         build_sccp_message_transparent_open_verify_summary_from_bundle(&job.bundle)
     {
         map.insert(
@@ -5830,6 +5874,10 @@ pub struct SccpCounterpartyCapabilityDto {
     /// Explanation for why the lane is disabled when `production_ready` is false.
     #[norito(default)]
     pub disabled_reason: Option<String>,
+    /// Full production-readiness checklist for this lane.
+    #[serde(default)]
+    #[norito(default)]
+    pub production_readiness: iroha_sccp::SccpLaneProductionReadinessV1,
 }
 
 #[derive(
@@ -5882,6 +5930,14 @@ pub struct SccpCapabilitiesDto {
     /// Optional Torii path for inbound verified message submission.
     #[norito(default)]
     pub message_submit_path: Option<String>,
+    /// SCCP production launch policy advertised to proof tooling.
+    #[serde(default)]
+    #[norito(default)]
+    pub production_policy: iroha_sccp::SccpProductionPolicyV1,
+    /// Whether every advertised SCCP lane currently satisfies the all-lanes launch gate.
+    #[serde(default)]
+    #[norito(default)]
+    pub launch_ready: bool,
     /// Generic SCCP payload kinds supported by `/v1/sccp/proofs/message/{message_id}`.
     pub message_payload_kinds: Vec<String>,
     /// Supported codec families for generic SCCP messages.
@@ -6031,6 +6087,12 @@ fn sccp_counterparty_capabilities() -> Result<Vec<SccpCounterpartyCapabilityDto>
                 destination_rollout: manifest.destination_rollout,
                 production_ready: manifest.production_ready,
                 disabled_reason: manifest.disabled_reason,
+                production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(domain)
+                    .ok_or_else(|| {
+                        conversion_error(format!(
+                            "unsupported SCCP domain for production readiness: {domain}"
+                        ))
+                    })?,
             })
         })
         .collect()
@@ -6061,6 +6123,8 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         message_submit_path: Some("/v1/bridge/messages".to_owned()),
         #[cfg(not(feature = "app_api"))]
         message_submit_path: None,
+        production_policy: iroha_sccp::sccp_production_policy_v1(),
+        launch_ready: iroha_sccp::sccp_all_lanes_launch_ready_v1(),
         message_payload_kinds: iroha_sccp::sccp_message_payload_kind_keys_v1(),
         codecs: sccp_codec_capabilities()?,
         counterparties: sccp_counterparty_capabilities()?,
@@ -6215,7 +6279,11 @@ fn sccp_message_manifest_for_bundle(
 fn sccp_message_lane_disabled_message(
     bundle: &NexusSccpMessageProofV1,
     target: &str,
+    allow_unready: bool,
 ) -> Option<String> {
+    if allow_unready {
+        return None;
+    }
     let manifest = sccp_message_manifest_for_bundle(bundle).ok()?;
     (!manifest.production_ready).then(|| {
         let reason = manifest
@@ -6232,15 +6300,18 @@ fn sccp_message_proof_build_error_message(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
     target: &str,
+    allow_unready: bool,
 ) -> String {
-    if let Some(message) = sccp_message_lane_disabled_message(bundle, target) {
+    if let Some(message) = sccp_message_lane_disabled_message(bundle, target, allow_unready) {
         return message;
     }
     let mut message = format!("failed to build SCCP {target}");
-    let needs_evm_attestation = matches!(
-        iroha_sccp::sccp_counterparty_domain_for_message_payload(&bundle.payload),
-        Some(iroha_sccp::SCCP_DOMAIN_ETH | iroha_sccp::SCCP_DOMAIN_BSC)
-    );
+    let needs_evm_attestation = sccp_message_manifest_for_bundle(bundle)
+        .map(|manifest| {
+            manifest.verifier_backend.family
+                == iroha_sccp::SccpVerifierBackendFamilyV1::EvmSecp256k1Keccak
+        })
+        .unwrap_or(false);
     if needs_evm_attestation && signer.algorithm() != Algorithm::Secp256k1 {
         message.push_str(": EVM/BSC SCCP proofs require da_receipt_signer to use secp256k1");
     }
@@ -6252,6 +6323,7 @@ fn bridge_proof_from_sccp_message_bundle(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
     evm_destination: Option<&iroha_sccp::SccpDestinationBindingV1>,
+    allow_unready: bool,
 ) -> Result<iroha_data_model::bridge::BridgeProof> {
     if !verify_message_bundle_structure(bundle) {
         return Err(conversion_error(
@@ -6259,29 +6331,49 @@ fn bridge_proof_from_sccp_message_bundle(
         ));
     }
     if let Some(message) =
-        sccp_message_lane_disabled_message(bundle, "transparent proof consumption")
+        sccp_message_lane_disabled_message(bundle, "transparent proof consumption", allow_unready)
     {
         return Err(conversion_error(message));
     }
-    let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof).ok_or_else(|| {
-        conversion_error("SCCP message bundle finality proof could not be decoded".to_owned())
+    let fallback_destination_binding = if allow_unready && evm_destination.is_none() {
+        let manifest = sccp_message_manifest_for_bundle(bundle)?;
+        (!manifest.production_ready
+            && matches!(
+                manifest.verifier_target,
+                iroha_sccp::SccpProofVerifierTargetV1::EvmContract
+            ))
+        .then_some(manifest.destination_binding)
+    } else {
+        None
+    };
+    let evm_destination = evm_destination.or(fallback_destination_binding.as_ref());
+    let public_inputs = sccp_message_transparent_public_inputs(bundle).ok_or_else(|| {
+        conversion_error("SCCP message bundle public inputs could not be derived".to_owned())
     })?;
     let (backend, manifest_hash, _) = sccp_message_backend_descriptor(&bundle.payload)?;
     let artifact = if let Some(destination_binding) = evm_destination {
-        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer(
+        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer_allow_unready(
             bundle,
             destination_binding,
             signer,
+            allow_unready,
         )
     } else {
-        build_nexus_sccp_message_transparent_proof_with_signer(bundle, signer)
-            .or_else(|| build_nexus_sccp_message_transparent_proof(bundle))
+        build_nexus_sccp_message_transparent_proof_with_signer_allow_unready(
+            bundle,
+            signer,
+            allow_unready,
+        )
+        .or_else(|| {
+            build_nexus_sccp_message_transparent_proof_allow_unready(bundle, allow_unready)
+        })
     }
     .ok_or_else(|| {
         conversion_error(sccp_message_proof_build_error_message(
             bundle,
             signer,
             "transparent proof artifact",
+            allow_unready,
         ))
     })?;
     let proof_bytes = to_bytes(&artifact).map_err(|err| {
@@ -6291,8 +6383,8 @@ fn bridge_proof_from_sccp_message_bundle(
     })?;
     Ok(iroha_data_model::bridge::BridgeProof {
         range: iroha_data_model::bridge::BridgeProofRange {
-            start_height: finality.height,
-            end_height: finality.height,
+            start_height: public_inputs.finality_height,
+            end_height: public_inputs.finality_height,
         },
         manifest_hash,
         payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
@@ -6533,8 +6625,17 @@ mod sccp_message_backend_tests {
             .expect("ton manifest");
         let public_inputs = iroha_sccp::sccp_message_transparent_public_inputs(&bundle)
             .expect("message public inputs");
-        let public_inputs_cell =
-            iroha_sccp::canonical_sccp_message_transparent_public_inputs_bytes(&public_inputs);
+        let inner = iroha_sccp::build_sccp_message_transparent_inner_proof(&bundle, &manifest)
+            .expect("inner proof");
+        let platform_payload = iroha_sccp::build_sccp_ton_internal_message_submission_payload(
+            &manifest,
+            &proof_bytes,
+            &public_inputs,
+            &bundle,
+            inner.statement_hash,
+            &manifest.destination_binding,
+        )
+        .expect("ton payload");
         NexusSccpMessageTransparentProofV1 {
             version: 1,
             local_domain: manifest.local_domain,
@@ -6553,17 +6654,13 @@ mod sccp_message_backend_tests {
             proof_bytes: proof_bytes.clone(),
             submission_package: iroha_sccp::SccpCounterpartySubmissionPackageV1 {
                 version: 1,
-                proof_family: manifest.proof_family,
-                verifier_backend: manifest.verifier_backend,
-                envelope_encoding: "ton_message_body_v1".to_owned(),
+                proof_family: manifest.proof_family.clone(),
+                verifier_backend: manifest.verifier_backend.clone(),
+                envelope_encoding: "ton_message_body_boc_v1".to_owned(),
                 submission_kind: manifest.submission_template.submission_kind.clone(),
                 verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
                 platform_payload: iroha_sccp::SccpPlatformSubmissionPayloadV1::TonInternalMessage(
-                    iroha_sccp::SccpTonInternalMessageSubmissionPayloadV1 {
-                        proof_cell: proof_bytes,
-                        public_inputs_cell,
-                        bundle_cell: iroha_sccp::canonical_nexus_sccp_message_bundle_bytes(&bundle),
-                    },
+                    platform_payload,
                 ),
                 arguments: Vec::new(),
                 envelope_bytes: vec![0xCC],
@@ -6617,6 +6714,52 @@ mod sccp_message_backend_tests {
             submission_package: artifact.submission_package.clone(),
             bundle: artifact.bundle,
         }
+    }
+
+    fn test_abi_word_u64(value: u64) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[24..].copy_from_slice(&value.to_be_bytes());
+        out
+    }
+
+    fn test_hex32(value: &str) -> [u8; 32] {
+        parse_sccp_fixed_hex::<32>("test_hex", value).expect("valid test hex")
+    }
+
+    fn sample_evm_groth16_platform_payload_for_job(
+        job: &SccpCounterpartyProofJobV1,
+    ) -> iroha_sccp::SccpPlatformSubmissionPayloadV1 {
+        let proof = iroha_sccp::SccpEvmGroth16Bn254ProofV1 {
+            version: 1,
+            message_id: job.public_inputs.message_id,
+            source_domain: job.local_domain,
+            commitment_root: job.public_inputs.commitment_root,
+            a: [test_abi_word_u64(1), test_abi_word_u64(2)],
+            b: [
+                test_hex32("1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed"),
+                test_hex32("198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2"),
+                test_hex32("12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa"),
+                test_hex32("090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b"),
+            ],
+            c: [test_abi_word_u64(1), test_abi_word_u64(2)],
+        };
+        iroha_sccp::SccpPlatformSubmissionPayloadV1::EvmGroth16ContractCall(
+            iroha_sccp::SccpEvmGroth16ContractSubmissionPayloadV1 {
+                proof_bytes: iroha_sccp::encode_sccp_evm_groth16_bn254_proof_bytes(&proof),
+                public_inputs: iroha_sccp::SccpEvmWordPublicInputsV1 {
+                    message_id: job.public_inputs.message_id,
+                    payload_hash: job.public_inputs.payload_hash,
+                    target_domain_word: test_abi_word_u64(u64::from(
+                        job.public_inputs.target_domain,
+                    )),
+                    commitment_root: job.public_inputs.commitment_root,
+                    finality_height_word: test_abi_word_u64(job.public_inputs.finality_height),
+                    finality_block_hash: job.public_inputs.finality_block_hash,
+                },
+                statement_hash: [0x99; 32],
+                destination_binding: job.destination_binding.clone(),
+            },
+        )
     }
 
     fn sample_sccp_finality_proof_bytes(commitment_root: [u8; 32]) -> Vec<u8> {
@@ -6802,8 +6945,8 @@ mod sccp_message_backend_tests {
             verifier_address_hex: Some(format!("0x{}", "22".repeat(20))),
             bridge_address_hex: Some(format!("0x{}", "33".repeat(20))),
         };
-        let binding =
-            sccp_evm_destination_binding_for_bundle(&bundle, &fields).expect("destination query");
+        let binding = sccp_evm_destination_binding_for_bundle(&bundle, &fields, false)
+            .expect("destination query");
 
         assert!(
             binding.is_none(),
@@ -6819,8 +6962,8 @@ mod sccp_message_backend_tests {
             verifier_address_hex: Some("0xalso-not-hex".to_owned()),
             bridge_address_hex: Some("0xstill-not-hex".to_owned()),
         };
-        let binding =
-            sccp_evm_destination_binding_for_bundle(&bundle, &fields).expect("destination query");
+        let binding = sccp_evm_destination_binding_for_bundle(&bundle, &fields, false)
+            .expect("destination query");
 
         assert!(
             binding.is_none(),
@@ -6909,6 +7052,7 @@ mod sccp_message_backend_tests {
                 verifier_address_hex: Some(format!("0x{}", "22".repeat(20))),
                 bridge_address_hex: Some(format!("0x{}", "33".repeat(20))),
             },
+            false,
         )
         .expect_err("non-EVM lane must reject EVM deployment fields");
 
@@ -7060,6 +7204,53 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
+    fn sccp_job_json_value_includes_groth16_summary_without_open_verify_summary() {
+        let mut job = sample_ton_job();
+        let message_id = job.public_inputs.message_id;
+        let commitment_root = job.public_inputs.commitment_root;
+        job.submission_package.platform_payload = sample_evm_groth16_platform_payload_for_job(&job);
+        let expected_message_id = hex::encode(message_id);
+        let expected_commitment_root = hex::encode(commitment_root);
+
+        let json = sccp_job_json_value(&job).expect("job json");
+        let object = json.as_object().expect("job json object");
+        let summary = object
+            .get("groth16_proof_summary")
+            .and_then(serde_json::Value::as_object)
+            .expect("groth16 proof summary");
+
+        assert_eq!(object.get("proof_envelope_summary"), None);
+        assert_eq!(
+            summary.get("version").and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            summary
+                .get("proof_len_bytes")
+                .and_then(serde_json::Value::as_u64),
+            Some(384)
+        );
+        assert_eq!(
+            summary
+                .get("groth16_public_signal_count")
+                .and_then(serde_json::Value::as_u64),
+            Some(9)
+        );
+        assert_eq!(
+            summary
+                .get("message_id")
+                .and_then(serde_json::Value::as_str),
+            Some(expected_message_id.as_str())
+        );
+        assert_eq!(
+            summary
+                .get("commitment_root")
+                .and_then(serde_json::Value::as_str),
+            Some(expected_commitment_root.as_str())
+        );
+    }
+
+    #[test]
     fn sccp_capabilities_snapshot_lists_remote_domains_and_codecs() {
         let snapshot = sccp_capabilities_snapshot().expect("capabilities");
         assert_eq!(snapshot.local_domain, iroha_sccp::SCCP_DOMAIN_SORA);
@@ -7090,6 +7281,11 @@ mod sccp_message_backend_tests {
                 None
             }
         );
+        assert_eq!(
+            snapshot.production_policy,
+            iroha_sccp::sccp_production_policy_v1()
+        );
+        assert!(!snapshot.launch_ready);
         assert_eq!(snapshot.codecs.len(), 6);
         assert!(snapshot.codecs.iter().any(|codec| {
             codec.id == iroha_sccp::SCCP_CODEC_SORA_ASSET_ID && codec.key == "sora_asset_id"
@@ -7125,6 +7321,26 @@ mod sccp_message_backend_tests {
             ton.destination_rollout.verifier_plan,
             iroha_sccp::SccpDestinationVerifierPlanV1::TonContractNativeRecursive
         );
+        assert_eq!(
+            ton.production_readiness.source_proof_plan,
+            iroha_sccp::SccpSourceProofPlanV1::TonMasterchainShardProof
+        );
+        assert!(
+            ton.production_readiness
+                .source_adapter_engine
+                .source_verifier_material
+                .placeholder_material
+        );
+        assert!(
+            !iroha_sccp::sccp_source_verifier_material_is_production_ready(
+                &ton.production_readiness
+                    .source_adapter_engine
+                    .source_verifier_material
+            )
+        );
+        assert!(!ton.production_readiness.source_adapter_ready);
+        assert!(!ton.production_readiness.routes_allowlisted);
+        assert!(!ton.production_readiness.blockers.is_empty());
     }
 
     #[test]
@@ -7148,7 +7364,7 @@ mod sccp_message_backend_tests {
             .expect("eth manifest");
         assert_eq!(
             eth.verifier_backend.key.as_str(),
-            iroha_sccp::SCCP_EVM_SECP256K1_PROOF_BACKEND_V1
+            iroha_sccp::SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
         );
         assert_eq!(eth.message_backend, "sccp/stark-fri-v1/eth");
         assert_eq!(eth.registry_backend, "bridge/sccp/stark-fri-v1/eth");
@@ -7349,7 +7565,7 @@ mod sccp_message_backend_tests {
             b"iroha:torii:routing:test:evm-attestor".to_vec(),
             Algorithm::Secp256k1,
         );
-        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None)
+        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, false)
             .expect_err("disabled lane should reject bridge proof generation");
         assert!(conversion_message(&err).is_some_and(|message| message.contains("is disabled")));
     }
@@ -7467,6 +7683,25 @@ fn build_sccp_finality_proof_bytes(
     })
 }
 
+fn build_sccp_message_finality_proof_bytes(
+    finality_proof: &iroha_data_model::bridge::BridgeFinalityProof,
+    _commitment: &SccpHubCommitmentV1,
+    payload: &SccpPayloadV1,
+    commitment_root: [u8; 32],
+) -> Result<Vec<u8>> {
+    let source_domain = sccp_message_source_domain(payload);
+    if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+        return build_sccp_finality_proof_bytes(finality_proof, commitment_root);
+    }
+
+    // TODO: wire this endpoint to accepted source-chain proof envelopes supplied
+    // by the source adapter. Synthesizing non-SORA finality from local Iroha
+    // finality data would create a production ingress bypass.
+    Err(sccp_bad_request(
+        "non-SORA SCCP message proof generation requires a submitted source-chain proof envelope",
+    ))
+}
+
 fn reconstruct_sccp_message_bundle_from_block(
     state: &CoreState,
     height: u64,
@@ -7519,7 +7754,12 @@ fn reconstruct_sccp_message_bundle_from_block(
         commitment: messages[index].commitment.clone(),
         merkle_proof,
         payload: messages[index].payload.clone(),
-        finality_proof: build_sccp_finality_proof_bytes(&finality_proof, commitment_root)?,
+        finality_proof: build_sccp_message_finality_proof_bytes(
+            &finality_proof,
+            &messages[index].commitment,
+            &messages[index].payload,
+            commitment_root,
+        )?,
     }))
 }
 
@@ -7728,7 +7968,12 @@ fn collect_recent_sccp_messages(
                 commitment: message.commitment.clone(),
                 merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
                 payload: message.payload.clone(),
-                finality_proof: build_sccp_finality_proof_bytes(&finality_proof, commitment_root)?,
+                finality_proof: build_sccp_message_finality_proof_bytes(
+                    &finality_proof,
+                    &message.commitment,
+                    &message.payload,
+                    commitment_root,
+                )?,
             };
             items.push(recent_message_entry_from_bundle(height_u64, &bundle)?);
             if items.len() >= limit {
@@ -7797,13 +8042,19 @@ pub fn publish_sccp_message_bundle(
         payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
     };
     let commitment_root = commitment_leaf_hash(&commitment);
+    let finality_proof = build_sccp_message_finality_proof_bytes(
+        &bridge_finality_proof,
+        &commitment,
+        &payload,
+        commitment_root,
+    )?;
     let bundle = NexusSccpMessageProofV1 {
         version: 1,
         commitment_root,
         commitment,
         merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
         payload,
-        finality_proof: build_sccp_finality_proof_bytes(&bridge_finality_proof, commitment_root)?,
+        finality_proof,
     };
     SCCP_MESSAGE_BUNDLES
         .write()
@@ -7902,26 +8153,37 @@ pub async fn handle_v1_sccp_message_proof_artifact(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
-    let evm_destination = sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination)?;
-    if let Some(message) = sccp_message_lane_disabled_message(&bundle, "proof artifact generation")
+    let allow_unready = false;
+    let evm_destination =
+        sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination, allow_unready)?;
+    if let Some(message) =
+        sccp_message_lane_disabled_message(&bundle, "proof artifact generation", allow_unready)
     {
         return Err(sccp_bad_request(message));
     }
     let artifact = if let Some(destination_binding) = evm_destination.as_ref() {
-        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer(
+        build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer_allow_unready(
             &bundle,
             destination_binding,
             signer,
+            allow_unready,
         )
     } else {
-        build_nexus_sccp_message_transparent_proof_with_signer(&bundle, signer)
-            .or_else(|| build_nexus_sccp_message_transparent_proof(&bundle))
+        build_nexus_sccp_message_transparent_proof_with_signer_allow_unready(
+            &bundle,
+            signer,
+            allow_unready,
+        )
+        .or_else(|| {
+            build_nexus_sccp_message_transparent_proof_allow_unready(&bundle, allow_unready)
+        })
     }
     .ok_or_else(|| {
         sccp_internal_error(sccp_message_proof_build_error_message(
             &bundle,
             signer,
             "proof artifact",
+            allow_unready,
         ))
     })?;
     let artifact_json = sccp_artifact_json_value(&artifact)?;
@@ -7947,25 +8209,35 @@ pub async fn handle_v1_sccp_message_proof_job(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
-    let evm_destination = sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination)?;
-    if let Some(message) = sccp_message_lane_disabled_message(&bundle, "proof job generation") {
+    let allow_unready = false;
+    let evm_destination =
+        sccp_evm_destination_binding_for_bundle(&bundle, &evm_destination, allow_unready)?;
+    if let Some(message) =
+        sccp_message_lane_disabled_message(&bundle, "proof job generation", allow_unready)
+    {
         return Err(sccp_bad_request(message));
     }
     let job = if let Some(destination_binding) = evm_destination.as_ref() {
-        build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer(
+        build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer_allow_unready(
             &bundle,
             destination_binding,
             signer,
+            allow_unready,
         )
     } else {
-        build_sccp_counterparty_proof_job_from_bundle_with_signer(&bundle, signer)
-            .or_else(|| build_sccp_counterparty_proof_job_from_bundle(&bundle))
+        build_sccp_counterparty_proof_job_from_bundle_with_signer_allow_unready(
+            &bundle,
+            signer,
+            allow_unready,
+        )
+        .or_else(|| build_sccp_counterparty_proof_job_from_bundle_allow_unready(&bundle, allow_unready))
     }
     .ok_or_else(|| {
         sccp_internal_error(sccp_message_proof_build_error_message(
             &bundle,
             signer,
             "normalized proof job",
+            allow_unready,
         ))
     })?;
     let job_json = sccp_job_json_value(&job)?;
@@ -13588,6 +13860,7 @@ pub async fn handle_post_bridge_proof_submit(
         ));
     }
 
+    let allow_unready = false;
     let (proof_kind, bridge_proof, counterparty_domain, counterparty_chain) =
         match (burn_bundle.as_ref(), message_bundle.as_ref()) {
             (Some(bundle), None) => {
@@ -13603,14 +13876,18 @@ pub async fn handle_post_bridge_proof_submit(
             (None, Some(bundle)) => {
                 let (counterparty_domain, counterparty_chain) =
                     sccp_counterparty_for_message_payload(&bundle.payload)?;
-                let evm_destination =
-                    sccp_evm_destination_binding_for_bundle(bundle, &evm_destination_fields)?;
+                let evm_destination = sccp_evm_destination_binding_for_bundle(
+                    bundle,
+                    &evm_destination_fields,
+                    allow_unready,
+                )?;
                 (
                     "message",
                     bridge_proof_from_sccp_message_bundle(
                         bundle,
                         signer,
                         evm_destination.as_ref(),
+                        allow_unready,
                     )?,
                     counterparty_domain,
                     counterparty_chain.to_owned(),
@@ -13628,9 +13905,11 @@ pub async fn handle_post_bridge_proof_submit(
     let instruction: dm::InstructionBox = dm::SubmitBridgeProof::new(bridge_proof).into();
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder = builder.with_executable(dm::Executable::Instructions(ConstVec::from(vec![
-        instruction,
-    ])));
+    let builder = builder
+        .with_metadata(metadata_with_default_gas_asset(state.as_ref()))
+        .with_executable(dm::Executable::Instructions(ConstVec::from(vec![
+            instruction,
+        ])));
 
     let response =
         if let Some(private_key) = private_key {
@@ -13816,7 +14095,9 @@ pub async fn handle_post_bridge_message_submit(
     let (counterparty_domain, counterparty_chain) =
         sccp_counterparty_for_message_payload(&message_bundle.payload)?;
     let message_id_hex = hex::encode(message_bundle.commitment.message_id);
-    let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle, signer, None)?;
+    let allow_unready = false;
+    let bridge_proof =
+        bridge_proof_from_sccp_message_bundle(&message_bundle, signer, None, allow_unready)?;
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;
     let manifest_hash_hex = hex::encode(bridge_proof.manifest_hash);
@@ -13857,8 +14138,9 @@ pub async fn handle_post_bridge_message_submit(
     }
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder =
-        builder.with_executable(dm::Executable::Instructions(ConstVec::from(instructions)));
+    let builder = builder
+        .with_metadata(metadata_with_default_gas_asset(state.as_ref()))
+        .with_executable(dm::Executable::Instructions(ConstVec::from(instructions)));
 
     let response =
         if let Some(private_key) = private_key {
@@ -52932,19 +53214,19 @@ fn trader_module_contract_key(module: &str) -> &'static str {
 #[cfg(feature = "app_api")]
 fn trader_module_alias_candidates(module: &str) -> &'static [&'static str] {
     match module {
-        "swaps" => &["dlmm.dlmm_router"],
-        "n3x" => &["n3x.n3x_hub"],
-        "perps" => &["perps.perps_engine"],
-        "farms" => &["farms.farm"],
-        "launchpad" => &["launchpad.sale_factory"],
-        "options" => &["options.factory", "options.manager"],
-        "cover" => &["cover.policy_manager"],
-        "intents" => &["intents.settlement_router"],
-        "vaults" => &["vaults.manager"],
-        "operators" => &["operators.registry"],
-        "margin" => &["margin.portfolio_margin"],
-        "rwa" => &["rwa.market"],
-        "dlmmHooks" => &["dlmm_hooks.hook_manager"],
+        "swaps" => &["dlmm_router::dlmm.universal"],
+        "n3x" => &["n3x_hub::n3x.universal"],
+        "perps" => &["perps_engine::perps.universal"],
+        "farms" => &["farm::farms.universal"],
+        "launchpad" => &["sale_factory::launchpad.universal"],
+        "options" => &["factory::options.universal", "manager::options.universal"],
+        "cover" => &["policy_manager::cover.universal"],
+        "intents" => &["settlement_router::intents.universal"],
+        "vaults" => &["manager::vaults.universal"],
+        "operators" => &["registry::operators.universal"],
+        "margin" => &["portfolio_margin::margin.universal"],
+        "rwa" => &["market::rwa.universal"],
+        "dlmmHooks" => &["hook_manager::dlmm_hooks.universal"],
         _ => &[],
     }
 }
@@ -53245,7 +53527,7 @@ fn call_contract_view_value(
     state: Arc<CoreState>,
     authority: &iroha_data_model::account::AccountId,
     contract_address: iroha_data_model::smart_contract::ContractAddress,
-    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    _contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     entrypoint: &str,
     payload: Option<Value>,
     gas_limit: u64,
@@ -53255,7 +53537,7 @@ fn call_contract_view_value(
         ContractViewDto {
             authority: authority.clone(),
             contract_address: Some(contract_address),
-            contract_alias,
+            contract_alias: None,
             entrypoint: Some(entrypoint.to_owned()),
             payload: payload.map(IrohaJson::new),
             gas_limit,
@@ -53296,7 +53578,7 @@ fn load_swap_fill_rollup(
         state.as_ref(),
         params.contract_address.as_deref(),
         params.contract_alias.as_deref(),
-        "dlmm.dlmm_router",
+        "dlmm_router::dlmm.universal",
     )?;
     let contract_address = prepared.contract_address.clone();
     let contract_alias = prepared.contract_alias.clone();
@@ -54669,6 +54951,17 @@ mod tx_projection_display_tests {
     }
 
     #[test]
+    fn trader_module_alias_candidates_are_parseable_contract_aliases() {
+        for module in TRADER_MODULE_ORDER {
+            for alias in trader_module_alias_candidates(module) {
+                alias
+                    .parse::<iroha_data_model::smart_contract::ContractAlias>()
+                    .unwrap_or_else(|err| panic!("invalid alias candidate `{alias}`: {err}"));
+            }
+        }
+    }
+
+    #[test]
     fn projections_omit_invalid_authority_literals() {
         let projection = TxProjection {
             authority: Some("operator1@banka".to_string()),
@@ -55030,7 +55323,7 @@ mod tx_projection_display_tests {
         SwapFillRollup {
             authority: ALICE_ID.to_string(),
             contract_address: "tairac1router".into(),
-            contract_alias: Some("dlmm.dlmm_router".into()),
+            contract_alias: Some("dlmm_router::dlmm.universal".into()),
             base_asset_id: "xor#universal".into(),
             quote_asset_id: "usdt#soraswap.universal".into(),
             history_head: 7,

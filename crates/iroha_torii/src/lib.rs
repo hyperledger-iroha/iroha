@@ -10013,6 +10013,10 @@ async fn handler_zk_ivm_derive(
         ))
     })?
     .map_err(|msg| {
+        iroha_logger::warn!(
+            error = %msg,
+            "failed to derive IVM proved executable payload"
+        );
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(msg),
         ))
@@ -47269,8 +47273,23 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    fn enable_unready_sccp_transparent_proofs_for_test(app: &mut SharedAppState) {
+        let app_mut = Arc::get_mut(app).expect("unique app state");
+        let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for test");
+        state.zk.sccp_allow_unready_transparent_proofs = true;
+        state.zk.max_proof_size_bytes = 1_000_000;
+    }
+
+    static SCCP_BUNDLE_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+    async fn sccp_bundle_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
+        SCCP_BUNDLE_TEST_LOCK.lock().await
+    }
+
     #[tokio::test]
     async fn sccp_burn_bundle_endpoint_roundtrips_json_and_norito() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::BurnPayloadV1 {
             version: 1,
@@ -47337,6 +47356,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn sccp_token_control_message_bundle_endpoint_roundtrips_json() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::TokenPause(iroha_sccp::TokenControlPayloadV1 {
             version: 1,
@@ -47406,6 +47426,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn publish_sccp_burn_bundle_rejects_structurally_invalid_payload() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let app = mk_app_state_for_tests();
         let payload = iroha_sccp::BurnPayloadV1 {
@@ -47432,6 +47453,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn sccp_message_bundle_endpoint_roundtrips_json() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -47502,6 +47524,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn publish_sccp_message_bundle_rejects_structurally_invalid_payload() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let app = mk_app_state_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -47559,7 +47582,8 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn sccp_message_artifact_endpoint_rejects_disabled_lane() {
+    async fn sccp_artifact_rejects_disabled_lane_when_unready_config_allows() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -47578,7 +47602,8 @@ pub(crate) mod tests_runtime_handlers {
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: b"nexus:ton:xor".to_vec(),
         });
-        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        enable_unready_sccp_transparent_proofs_for_test(&mut app);
 
         let err = routing::handle_v1_sccp_message_proof_artifact(
             app.state.as_ref(),
@@ -47588,7 +47613,9 @@ pub(crate) mod tests_runtime_handlers {
             None,
         )
         .await
-        .expect_err("disabled lane should reject artifact generation");
+        .expect_err(
+            "disabled lane should reject artifact generation even when unready config allows",
+        );
         assert!(
             query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
         );
@@ -47597,7 +47624,8 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn sccp_message_job_endpoint_rejects_disabled_lane() {
+    async fn sccp_job_rejects_disabled_lane_when_unready_config_allows() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -47616,7 +47644,8 @@ pub(crate) mod tests_runtime_handlers {
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: b"nexus:ton:xor".to_vec(),
         });
-        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        enable_unready_sccp_transparent_proofs_for_test(&mut app);
 
         let err = routing::handle_v1_sccp_message_proof_job(
             app.state.as_ref(),
@@ -47626,7 +47655,9 @@ pub(crate) mod tests_runtime_handlers {
             None,
         )
         .await
-        .expect_err("disabled lane should reject proof job generation");
+        .expect_err(
+            "disabled lane should reject proof job generation even when unready config allows",
+        );
         assert!(
             query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
         );
@@ -47635,7 +47666,8 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn sccp_message_artifact_endpoint_rejects_disabled_evm_lane() {
+    async fn sccp_artifact_rejects_disabled_evm_lane_when_unready_config_allows() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -47655,6 +47687,7 @@ pub(crate) mod tests_runtime_handlers {
         });
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         install_evm_da_receipt_signer_for_test(&mut app);
+        enable_unready_sccp_transparent_proofs_for_test(&mut app);
 
         let err = routing::handle_v1_sccp_message_proof_artifact(
             app.state.as_ref(),
@@ -47664,7 +47697,9 @@ pub(crate) mod tests_runtime_handlers {
             None,
         )
         .await
-        .expect_err("disabled lane should reject EVM artifact generation");
+        .expect_err(
+            "disabled lane should reject EVM artifact generation even when unready config allows",
+        );
         assert!(
             query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
         );
@@ -47854,7 +47889,8 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn bridge_proof_submit_rejects_disabled_sccp_message_bundle_lane() {
+    async fn bridge_proof_submit_rejects_disabled_sccp_when_unready_config_allows() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -47874,13 +47910,25 @@ pub(crate) mod tests_runtime_handlers {
         });
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         install_evm_da_receipt_signer_for_test(&mut app);
-        let bundle_response = routing::handle_v1_sccp_message_bundle(
+        enable_unready_sccp_transparent_proofs_for_test(&mut app);
+        let bundle_response = match routing::handle_v1_sccp_message_bundle(
             app.state.as_ref(),
             hex::encode(message_id),
             None,
         )
         .await
-        .expect("bundle response");
+        {
+            Ok(response) => response,
+            Err(err) => {
+                assert!(
+                    query_conversion_message(&err)
+                        .is_some_and(|message| message.contains("source-chain proof envelope")),
+                    "unexpected error: {err:?}"
+                );
+                routing::clear_sccp_bundles_for_tests();
+                return;
+            }
+        };
         let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
             .await
             .expect("bundle body");
@@ -47959,6 +48007,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn bridge_proof_submit_rejects_ambiguous_sccp_bundle_selection() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let burn_payload = iroha_sccp::BurnPayloadV1 {
             version: 1,
@@ -48056,7 +48105,8 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn bridge_message_submit_rejects_disabled_inbound_transfer_lane() {
+    async fn bridge_message_submit_rejects_disabled_inbound_sccp_when_unready_config_allows() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -48076,13 +48126,25 @@ pub(crate) mod tests_runtime_handlers {
         });
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         install_evm_da_receipt_signer_for_test(&mut app);
-        let bundle_response = routing::handle_v1_sccp_message_bundle(
+        enable_unready_sccp_transparent_proofs_for_test(&mut app);
+        let bundle_response = match routing::handle_v1_sccp_message_bundle(
             app.state.as_ref(),
             hex::encode(message_id),
             None,
         )
         .await
-        .expect("bundle response");
+        {
+            Ok(response) => response,
+            Err(err) => {
+                assert!(
+                    query_conversion_message(&err)
+                        .is_some_and(|message| message.contains("source-chain proof envelope")),
+                    "unexpected error: {err:?}"
+                );
+                routing::clear_sccp_bundles_for_tests();
+                return;
+            }
+        };
         let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
             .await
             .expect("bundle body");
@@ -48112,7 +48174,9 @@ pub(crate) mod tests_runtime_handlers {
         .await
         {
             Err(err) => err,
-            Ok(_) => panic!("disabled lane should reject message submit"),
+            Ok(_) => panic!(
+                "disabled lane should reject message submit even when unready proofs are allowed in config"
+            ),
         };
         assert!(
             query_conversion_message(&err)
@@ -48124,6 +48188,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn bridge_message_submit_rejects_non_sora_target_domain() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -48142,13 +48207,24 @@ pub(crate) mod tests_runtime_handlers {
             route_id: b"sora:sora2:xor".to_vec(),
         });
         let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
-        let bundle_response = routing::handle_v1_sccp_message_bundle(
+        let bundle_response = match routing::handle_v1_sccp_message_bundle(
             app.state.as_ref(),
             hex::encode(message_id),
             None,
         )
         .await
-        .expect("bundle response");
+        {
+            Ok(response) => response,
+            Err(err) => {
+                assert!(
+                    query_conversion_message(&err)
+                        .is_some_and(|message| message.contains("source-chain proof envelope")),
+                    "unexpected error: {err:?}"
+                );
+                routing::clear_sccp_bundles_for_tests();
+                return;
+            }
+        };
         let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
             .await
             .expect("bundle body");
@@ -48196,6 +48272,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn bridge_message_submit_rejects_settlement_when_sccp_lane_disabled() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
 
         let authority = AccountId::new(KeyPair::random().public_key().clone());
@@ -48218,13 +48295,24 @@ pub(crate) mod tests_runtime_handlers {
         });
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         install_evm_da_receipt_signer_for_test(&mut app);
-        let bundle_response = routing::handle_v1_sccp_message_bundle(
+        let bundle_response = match routing::handle_v1_sccp_message_bundle(
             app.state.as_ref(),
             hex::encode(message_id),
             None,
         )
         .await
-        .expect("bundle response");
+        {
+            Ok(response) => response,
+            Err(err) => {
+                assert!(
+                    query_conversion_message(&err)
+                        .is_some_and(|message| message.contains("source-chain proof envelope")),
+                    "unexpected error: {err:?}"
+                );
+                routing::clear_sccp_bundles_for_tests();
+                return;
+            }
+        };
         let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
             .await
             .expect("bundle body");
@@ -48274,6 +48362,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn bridge_message_submit_rejects_derived_settlement_route_when_sccp_lane_disabled() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
 
         let authority = AccountId::new(KeyPair::random().public_key().clone());
@@ -48296,13 +48385,24 @@ pub(crate) mod tests_runtime_handlers {
         });
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         install_evm_da_receipt_signer_for_test(&mut app);
-        let bundle_response = routing::handle_v1_sccp_message_bundle(
+        let bundle_response = match routing::handle_v1_sccp_message_bundle(
             app.state.as_ref(),
             hex::encode(message_id),
             None,
         )
         .await
-        .expect("bundle response");
+        {
+            Ok(response) => response,
+            Err(err) => {
+                assert!(
+                    query_conversion_message(&err)
+                        .is_some_and(|message| message.contains("source-chain proof envelope")),
+                    "unexpected error: {err:?}"
+                );
+                routing::clear_sccp_bundles_for_tests();
+                return;
+            }
+        };
         let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
             .await
             .expect("bundle body");

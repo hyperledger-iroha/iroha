@@ -193,6 +193,11 @@ const SNAPSHOT_MERKLE_FILE_NAME: &str = "snapshot.merkle.json";
 const SNAPSHOT_MERKLE_TMP_FILE_NAME: &str = "snapshot.merkle.json.tmp";
 /// Default chunk size used to derive snapshot Merkle metadata.
 const _DEFAULT_MERKLE_CHUNK_SIZE: NonZeroUsize = defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES;
+const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
+
+fn hard_fork_snapshot_bootstrap_enabled() -> bool {
+    std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
+}
 
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 enum SnapshotMerkleError {
@@ -1139,8 +1144,23 @@ fn try_read_snapshot_bundle(
     }
     for (idx, snapshot_block_hash) in snapshot_hashes.into_iter().enumerate() {
         let height = idx + 1;
+        let height_nz = NonZeroUsize::new(height).expect("iterating from 1");
+        if hard_fork_snapshot_bootstrap_enabled() {
+            let kura_block_hash = kura
+                .block_hash_at_height(height_nz)
+                .ok_or(TryReadError::MissingBlock { height })?;
+            if kura_block_hash != snapshot_block_hash {
+                return Err(TryReadError::MismatchedHash {
+                    height,
+                    snapshot_block_hash,
+                    kura_block_hash,
+                });
+            }
+            continue;
+        }
+
         let kura_block = kura
-            .get_block(NonZeroUsize::new(height).expect("iterating from 1"))
+            .get_block(height_nz)
             .ok_or(TryReadError::MissingBlock { height })?;
         if kura_block.hash() != snapshot_block_hash {
             if height == snapshot_height {

@@ -221,6 +221,9 @@ pub struct SccpCounterpartyCapability {
     /// Explanation for why the lane is disabled when `production_ready` is false.
     #[norito(default)]
     pub disabled_reason: Option<String>,
+    /// Full production-readiness checklist for this lane.
+    #[norito(default)]
+    pub production_readiness: iroha_sccp::SccpLaneProductionReadinessV1,
 }
 
 #[derive(
@@ -268,6 +271,12 @@ pub struct SccpCapabilities {
     /// Optional Torii path for inbound verified message submission.
     #[norito(default)]
     pub message_submit_path: Option<String>,
+    /// SCCP production launch policy advertised by the node.
+    #[norito(default)]
+    pub production_policy: iroha_sccp::SccpProductionPolicyV1,
+    /// Whether every advertised SCCP lane satisfies the launch gate.
+    #[norito(default)]
+    pub launch_ready: bool,
     /// Supported generic SCCP payload kinds.
     pub message_payload_kinds: Vec<String>,
     /// Supported SCCP codec families.
@@ -12776,7 +12785,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_vk_json(&self, backend: &str, name: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/zk/vk/{backend}/{name}"));
+        let url = join_torii_url_with_path_segments(&self.torii_url, "v1/zk/vk", &[backend, name]);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -14705,11 +14714,24 @@ pub(crate) fn join_torii_url(url: &Url, path: &str) -> Url {
     url.join(path).expect("Valid URI")
 }
 
+fn join_torii_url_with_path_segments(url: &Url, path: &str, segments: &[&str]) -> Url {
+    let mut url = join_torii_url(url, path);
+    {
+        let mut path_segments = url
+            .path_segments_mut()
+            .expect("Torii url must be a base URL");
+        for segment in segments {
+            path_segments.push(segment);
+        }
+    }
+    url
+}
+
 #[cfg(test)]
 mod url_join_tests {
     use url::Url;
 
-    use super::join_torii_url;
+    use super::{join_torii_url, join_torii_url_with_path_segments};
 
     #[test]
     fn join_prover_reports_paths() {
@@ -14728,6 +14750,18 @@ mod url_join_tests {
         let base = Url::parse("http://localhost:8080/api/").unwrap();
         let u = join_torii_url(&base, "v1/zk/vote/tally");
         assert_eq!(u.as_str(), "http://localhost:8080/api/v1/zk/vote/tally");
+    }
+
+    #[test]
+    fn join_vk_path_encodes_slash_containing_backend_segment() {
+        let base = Url::parse("http://localhost:8080/api/").unwrap();
+        let u =
+            join_torii_url_with_path_segments(&base, "v1/zk/vk", &["halo2/ipa", "ivm_execution"]);
+
+        assert_eq!(
+            u.as_str(),
+            "http://localhost:8080/api/v1/zk/vk/halo2%2Fipa/ivm_execution"
+        );
     }
 }
 
@@ -21008,10 +21042,9 @@ mod tests {
             NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,
             NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
             SccpCounterpartySubmissionPackageV1, SccpHubCommitmentV1, SccpHubMessageKind,
-            SccpMerkleProofV1, SccpPayloadV1, SccpPlatformSubmissionPayloadV1,
-            SccpTonInternalMessageSubmissionPayloadV1, TransferPayloadV1,
-            canonical_nexus_sccp_message_bundle_bytes,
-            canonical_sccp_message_transparent_public_inputs_bytes, canonical_sccp_payload_bytes,
+            SccpMerkleProofV1, SccpPayloadV1, SccpPlatformSubmissionPayloadV1, TransferPayloadV1,
+            build_sccp_message_transparent_inner_proof,
+            build_sccp_ton_internal_message_submission_payload, canonical_sccp_payload_bytes,
             merkle_root_from_commitment, payload_hash, sccp_message_id,
             sccp_message_transparent_public_inputs, sccp_proof_manifest_for_domain,
         };
@@ -21076,14 +21109,19 @@ mod tests {
             sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON).expect("ton manifest");
         let public_inputs =
             sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof_bytes = vec![0xAA, 0xBB];
+        let inner =
+            build_sccp_message_transparent_inner_proof(&bundle, &manifest).expect("inner proof");
         let platform_payload = SccpPlatformSubmissionPayloadV1::TonInternalMessage(
-            SccpTonInternalMessageSubmissionPayloadV1 {
-                proof_cell: vec![0xAA, 0xBB],
-                public_inputs_cell: canonical_sccp_message_transparent_public_inputs_bytes(
-                    &public_inputs,
-                ),
-                bundle_cell: canonical_nexus_sccp_message_bundle_bytes(&bundle),
-            },
+            build_sccp_ton_internal_message_submission_payload(
+                &manifest,
+                &proof_bytes,
+                &public_inputs,
+                &bundle,
+                inner.statement_hash,
+                &manifest.destination_binding,
+            )
+            .expect("ton payload"),
         );
         NexusSccpMessageTransparentProofV1 {
             version: 1,
@@ -21100,12 +21138,12 @@ mod tests {
             finality_model: manifest.finality_model,
             verifier_target: manifest.verifier_target,
             public_inputs,
-            proof_bytes: vec![0xAA, 0xBB],
+            proof_bytes,
             submission_package: SccpCounterpartySubmissionPackageV1 {
                 version: 1,
-                proof_family: manifest.proof_family,
-                verifier_backend: manifest.verifier_backend,
-                envelope_encoding: "ton_message_body_v1".to_owned(),
+                proof_family: manifest.proof_family.clone(),
+                verifier_backend: manifest.verifier_backend.clone(),
+                envelope_encoding: "ton_message_body_boc_v1".to_owned(),
                 submission_kind: manifest.submission_template.submission_kind.clone(),
                 verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
                 platform_payload,
@@ -21164,6 +21202,8 @@ mod tests {
             legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             message_submit_path: Some("/v1/bridge/messages".to_owned()),
+            production_policy: iroha_sccp::sccp_production_policy_v1(),
+            launch_ready: false,
             message_payload_kinds: vec![
                 "asset_register".to_owned(),
                 "route_activate".to_owned(),
@@ -21207,6 +21247,10 @@ mod tests {
                         .expect("ton disabled reason")
                         .to_owned(),
                     ),
+                    production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_TON,
+                    )
+                    .expect("ton production readiness"),
                 },
                 SccpCounterpartyCapability {
                     domain: iroha_sccp::SCCP_DOMAIN_ETH,
@@ -21231,6 +21275,10 @@ mod tests {
                         .expect("eth disabled reason")
                         .to_owned(),
                     ),
+                    production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_ETH,
+                    )
+                    .expect("eth production readiness"),
                 },
             ],
         }

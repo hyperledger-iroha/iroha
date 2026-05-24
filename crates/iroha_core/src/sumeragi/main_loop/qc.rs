@@ -49,21 +49,27 @@ enum CommittedQcDecision {
     Drop,
 }
 
+#[allow(dead_code)]
+#[derive(Debug)]
+struct CommitRootGroupTrace {
+    parent_state_root: Hash,
+    post_state_root: Hash,
+    signers: Vec<ValidatorIndex>,
+    peers: Vec<String>,
+}
+
 /// For small committees, worker handoff can dominate the aggregate verification cost.
 /// Keep verification inline to avoid unnecessary queueing latency on the hot path.
 const QC_VERIFY_INLINE_ROSTER_MAX: usize = 8;
 
-pub(super) fn select_commit_root_signers(
+fn commit_root_signer_groups(
     accepted_votes: &BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
     block_hash: HashOf<BlockHeader>,
     height: u64,
     view: u64,
     epoch: u64,
     signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
-) -> (BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize) {
-    if signers.is_empty() {
-        return (BTreeSet::new(), 0);
-    }
+) -> BTreeMap<(Hash, Hash), BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> {
     let mut groups: BTreeMap<(Hash, Hash), BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> =
         BTreeMap::new();
     for signer in signers {
@@ -83,6 +89,52 @@ pub(super) fn select_commit_root_signers(
             .or_default()
             .insert(*signer);
     }
+    groups
+}
+
+fn commit_root_group_traces(
+    groups: &BTreeMap<(Hash, Hash), BTreeSet<crate::sumeragi::consensus::ValidatorIndex>>,
+    signature_topology: &super::network_topology::Topology,
+) -> Vec<CommitRootGroupTrace> {
+    groups
+        .iter()
+        .map(|((parent_state_root, post_state_root), group)| {
+            let signers = group.iter().copied().collect::<Vec<_>>();
+            let peers = group
+                .iter()
+                .map(|signer| {
+                    signature_topology
+                        .as_ref()
+                        .get(*signer as usize)
+                        .map_or_else(
+                            || format!("<missing-validator-index:{signer}>"),
+                            |peer| format!("{peer}"),
+                        )
+                })
+                .collect::<Vec<_>>();
+            CommitRootGroupTrace {
+                parent_state_root: *parent_state_root,
+                post_state_root: *post_state_root,
+                signers,
+                peers,
+            }
+        })
+        .collect()
+}
+
+pub(super) fn select_commit_root_signers(
+    accepted_votes: &BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+) -> (BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize) {
+    if signers.is_empty() {
+        return (BTreeSet::new(), 0);
+    }
+    let groups =
+        commit_root_signer_groups(accepted_votes, block_hash, height, view, epoch, signers);
     let group_count = groups.len();
     let mut selected: Option<(
         &(Hash, Hash),
@@ -157,26 +209,8 @@ pub(super) fn select_commit_root_signers_by_stake(
     if signers.is_empty() {
         return Ok((BTreeSet::new(), 0));
     }
-    let mut groups: BTreeMap<(Hash, Hash), BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> =
-        BTreeMap::new();
-    for signer in signers {
-        let Some(vote) = accepted_votes.get(signer) else {
-            continue;
-        };
-        if vote.phase != crate::sumeragi::consensus::Phase::Commit
-            || vote.block_hash != block_hash
-            || vote.height != height
-            || vote.view != view
-            || vote.epoch != epoch
-        {
-            continue;
-        }
-        groups
-            .entry((vote.parent_state_root, vote.post_state_root))
-            .or_default()
-            .insert(*signer);
-    }
-
+    let groups =
+        commit_root_signer_groups(accepted_votes, block_hash, height, view, epoch, signers);
     let group_count = groups.len();
     let mut selected: Option<(
         &(Hash, Hash),
@@ -204,6 +238,63 @@ pub(super) fn select_commit_root_signers_by_stake(
 }
 
 impl Actor {
+    fn maybe_rebroadcast_near_quorum_new_view_votes(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        support: usize,
+        required: usize,
+        now: Instant,
+    ) -> usize {
+        if self.is_observer()
+            || height != self.committed_height_snapshot().saturating_add(1)
+            || support == 0
+            || support >= required
+        {
+            return 0;
+        }
+
+        let cooldown = self
+            .rebroadcast_cooldown()
+            .max(super::PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL);
+        if !self
+            .new_view_rebroadcast_log
+            .allow(block_hash, height, view, now, cooldown)
+        {
+            return 0;
+        }
+
+        let targets = self.new_view_rebroadcast_targets(block_hash, height, view);
+        let rebroadcasted = self.rebroadcast_block_votes_to_targets(
+            crate::sumeragi::consensus::Phase::NewView,
+            block_hash,
+            height,
+            view,
+            &targets,
+        );
+        if rebroadcasted == 0 {
+            return 0;
+        }
+
+        if let Some(next_deadline) = now.checked_add(super::PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+            && self.subsystems.propose.pacemaker.next_deadline > next_deadline
+        {
+            self.subsystems.propose.pacemaker.next_deadline = next_deadline;
+        }
+        info!(
+            height,
+            view,
+            block = %block_hash,
+            support,
+            required,
+            rebroadcasted,
+            targets = targets.len(),
+            "rebroadcasting partial NEW_VIEW votes to full view topology"
+        );
+        rebroadcasted
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn maybe_emit_late_new_view_vote_to_complete_near_quorum(
         &mut self,
@@ -218,18 +309,18 @@ impl Actor {
         npos_stake_roster: Option<&[PeerId]>,
         required: usize,
         voting_len: usize,
+        chain_order_binding: (Hash, u64),
     ) -> bool {
         if height != self.committed_height_snapshot().saturating_add(1) {
             return false;
         }
-        // Complete current or past near-quorums only; future-view support must
-        // first move the local pacemaker before we add a local signature.
-        if !self
-            .phase_tracker
-            .current_view(height)
-            .is_some_and(|current_view| current_view >= view)
+        if let Some(current_view) = self.phase_tracker.current_view(height)
+            && view > current_view
         {
-            return false;
+            let future_window = self.config.gating.future_view_window;
+            if future_window > 0 && view > current_view.saturating_add(future_window) {
+                return false;
+            }
         }
         if self
             .local_same_slot_vote(
@@ -298,6 +389,7 @@ impl Actor {
             view,
             highest_qc,
             emission_topology,
+            chain_order_binding,
         );
         if emitted {
             info!(
@@ -1481,6 +1573,9 @@ impl Actor {
         let mut targets = Self::build_fetch_targets(signers, topology);
         targets.sort();
         targets.dedup();
+        #[cfg(test)]
+        let logged_targets =
+            missing_block_request_targets_without_local(&self.common_config.peer.id, &targets);
         let sent = send_certified_block_fetch_request(
             &self.network,
             &self.common_config.peer.id,
@@ -1498,6 +1593,24 @@ impl Actor {
                 "unable to request certified block: no remote QC validator targets available"
             );
             return 0;
+        }
+        #[cfg(test)]
+        if self.background_request_log.is_some() {
+            let request = build_certified_block_fetch_request(
+                self.common_config.peer.id.clone(),
+                certified.subject_block_hash,
+                certified.height,
+                certified.view,
+            );
+            let msg = BlockMessageWire::new(BlockMessage::CertifiedBlockFetch(
+                super::message::CertifiedBlockFetch::Request(request),
+            ));
+            for peer in logged_targets {
+                self.record_background_request(&BackgroundRequest::Post {
+                    peer,
+                    msg: msg.clone(),
+                });
+            }
         }
         info!(
             height = certified.height,
@@ -4181,6 +4294,19 @@ impl Actor {
                     return;
                 }
             };
+            let root_group_traces = (root_groups > 1).then(|| {
+                commit_root_group_traces(
+                    &commit_root_signer_groups(
+                        &snapshot.accepted_votes,
+                        block_hash,
+                        height,
+                        view,
+                        epoch,
+                        &snapshot.signers,
+                    ),
+                    &signature_topology,
+                )
+            });
             snapshot.retain_signers(filtered, signature_topology.as_ref().len());
             if root_groups > 1 && snapshot.signers.len() < valid_signers {
                 warn!(
@@ -4191,6 +4317,7 @@ impl Actor {
                     selected_signers = snapshot.signers.len(),
                     valid_signers,
                     required,
+                    root_group_traces = ?root_group_traces.unwrap_or_default(),
                     "commit votes split across execution roots; selected root signer set for QC"
                 );
             }
@@ -4238,6 +4365,12 @@ impl Actor {
                 }
             };
             let Some((highest_qc, filtered_signers)) = selected else {
+                let largest_same_highest_group = groups
+                    .iter()
+                    .filter(|(highest_qc, _)| highest_qc.subject_block_hash == block_hash)
+                    .map(|(_, group)| voting_signer_count(group, voting_len))
+                    .max()
+                    .unwrap_or_default();
                 let late_local_vote_emitted = self
                     .maybe_emit_late_new_view_vote_to_complete_near_quorum(
                         &groups,
@@ -4251,7 +4384,20 @@ impl Actor {
                         npos_stake_roster.as_deref(),
                         required,
                         voting_len,
+                        (chain_order_hash, rechain_seq),
                     );
+                if late_local_vote_emitted {
+                    self.try_form_qc_from_votes(phase, block_hash, height, view, epoch, topology);
+                    return;
+                }
+                let near_quorum_rebroadcasted = self.maybe_rebroadcast_near_quorum_new_view_votes(
+                    block_hash,
+                    height,
+                    view,
+                    largest_same_highest_group,
+                    required,
+                    Instant::now(),
+                );
                 warn!(
                     height,
                     view,
@@ -4261,6 +4407,7 @@ impl Actor {
                     total_signers = snapshot.total_signers,
                     required,
                     late_local_vote_emitted,
+                    near_quorum_rebroadcasted,
                     "skipping NEW_VIEW certificate: no single highest-QC vote group reached quorum"
                 );
                 return;
@@ -4694,6 +4841,32 @@ impl Actor {
             }
 
             let now = Instant::now();
+            if matches!(phase, crate::sumeragi::consensus::Phase::Commit) {
+                let cooldown = self.rebroadcast_cooldown();
+                if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
+                    let certified = crate::sumeragi::consensus::QcHeaderRef {
+                        subject_block_hash: block_hash,
+                        height,
+                        view,
+                        epoch: self.epoch_for_height(height),
+                        phase,
+                    };
+                    let certified_fetch_targets = self.request_certified_block_for_header(
+                        certified,
+                        signature_topology,
+                        signers,
+                        "qc_missing_payload_quorum_certified_fetch",
+                    );
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        targets = certified_fetch_targets,
+                        "paired missing commit payload quorum with certified block fetch"
+                    );
+                }
+            }
             let contiguous_frontier = height == self.committed_height_snapshot().saturating_add(1)
                 && height == self.active_consensus_round_height();
             if contiguous_frontier {
@@ -4736,13 +4909,14 @@ impl Actor {
                     exact_retry_emitted,
                     "routing vote-backed contiguous frontier payload miss through exact body repair"
                 );
+                let observed_commit_signers = signers.len().max(voting_signers).max(total_signers);
                 let quorum_saturated_commit_gap =
                     matches!(phase, crate::sumeragi::consensus::Phase::Commit)
-                        && exact_owner_routed
+                        && quorum_met
                         && signature_topology
                             .as_ref()
                             .len()
-                            .saturating_sub(signers.len())
+                            .saturating_sub(observed_commit_signers)
                             < 2;
                 if quorum_saturated_commit_gap {
                     let mut targets = rebroadcast_targets_for_qc(
@@ -4809,6 +4983,10 @@ impl Actor {
                         block = %block_hash,
                         topology_len = signature_topology.as_ref().len(),
                         signers = signers.len(),
+                        voting_signers,
+                        total_signers,
+                        observed_commit_signers,
+                        exact_owner_routed,
                         targets = targets.len(),
                         missing_block_requested,
                         "paired exact frontier body repair with quorum-saturated missing-block fetch"
@@ -6087,6 +6265,69 @@ impl Actor {
                 highest,
             );
         }
+        self.maybe_install_new_view_qc_at_frontier(qc, highest, signers.len(), topology);
+    }
+
+    fn maybe_install_new_view_qc_at_frontier(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+        support: usize,
+        topology: &super::network_topology::Topology,
+    ) -> bool {
+        let height = qc.height;
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+        let Some(local_view) = self.phase_tracker.current_view(height) else {
+            return false;
+        };
+        if qc.view <= local_view {
+            return false;
+        }
+        let future_window = self.config.gating.future_view_window;
+        if future_window > 0 && qc.view > local_view.saturating_add(future_window) {
+            debug!(
+                height,
+                view = qc.view,
+                local_view,
+                future_window,
+                "not installing NEW_VIEW QC beyond the configured future-view window"
+            );
+            return false;
+        }
+
+        let now = Instant::now();
+        self.phase_tracker.on_view_change(height, qc.view, now);
+        self.subsystems.propose.pacemaker.next_deadline = now;
+        let min_view = if future_window == 0 {
+            qc.view
+        } else {
+            qc.view.saturating_sub(future_window)
+        };
+        self.subsystems
+            .propose
+            .new_view_tracker
+            .drop_below_view(height, min_view);
+        self.prune_stale_view_state(height, qc.view);
+        super::status::set_view_change_index(qc.view);
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.set_view_changes(qc.view);
+            telemetry.inc_view_change_install();
+        }
+        super::status::inc_view_change_install();
+        info!(
+            height,
+            view = qc.view,
+            local_view,
+            support,
+            required = topology.min_votes_for_commit().max(1),
+            highest_height = highest.height,
+            highest_view = highest.view,
+            highest_block = %highest.subject_block_hash,
+            "installing NEW_VIEW QC at active frontier"
+        );
+        true
     }
 
     pub(super) fn rehydrate_pending_from_kura_for_qc(

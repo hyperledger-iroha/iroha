@@ -61,6 +61,28 @@ pub(super) const fn known_block_commit_qc_recovery_request_plan(
     }
 }
 
+fn pending_allows_stale_view_commit_qc_fetch(
+    pending: &PendingBlock,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    tip_height: usize,
+    tip_hash: Option<HashOf<BlockHeader>>,
+) -> bool {
+    pending.block.hash() == block_hash
+        && pending.height == height
+        && pending.view == view
+        && pending.validation_status != ValidationStatus::Invalid
+        && !pending.is_consensus_inactive()
+        && pending.local_commit_vote_emitted()
+        && pending_extends_tip(
+            pending.height,
+            pending.block.header().prev_block_hash(),
+            tip_height,
+            tip_hash,
+        )
+}
+
 #[derive(Debug)]
 pub(super) struct CommitResult {
     pub(super) id: u64,
@@ -4651,7 +4673,16 @@ impl Actor {
             );
             return false;
         }
-        if self.known_block_commit_qc_recovery_superseded_by_local_view(height, view) {
+        let superseded_by_local_view =
+            self.known_block_commit_qc_recovery_superseded_by_local_view(height, view);
+        let allow_stale_view_cert_fetch = superseded_by_local_view
+            && self.known_block_commit_qc_recovery_stale_view_cert_fetch_allowed(
+                block_hash,
+                height,
+                view,
+                pending_override,
+            );
+        if superseded_by_local_view && !allow_stale_view_cert_fetch {
             debug!(
                 height,
                 view,
@@ -4661,6 +4692,15 @@ impl Actor {
             );
             self.clear_missing_commit_qc_request(&block_hash, MissingBlockClearReason::Obsolete);
             return false;
+        }
+        if allow_stale_view_cert_fetch {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                trigger,
+                "allowing known-block commit-QC recovery for vote-backed stale local view"
+            );
         }
 
         let filtered_targets = super::missing_block_request_targets_without_local(
@@ -4964,7 +5004,36 @@ impl Actor {
                 .is_some_and(|current_view| current_view > view)
     }
 
-    fn known_block_commit_qc_recovery_view_change_window(&self) -> Duration {
+    fn known_block_commit_qc_recovery_stale_view_cert_fetch_allowed(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        pending_override: Option<&PendingBlock>,
+    ) -> bool {
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        if pending_override.is_some_and(|pending| {
+            pending_allows_stale_view_commit_qc_fetch(
+                pending, block_hash, height, view, tip_height, tip_hash,
+            )
+        }) {
+            return true;
+        }
+        self.pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(|pending| {
+                pending_allows_stale_view_commit_qc_fetch(
+                    pending, block_hash, height, view, tip_height, tip_hash,
+                )
+            })
+    }
+
+    pub(super) fn known_block_commit_qc_recovery_view_change_window(&self) -> Duration {
         let quorum_timeout = self.quorum_timeout(self.runtime_da_enabled());
         let availability_timeout =
             self.availability_timeout(quorum_timeout, self.runtime_da_enabled());
@@ -4998,7 +5067,18 @@ impl Actor {
         let stall_window = self
             .frontier_slot_lag_window()
             .max(request.view_change_window.unwrap_or_default());
-        if now.saturating_duration_since(request.last_dependency_progress) < stall_window {
+        let dependency_stall = now.saturating_duration_since(request.last_dependency_progress);
+        if dependency_stall < stall_window {
+            return false;
+        }
+
+        if self.maybe_defer_frontier_advance_for_new_view_convergence(
+            request.height,
+            request.view,
+            dependency_stall,
+            stall_window,
+            now,
+        ) {
             return false;
         }
 
@@ -5788,6 +5868,7 @@ impl Actor {
             highest_qc,
             topology,
             NewViewVoteEmission::Normal,
+            None,
         )
     }
 
@@ -5798,6 +5879,7 @@ impl Actor {
         view: u64,
         highest_qc: crate::sumeragi::consensus::QcRef,
         topology: &super::network_topology::Topology,
+        chain_order_binding: (Hash, u64),
     ) -> bool {
         self.emit_new_view_vote_with_mode(
             height,
@@ -5805,6 +5887,7 @@ impl Actor {
             highest_qc,
             topology,
             NewViewVoteEmission::CompleteNearQuorum,
+            Some(chain_order_binding),
         )
     }
 
@@ -5816,6 +5899,7 @@ impl Actor {
         highest_qc: crate::sumeragi::consensus::QcRef,
         topology: &super::network_topology::Topology,
         emission: NewViewVoteEmission,
+        chain_order_binding_override: Option<(Hash, u64)>,
     ) -> bool {
         if self.is_observer() {
             return false;
@@ -5840,10 +5924,16 @@ impl Actor {
         ) {
             return false;
         }
-        self.process_committed_blocks_before_consensus("emit_new_view_vote");
+        if !completing_near_quorum {
+            self.process_committed_blocks_before_consensus("emit_new_view_vote");
+        }
         let epoch = self.epoch_for_height(height);
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let topology = self.vote_emission_topology_for_height(height, consensus_mode, topology);
+        let topology = if completing_near_quorum {
+            topology.clone()
+        } else {
+            self.vote_emission_topology_for_height(height, consensus_mode, topology)
+        };
         let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
@@ -5965,12 +6055,14 @@ impl Actor {
             view,
             epoch,
             local_idx,
-            Some(self.vnext_chain_order_binding_for_signature_topology(
-                height,
-                view,
-                consensus_mode,
-                &signature_topology,
-            )),
+            Some(chain_order_binding_override.unwrap_or_else(|| {
+                self.vnext_chain_order_binding_for_signature_topology(
+                    height,
+                    view,
+                    consensus_mode,
+                    &signature_topology,
+                )
+            })),
             Some(highest_qc),
             None,
         ) else {
@@ -6012,6 +6104,11 @@ impl Actor {
         }
         targets.retain(|peer| peer != &local_peer_id);
         if targets.is_empty() {
+            fallback_to_topology = true;
+            targets = signature_topology.as_ref().to_vec();
+            targets.retain(|peer| peer != &local_peer_id);
+        }
+        if completing_near_quorum {
             fallback_to_topology = true;
             targets = signature_topology.as_ref().to_vec();
             targets.retain(|peer| peer != &local_peer_id);
@@ -6520,6 +6617,21 @@ impl Actor {
         }
 
         rebroadcasted
+    }
+
+    pub(super) fn new_view_rebroadcast_targets(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> Vec<PeerId> {
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let mut targets =
+            self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode);
+        if targets.is_empty() {
+            targets = self.effective_commit_topology();
+        }
+        targets
     }
 
     pub(super) fn rebroadcast_block_votes_to_targets(

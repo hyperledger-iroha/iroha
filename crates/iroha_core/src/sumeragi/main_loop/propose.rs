@@ -16,9 +16,6 @@ use iroha_data_model::prelude::Repeats;
 
 const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 128;
 const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 4;
-// Recovery views prioritize chain movement over queue draining; large recovery
-// batches can outlive the view that is supposed to repair the slot.
-const RECOVERY_PROPOSAL_MAX_TRANSACTIONS: usize = 32;
 
 pub(super) const fn should_seed_frontier_backup_transport(
     da_enabled: bool,
@@ -649,7 +646,11 @@ impl Actor {
         if !self.config.resilience.enabled
             || height != self.committed_height_snapshot().saturating_add(1)
             || view == 0
-            || !self.frontier_proposal_starved_past_ingress_grace(now, ingress_grace)
+            || !self.frontier_proposal_or_view_starved_past_ingress_grace(
+                height,
+                now,
+                ingress_grace,
+            )
         {
             return false;
         }
@@ -866,22 +867,6 @@ impl Actor {
             .expect("non-zero by construction");
         let fast_tx_capped = max_tx_target < configured_target;
         (max_tx_target, max_in_block, fast_tx_capped)
-    }
-
-    pub(super) fn cap_tx_budget_for_recovery_view(
-        queue_len: usize,
-        max_tx_target: usize,
-        view: u64,
-    ) -> (usize, NonZeroUsize, bool) {
-        let recovery_capped = view > 0 && max_tx_target > RECOVERY_PROPOSAL_MAX_TRANSACTIONS;
-        let target = if recovery_capped {
-            RECOVERY_PROPOSAL_MAX_TRANSACTIONS
-        } else {
-            max_tx_target
-        };
-        let max_in_block =
-            NonZeroUsize::new(queue_len.min(target).max(1)).expect("non-zero by construction");
-        (target, max_in_block, recovery_capped)
     }
 
     pub(super) fn fast_finality_cap_applies(
@@ -1469,6 +1454,13 @@ impl Actor {
             .local_same_height_vote(height, self.epoch_for_height(height))
             .as_ref()
             .is_some_and(|vote| self.local_same_height_vote_has_consensus_lock(height, vote));
+        let local_commit_vote_blocks_fresh_branch = self
+            .local_same_height_vote(height, self.epoch_for_height(height))
+            .as_ref()
+            .is_some_and(|vote| {
+                matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
+                    && !self.local_same_height_vote_is_committed_parent_marker(height, view, vote)
+            });
         let commit_inflight_live =
             self.subsystems
                 .commit
@@ -1517,6 +1509,7 @@ impl Actor {
                 let protected_owner = owner_qc_observed
                     || slot_commit_qc_repairable
                     || local_vote_consensus_locked
+                    || (local_commit_vote_blocks_fresh_branch && !new_view_qc_supersedes_owner)
                     || (competing_quorum_locked && !new_view_qc_supersedes_owner)
                     || commit_inflight_live;
                 body_repair_requested = protected_owner
@@ -1524,6 +1517,8 @@ impl Actor {
                 let stale_vote_locked_owner = protected_owner
                     && owner_age >= hard_yield_age
                     && (local_vote_consensus_locked
+                        || (local_commit_vote_blocks_fresh_branch
+                            && !new_view_qc_supersedes_owner)
                         || (competing_quorum_locked && !new_view_qc_supersedes_owner))
                     && !owner_qc_observed
                     && !owner_pending_commit_qc_observed
@@ -1558,6 +1553,7 @@ impl Actor {
                     && !owner_qc_observed
                     && !owner_pending_commit_qc_observed
                     && !local_vote_consensus_locked
+                    && !(local_commit_vote_blocks_fresh_branch && !new_view_qc_supersedes_owner)
                     && (!competing_quorum_locked
                         || new_view_qc_supersedes_owner
                         || recovery_exhausted)
@@ -1608,6 +1604,7 @@ impl Actor {
                     owner_qc_observed,
                     owner_pending_commit_qc_observed,
                     local_vote_consensus_locked,
+                    local_commit_vote_blocks_fresh_branch,
                     commit_inflight_live,
                     body_repair_requested,
                     stale_vote_locked_recovery_requested,
@@ -1644,6 +1641,11 @@ impl Actor {
             !local_vote_new_view_qc_supersedes
                 && self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, false)
         });
+        let local_commit_vote_blocks_yield = local_vote.as_ref().is_some_and(|vote| {
+            !local_vote_new_view_qc_supersedes
+                && matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
+                && !self.local_same_height_vote_is_committed_parent_marker(height, view, vote)
+        });
         let (frontier_commit_qc_observed, competing_quorum_locked) = self
             .frontier_slot
             .as_ref()
@@ -1663,6 +1665,7 @@ impl Actor {
             || frontier_commit_qc_blocks_yield
             || local_vote_consensus_locked
             || competing_quorum_blocks_yield
+            || local_commit_vote_blocks_yield
             || (local_vote_blocks && !recovery_exhausted)
         {
             if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
@@ -1687,6 +1690,7 @@ impl Actor {
                     frontier_commit_qc_observed,
                     frontier_commit_qc_blocks_yield,
                     local_vote_consensus_locked,
+                    local_commit_vote_blocks_yield,
                     local_vote_blocks,
                     competing_quorum_locked,
                     competing_quorum_blocks_yield,
@@ -1904,6 +1908,16 @@ impl Actor {
         if existing_vote.view > proposal_view {
             return true;
         }
+        if matches!(
+            existing_vote.phase,
+            crate::sumeragi::consensus::Phase::Commit
+        ) && !self.local_same_height_vote_is_committed_parent_marker(
+            proposal_height,
+            proposal_view,
+            existing_vote,
+        ) {
+            return true;
+        }
         if existing_vote.view == proposal_view {
             return self.local_same_height_vote_has_hard_lock(proposal_height, existing_vote)
                 || self.local_same_height_vote_has_live_proposal_material(
@@ -1974,6 +1988,18 @@ impl Actor {
             return true;
         }
         false
+    }
+
+    fn local_same_height_vote_is_committed_parent_marker(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        existing_vote: &crate::sumeragi::consensus::Vote,
+    ) -> bool {
+        existing_vote.view == proposal_view
+            && proposal_height > 0
+            && self.committed_block_hash_for_height(proposal_height.saturating_sub(1))
+                == Some(existing_vote.block_hash)
     }
 
     #[cfg(test)]
@@ -2336,17 +2362,14 @@ impl Actor {
                         digest,
                     )
                 };
-            let (max_tx_target, _max_in_block, fast_tx_capped) =
-                Self::max_tx_budget_for_commit_time(
-                    queue_len,
-                    block_max_param.get(),
-                    self.config.block.max_transactions,
-                    self.config.block.fast_finality_max_transactions,
-                    commit_time_ms,
-                    effective_commit_time_ms,
-                );
-            let (max_tx_target, max_in_block, recovery_tx_capped) =
-                Self::cap_tx_budget_for_recovery_view(queue_len, max_tx_target, view);
+            let (max_tx_target, max_in_block, fast_tx_capped) = Self::max_tx_budget_for_commit_time(
+                queue_len,
+                block_max_param.get(),
+                self.config.block.max_transactions,
+                self.config.block.fast_finality_max_transactions,
+                commit_time_ms,
+                effective_commit_time_ms,
+            );
             let fast_gas_limit_per_block = self.config.block.fast_gas_limit_per_block;
             let proposal_gas_limit = Self::cap_gas_limit_for_fast_commit(
                 base_gas_limit,
@@ -2379,7 +2402,6 @@ impl Actor {
                 proposal_gas_limit = proposal_gas_limit.map(NonZeroU64::get),
                 fast_gas_capped,
                 fast_tx_capped,
-                recovery_tx_capped,
                 "proposal assembly budget"
             );
             // Bound queue scanning to keep proposal assembly from stalling under sustained load.
@@ -3788,7 +3810,7 @@ impl Actor {
         )
     }
 
-    fn maybe_rebroadcast_cached_proposal(
+    pub(super) fn maybe_rebroadcast_cached_proposal(
         &mut self,
         height: u64,
         view: u64,
@@ -3867,8 +3889,17 @@ impl Actor {
             return;
         }
 
-        let cooldown = self.payload_rebroadcast_cooldown();
-        if self.relay_backpressure_active(now, cooldown) {
+        let frontier_recovery_cached = self.config.resilience.enabled
+            && height == self.committed_height_snapshot().saturating_add(1)
+            && view > 0
+            && pending_queue_len > 0;
+        let payload_cooldown = self.payload_rebroadcast_cooldown();
+        let cooldown = if frontier_recovery_cached {
+            payload_cooldown.min(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+        } else {
+            payload_cooldown
+        };
+        if !frontier_recovery_cached && self.relay_backpressure_active(now, cooldown) {
             trace!(
                 height,
                 view, "skipping cached proposal rebroadcast due to relay backpressure"
@@ -3924,6 +3955,8 @@ impl Actor {
                 height,
                 view,
                 block = %block_hash,
+                frontier_recovery_cached,
+                cooldown_ms = cooldown.as_millis(),
                 "rebroadcasting cached proposal"
             );
         } else {
@@ -3931,6 +3964,8 @@ impl Actor {
                 height,
                 view,
                 block = %block_hash,
+                frontier_recovery_cached,
+                cooldown_ms = cooldown.as_millis(),
                 "rebroadcasting cached proposal"
             );
         }
@@ -4001,12 +4036,13 @@ impl Actor {
             );
             return;
         }
-        let rebroadcasted = self.rebroadcast_block_votes(
+        let targets = self.new_view_rebroadcast_targets(block_hash, target_height, target_view);
+        let rebroadcasted = self.rebroadcast_block_votes_to_targets(
             crate::sumeragi::consensus::Phase::NewView,
             block_hash,
             target_height,
             target_view,
-            false,
+            &targets,
         );
         if rebroadcasted == 0 {
             debug!(
@@ -4139,6 +4175,39 @@ impl Actor {
         let local_peer_id = self.common_config.peer.id().clone();
         let local_idx = self.local_validator_index_for_topology(&topology);
         let local_peer = local_idx.map(|_| local_peer_id.clone());
+        let frontier_partial_new_view_support_detected = self.config.resilience.enabled
+            && tracked_height == committed_height.saturating_add(1)
+            && tracked_view > 0
+            && (self
+                .subsystems
+                .propose
+                .new_view_tracker
+                .entries
+                .get(&(tracked_height, tracked_view))
+                .is_some_and(|entry| {
+                    let roster_set: BTreeSet<_> = topology.as_ref().iter().cloned().collect();
+                    let support = entry.count_in_roster(&roster_set, local_peer.as_ref());
+                    support > 0 && support < required
+                })
+                || self.frontier_partial_new_view_vote_support(
+                    tracked_height,
+                    tracked_view,
+                    required,
+                    &topology,
+                ));
+        let frontier_partial_new_view_support = frontier_partial_new_view_support_detected
+            && self.frontier_partial_new_view_support_still_converging(tracked_height, now);
+        if frontier_partial_new_view_support_detected && !frontier_partial_new_view_support {
+            debug!(
+                height = tracked_height,
+                view = tracked_view,
+                committed_height,
+                convergence_grace_ms = self
+                    .frontier_partial_new_view_convergence_grace()
+                    .as_millis(),
+                "partial NEW_VIEW support did not converge before the grace window; allowing committed-QC frontier fallback"
+            );
+        }
 
         let has_queue_work = pending_queue_len > 0;
         if da_enabled && !has_queue_work {
@@ -4183,6 +4252,7 @@ impl Actor {
                     && tracked_height == committed_height.saturating_add(1)
                     && qc.phase == crate::sumeragi::consensus::Phase::Commit
                     && qc.height == committed_height
+                    && !frontier_partial_new_view_support
                     && !missing_qc_frontier_self_proposal_blocked_by_ingress
                     && !self.proposal_gated_by_missing_dependencies(tracked_height)
             });
@@ -4456,6 +4526,7 @@ impl Actor {
         }
 
         if candidate.is_none()
+            && !frontier_partial_new_view_support
             && let Some(qc) = self.missing_qc_liveness_allows_frontier_self_proposal(
                 tracked_height,
                 tracked_view,
@@ -4482,6 +4553,7 @@ impl Actor {
             && self.config.resilience.enabled
             && tracked_height == committed_height.saturating_add(1)
             && tracked_view > 0
+            && !frontier_partial_new_view_support
             && self
                 .subsystems
                 .propose
@@ -5104,8 +5176,17 @@ impl Actor {
         if height == self.committed_height_snapshot().saturating_add(1) && view_idx > 0 {
             let queue_depths = super::status::worker_queue_depth_snapshot();
             let ingress_grace = self.frontier_ingress_drain_grace(da_enabled);
+            let selected_frontier_recovery_candidate = self.config.resilience.enabled
+                && highest_qc.phase == crate::sumeragi::consensus::Phase::Commit
+                && highest_qc.height.saturating_add(1) == height;
             let frontier_recovery_ingress_override = self
-                .frontier_recovery_ingress_override_active(height, view_idx, now, ingress_grace);
+                .frontier_recovery_ingress_override_active(height, view_idx, now, ingress_grace)
+                || (selected_frontier_recovery_candidate
+                    && self.frontier_proposal_or_view_starved_past_ingress_grace(
+                        height,
+                        now,
+                        ingress_grace,
+                    ));
             if Self::frontier_consensus_ingress_queued(queue_depths) {
                 if !frontier_recovery_ingress_override
                     && self.frontier_proposal_ingress_defer_active(

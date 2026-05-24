@@ -22,6 +22,9 @@ function compileContracts() {
       "ISccpMessageVerifier.sol": loadSource("ISccpMessageVerifier.sol"),
       "Ownable.sol": loadSource("Ownable.sol"),
       "SccpMessageBridge.sol": loadSource("SccpMessageBridge.sol"),
+      "SccpGroth16Bn254MessageVerifier.sol": loadSource(
+        "SccpGroth16Bn254MessageVerifier.sol"
+      ),
       "SccpSecp256k1MessageVerifier.sol": loadSource(
         "SccpSecp256k1MessageVerifier.sol"
       ),
@@ -61,6 +64,10 @@ async function deploy(signer, abi, bytecode, args = []) {
   return contract;
 }
 
+function callException(error) {
+  return error && error.code === "CALL_EXCEPTION";
+}
+
 async function main() {
   const contracts = compileContracts();
   const provider = new ethers.BrowserProvider(ganache.provider());
@@ -77,6 +84,11 @@ async function main() {
     contracts,
     "SccpMessageBridge.sol",
     "SccpMessageBridge"
+  );
+  const groth16VerifierArtifact = artifact(
+    contracts,
+    "SccpGroth16Bn254MessageVerifier.sol",
+    "SccpGroth16Bn254MessageVerifier"
   );
 
   const verifier = await deploy(
@@ -218,7 +230,7 @@ async function main() {
       );
       await replayTx.wait();
     },
-    (error) => error && error.code === "CALL_EXCEPTION"
+    callException
   );
 
   await assert.rejects(
@@ -230,7 +242,7 @@ async function main() {
       );
       await wrongLaneTx.wait();
     },
-    (error) => error && error.code === "CALL_EXCEPTION"
+    callException
   );
 
   const tamperedProofBytes = abi.encode(
@@ -255,7 +267,7 @@ async function main() {
       );
       await badTx.wait();
     },
-    (error) => error && error.code === "CALL_EXCEPTION"
+    callException
   );
 
   await assert.rejects(
@@ -267,7 +279,7 @@ async function main() {
       );
       await badStatementTx.wait();
     },
-    (error) => error && error.code === "CALL_EXCEPTION"
+    callException
   );
 
   const unauthorized = ethers.Wallet.createRandom();
@@ -294,7 +306,276 @@ async function main() {
       );
       await badSignerTx.wait();
     },
-    (error) => error && error.code === "CALL_EXCEPTION"
+    callException
+  );
+
+  const g1 = [1n, 2n];
+  const zeroG1 = [0n, 0n];
+  const zeroG2 = [0n, 0n, 0n, 0n];
+  const g2 = [
+    10857046999023057135944570762232829481370756359578518086990519993285655852781n,
+    11559732032986387107991004021392285783925812861821192530917403151452391805634n,
+    8495653923123431417604973247489272438418190587263600148770280649306958101930n,
+    4082367875863433681332203403145435568316851327593401208105741076214120093531n,
+  ];
+  const vkIc = Array.from({ length: 10 }, () => g1).flat();
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        groth16VerifierArtifact.abi,
+        groth16VerifierArtifact.bytecode,
+        [zeroG1, g2, g2, g2, vkIc]
+      );
+    },
+    callException
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        groth16VerifierArtifact.abi,
+        groth16VerifierArtifact.bytecode,
+        [[1n, 1n], g2, g2, g2, vkIc]
+      );
+    },
+    callException
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        groth16VerifierArtifact.abi,
+        groth16VerifierArtifact.bytecode,
+        [g1, zeroG2, g2, g2, vkIc]
+      );
+    },
+    callException
+  );
+
+  const invalidG2 = g2.slice();
+  invalidG2[0] = invalidG2[0] + 1n;
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        groth16VerifierArtifact.abi,
+        groth16VerifierArtifact.bytecode,
+        [g1, invalidG2, g2, g2, vkIc]
+      );
+    },
+    callException
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        groth16VerifierArtifact.abi,
+        groth16VerifierArtifact.bytecode,
+        [g1, g2, g2, g2, vkIc.slice(0, 9)]
+      );
+    },
+    callException
+  );
+
+  const groth16Verifier = await deploy(
+    signer,
+    groth16VerifierArtifact.abi,
+    groth16VerifierArtifact.bytecode,
+    [g1, g2, g2, g2, vkIc]
+  );
+  assert.equal(await groth16Verifier.publicInputCount(), 9n);
+
+  const groth16Bridge = await deploy(
+    signer,
+    bridgeArtifact.abi,
+    bridgeArtifact.bytecode,
+    [
+      await groth16Verifier.getAddress(),
+      "evm-groth16-bn254-v1",
+      "stark-fri-v1",
+      networkId,
+      0,
+      1,
+    ]
+  );
+  const invalidGroth16ProofBytes = abi.encode(
+    [
+      "uint256",
+      "bytes32",
+      "uint256",
+      "bytes32",
+      "uint256[2]",
+      "uint256[4]",
+      "uint256[2]",
+    ],
+    [1, messageId, 0, publicInputs[3], g1, g2, g1]
+  );
+
+  await assert.rejects(
+    async () => {
+      const badGrothTx = await groth16Bridge.submitSccpMessageProof(
+        invalidGroth16ProofBytes,
+        publicInputs,
+        statementHash
+      );
+      await badGrothTx.wait();
+    },
+    callException
+  );
+
+  const malformedGroth16ProofBytes = "0x1234";
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        malformedGroth16ProofBytes,
+        publicInputs,
+        statementHash,
+        destinationBindingHash
+      ),
+    callException
+  );
+
+  const wrongVersionGroth16ProofBytes = abi.encode(
+    [
+      "uint256",
+      "bytes32",
+      "uint256",
+      "bytes32",
+      "uint256[2]",
+      "uint256[4]",
+      "uint256[2]",
+    ],
+    [2, messageId, 0, publicInputs[3], g1, g2, g1]
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        wrongVersionGroth16ProofBytes,
+        publicInputs,
+        statementHash,
+        destinationBindingHash
+      ),
+    callException
+  );
+
+  const overflowSourceDomainGroth16ProofBytes = abi.encode(
+    [
+      "uint256",
+      "bytes32",
+      "uint256",
+      "bytes32",
+      "uint256[2]",
+      "uint256[4]",
+      "uint256[2]",
+    ],
+    [1, messageId, 4294967296n, publicInputs[3], g1, g2, g1]
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        overflowSourceDomainGroth16ProofBytes,
+        publicInputs,
+        statementHash,
+        destinationBindingHash
+      ),
+    callException
+  );
+
+  const zeroPointGroth16ProofBytes = abi.encode(
+    [
+      "uint256",
+      "bytes32",
+      "uint256",
+      "bytes32",
+      "uint256[2]",
+      "uint256[4]",
+      "uint256[2]",
+    ],
+    [1, messageId, 0, publicInputs[3], zeroG1, g2, g1]
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        zeroPointGroth16ProofBytes,
+        publicInputs,
+        statementHash,
+        destinationBindingHash
+      ),
+    callException
+  );
+
+  const invalidG2Groth16ProofBytes = abi.encode(
+    [
+      "uint256",
+      "bytes32",
+      "uint256",
+      "bytes32",
+      "uint256[2]",
+      "uint256[4]",
+      "uint256[2]",
+    ],
+    [1, messageId, 0, publicInputs[3], g1, invalidG2, g1]
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        invalidG2Groth16ProofBytes,
+        publicInputs,
+        statementHash,
+        destinationBindingHash
+      ),
+    callException
+  );
+
+  const wrongCommitmentGroth16ProofBytes = abi.encode(
+    [
+      "uint256",
+      "bytes32",
+      "uint256",
+      "bytes32",
+      "uint256[2]",
+      "uint256[4]",
+      "uint256[2]",
+    ],
+    [
+      1,
+      messageId,
+      0,
+      ethers.keccak256(ethers.toUtf8Bytes("wrong-commitment-root")),
+      g1,
+      g2,
+      g1,
+    ]
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        wrongCommitmentGroth16ProofBytes,
+        publicInputs,
+        statementHash,
+        destinationBindingHash
+      ),
+    callException
+  );
+
+  const mismatchedGrothInputs = publicInputs.slice();
+  mismatchedGrothInputs[0] = ethers.keccak256(
+    ethers.toUtf8Bytes("wrong-groth-message")
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        invalidGroth16ProofBytes,
+        mismatchedGrothInputs,
+        statementHash,
+        destinationBindingHash
+      ),
+    callException
   );
 
   console.log("sccp_message_bridge_smoke: ok");

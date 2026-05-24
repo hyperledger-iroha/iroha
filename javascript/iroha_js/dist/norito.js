@@ -801,21 +801,33 @@ function encodeEmbeddedInstructionBox(instruction, context) {
  */
 export function noritoDecodeInstruction(bytes, options = {}) {
   const buffer = toBuffer(bytes);
-  const native = resolveNative("noritoDecodeInstruction");
   let json;
   try {
-    json = native.noritoDecodeInstruction(buffer);
+    const native = resolveNative("noritoDecodeInstruction");
+    try {
+      json = native.noritoDecodeInstruction(buffer);
+    } catch (error) {
+      if (!isAlignmentError(error)) {
+        throw error;
+      }
+      const decoded =
+        tryDecodeWithAlignedBuffer(native, buffer) ??
+        tryDecodeWithRelocatedStorage(native, buffer);
+      if (decoded === null) {
+        throw error;
+      }
+      json = decoded;
+    }
   } catch (error) {
-    if (!isAlignmentError(error)) {
+    if (!isNativeBindingUnavailable(error)) {
       throw error;
     }
-    const decoded =
-      tryDecodeWithAlignedBuffer(native, buffer) ??
-      tryDecodeWithRelocatedStorage(native, buffer);
-    if (decoded === null) {
+    try {
+      const decoded = decodePureJsInstruction(buffer);
+      return options.parseJson === false ? JSON.stringify(decoded) : decoded;
+    } catch {
       throw error;
     }
-    json = decoded;
   }
   if (options.parseJson === false) {
     return json;

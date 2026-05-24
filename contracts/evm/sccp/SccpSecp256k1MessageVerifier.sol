@@ -5,13 +5,12 @@ import "./ISccpMessageVerifier.sol";
 
 /**
  * @title SccpSecp256k1MessageVerifier
- * @dev Production SCCP verifier for EVM lanes.
+ * @dev Reference-only SCCP verifier for EVM lanes.
  *
- * The native SCCP proof is verified off-chain and reduced to a secp256k1
- * attestation over `(message_id, source_domain, commitment_root,
- * public_inputs_hash, statement_hash, native_proof_hash,
- * destination_binding_hash)`. On-chain we only verify that enough authorized
- * attestors signed that digest using EVM-native `keccak256` and `ecrecover`.
+ * This contract verifies only a secp256k1 attestation over
+ * `(message_id, source_domain, commitment_root, public_inputs_hash,
+ * statement_hash, native_proof_hash, destination_binding_hash)`. It does not
+ * verify the native SCCP proof and must not be used as a production verifier.
  */
 contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier {
     uint256 private constant ATTESTATION_VERSION = 1;

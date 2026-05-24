@@ -3816,6 +3816,65 @@ mod pipeline_tests {
     }
 }
 
+/// User-level SCCP source-chain verifier material.
+#[derive(Debug, ReadConfig, Clone, norito::derive::JsonDeserialize)]
+pub struct SccpSourceVerifierMaterial {
+    /// Material format version.
+    #[config(default = "1")]
+    pub version: u8,
+    /// SCCP source domain identifier.
+    pub source_domain: u32,
+    /// Canonical source-chain key such as `eth`, `bsc`, or `sol`.
+    pub source_chain: String,
+    /// Source proof plan name, for example `EthereumBeaconReceiptProof`.
+    pub source_proof_plan: String,
+    /// Source-chain finality model name, for example `EthereumBeaconExecution`.
+    pub finality_model: String,
+    /// Source adapter circuit identifier.
+    pub adapter_circuit_id: String,
+    /// Trust-anchor record identifier.
+    pub source_trust_anchor_id: String,
+    /// Hex-encoded 32-byte trust-anchor digest.
+    pub source_trust_anchor_hash: String,
+    /// Consensus verifier identifier.
+    pub consensus_verifier_id: String,
+    /// Hex-encoded 32-byte consensus verifier digest.
+    pub consensus_verifier_hash: String,
+    /// Message inclusion verifier identifier.
+    pub message_inclusion_verifier_id: String,
+    /// Hex-encoded 32-byte message inclusion verifier digest.
+    pub message_inclusion_verifier_hash: String,
+    /// Finality policy identifier.
+    pub finality_policy_id: String,
+    /// Hex-encoded 32-byte finality policy digest.
+    pub finality_policy_hash: String,
+    /// Whether this record is placeholder material and must remain disabled.
+    #[config(default = "true")]
+    pub placeholder_material: bool,
+}
+
+impl SccpSourceVerifierMaterial {
+    fn parse(self) -> actual::SccpSourceVerifierMaterial {
+        actual::SccpSourceVerifierMaterial {
+            version: self.version,
+            source_domain: self.source_domain,
+            source_chain: self.source_chain,
+            source_proof_plan: self.source_proof_plan,
+            finality_model: self.finality_model,
+            adapter_circuit_id: self.adapter_circuit_id,
+            source_trust_anchor_id: self.source_trust_anchor_id,
+            source_trust_anchor_hash: self.source_trust_anchor_hash,
+            consensus_verifier_id: self.consensus_verifier_id,
+            consensus_verifier_hash: self.consensus_verifier_hash,
+            message_inclusion_verifier_id: self.message_inclusion_verifier_id,
+            message_inclusion_verifier_hash: self.message_inclusion_verifier_hash,
+            finality_policy_id: self.finality_policy_id,
+            finality_policy_hash: self.finality_policy_hash,
+            placeholder_material: self.placeholder_material,
+        }
+    }
+}
+
 /// Zero-knowledge configuration section.
 /// User-level configuration container for `Zk`.
 #[derive(Debug, ReadConfig, Clone)]
@@ -3901,6 +3960,12 @@ pub struct Zk {
         default = "defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS"
     )]
     pub bridge_proof_max_future_drift_blocks: u64,
+    /// Allow SCCP transparent proof consumption for lanes whose destination verifiers are not production-ready.
+    #[config(env = "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS", default = "false")]
+    pub sccp_allow_unready_transparent_proofs: bool,
+    /// SCCP source-chain verifier material that can enable non-SORA source lanes.
+    #[config(default = "Vec::new()")]
+    pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
     /// Poseidon parameter set identifier to embed into confidential policies (if any).
     #[config(env = "ZK_POSEIDON_PARAMS_ID")]
     pub poseidon_params_id: Option<u32>,
@@ -3933,6 +3998,12 @@ impl Zk {
             bridge_proof_max_range_len: self.bridge_proof_max_range_len,
             bridge_proof_max_past_age_blocks: self.bridge_proof_max_past_age_blocks,
             bridge_proof_max_future_drift_blocks: self.bridge_proof_max_future_drift_blocks,
+            sccp_allow_unready_transparent_proofs: self.sccp_allow_unready_transparent_proofs,
+            sccp_source_verifier_materials: self
+                .sccp_source_verifier_materials
+                .into_iter()
+                .map(SccpSourceVerifierMaterial::parse)
+                .collect(),
             poseidon_params_id: self.poseidon_params_id,
             pedersen_params_id: self.pedersen_params_id,
             kaigi_roster_join_vk: self.kaigi_roster_join_vk.map(VerifyingKeyRef::parse),

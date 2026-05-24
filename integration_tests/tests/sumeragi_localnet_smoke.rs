@@ -137,7 +137,7 @@ const REALISTIC_30TPS_TARGET_TPS: u64 = 30;
 const REALISTIC_30TPS_BLOCK_TIME_MS: u64 = 400;
 const REALISTIC_30TPS_COMMIT_TIME_MS: u64 = 500;
 const REALISTIC_30TPS_BLOCK_MAX_TXS: u64 = 128;
-const REALISTIC_30TPS_SUBMIT_PARALLELISM: usize = 16;
+const REALISTIC_30TPS_SUBMIT_PARALLELISM: usize = 64;
 const REALISTIC_30TPS_QUEUE_SOFT_LIMIT: u64 = 3_000;
 const REALISTIC_30TPS_STALL_THRESHOLD: Duration = Duration::from_secs(20);
 const REALISTIC_30TPS_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
@@ -1279,7 +1279,7 @@ async fn run_realistic_30tps_localnet(
                 )
                 .write(
                     ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
-                    2_i64,
+                    1_i64,
                 )
                 .write(
                     [
@@ -1288,7 +1288,7 @@ async fn run_realistic_30tps_localnet(
                         "da",
                         "availability_timeout_multiplier",
                     ],
-                    2_i64,
+                    1_i64,
                 )
                 .write(
                     [

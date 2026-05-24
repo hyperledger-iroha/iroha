@@ -689,8 +689,16 @@ struct DeployPackArtifacts {
     chunk_digest_sha3: [u8; 32],
     payload_bytes: Vec<u8>,
     storage_files: Option<Vec<StorageFileEntryOwned>>,
+    gateway_expectations: Vec<GatewayExpectation>,
     payload_kind: &'static str,
     payload_digest_hex: String,
+}
+
+#[derive(Clone, Debug)]
+struct GatewayExpectation {
+    path: Option<Vec<String>>,
+    bytes: u64,
+    blake3_hex: String,
 }
 
 struct StoragePinHttpResponse {
@@ -714,6 +722,18 @@ struct PublishPeerDiscovery {
     error: Option<String>,
 }
 
+struct ManifestRegisterSubmission {
+    endpoint_requested: String,
+    endpoint_used: String,
+    status: StatusCode,
+    response_bytes: Vec<u8>,
+    response_value: Value,
+    submission_mode: &'static str,
+    fallback_reason: Option<String>,
+    chain_id_hint: Option<String>,
+    failure_message: Option<String>,
+}
+
 fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let mut payload_path: Option<PathBuf> = None;
     let mut client_config_path: Option<PathBuf> = None;
@@ -723,6 +743,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let mut gateway_base_url_override: Option<String> = None;
     let mut explicit_pin_torii_urls: Vec<String> = Vec::new();
     let mut peer_discovery_enabled = true;
+    let mut submitted_epoch_override: Option<u64> = None;
     let mut summary_out: Option<PathBuf> = None;
 
     for arg in raw_args {
@@ -741,6 +762,12 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             "--out-dir" => out_dir_override = Some(PathBuf::from(value)),
             "--gateway-base-url" => gateway_base_url_override = Some(value.to_string()),
             "--pin-torii-url" => explicit_pin_torii_urls.push(value.to_string()),
+            "--submitted-epoch" => {
+                let parsed: u64 = value
+                    .parse()
+                    .map_err(|err| format!("invalid `--submitted-epoch` value: {err}"))?;
+                submitted_epoch_override = Some(parsed);
+            }
             "--summary-out" => summary_out = Some(PathBuf::from(value)),
             _ => {
                 return Err(format!(
@@ -881,23 +908,34 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let authority = AccountId::new(client_config.public_key.clone());
     let authority_literal =
         authority_payload_literal(&authority, Some(client_config.chain_discriminant))?;
-    let submitted_epoch = match resolve_submitted_epoch_from_status(&client, &torii_base_url) {
-        Ok(epoch) => epoch,
-        Err(err) => {
-            errors.push(format!("failed to resolve submitted epoch: {err}"));
-            0
-        }
+    let submitted_epoch = match submitted_epoch_override {
+        Some(epoch) => epoch,
+        None => match resolve_submitted_epoch_from_status(&client, &torii_base_url) {
+            Ok(epoch) => epoch,
+            Err(err) => {
+                errors.push(format!("failed to resolve submitted epoch: {err}"));
+                0
+            }
+        },
     };
 
+    let submit_request = ManifestSubmitRequest {
+        client: &client,
+        torii_base_url: &torii_base_url,
+        authority: &authority,
+        private_key: &client_config.private_key,
+        gas_asset_id: None,
+        alias_inputs: None,
+        api_version_hint: None,
+    };
     let registration = if errors.is_empty() {
-        submit_pin_register_http(
-            &client,
-            &torii_base_url,
+        submit_pin_register_with_fallback(
+            &submit_request,
             &authority_literal,
-            client_config.private_key.clone(),
             &artifacts.manifest,
             artifacts.chunk_digest_sha3,
             submitted_epoch,
+            None,
         )
     } else {
         Err(
@@ -924,14 +962,32 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
                     register_response_path.display()
                 )
             })?;
-            registration_ok = response.status.is_success();
+            let fallback_failure = response.failure_message.clone();
+            registration_ok = response.status.is_success() && fallback_failure.is_none();
             registration_summary.insert(
                 "status".into(),
                 Value::from(response.status.as_u16() as u64),
             );
-            registration_summary.insert("endpoint".into(), Value::from(response.endpoint));
+            registration_summary.insert("endpoint".into(), Value::from(response.endpoint_used));
+            registration_summary.insert(
+                "endpoint_requested".into(),
+                Value::from(response.endpoint_requested),
+            );
+            registration_summary.insert(
+                "submission_mode".into(),
+                Value::from(response.submission_mode),
+            );
+            if let Some(reason) = response.fallback_reason {
+                registration_summary.insert("fallback_reason".into(), Value::from(reason));
+            }
+            if let Some(chain_id) = response.chain_id_hint {
+                registration_summary.insert("chain_id".into(), Value::from(chain_id));
+            }
             registration_summary.insert("success".into(), Value::from(registration_ok));
             paid_pin_fee = paid_pin_fee_from_register_response(&response.response_value);
+            if let Some(message) = fallback_failure {
+                errors.push(message);
+            }
             if !registration_ok {
                 let body = String::from_utf8_lossy(&response.response_bytes);
                 errors.push(format!(
@@ -1059,8 +1115,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         &client,
         &gateway_base_url,
         &artifacts.root_cid_base32,
-        &artifacts.storage_files,
-        artifacts.manifest.content_length,
+        &artifacts.gateway_expectations,
     );
     let gateway_success = gateway_verification
         .get("success")
@@ -1114,17 +1169,7 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         .get("private_key")
         .and_then(toml::Value::as_str)
         .ok_or_else(|| "client config `[account]` must define `private_key`".to_string())?;
-    let chain_discriminant = account
-        .get("chain_discriminant")
-        .and_then(toml::Value::as_integer)
-        .ok_or_else(|| {
-            "client config `[account]` must define integer `chain_discriminant`".to_string()
-        })
-        .and_then(|value| {
-            u16::try_from(value).map_err(|_| {
-                "client config `[account].chain_discriminant` must fit in u16".to_string()
-            })
-        })?;
+    let chain_discriminant = resolve_deploy_chain_discriminant(&root, account)?;
     let public_key = PublicKey::from_str(public_key_raw)
         .map_err(|err| format!("failed to parse client config public_key: {err}"))?;
     let private_key = parse_private_key_inline(private_key_raw)
@@ -1135,6 +1180,44 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         private_key,
         chain_discriminant,
     })
+}
+
+fn resolve_deploy_chain_discriminant(
+    root: &toml::Table,
+    account: &toml::Table,
+) -> Result<u16, String> {
+    if let Some(value) = account.get("chain_discriminant") {
+        let value = value.as_integer().ok_or_else(|| {
+            "client config `[account].chain_discriminant` must be an integer".to_string()
+        })?;
+        return u16::try_from(value).map_err(|_| {
+            "client config `[account].chain_discriminant` must fit in u16".to_string()
+        });
+    }
+
+    let chain = root
+        .get("chain")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| {
+            "client config must define integer `[account].chain_discriminant` or a known top-level `chain`"
+                .to_string()
+        })?;
+    known_deploy_chain_discriminant(chain).ok_or_else(|| {
+        format!(
+            "client config top-level `chain` `{chain}` is not known; define integer `[account].chain_discriminant`"
+        )
+    })
+}
+
+fn known_deploy_chain_discriminant(chain: &str) -> Option<u16> {
+    match chain.trim() {
+        "iroha3-taira" | "809574f5-fee7-5e69-bfcf-52451e42d50f" => Some(369),
+        "iroha3-nexus" | "00000000-0000-0000-0000-000000000753" => Some(753),
+        "00000000-0000-0000-0000-000000000000" => {
+            Some(iroha_config::parameters::defaults::common::chain_discriminant())
+        }
+        _ => None,
+    }
 }
 
 fn build_deploy_artifacts(
@@ -1252,6 +1335,8 @@ fn build_deploy_artifacts(
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let (payload_bytes, storage_files, payload_kind) =
         load_storage_pin_payload(payload_path, &manifest)?;
+    let gateway_expectations =
+        build_gateway_expectations(payload_path, storage_files.as_deref(), &payload_bytes)?;
     let payload_digest_hex = hex_encode(blake3_hash(&payload_bytes).as_bytes());
     let root_cid_hex = hex_encode(&root_cid);
     let root_cid_base32 = encode_content_cid_base32(&root_cid);
@@ -1267,59 +1352,190 @@ fn build_deploy_artifacts(
         chunk_digest_sha3,
         payload_bytes,
         storage_files,
+        gateway_expectations,
         payload_kind,
         payload_digest_hex,
     })
 }
 
-fn submit_pin_register_http(
-    client: &HttpClient,
-    torii_base_url: &Url,
+fn build_gateway_expectations(
+    payload_path: &Path,
+    files: Option<&[StorageFileEntryOwned]>,
+    payload_bytes: &[u8],
+) -> Result<Vec<GatewayExpectation>, String> {
+    if let Some(entries) = files {
+        let mut expectations = Vec::new();
+        if let Some(index) = entries
+            .iter()
+            .find(|entry| entry.path.len() == 1 && entry.path[0] == "index.html")
+        {
+            expectations.push(read_gateway_expectation(payload_path, None, index)?);
+        }
+
+        let mut ordered = entries.to_vec();
+        ordered.sort_by(|left, right| left.path.cmp(&right.path));
+        for entry in ordered.iter().take(32) {
+            expectations.push(read_gateway_expectation(
+                payload_path,
+                Some(entry.path.clone()),
+                entry,
+            )?);
+        }
+        return Ok(expectations);
+    }
+
+    Ok(vec![GatewayExpectation {
+        path: None,
+        bytes: payload_bytes.len() as u64,
+        blake3_hex: hex_encode(blake3_hash(payload_bytes).as_bytes()),
+    }])
+}
+
+fn read_gateway_expectation(
+    root: &Path,
+    gateway_path: Option<Vec<String>>,
+    entry: &StorageFileEntryOwned,
+) -> Result<GatewayExpectation, String> {
+    let file_path = entry
+        .path
+        .iter()
+        .fold(root.to_path_buf(), |acc, component| acc.join(component));
+    let bytes = fs::read(&file_path).map_err(|err| {
+        format!(
+            "failed to read gateway verification file `{}`: {err}",
+            file_path.display()
+        )
+    })?;
+    Ok(GatewayExpectation {
+        path: gateway_path,
+        bytes: entry.size,
+        blake3_hex: hex_encode(blake3_hash(&bytes).as_bytes()),
+    })
+}
+
+fn submit_pin_register_with_fallback(
+    request: &ManifestSubmitRequest<'_>,
     authority_literal: &str,
-    private_key: PrivateKey,
     manifest: &ManifestV1,
     chunk_digest_sha3: [u8; 32],
     submitted_epoch: u64,
-) -> Result<ManifestRegisterHttpResponse, String> {
-    let endpoint = torii_base_url
+    successor_digest: Option<[u8; 32]>,
+) -> Result<ManifestRegisterSubmission, String> {
+    let endpoint = request
+        .torii_base_url
         .join("v1/sorafs/pin/register")
         .map_err(|err| format!("failed to build Torii pin-register endpoint URL: {err}"))?;
+    let requested_endpoint = endpoint.as_str().to_string();
+    if request
+        .gas_asset_id
+        .as_ref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        let fallback = submit_manifest_via_transaction_endpoint(
+            request,
+            manifest,
+            chunk_digest_sha3,
+            submitted_epoch,
+            successor_digest,
+        )
+        .map_err(|err| format!("direct /transaction manifest submit failed: {err}"))?;
+        return Ok(ManifestRegisterSubmission {
+            endpoint_requested: requested_endpoint,
+            endpoint_used: fallback.endpoint,
+            status: fallback.status,
+            response_bytes: fallback.response_bytes,
+            response_value: fallback.response_value,
+            submission_mode: "transaction_direct",
+            fallback_reason: Some(
+                "gas_asset_id requested; bypassed pin-register route".to_string(),
+            ),
+            chain_id_hint: Some(fallback.chain_id),
+            failure_message: fallback.failure_message,
+        });
+    }
+
     let payload = build_pin_register_payload(
         authority_literal,
-        private_key,
+        request.private_key.clone(),
         manifest,
         chunk_digest_sha3,
         submitted_epoch,
-        None,
-        None,
+        request.alias_inputs,
+        successor_digest,
     )?;
     let body_bytes =
         to_vec(&payload).map_err(|err| format!("failed to encode Torii payload: {err}"))?;
-    let response = client
+    let response = request
+        .client
         .post(endpoint.as_str())
         .header(CONTENT_TYPE, "application/json")
         .body(body_bytes)
         .send()
         .map_err(|err| format!("failed to submit manifest to Torii: {err}"))?;
     let status = response.status();
+    let api_version_hint = response
+        .headers()
+        .get("x-iroha-api-version")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let response_bytes = response
         .bytes()
         .map_err(|err| format!("failed to read Torii response: {err}"))?
         .to_vec();
-    let response_value = decode_response_value_or_text(&response_bytes);
-    Ok(ManifestRegisterHttpResponse {
-        endpoint: endpoint.as_str().to_string(),
-        status,
-        response_bytes,
-        response_value,
-    })
-}
 
-struct ManifestRegisterHttpResponse {
-    endpoint: String,
-    status: StatusCode,
-    response_bytes: Vec<u8>,
-    response_value: Value,
+    if status.is_success() {
+        return Ok(ManifestRegisterSubmission {
+            endpoint_requested: requested_endpoint.clone(),
+            endpoint_used: requested_endpoint,
+            status,
+            response_value: decode_response_value_or_text(&response_bytes),
+            response_bytes,
+            submission_mode: "pin_register_http",
+            fallback_reason: None,
+            chain_id_hint: None,
+            failure_message: None,
+        });
+    }
+
+    if should_fallback_manifest_submit_status(status) {
+        let fallback = submit_manifest_via_transaction_endpoint(
+            &ManifestSubmitRequest {
+                client: request.client,
+                torii_base_url: request.torii_base_url,
+                authority: request.authority,
+                private_key: request.private_key,
+                gas_asset_id: request.gas_asset_id,
+                alias_inputs: request.alias_inputs,
+                api_version_hint: api_version_hint.as_deref(),
+            },
+            manifest,
+            chunk_digest_sha3,
+            submitted_epoch,
+            successor_digest,
+        )
+        .map_err(|err| {
+            format!(
+                "Torii pin-register endpoint returned {status}; generic /transaction fallback failed: {err}"
+            )
+        })?;
+        return Ok(ManifestRegisterSubmission {
+            endpoint_requested: requested_endpoint,
+            endpoint_used: fallback.endpoint,
+            status: fallback.status,
+            response_bytes: fallback.response_bytes,
+            response_value: fallback.response_value,
+            submission_mode: "transaction_fallback",
+            fallback_reason: Some(format!("pin register route returned {status}")),
+            chain_id_hint: Some(fallback.chain_id),
+            failure_message: fallback.failure_message,
+        });
+    }
+
+    let body_text = String::from_utf8_lossy(&response_bytes);
+    Err(format!(
+        "Torii returned {status} when submitting manifest: {body_text}"
+    ))
 }
 
 fn submit_storage_pin_request(
@@ -1478,17 +1694,8 @@ fn verify_gateway_deploy(
     client: &HttpClient,
     gateway_base_url: &str,
     cid_base32: &str,
-    files: &Option<Vec<StorageFileEntryOwned>>,
-    payload_bytes: u64,
+    expectations: &[GatewayExpectation],
 ) -> Value {
-    let mut root_expected = Some(payload_bytes);
-    if let Some(entries) = files
-        && let Some(index) = entries
-            .iter()
-            .find(|entry| entry.path.len() == 1 && entry.path[0] == "index.html")
-    {
-        root_expected = Some(index.size);
-    }
     let root_url = match gateway_url_for_cid(gateway_base_url, cid_base32) {
         Ok(url) => url,
         Err(err) => {
@@ -1502,26 +1709,33 @@ fn verify_gateway_deploy(
             ]));
         }
     };
-    let root_check = fetch_gateway_check(client, &root_url, root_expected);
-    let mut checks = vec![root_check.clone()];
 
-    if let Some(entries) = files {
-        let mut ordered = entries.clone();
-        ordered.sort_by(|left, right| left.path.cmp(&right.path));
-        for entry in ordered.into_iter().take(32) {
-            let url = match gateway_url_for_file(gateway_base_url, cid_base32, &entry.path) {
-                Ok(url) => url,
+    let mut checks = Vec::new();
+    for expectation in expectations {
+        let (url, label) = match expectation.path.as_ref() {
+            Some(path) => match gateway_url_for_file(gateway_base_url, cid_base32, path) {
+                Ok(url) => (url, path.join("/")),
                 Err(err) => {
                     checks.push(Value::Object(Map::from_iter([
                         ("success".into(), Value::from(false)),
-                        ("path".into(), Value::from(entry.path.join("/"))),
+                        ("path".into(), Value::from(path.join("/"))),
                         ("error".into(), Value::from(err)),
                     ])));
                     continue;
                 }
-            };
-            checks.push(fetch_gateway_check(client, &url, Some(entry.size)));
-        }
+            },
+            None => (root_url.clone(), "/".to_string()),
+        };
+        checks.push(fetch_gateway_check(client, &url, &label, expectation));
+    }
+    if checks.is_empty() {
+        checks.push(Value::Object(Map::from_iter([
+            ("success".into(), Value::from(false)),
+            (
+                "error".into(),
+                Value::from("no gateway verification expectations were generated"),
+            ),
+        ])));
     }
 
     let success = checks
@@ -1538,12 +1752,20 @@ fn verify_gateway_deploy(
     Value::Object(map)
 }
 
-fn fetch_gateway_check(client: &HttpClient, url: &str, expected_len: Option<u64>) -> Value {
+fn fetch_gateway_check(
+    client: &HttpClient,
+    url: &str,
+    label: &str,
+    expectation: &GatewayExpectation,
+) -> Value {
     let mut map = Map::new();
+    map.insert("path".into(), Value::from(label.to_string()));
     map.insert("url".into(), Value::from(url.to_string()));
-    if let Some(expected) = expected_len {
-        map.insert("expected_bytes".into(), Value::from(expected));
-    }
+    map.insert("expected_bytes".into(), Value::from(expectation.bytes));
+    map.insert(
+        "expected_blake3_hex".into(),
+        Value::from(expectation.blake3_hex.clone()),
+    );
     match client.get(url).send() {
         Ok(response) => {
             let status = response.status();
@@ -1560,13 +1782,17 @@ fn fetch_gateway_check(client: &HttpClient, url: &str, expected_len: Option<u64>
                 }
             };
             let actual = bytes.len() as u64;
-            let length_ok = expected_len.is_none_or(|expected| expected == actual);
+            let actual_hash = hex_encode(blake3_hash(&bytes).as_bytes());
+            let length_ok = expectation.bytes == actual;
+            let hash_ok = expectation.blake3_hex == actual_hash;
             map.insert("status".into(), Value::from(status.as_u16() as u64));
             map.insert("actual_bytes".into(), Value::from(actual));
+            map.insert("actual_blake3_hex".into(), Value::from(actual_hash));
             map.insert("length_ok".into(), Value::from(length_ok));
+            map.insert("hash_ok".into(), Value::from(hash_ok));
             map.insert(
                 "success".into(),
-                Value::from(status == StatusCode::OK && length_ok),
+                Value::from(status == StatusCode::OK && length_ok && hash_ok),
             );
         }
         Err(err) => {
@@ -2862,7 +3088,7 @@ fn format_car_error(err: CarWriteError) -> String {
 fn usage() -> String {
     "Usage:
   sorafs_cli norito build --source=PATH --bytecode-out=PATH [--abi-version=N] [--summary-out=PATH]
-  sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--pin-torii-url=URL...] [--no-peer-discovery] [--summary-out=PATH]
+  sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--submitted-epoch=EPOCH] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--pin-torii-url=URL...] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest sign --manifest=PATH (--bundle-out=PATH | --signature-out=PATH) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--identity-token=JWT | --identity-token-env=VAR | --identity-token-file=PATH | --identity-token-provider=github-actions [--identity-token-audience=AUD]] [--include-token=true|false] [--issued-at=UNIX]
@@ -5634,9 +5860,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
 
     let torii_base_url =
         Url::parse(&torii_url).map_err(|err| format!("invalid `--torii-url` value: {err}"))?;
-    let torii_endpoint = torii_base_url
-        .join("v1/sorafs/pin/register")
-        .map_err(|err| format!("failed to build Torii endpoint URL: {err}"))?;
 
     let plan_specs = if let Some(source) = chunk_plan_source {
         let value = source.read()?;
@@ -5732,131 +5955,26 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         }
     };
 
-    let payload = build_pin_register_payload(
+    let submission = submit_pin_register_with_fallback(
+        &ManifestSubmitRequest {
+            client: &client,
+            torii_base_url: &torii_base_url,
+            authority: &authority,
+            private_key: &private_key,
+            gas_asset_id: gas_asset_id.as_deref(),
+            alias_inputs: alias_inputs.as_ref(),
+            api_version_hint: None,
+        },
         &authority_literal,
-        private_key.clone(),
         &manifest,
         chunk_digest,
         submitted_epoch,
-        alias_inputs.as_ref(),
         successor_digest,
     )?;
 
-    let body_bytes =
-        to_vec(&payload).map_err(|err| format!("failed to encode Torii payload: {err}"))?;
-    let requested_endpoint = torii_endpoint.as_str().to_string();
-    let (
-        response_status,
-        response_bytes_to_write,
-        torii_response_value,
-        torii_endpoint_used,
-        submission_mode,
-        fallback_reason,
-        chain_id_hint,
-        failure_message,
-    ) = if gas_asset_id
-        .as_ref()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-    {
-        let fallback = submit_manifest_via_transaction_endpoint(
-            &ManifestSubmitRequest {
-                client: &client,
-                torii_base_url: &torii_base_url,
-                authority: &authority,
-                private_key: &private_key,
-                gas_asset_id: gas_asset_id.as_deref(),
-                alias_inputs: alias_inputs.as_ref(),
-                api_version_hint: None,
-            },
-            &manifest,
-            chunk_digest,
-            submitted_epoch,
-            successor_digest,
-        )
-        .map_err(|err| format!("direct /transaction manifest submit failed: {err}"))?;
-        (
-            fallback.status,
-            fallback.response_bytes,
-            fallback.response_value,
-            fallback.endpoint,
-            "transaction_direct",
-            Some("gas_asset_id requested; bypassed pin-register route".to_string()),
-            Some(fallback.chain_id),
-            fallback.failure_message,
-        )
-    } else {
-        let response = client
-            .post(torii_endpoint.as_str())
-            .header(CONTENT_TYPE, "application/json")
-            .body(body_bytes)
-            .send()
-            .map_err(|err| format!("failed to submit manifest to Torii: {err}"))?;
-
-        let status = response.status();
-        let api_version_hint = response
-            .headers()
-            .get("x-iroha-api-version")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let response_bytes = response
-            .bytes()
-            .map_err(|err| format!("failed to read Torii response: {err}"))?;
-        let response_vec = response_bytes.to_vec();
-
-        if status.is_success() {
-            (
-                status,
-                response_vec.clone(),
-                decode_response_value_or_text(&response_vec),
-                requested_endpoint.clone(),
-                "pin_register_http",
-                None,
-                None,
-                None,
-            )
-        } else if should_fallback_manifest_submit_status(status) {
-            let fallback = submit_manifest_via_transaction_endpoint(
-                &ManifestSubmitRequest {
-                    client: &client,
-                    torii_base_url: &torii_base_url,
-                    authority: &authority,
-                    private_key: &private_key,
-                    gas_asset_id: gas_asset_id.as_deref(),
-                    alias_inputs: alias_inputs.as_ref(),
-                    api_version_hint: api_version_hint.as_deref(),
-                },
-                &manifest,
-                chunk_digest,
-                submitted_epoch,
-                successor_digest,
-            )
-            .map_err(|err| {
-                format!(
-                    "Torii pin-register endpoint returned {status}; generic /transaction fallback failed: {err}"
-                )
-            })?;
-            (
-                fallback.status,
-                fallback.response_bytes,
-                fallback.response_value,
-                fallback.endpoint,
-                "transaction_fallback",
-                Some(format!("pin register route returned {status}")),
-                Some(fallback.chain_id),
-                fallback.failure_message,
-            )
-        } else {
-            let body_text = String::from_utf8_lossy(&response_vec);
-            return Err(format!(
-                "Torii returned {status} when submitting manifest: {body_text}"
-            ));
-        }
-    };
-
     if let Some(path) = response_out {
         ensure_parent_dir(&path)?;
-        fs::write(&path, &response_bytes_to_write)
+        fs::write(&path, &submission.response_bytes)
             .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
     }
 
@@ -5864,19 +5982,22 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     summary.insert("torii_url".into(), Value::from(torii_url));
     summary.insert(
         "torii_endpoint".into(),
-        Value::from(torii_endpoint_used.clone()),
+        Value::from(submission.endpoint_used.clone()),
     );
     summary.insert(
         "torii_endpoint_requested".into(),
-        Value::from(requested_endpoint),
+        Value::from(submission.endpoint_requested),
     );
     summary.insert(
         "status".into(),
-        Value::from(response_status.as_u16() as u64),
+        Value::from(submission.status.as_u16() as u64),
     );
     summary.insert("submitted_epoch".into(), Value::from(submitted_epoch));
     summary.insert("authority".into(), Value::from(authority_literal));
-    summary.insert("submission_mode".into(), Value::from(submission_mode));
+    summary.insert(
+        "submission_mode".into(),
+        Value::from(submission.submission_mode),
+    );
     if let Some(asset_id) = gas_asset_id
         .as_ref()
         .map(|value| value.trim())
@@ -5924,13 +6045,13 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(hex) = successor_hex.as_ref() {
         summary.insert("successor_of_hex".into(), Value::from(hex.clone()));
     }
-    if let Some(reason) = fallback_reason {
+    if let Some(reason) = submission.fallback_reason {
         summary.insert("fallback_reason".into(), Value::from(reason));
     }
-    if let Some(chain_id) = chain_id_hint {
+    if let Some(chain_id) = submission.chain_id_hint {
         summary.insert("chain_id".into(), Value::from(chain_id));
     }
-    summary.insert("torii_response".into(), torii_response_value);
+    summary.insert("torii_response".into(), submission.response_value);
 
     let rendered = to_string_pretty(&Value::Object(summary))
         .map_err(|err| format!("failed to render summary: {err}"))?;
@@ -5939,7 +6060,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         ensure_parent_dir(&path)?;
         write_text(&path, rendered.as_bytes())?;
     }
-    if let Some(message) = failure_message {
+    if let Some(message) = submission.failure_message {
         return Err(message);
     }
     Ok(())

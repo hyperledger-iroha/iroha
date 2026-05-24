@@ -17,6 +17,7 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use iroha_macro::*;
+use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 use rand::seq::SliceRandom;
 use tokio::sync::mpsc;
@@ -2665,6 +2666,41 @@ impl BlockSynchronizer {
             }
         }
 
+        if let Some(cert) = world.commit_qcs().get(&block_hash).filter(|cert| {
+            cert.height == height
+                && cert.view == view
+                && cert.subject_block_hash == block_hash
+                && matches!(cert.phase, Phase::Commit)
+                && cert.mode_tag == expected_mode_tag
+        }) {
+            if matches!(consensus_mode, ConsensusMode::Npos)
+                && let Err(reason) = Self::npos_cached_commit_qc_reusable(world, cert)
+            {
+                if let Some(suppressed) = allow_block_sync_qc_warning(
+                    BlockSyncQcWarningKind::RejectedCachedCommitQcNpos,
+                    block_hash,
+                    height,
+                    view,
+                ) {
+                    warn!(
+                        height,
+                        view,
+                        reason,
+                        signers = qc_signer_count(cert),
+                        suppressed,
+                        "block sync: skipping stored commit QC in NPoS"
+                    );
+                }
+            } else {
+                iroha_logger::info!(
+                    height,
+                    view,
+                    "block sync: reusing stored commit QC from world state"
+                );
+                return Some(cert.clone());
+            }
+        }
+
         if !matches!(consensus_mode, ConsensusMode::Npos)
             && let Some(record) = cached_precommit_record.as_ref()
         {
@@ -4016,6 +4052,73 @@ mod qc_build_tests {
         let out =
             BlockSynchronizer::block_sync_qc_for(&state_view, ConsensusMode::Permissioned, &block)
                 .expect("commit QC should be reused");
+        assert_eq!(out, qc);
+    }
+
+    #[test]
+    fn block_sync_qc_for_uses_world_commit_qc_storage() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_precommit_signer_history_for_tests();
+
+        let chain_id = ChainId::from("block-sync-qc-world");
+        let mode_tag = PERMISSIONED_TAG;
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let topology = Topology::new(peers.clone());
+        let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
+        let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+
+        let mut signers = BTreeSet::new();
+        signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
+        signers.insert(ValidatorIndex::try_from(1).expect("index 1"));
+        let aggregate = aggregate_signature_for_signers(
+            &chain_id,
+            mode_tag,
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            0,
+            &signers,
+            &topology,
+            &keypairs,
+        );
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let qc = BlockSynchronizer::qc_from_signers(
+            ConsensusMode::Permissioned,
+            None,
+            mode_tag,
+            peers,
+            block_hash,
+            zero_root,
+            zero_root,
+            height,
+            view,
+            0,
+            signers,
+            aggregate,
+        )
+        .expect("QC should be built");
+
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let mut world = World::new();
+        world.commit_qcs.insert(block_hash, qc.clone());
+        let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
+        let state_view = state.view();
+
+        let out =
+            BlockSynchronizer::block_sync_qc_for(&state_view, ConsensusMode::Permissioned, &block)
+                .expect("stored commit QC should be reused");
         assert_eq!(out, qc);
     }
 
