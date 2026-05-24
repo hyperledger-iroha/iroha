@@ -7648,14 +7648,14 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "paynet").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id =
-            AssetDefinitionId::new(domain_id, "kina".parse().expect("asset definition name"));
+            AssetDefinitionId::new(domain_id, "unit".parse().expect("asset definition name"));
         let new_definition = NewAssetDefinition {
             id: definition_id,
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -7718,14 +7718,14 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "paynet").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id =
-            AssetDefinitionId::new(domain_id, "kina".parse().expect("asset definition name"));
+            AssetDefinitionId::new(domain_id, "unit".parse().expect("asset definition name"));
         let new_definition = NewAssetDefinition {
             id: definition_id,
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -7754,14 +7754,14 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "universal").expect("domain");
+        let domain_id: DomainId = DomainId::try_new("private-unit", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "kina#paynet".parse().expect("alias");
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "kina".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: Some(alias.clone()),
             spec: NumericSpec::integer(),
@@ -7794,14 +7794,14 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "universal").expect("domain");
+        let domain_id: DomainId = DomainId::try_new("private-unit", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "kina#paynet".parse().expect("alias");
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id,
-            name: "kina".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: Some(alias),
             spec: NumericSpec::integer(),
@@ -7834,14 +7834,14 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
-        let domain_id: DomainId = DomainId::try_new("digital-kina", "paynet").expect("domain");
+        let domain_id: DomainId = DomainId::try_new("private-unit", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "kina#universal".parse().expect("alias");
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "kina".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: Some(alias.clone()),
             spec: NumericSpec::integer(),
@@ -7875,14 +7875,14 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
         let domain_id: DomainId =
-            DomainId::try_new("restricted-kina", "universal").expect("domain");
+            DomainId::try_new("restricted-unit", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
-        let alias: AssetDefinitionAlias = "kina#paynet".parse().expect("alias");
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "kina".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: Some(alias.clone()),
             spec: NumericSpec::integer(),
@@ -8114,10 +8114,10 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-global", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "pgk".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8137,7 +8137,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register global definition");
 
-        let alias: AssetDefinitionAlias = "pgk#paynet".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         let err = SetAssetDefinitionAlias::bind(definition_id, alias, None)
             .execute(&authority, &mut tx)
             .expect_err("global alias must not move home to restricted dataspace");
@@ -8155,10 +8155,10 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-public", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "pgk".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8178,7 +8178,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register global definition");
 
-        let alias: AssetDefinitionAlias = "pgk#paynet".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("public dataspace may home a global asset alias");
@@ -8196,7 +8196,7 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("alias-universal", "paynet").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -8205,12 +8205,12 @@ mod tests {
         tx.world.insert_asset_definition_entry(
             definition_id.clone(),
             AssetDefinition::numeric(definition_id.clone())
-                .with_name("pgk".to_owned())
+                .with_name("unit".to_owned())
                 .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
                 .build(&authority),
         );
 
-        let alias: AssetDefinitionAlias = "pgk#universal".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("universal dataspace may home a global asset alias");
@@ -8229,10 +8229,10 @@ mod tests {
             DomainId::try_new("alias-clear-universal", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "pgk".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8250,7 +8250,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register global definition");
 
-        let alias: AssetDefinitionAlias = "pgk#universal".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("bind universal alias");
@@ -8273,9 +8273,9 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
         let domain_id: DomainId = DomainId::try_new("cash", "paynet").expect("domain");
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = AssetDefinition::numeric(definition_id.clone())
-            .with_name("pgk".to_owned())
+            .with_name("unit".to_owned())
             .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
             .build(&authority);
 
@@ -8289,7 +8289,7 @@ mod tests {
         tx.world
             .bind_asset_definition_alias(
                 &definition_id,
-                "pgk#universal".parse().expect("alias"),
+                "unit#universal".parse().expect("alias"),
                 None,
                 None,
                 10_000,
@@ -8314,10 +8314,10 @@ mod tests {
             DomainId::try_new("alias-restricted", "universal").expect("domain");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "pgk".to_owned(),
+            name: "unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8337,7 +8337,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register restricted definition");
 
-        let alias: AssetDefinitionAlias = "pgk#paynet".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect("restricted asset alias may use restricted dataspace");
@@ -8358,10 +8358,10 @@ mod tests {
         seed_account(&mut state, &ALICE_ID, &domain_id);
         seed_account(&mut state, &BOB_ID, &domain_id);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8471,10 +8471,10 @@ mod tests {
             DomainId::try_new("policy-missing-migration", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8520,10 +8520,10 @@ mod tests {
             DomainId::try_new("policy-noop-migration", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8569,10 +8569,10 @@ mod tests {
             DomainId::try_new("policy-noop-ok", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8615,10 +8615,10 @@ mod tests {
             DomainId::try_new("policy-empty-migration", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8671,10 +8671,10 @@ mod tests {
             DomainId::try_new("policy-unknown-migration", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -8720,10 +8720,10 @@ mod tests {
             DomainId::try_new("policy-restricted", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
-        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Digital Kina".to_owned(),
+            name: "Private Unit".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),

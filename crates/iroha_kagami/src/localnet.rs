@@ -1453,7 +1453,7 @@ fn localnet_dataspace_catalog(
             "paynet",
             i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
                 .expect("PAYNET dataspace id fits i64"),
-            "Bank of Papua New Guinea private Digital Kina dataspace",
+            "Private central-bank digital-currency dataspace",
         )],
         None => Vec::new(),
     };
@@ -1545,7 +1545,7 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
             lane_specs.push((
                 i64::from(LOCALNET_PAYNET_ALIAS_LANE_INDEX),
                 "paynet",
-                "Bank of Papua New Guinea private Digital Kina dataspace lane",
+                "Private central-bank digital-currency dataspace lane",
                 "paynet",
                 "restricted",
                 Some("parliament"),

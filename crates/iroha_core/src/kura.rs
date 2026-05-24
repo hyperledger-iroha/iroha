@@ -518,6 +518,7 @@ struct ChainValidation {
     hashes: Vec<HashOf<BlockHeader>>,
     truncated: bool,
     hash_mismatch: bool,
+    hard_fork_hash_only_block_count: usize,
 }
 
 #[derive(Debug)]
@@ -1099,8 +1100,9 @@ impl Kura {
         let block_height_index = Self::build_block_height_index(&block_data);
         let transaction_entrypoint_index = Self::build_transaction_entrypoint_index(&block_data);
         let block_count = block_data.len();
-        let hard_fork_hash_only_block_count =
-            hard_fork_snapshot_bootstrap_legacy_block_count(block_count);
+        let hard_fork_hash_only_block_count = chain_validation
+            .hard_fork_hash_only_block_count
+            .min(block_count);
         if hard_fork_hash_only_block_count > 0 {
             warn!(
                 hard_fork_hash_only_block_count,
@@ -2107,8 +2109,14 @@ impl Kura {
             .try_into()
             .expect("INTERNAL BUG: block index count exceeds usize::MAX");
 
-        let chain_validation = if hard_fork_snapshot_bootstrap_enabled() {
-            Kura::init_hash_only_hard_fork_mode(block_store, block_index_count)?
+        let hard_fork_hash_only_block_count =
+            hard_fork_snapshot_bootstrap_legacy_block_count(block_index_count);
+        let chain_validation = if hard_fork_hash_only_block_count > 0 {
+            Kura::init_hash_only_hard_fork_mode(
+                block_store,
+                block_index_count,
+                hard_fork_hash_only_block_count,
+            )?
         } else {
             match mode {
                 InitMode::Fast => {
@@ -2144,6 +2152,7 @@ impl Kura {
     fn init_hash_only_hard_fork_mode(
         block_store: &mut BlockStore,
         block_index_count: usize,
+        hard_fork_hash_only_block_count: usize,
     ) -> Result<ChainValidation, Error> {
         let block_hashes_count: usize = block_store
             .read_hashes_count()?
@@ -2156,16 +2165,43 @@ impl Kura {
             });
         }
 
-        let hashes = block_store.read_block_hashes(0, block_hashes_count)?;
+        let expected_hashes = block_store.read_block_hashes(0, block_hashes_count)?;
+        if hard_fork_hash_only_block_count >= block_index_count {
+            info!(
+                block_count = expected_hashes.len(),
+                "hard-fork snapshot bootstrap: trusting existing Kura hash journal without decoding legacy block bodies"
+            );
+            return Ok(ChainValidation {
+                hashes: expected_hashes,
+                truncated: false,
+                hash_mismatch: false,
+                hard_fork_hash_only_block_count: block_index_count,
+            });
+        }
+
+        let mut block_indices = vec![BlockIndex::default(); block_index_count];
+        block_store.read_block_indices(0, &mut block_indices)?;
+        let mut validation = Self::validate_block_chain(
+            block_store,
+            &block_indices,
+            Some(&expected_hashes),
+            hard_fork_hash_only_block_count,
+        )?;
+        validation.hard_fork_hash_only_block_count = validation
+            .hard_fork_hash_only_block_count
+            .min(validation.hashes.len());
+        if validation.truncated || validation.hash_mismatch {
+            block_store.overwrite_block_hashes(&validation.hashes)?;
+        }
         info!(
-            block_count = hashes.len(),
-            "hard-fork snapshot bootstrap: trusting existing Kura hash journal without decoding legacy block bodies"
+            legacy_blocks = validation.hard_fork_hash_only_block_count,
+            validated_blocks = validation
+                .hashes
+                .len()
+                .saturating_sub(validation.hard_fork_hash_only_block_count),
+            "hard-fork snapshot bootstrap: trusted legacy prefix and validated post-fork block bodies"
         );
-        Ok(ChainValidation {
-            hashes,
-            truncated: false,
-            hash_mismatch: false,
-        })
+        Ok(validation)
     }
 
     fn init_fast_mode(
@@ -2190,7 +2226,7 @@ impl Kura {
             block_store.read_block_indices(0, &mut block_indices)?;
             let expected_hashes = block_store.read_block_hashes(0, block_hashes_count)?;
             let validation =
-                Self::validate_block_chain(block_store, &block_indices, Some(&expected_hashes))?;
+                Self::validate_block_chain(block_store, &block_indices, Some(&expected_hashes), 0)?;
             if validation.truncated || validation.hash_mismatch {
                 block_store.overwrite_block_hashes(&validation.hashes)?;
             }
@@ -2221,7 +2257,7 @@ impl Kura {
         };
 
         let validation =
-            Self::validate_block_chain(block_store, &block_indices, expected_hashes.as_deref())?;
+            Self::validate_block_chain(block_store, &block_indices, expected_hashes.as_deref(), 0)?;
         block_store.overwrite_block_hashes(&validation.hashes)?;
 
         Ok(validation)
@@ -2232,11 +2268,14 @@ impl Kura {
         block_store: &mut BlockStore,
         block_indices: &[BlockIndex],
         expected_hashes: Option<&[HashOf<BlockHeader>]>,
+        hash_only_prefix: usize,
     ) -> Result<ChainValidation, Error> {
         if let Some(expected) = expected_hashes {
             if expected.len() != block_indices.len() {
                 return Err(Error::HashesFileHeightMismatch);
             }
+        } else if hash_only_prefix > 0 {
+            return Err(Error::HashesFileHeightMismatch);
         }
 
         let mut block_hashes = Vec::with_capacity(block_indices.len());
@@ -2248,6 +2287,16 @@ impl Kura {
 
         for (idx, block) in block_indices.iter().enumerate() {
             let height = idx.saturating_add(1) as u64;
+            if idx < hash_only_prefix {
+                let expected = expected_hashes
+                    .and_then(|hashes| hashes.get(idx))
+                    .copied()
+                    .ok_or(Error::HashesFileHeightMismatch)?;
+                prev_block_hash = Some(expected);
+                block_hashes.push(expected);
+                continue;
+            }
+
             if block.length == 0 {
                 truncated = Some(true);
                 error!(
@@ -2449,6 +2498,7 @@ impl Kura {
             hashes: block_hashes,
             truncated,
             hash_mismatch,
+            hard_fork_hash_only_block_count: hash_only_prefix,
         })
     }
 
@@ -14998,6 +15048,41 @@ mod tests {
         assert!(validation.truncated);
         assert!(validation.hashes.is_empty());
         assert_eq!(store.read_index_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn hard_fork_init_trusts_only_configured_legacy_prefix() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 3);
+        let mut store = new_block_store(&temp_dir);
+        let first_index = store.read_block_index(0).unwrap();
+        let zeros = vec![0_u8; usize::try_from(first_index.length).unwrap()];
+        store.write_block_data(first_index.start, &zeros).unwrap();
+
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 3, 1).unwrap();
+
+        assert!(!validation.truncated);
+        assert_eq!(validation.hashes.len(), 3);
+        assert_eq!(validation.hard_fork_hash_only_block_count, 1);
+        assert_eq!(store.read_index_count().unwrap(), 3);
+    }
+
+    #[test]
+    fn hard_fork_init_prunes_corrupt_tail_after_bootstrap_height() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+        let mut store = new_block_store(&temp_dir);
+        let tail_index = store.read_block_index(3).unwrap();
+        let zeros = vec![0_u8; usize::try_from(tail_index.length).unwrap()];
+        store.write_block_data(tail_index.start, &zeros).unwrap();
+
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 4, 2).unwrap();
+
+        assert!(validation.truncated);
+        assert_eq!(validation.hashes.len(), 3);
+        assert_eq!(validation.hard_fork_hash_only_block_count, 2);
+        assert_eq!(store.read_index_count().unwrap(), 3);
+        assert_eq!(store.read_hashes_count().unwrap(), 3);
     }
 
     #[test]

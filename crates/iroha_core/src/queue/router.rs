@@ -6325,7 +6325,7 @@ mod tests {
         );
         let projected_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "kina".parse().expect("asset definition name"),
+            "unit".parse().expect("asset definition name"),
         );
         let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
             &projected_asset_definition.canonical_address(),
@@ -6345,14 +6345,14 @@ mod tests {
         let mut state = state_with_asset_definitions(
             vec![
                 AssetDefinition::numeric(opaque_asset_definition.clone())
-                    .with_name("kina".to_owned())
+                    .with_name("unit".to_owned())
                     .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
                     .build(&sender_id),
             ],
             dataspace_catalog,
             lane_catalog,
         );
-        bind_asset_definition_alias(&mut state, &opaque_asset_definition, "kina#paynet");
+        bind_asset_definition_alias(&mut state, &opaque_asset_definition, "unit#paynet");
 
         assert_eq!(
             router

@@ -140,12 +140,12 @@ use iroha_data_model::{
     role::{NewRole, Role, RoleId},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::manifest::{ContractManifest, ManifestProvenance},
+    sns::RegisterNameRequestV1,
     soracloud::{
         SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
         encode_bundle_with_materials_provenance_payload,
         encode_hf_shared_lease_join_provenance_payload,
     },
-    sns::RegisterNameRequestV1,
     sorafs::pin_registry::StorageClass,
     transaction::{
         Executable, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
@@ -6361,8 +6361,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "unsupported Unregister instruction variant; expected keys: Peer, Domain, Account, AssetDefinition, Nft, Role, Trigger",
                 ));
             }
-            if let Some(register_sns_value) = remove_case_insensitive(&mut map, "RegisterSnsName")
-            {
+            if let Some(register_sns_value) = remove_case_insensitive(&mut map, "RegisterSnsName") {
                 let request: RegisterNameRequestV1 =
                     json::from_value(register_sns_value).map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(RegisterSnsName::new(request)));
