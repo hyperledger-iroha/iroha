@@ -1433,6 +1433,18 @@ fn load_public_dataspace_upstreams(state: &CoreState) -> BTreeMap<DataSpaceId, S
     upstreams
 }
 
+#[cfg(feature = "app_api")]
+fn local_read_fanout_coordinator_enabled() -> bool {
+    std::env::var("IROHA_TORII_LOCAL_READ_FANOUT_COORDINATOR")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
 #[allow(clippy::struct_excessive_bools)]
 struct AppState {
     events: EventsSender,
@@ -20777,7 +20789,9 @@ async fn execute_torii_read_fanout_via_nexus(
         Ok(route) => route,
         Err(response) => return response,
     };
-    if should_execute_route_locally(app.as_ref(), nexus_route) {
+    if local_read_fanout_coordinator_enabled()
+        || should_execute_route_locally(app.as_ref(), nexus_route)
+    {
         return execute_torii_read_fanout_proxy_request(app, request).await;
     }
 

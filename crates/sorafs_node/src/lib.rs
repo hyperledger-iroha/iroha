@@ -134,7 +134,7 @@ enum GcEvictionPolicy {
 }
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
-    fs,
+    env, fs,
     io::Read,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -430,6 +430,17 @@ pub enum ReconciliationError {
     Validation(#[from] ReconciliationValidationError),
 }
 
+fn hard_fork_snapshot_bootstrap_enabled() -> bool {
+    env::var("IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP")
+        .map(|value| {
+            matches!(
+                value.as_str(),
+                "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+            )
+        })
+        .unwrap_or(false)
+}
+
 impl NodeHandle {
     /// Construct a new handle for the embedded storage worker.
     #[must_use]
@@ -451,11 +462,24 @@ impl NodeHandle {
         let capacity_limit = config.max_capacity_bytes().0;
 
         let storage = if config.enabled() {
-            let backend = Arc::new(StorageBackend::new(config.clone()).unwrap_or_else(|err| {
-                panic!("failed to initialise SoraFS storage backend: {err}")
-            }));
-            schedulers.update_storage_bytes(backend.total_bytes(), capacity_limit);
-            Some(backend)
+            match StorageBackend::new(config.clone()) {
+                Ok(backend) => {
+                    let backend = Arc::new(backend);
+                    schedulers.update_storage_bytes(backend.total_bytes(), capacity_limit);
+                    Some(backend)
+                }
+                Err(StorageError::Norito(err)) if hard_fork_snapshot_bootstrap_enabled() => {
+                    iroha_logger::warn!(
+                        %err,
+                        "hard-fork snapshot bootstrap: disabling SoraFS storage backend after legacy Norito decode failure"
+                    );
+                    schedulers.update_storage_bytes(0, capacity_limit);
+                    None
+                }
+                Err(err) => {
+                    panic!("failed to initialise SoraFS storage backend: {err}")
+                }
+            }
         } else {
             schedulers.update_storage_bytes(0, capacity_limit);
             None

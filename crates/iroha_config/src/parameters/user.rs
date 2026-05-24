@@ -17566,11 +17566,18 @@ pub struct ToriiRamLfeProgram {
     /// Hidden derivation secret encoded as hex.
     pub secret_hex: String,
     /// Norito-encoded hidden BFV RAM-FHE program encoded as hex.
-    pub hidden_program_hex: String,
+    pub hidden_program_hex: Option<String>,
     /// Private key used to sign receipts for this program.
     pub signer_private_key: ExposedPrivateKey,
     /// Optional receipt TTL expressed in milliseconds.
     pub receipt_ttl_ms: Option<DurationMs>,
+}
+
+fn default_ram_lfe_hidden_program_hex() -> String {
+    let bytes = iroha_crypto::default_bfv_programmed_hidden_program()
+        .to_bytes()
+        .expect("default RAM-LFE hidden program should encode");
+    hex::encode(bytes)
 }
 
 impl ToriiRamLfeProgram {
@@ -17589,7 +17596,10 @@ impl ToriiRamLfeProgram {
         if secret.is_empty() {
             panic!("torii.ram_lfe.programs[{index}].secret_hex must not be empty");
         }
-        let hidden_program_literal = self.hidden_program_hex.trim().trim_start_matches("0x");
+        let hidden_program_hex = self
+            .hidden_program_hex
+            .unwrap_or_else(default_ram_lfe_hidden_program_hex);
+        let hidden_program_literal = hidden_program_hex.trim().trim_start_matches("0x");
         let hidden_program_bytes = Vec::from_hex(hidden_program_literal).unwrap_or_else(|err| {
             panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex: {err}")
         });

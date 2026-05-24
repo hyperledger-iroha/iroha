@@ -78,9 +78,10 @@ use iroha_data_model::{
         AxtPolicySnapshot, AxtReplayRecord, DataSpaceId, DomainCommittee, DomainEndorsement,
         DomainEndorsementPolicy, DomainEndorsementRecord, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneId,
         LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext,
-        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneValidatorRecord,
-        PublicLaneValidatorStatus, UniversalAccountId, VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
-        VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
+        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneUnbonding,
+        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedLaneRelayRecord,
+        lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
     oracle::{
@@ -186,6 +187,7 @@ pub(crate) use tiered::TieredStateBackend;
 use tiered::{TieredKeyHandle, TieredSnapshotDiff, TieredSnapshotPayload};
 
 const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
+const HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV: &str = "IROHA_HARD_FORK_PUBLIC_LANE_STATE_MANIFEST";
 
 fn hard_fork_snapshot_bootstrap_enabled() -> bool {
     std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
@@ -33102,7 +33104,7 @@ pub(crate) struct SnapshotSpaceDirectoryManifestSet {
 pub(crate) mod deserialize {
     use std::marker::PhantomData;
 
-    use norito::codec::DecodeAll;
+    use norito::codec::{Decode, DecodeAll};
     use norito::json::{self, JsonDeserialize};
 
     use super::{default_oracle, *};
@@ -33176,29 +33178,88 @@ pub(crate) mod deserialize {
 
             drain_unknown(&map, "state");
 
-            world.public_lane_validators = decode_snapshot_records::<PublicLaneValidatorRecord>(
-                public_lane_validators,
-                "public_lane_validators",
-            )?
-            .into_iter()
-            .map(|record| ((record.lane_id, record.validator.clone()), record))
-            .collect();
-            world.public_lane_stake_shares = decode_snapshot_records::<PublicLaneStakeShare>(
-                public_lane_stake_shares,
-                "public_lane_stake_shares",
-            )?
-            .into_iter()
-            .map(|record| {
-                (
-                    (
-                        record.lane_id,
-                        record.validator.clone(),
-                        record.staker.clone(),
+            let public_lane_validator_blob_count = public_lane_validators.len();
+            let public_lane_stake_share_blob_count = public_lane_stake_shares.len();
+            let external_public_lane_state = load_external_public_lane_state_manifest()?;
+
+            let mut public_lane_validator_records =
+                decode_public_lane_validator_records(public_lane_validators)?;
+            let mut public_lane_stake_share_records =
+                decode_public_lane_stake_share_records(public_lane_stake_shares)?;
+
+            if let Some(external) = external_public_lane_state {
+                if !external.validators.is_empty() {
+                    if public_lane_validator_records.is_empty() {
+                        eprintln!(
+                            "snapshot hard-fork compatibility: restoring {} public-lane validators from `{}`",
+                            external.validators.len(),
+                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
+                        );
+                        public_lane_validator_records = external.validators;
+                    } else {
+                        eprintln!(
+                            "snapshot hard-fork compatibility: ignoring `{}` because persisted public-lane validators decoded successfully",
+                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
+                        );
+                    }
+                }
+                if !external.stake_shares.is_empty() {
+                    if public_lane_stake_share_records.is_empty() {
+                        eprintln!(
+                            "snapshot hard-fork compatibility: restoring {} public-lane stake shares from `{}`",
+                            external.stake_shares.len(),
+                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
+                        );
+                        public_lane_stake_share_records = external.stake_shares;
+                    } else {
+                        eprintln!(
+                            "snapshot hard-fork compatibility: ignoring `{}` because persisted public-lane stake shares decoded successfully",
+                            HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV
+                        );
+                    }
+                }
+            }
+
+            if hard_fork_snapshot_bootstrap_enabled()
+                && public_lane_validator_blob_count > 0
+                && public_lane_validator_records.is_empty()
+            {
+                return Err(json::Error::InvalidField {
+                    field: "public_lane_validators".to_owned(),
+                    message: format!(
+                        "legacy public-lane validators could not be decoded; set `{HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV}` to a preservation manifest"
                     ),
-                    record,
-                )
-            })
-            .collect();
+                });
+            }
+            if hard_fork_snapshot_bootstrap_enabled()
+                && public_lane_stake_share_blob_count > 0
+                && public_lane_stake_share_records.is_empty()
+            {
+                return Err(json::Error::InvalidField {
+                    field: "public_lane_stake_shares".to_owned(),
+                    message: format!(
+                        "legacy public-lane stake shares could not be decoded; set `{HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV}` to a preservation manifest"
+                    ),
+                });
+            }
+
+            world.public_lane_validators = public_lane_validator_records
+                .into_iter()
+                .map(|record| ((record.lane_id, record.validator.clone()), record))
+                .collect();
+            world.public_lane_stake_shares = public_lane_stake_share_records
+                .into_iter()
+                .map(|record| {
+                    (
+                        (
+                            record.lane_id,
+                            record.validator.clone(),
+                            record.staker.clone(),
+                        ),
+                        record,
+                    )
+                })
+                .collect();
             world.public_lane_rewards = decode_snapshot_records::<PublicLaneRewardRecord>(
                 public_lane_rewards,
                 "public_lane_rewards",
@@ -33258,6 +33319,496 @@ pub(crate) mod deserialize {
                 })
             })
             .collect()
+    }
+
+    #[derive(Decode)]
+    struct LegacyPublicLaneValidatorRecord {
+        lane_id: LaneId,
+        validator: AccountId,
+        stake_account: AccountId,
+        total_stake: Numeric,
+        self_stake: Numeric,
+        metadata: Metadata,
+        status: PublicLaneValidatorStatus,
+        activation_epoch: Option<u64>,
+        activation_height: Option<u64>,
+        last_reward_epoch: Option<u64>,
+    }
+
+    #[derive(Decode)]
+    struct LegacyPublicLaneStakeShareRecord {
+        lane_id: LaneId,
+        validator: AccountId,
+        staker: AccountId,
+        bonded: Numeric,
+        pending_unbonds: BTreeMap<Hash, PublicLaneUnbonding>,
+        metadata: Metadata,
+    }
+
+    #[derive(Decode)]
+    struct LegacyPublicLaneStakeShareWithoutPendingUnbonds {
+        lane_id: LaneId,
+        validator: AccountId,
+        staker: AccountId,
+        bonded: Numeric,
+        metadata: Metadata,
+    }
+
+    #[derive(Default)]
+    struct ExternalPublicLaneState {
+        validators: Vec<PublicLaneValidatorRecord>,
+        stake_shares: Vec<PublicLaneStakeShare>,
+    }
+
+    fn load_external_public_lane_state_manifest()
+    -> Result<Option<ExternalPublicLaneState>, json::Error> {
+        if !hard_fork_snapshot_bootstrap_enabled() {
+            return Ok(None);
+        }
+        let Some(path) = std::env::var_os(HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV) else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(path);
+        let body = std::fs::read_to_string(&path).map_err(|err| json::Error::InvalidField {
+            field: HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV.to_owned(),
+            message: format!("failed to read `{}`: {err}", path.display()),
+        })?;
+        let value: json::Value =
+            json::from_json(&body).map_err(|err| json::Error::InvalidField {
+                field: HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV.to_owned(),
+                message: format!("failed to parse `{}` as JSON: {err}", path.display()),
+            })?;
+        let state =
+            parse_external_public_lane_state(&value).map_err(|err| json::Error::InvalidField {
+                field: HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV.to_owned(),
+                message: format!("invalid `{}`: {err}", path.display()),
+            })?;
+        Ok(Some(state))
+    }
+
+    fn parse_external_public_lane_state(
+        value: &json::Value,
+    ) -> Result<ExternalPublicLaneState, json::Error> {
+        let object = value.as_object().ok_or_else(|| {
+            json::Error::Message("expected top-level public-lane manifest object".to_owned())
+        })?;
+        let validators = parse_public_lane_validator_manifest(
+            object
+                .get("validators")
+                .ok_or_else(|| json::Error::missing_field("validators"))?,
+        )?;
+        let stake_shares = parse_public_lane_stake_share_manifest(
+            object
+                .get("stake_shares")
+                .ok_or_else(|| json::Error::missing_field("stake_shares"))?,
+        )?;
+        Ok(ExternalPublicLaneState {
+            validators,
+            stake_shares,
+        })
+    }
+
+    fn parse_public_lane_validator_manifest(
+        value: &json::Value,
+    ) -> Result<Vec<PublicLaneValidatorRecord>, json::Error> {
+        let items = value.as_array().ok_or_else(|| {
+            json::Error::Message("expected `validators` to be an array".to_owned())
+        })?;
+        let mut records = Vec::with_capacity(items.len());
+        for (index, item) in items.iter().enumerate() {
+            let field = format!("validators[{index}]");
+            records.push(PublicLaneValidatorRecord {
+                lane_id: parse_public_lane_id(item, &field)?,
+                validator: parse_public_lane_account(item, "validator", &field)?,
+                peer_id: parse_public_lane_peer_id(item, "peer_id", &field)?,
+                stake_account: parse_public_lane_account(item, "stake_account", &field)?,
+                total_stake: parse_public_lane_numeric(item, "total_stake", &field)?,
+                self_stake: parse_public_lane_numeric(item, "self_stake", &field)?,
+                metadata: parse_public_lane_metadata(item, &field)?,
+                status: parse_public_lane_validator_status(
+                    get_public_lane_field(item, "status", &field)?,
+                    &format!("{field}.status"),
+                )?,
+                activation_epoch: parse_public_lane_optional_u64(item, "activation_epoch", &field)?,
+                activation_height: parse_public_lane_optional_u64(
+                    item,
+                    "activation_height",
+                    &field,
+                )?,
+                last_reward_epoch: parse_public_lane_optional_u64(
+                    item,
+                    "last_reward_epoch",
+                    &field,
+                )?,
+            });
+        }
+        Ok(records)
+    }
+
+    fn parse_public_lane_stake_share_manifest(
+        value: &json::Value,
+    ) -> Result<Vec<PublicLaneStakeShare>, json::Error> {
+        let items = value.as_array().ok_or_else(|| {
+            json::Error::Message("expected `stake_shares` to be an array".to_owned())
+        })?;
+        let mut records = Vec::with_capacity(items.len());
+        for (index, item) in items.iter().enumerate() {
+            let field = format!("stake_shares[{index}]");
+            records.push(PublicLaneStakeShare {
+                lane_id: parse_public_lane_id(item, &field)?,
+                validator: parse_public_lane_account(item, "validator", &field)?,
+                staker: parse_public_lane_account(item, "staker", &field)?,
+                bonded: parse_public_lane_numeric(item, "bonded", &field)?,
+                pending_unbonds: parse_public_lane_pending_unbonds(item, &field)?,
+                metadata: parse_public_lane_metadata(item, &field)?,
+            });
+        }
+        Ok(records)
+    }
+
+    fn get_public_lane_field<'a>(
+        value: &'a json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<&'a json::Value, json::Error> {
+        value
+            .as_object()
+            .and_then(|object| object.get(key))
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: "missing field".to_owned(),
+            })
+    }
+
+    fn parse_public_lane_id(value: &json::Value, field: &str) -> Result<LaneId, json::Error> {
+        let lane = get_public_lane_field(value, "lane_id", field)?
+            .as_u64()
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.lane_id"),
+                message: "expected unsigned integer".to_owned(),
+            })?;
+        let lane = u32::try_from(lane).map_err(|_| json::Error::InvalidField {
+            field: format!("{field}.lane_id"),
+            message: "lane id overflow".to_owned(),
+        })?;
+        Ok(LaneId::new(lane))
+    }
+
+    fn parse_public_lane_string(
+        value: &json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<String, json::Error> {
+        Ok(get_public_lane_field(value, key, field)?
+            .as_str()
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: "expected string".to_owned(),
+            })?
+            .to_owned())
+    }
+
+    fn parse_public_lane_account(
+        value: &json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<AccountId, json::Error> {
+        let literal = parse_public_lane_string(value, key, field)?;
+        AccountId::parse_encoded(&literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|err| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: err.to_string(),
+            })
+    }
+
+    fn parse_public_lane_peer_id(
+        value: &json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<PeerId, json::Error> {
+        let literal = parse_public_lane_string(value, key, field)?;
+        literal
+            .parse::<PeerId>()
+            .map_err(|err| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: err.to_string(),
+            })
+    }
+
+    fn parse_public_lane_numeric(
+        value: &json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<Numeric, json::Error> {
+        let literal = parse_public_lane_string(value, key, field)?;
+        literal
+            .parse::<Numeric>()
+            .map_err(|err| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: err.to_string(),
+            })
+    }
+
+    fn parse_public_lane_optional_u64(
+        value: &json::Value,
+        key: &str,
+        field: &str,
+    ) -> Result<Option<u64>, json::Error> {
+        let Some(field_value) = value.as_object().and_then(|object| object.get(key)) else {
+            return Ok(None);
+        };
+        if field_value.is_null() {
+            return Ok(None);
+        }
+        field_value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.{key}"),
+                message: "expected unsigned integer or null".to_owned(),
+            })
+    }
+
+    fn parse_public_lane_metadata(
+        value: &json::Value,
+        field: &str,
+    ) -> Result<Metadata, json::Error> {
+        let Some(metadata) = value.as_object().and_then(|object| object.get("metadata")) else {
+            return Ok(Metadata::default());
+        };
+        Metadata::json_from_value(metadata).map_err(|err| json::Error::InvalidField {
+            field: format!("{field}.metadata"),
+            message: err.to_string(),
+        })
+    }
+
+    fn parse_public_lane_validator_status(
+        value: &json::Value,
+        field: &str,
+    ) -> Result<PublicLaneValidatorStatus, json::Error> {
+        let status_type = value
+            .as_object()
+            .and_then(|object| object.get("type"))
+            .and_then(json::Value::as_str)
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.type"),
+                message: "expected status type string".to_owned(),
+            })?;
+        match status_type {
+            "PendingActivation" => Ok(PublicLaneValidatorStatus::PendingActivation(
+                get_public_lane_field(value, "activates_at_epoch", field)?
+                    .as_u64()
+                    .ok_or_else(|| json::Error::InvalidField {
+                        field: format!("{field}.activates_at_epoch"),
+                        message: "expected unsigned integer".to_owned(),
+                    })?,
+            )),
+            "Active" => Ok(PublicLaneValidatorStatus::Active),
+            "Jailed" => Ok(PublicLaneValidatorStatus::Jailed(parse_public_lane_string(
+                value, "reason", field,
+            )?)),
+            "Exiting" => Ok(PublicLaneValidatorStatus::Exiting(
+                get_public_lane_field(value, "releases_at_ms", field)?
+                    .as_u64()
+                    .ok_or_else(|| json::Error::InvalidField {
+                        field: format!("{field}.releases_at_ms"),
+                        message: "expected unsigned integer".to_owned(),
+                    })?,
+            )),
+            "Exited" => Ok(PublicLaneValidatorStatus::Exited),
+            "Slashed" => {
+                let slash_id = parse_public_lane_string(value, "slash_id", field)?;
+                slash_id
+                    .parse::<Hash>()
+                    .map(PublicLaneValidatorStatus::Slashed)
+                    .map_err(|err| json::Error::InvalidField {
+                        field: format!("{field}.slash_id"),
+                        message: err.to_string(),
+                    })
+            }
+            other => Err(json::Error::InvalidField {
+                field: format!("{field}.type"),
+                message: format!("unsupported validator status `{other}`"),
+            }),
+        }
+    }
+
+    fn parse_public_lane_pending_unbonds(
+        value: &json::Value,
+        field: &str,
+    ) -> Result<BTreeMap<Hash, PublicLaneUnbonding>, json::Error> {
+        let Some(pending_unbonds) = value
+            .as_object()
+            .and_then(|object| object.get("pending_unbonds"))
+        else {
+            return Ok(BTreeMap::new());
+        };
+        let items = pending_unbonds
+            .as_array()
+            .ok_or_else(|| json::Error::InvalidField {
+                field: format!("{field}.pending_unbonds"),
+                message: "expected array".to_owned(),
+            })?;
+        let mut map = BTreeMap::new();
+        for (index, item) in items.iter().enumerate() {
+            let item_field = format!("{field}.pending_unbonds[{index}]");
+            let request_id = parse_public_lane_string(item, "request_id", &item_field)?
+                .parse::<Hash>()
+                .map_err(|err| json::Error::InvalidField {
+                    field: format!("{item_field}.request_id"),
+                    message: err.to_string(),
+                })?;
+            let amount = parse_public_lane_numeric(item, "amount", &item_field)?;
+            let release_at_ms = get_public_lane_field(item, "release_at_ms", &item_field)?
+                .as_u64()
+                .ok_or_else(|| json::Error::InvalidField {
+                    field: format!("{item_field}.release_at_ms"),
+                    message: "expected unsigned integer".to_owned(),
+                })?;
+            let unbonding = PublicLaneUnbonding {
+                request_id,
+                amount,
+                release_at_ms,
+            };
+            if map.insert(request_id, unbonding).is_some() {
+                return Err(json::Error::InvalidField {
+                    field: item_field,
+                    message: "duplicate pending unbond request_id".to_owned(),
+                });
+            }
+        }
+        Ok(map)
+    }
+
+    fn decode_public_lane_validator_records(
+        records: Vec<SnapshotNoritoBlob>,
+    ) -> Result<Vec<PublicLaneValidatorRecord>, json::Error> {
+        let record_count = records.len();
+        let mut decoded = Vec::with_capacity(record_count);
+        for (index, record) in records.into_iter().enumerate() {
+            let bytes =
+                hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
+                    field: "public_lane_validators".to_owned(),
+                    message: format!("record {index} hex decode failed: {err}"),
+                })?;
+            let mut cursor = bytes.as_slice();
+            match PublicLaneValidatorRecord::decode_all(&mut cursor) {
+                Ok(record) => decoded.push(record),
+                Err(primary) if hard_fork_snapshot_bootstrap_enabled() => {
+                    let mut legacy_cursor = bytes.as_slice();
+                    match LegacyPublicLaneValidatorRecord::decode_all(&mut legacy_cursor) {
+                        Ok(record) => {
+                            let Some(peer_public_key) = record.validator.try_signatory().cloned()
+                            else {
+                                eprintln!(
+                                    "snapshot hard-fork compatibility: discarding {record_count} persisted `public_lane_validators` records because record {index} has a legacy validator account without a single-key signatory"
+                                );
+                                return Ok(Vec::new());
+                            };
+                            eprintln!(
+                                "snapshot hard-fork compatibility: decoded persisted `public_lane_validators` record {index} with legacy struct fallback after primary decode failed: {primary}"
+                            );
+                            decoded.push(PublicLaneValidatorRecord {
+                                lane_id: record.lane_id,
+                                validator: record.validator,
+                                peer_id: PeerId::from(peer_public_key),
+                                stake_account: record.stake_account,
+                                total_stake: record.total_stake,
+                                self_stake: record.self_stake,
+                                metadata: record.metadata,
+                                status: record.status,
+                                activation_epoch: record.activation_epoch,
+                                activation_height: record.activation_height,
+                                last_reward_epoch: record.last_reward_epoch,
+                            });
+                        }
+                        Err(fallback) => {
+                            eprintln!(
+                                "snapshot hard-fork compatibility: discarding {record_count} persisted `public_lane_validators` records because record {index} could not be decoded: primary={primary}; tuple fallback={fallback}"
+                            );
+                            return Ok(Vec::new());
+                        }
+                    }
+                }
+                Err(err) => {
+                    return Err(json::Error::InvalidField {
+                        field: "public_lane_validators".to_owned(),
+                        message: format!("record {index} norito decode failed: {err}"),
+                    });
+                }
+            }
+        }
+        Ok(decoded)
+    }
+
+    fn decode_public_lane_stake_share_records(
+        records: Vec<SnapshotNoritoBlob>,
+    ) -> Result<Vec<PublicLaneStakeShare>, json::Error> {
+        let record_count = records.len();
+        let mut decoded = Vec::with_capacity(record_count);
+        for (index, record) in records.into_iter().enumerate() {
+            let bytes =
+                hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
+                    field: "public_lane_stake_shares".to_owned(),
+                    message: format!("record {index} hex decode failed: {err}"),
+                })?;
+            let mut cursor = bytes.as_slice();
+            match PublicLaneStakeShare::decode_all(&mut cursor) {
+                Ok(record) => decoded.push(record),
+                Err(primary) if hard_fork_snapshot_bootstrap_enabled() => {
+                    let mut legacy_cursor = bytes.as_slice();
+                    match LegacyPublicLaneStakeShareRecord::decode_all(&mut legacy_cursor) {
+                        Ok(record) => {
+                            eprintln!(
+                                "snapshot hard-fork compatibility: decoded persisted `public_lane_stake_shares` record {index} with legacy struct fallback after primary decode failed: {primary}"
+                            );
+                            decoded.push(PublicLaneStakeShare {
+                                lane_id: record.lane_id,
+                                validator: record.validator,
+                                staker: record.staker,
+                                bonded: record.bonded,
+                                pending_unbonds: record.pending_unbonds,
+                                metadata: record.metadata,
+                            });
+                        }
+                        Err(fallback) => {
+                            let mut legacy_without_unbonds_cursor = bytes.as_slice();
+                            match LegacyPublicLaneStakeShareWithoutPendingUnbonds::decode_all(
+                                &mut legacy_without_unbonds_cursor,
+                            ) {
+                                Ok(record) => {
+                                    eprintln!(
+                                        "snapshot hard-fork compatibility: decoded persisted `public_lane_stake_shares` record {index} without pending_unbonds after primary decode failed: {primary}"
+                                    );
+                                    decoded.push(PublicLaneStakeShare {
+                                        lane_id: record.lane_id,
+                                        validator: record.validator,
+                                        staker: record.staker,
+                                        bonded: record.bonded,
+                                        pending_unbonds: BTreeMap::new(),
+                                        metadata: record.metadata,
+                                    });
+                                }
+                                Err(fallback_without_unbonds) => {
+                                    eprintln!(
+                                        "snapshot hard-fork compatibility: discarding {record_count} persisted `public_lane_stake_shares` records because record {index} could not be decoded: primary={primary}; tuple fallback={fallback}; no-unbonds fallback={fallback_without_unbonds}"
+                                    );
+                                    return Ok(Vec::new());
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    return Err(json::Error::InvalidField {
+                        field: "public_lane_stake_shares".to_owned(),
+                        message: format!("record {index} norito decode failed: {err}"),
+                    });
+                }
+            }
+        }
+        Ok(decoded)
     }
 
     fn decode_space_directory_manifest_sets(
@@ -33320,14 +33871,55 @@ pub(crate) mod deserialize {
         policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
     ) -> Result<(), json::Error> {
         for (program_id, policy) in policies.view().iter() {
-            crate::smartcontracts::isi::ram_lfe::validate_program_policy(policy).map_err(
-                |err| json::Error::InvalidField {
-                    field: format!("world.ram_lfe_program_policies.{program_id}"),
-                    message: err.to_string(),
-                },
-            )?;
+            match crate::smartcontracts::isi::ram_lfe::validate_program_policy(policy) {
+                Ok(()) => {}
+                Err(err) if hard_fork_snapshot_bootstrap_enabled() => {
+                    eprintln!(
+                        "snapshot hard-fork compatibility: preserving RAM-LFE program policy `{program_id}` despite legacy validation failure: {err}"
+                    );
+                }
+                Err(err) => {
+                    return Err(json::Error::InvalidField {
+                        field: format!("world.ram_lfe_program_policies.{program_id}"),
+                        message: err.to_string(),
+                    });
+                }
+            }
         }
         Ok(())
+    }
+
+    fn take_ram_lfe_program_policies(
+        map: &mut json::native::Map,
+    ) -> Result<Storage<RamLfeProgramId, RamLfeProgramPolicy>, json::Error> {
+        let Some(mut value) = map.remove("ram_lfe_program_policies") else {
+            return Ok(Storage::default());
+        };
+        if hard_fork_snapshot_bootstrap_enabled()
+            && let json::Value::Object(storage) = &mut value
+            && let Some(json::Value::Object(blocks)) = storage.get_mut("blocks")
+        {
+            let mut patched = 0_usize;
+            for policy in blocks.values_mut() {
+                if let json::Value::Object(policy_map) = policy
+                    && !policy_map.contains_key("output_opening_public_key")
+                    && let Some(resolver_public_key) =
+                        policy_map.get("resolver_public_key").cloned()
+                {
+                    policy_map.insert("output_opening_public_key".to_owned(), resolver_public_key);
+                    patched += 1;
+                }
+            }
+            if patched > 0 {
+                eprintln!(
+                    "snapshot hard-fork compatibility: filled `output_opening_public_key` from `resolver_public_key` for {patched} RAM-LFE program policies"
+                );
+            }
+        }
+        json::value::from_value(value).map_err(|err| json::Error::InvalidField {
+            field: "ram_lfe_program_policies".to_owned(),
+            message: err.to_string(),
+        })
     }
 
     fn take_optional_default_lossy<T>(
@@ -33369,6 +33961,31 @@ pub(crate) mod deserialize {
             }
             Err(err) => Err(err),
         }
+    }
+
+    fn take_optional_default_hard_fork_lossy<T>(
+        map: &mut json::native::Map,
+        key: &str,
+    ) -> Result<T, json::Error>
+    where
+        T: JsonDeserialize + Default,
+    {
+        map.remove(key).map_or_else(
+            || Ok(T::default()),
+            |value| match json::value::from_value(value) {
+                Ok(parsed) => Ok(parsed),
+                Err(err) if hard_fork_snapshot_bootstrap_enabled() => {
+                    eprintln!(
+                        "snapshot hard-fork compatibility: discarding persisted `{key}` value because it could not be decoded: {err}"
+                    );
+                    Ok(T::default())
+                }
+                Err(err) => Err(json::Error::InvalidField {
+                    field: key.to_owned(),
+                    message: err.to_string(),
+                }),
+            },
+        )
     }
 
     fn take_parameters_cell(
@@ -33446,7 +34063,7 @@ pub(crate) mod deserialize {
         let account_aliases_by_account =
             take_optional_default(&mut map, "account_aliases_by_account")?;
         let account_scope_directory = take_optional_default(&mut map, "account_scope_directory")?;
-        let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
+        let ram_lfe_program_policies = take_ram_lfe_program_policies(&mut map)?;
         validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
@@ -33503,7 +34120,7 @@ pub(crate) mod deserialize {
         let proofs = take_optional_default(&mut map, "proofs")?;
         let proof_tags = take_optional_default(&mut map, "proof_tags")?;
         let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
-        let commit_qcs = take_optional_default(&mut map, "commit_qcs")?;
+        let commit_qcs = take_optional_default_hard_fork_lossy(&mut map, "commit_qcs")?;
         let contract_manifests = take_optional_default(&mut map, "contract_manifests")?;
         let contract_code = take_optional_default(&mut map, "contract_code")?;
         let contract_instances = take_optional_default(&mut map, "contract_instances")?;

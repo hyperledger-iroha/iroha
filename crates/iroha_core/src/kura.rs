@@ -91,9 +91,40 @@ const EVICTED_BLOCK_START: u64 = u64::MAX;
 /// Upper bound for merge-ledger entry payloads to avoid unbounded allocations on recovery.
 const MERGE_LEDGER_MAX_ENTRY_BYTES: usize = 16 * 1024 * 1024;
 const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
+const HARD_FORK_SNAPSHOT_BOOTSTRAP_HEIGHT_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP_HEIGHT";
 
 fn hard_fork_snapshot_bootstrap_enabled() -> bool {
     std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
+}
+
+fn hard_fork_snapshot_bootstrap_legacy_block_count(block_count: usize) -> usize {
+    if !hard_fork_snapshot_bootstrap_enabled() {
+        return 0;
+    }
+
+    let Some(raw_height) = std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_HEIGHT_ENV) else {
+        return block_count;
+    };
+    let raw_height = raw_height.to_string_lossy();
+    match raw_height.parse::<usize>() {
+        Ok(height) if height <= block_count => height,
+        Ok(height) => {
+            warn!(
+                configured_height = height,
+                block_count,
+                "hard-fork snapshot bootstrap height exceeds durable block count; treating all existing blocks as legacy"
+            );
+            block_count
+        }
+        Err(err) => {
+            warn!(
+                ?err,
+                value = %raw_height,
+                "failed to parse hard-fork snapshot bootstrap height; treating all existing blocks as legacy"
+            );
+            block_count
+        }
+    }
 }
 
 fn default_fastpq_proof_sidecar_queue_cap() -> usize {
@@ -121,6 +152,8 @@ pub struct Kura {
     block_store: Mutex<BlockStore>,
     /// The array of block hashes and a slot for an arc of the block. This is normally recovered from the index file.
     block_data: Mutex<BlockData>,
+    /// Number of pre-fork blocks whose body schema is intentionally not decoded in bootstrap mode.
+    hard_fork_hash_only_block_count: AtomicUsize,
     /// Reverse lookup for committed block hash to block height.
     block_height_index: Mutex<BlockHeightIndex>,
     /// Reverse lookup for committed transaction entrypoint hash to containing block heights.
@@ -1066,6 +1099,15 @@ impl Kura {
         let block_height_index = Self::build_block_height_index(&block_data);
         let transaction_entrypoint_index = Self::build_transaction_entrypoint_index(&block_data);
         let block_count = block_data.len();
+        let hard_fork_hash_only_block_count =
+            hard_fork_snapshot_bootstrap_legacy_block_count(block_count);
+        if hard_fork_hash_only_block_count > 0 {
+            warn!(
+                hard_fork_hash_only_block_count,
+                block_count,
+                "hard-fork snapshot bootstrap: treating pre-fork block bodies as unavailable"
+            );
+        }
         info!(mode=?config.init_mode, block_count, "Kura init complete");
 
         let merge_log_path = Self::select_merge_log_path(&store_dir, primary_lane);
@@ -1107,6 +1149,7 @@ impl Kura {
         let kura = Arc::new(Self {
             block_store: Mutex::new(block_store),
             block_data: Mutex::new(block_data),
+            hard_fork_hash_only_block_count: AtomicUsize::new(hard_fork_hash_only_block_count),
             block_height_index: Mutex::new(block_height_index),
             transaction_entrypoint_index: Mutex::new(transaction_entrypoint_index),
             block_notify_tx,
@@ -1208,6 +1251,7 @@ impl Kura {
                 FSYNC_INTERVAL,
             )),
             block_data: Mutex::new(Vec::new()),
+            hard_fork_hash_only_block_count: AtomicUsize::new(0),
             block_height_index: Mutex::new(BTreeMap::new()),
             transaction_entrypoint_index: Mutex::new(TransactionEntrypointIndex::complete_empty()),
             block_notify_tx,
@@ -2712,6 +2756,15 @@ impl Kura {
                 match decode_framed_signed_block(&bytes) {
                     Ok(decoded) => decoded,
                     Err(error) => {
+                        if self.is_hard_fork_hash_only_block(block_index) {
+                            debug!(
+                                ?error,
+                                block_index,
+                                height,
+                                "hard-fork snapshot bootstrap: legacy block body is unavailable"
+                            );
+                            return None;
+                        }
                         error!(
                             ?error,
                             block_index, height, "Failed to decode evicted block payload"
@@ -2731,6 +2784,14 @@ impl Kura {
                 match decode_framed_signed_block(bytes) {
                     Ok(decoded) => decoded,
                     Err(error) => {
+                        if self.is_hard_fork_hash_only_block(block_index) {
+                            debug!(
+                                ?error,
+                                block_index,
+                                "hard-fork snapshot bootstrap: legacy block body is unavailable"
+                            );
+                            return None;
+                        }
                         error!(?error, block_index, "Failed to decode block from disk");
                         return None;
                     }
@@ -2763,6 +2824,10 @@ impl Kura {
         }
 
         Some(block_arc)
+    }
+
+    fn is_hard_fork_hash_only_block(&self, block_index: usize) -> bool {
+        block_index < self.hard_fork_hash_only_block_count.load(Ordering::Relaxed)
     }
 
     fn wsv_checkpoint_dir_for(blocks_dir: &Path) -> PathBuf {
