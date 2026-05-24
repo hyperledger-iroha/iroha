@@ -5567,17 +5567,6 @@ impl Actor {
         }
         let conflicting_vote = self.local_conflicting_slot_vote(height, epoch, block_hash);
         if let Some(conflict) = conflicting_vote {
-            let roots = pending_roots.or_else(|| {
-                self.pending
-                    .pending_blocks
-                    .get(&block_hash)
-                    .and_then(|pending| {
-                        match (pending.parent_state_root, pending.post_state_root) {
-                            (Some(parent), Some(post)) => Some((parent, post)),
-                            _ => None,
-                        }
-                    })
-            });
             let new_view_qc_supersedes = self
                 .proposal_or_new_view_highest_qc_for_slot(height, view)
                 .is_some_and(|highest_qc| {
@@ -5601,20 +5590,7 @@ impl Actor {
                 height,
                 conflict.view,
             ) || self.same_height_has_recoverable_qc(height);
-            let candidate_completes_quorum = conflict.view < view
-                && !new_view_qc_supersedes
-                && !stale_vote_can_rotate
-                && !conflict_has_recoverable_qc
-                && self.candidate_commit_quorum_completes_with_local_vote(
-                    block_hash,
-                    height,
-                    view,
-                    &topology,
-                    &signature_topology,
-                    local_idx,
-                    roots,
-                );
-            if new_view_qc_supersedes || stale_vote_can_rotate || candidate_completes_quorum {
+            if new_view_qc_supersedes || stale_vote_can_rotate {
                 info!(
                     height,
                     view,
@@ -5626,7 +5602,6 @@ impl Actor {
                     signer = local_idx,
                     new_view_qc_supersedes,
                     stale_vote_can_rotate,
-                    candidate_completes_quorum,
                     conflict_has_recoverable_qc,
                     "allowing precommit: same-height local vote is superseded"
                 );

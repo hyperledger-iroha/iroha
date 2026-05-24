@@ -772,7 +772,13 @@ const normalizeSolanaInclusionBranch = (value, label = "inclusionBranch") => {
   if (!Array.isArray(value)) {
     throw new TypeError(`${label} must be an array`);
   }
-  return value.map((sibling, index) => hexToBytes(sibling, `${label}[${index}]`, 32));
+  return value.map((sibling, index) => {
+    const bytes = toBytes(sibling, `${label}[${index}]`);
+    if (bytes.length !== 32) {
+      throw new TypeError(`${label}[${index}] must be 32 bytes`);
+    }
+    return bytes;
+  });
 };
 
 export function canonicalSolanaSccpMessageProofBytes(input) {

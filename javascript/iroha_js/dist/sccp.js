@@ -34,6 +34,7 @@ const SCCP_MSG_PREFIX_TOKEN_RESUME_V1 = "sccp:token:resume:v1";
 const SCCP_HUB_LEAF_PREFIX_V1 = "sccp:hub:leaf:v1";
 const SCCP_HUB_NODE_PREFIX_V1 = "sccp:hub:node:v1";
 const SCCP_PAYLOAD_HASH_PREFIX_V1 = "sccp:payload:v1";
+const SCCP_SOLANA_MESSAGE_PROOF_PREFIX_V1 = "sccp:solana:message-proof:v1";
 const SCCP_TON_BOC_MAGIC = Uint8Array.from([0xb5, 0xee, 0x9c, 0x72]);
 const SCCP_TON_SUBMIT_OP_V1 = 0x53434350;
 const SCCP_TON_MESSAGE_SCHEMA_VERSION_V1 = 1;
@@ -767,6 +768,58 @@ export class TonSccpProver {
   }
 }
 
+const normalizeSolanaInclusionBranch = (value, label = "inclusionBranch") => {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label} must be an array`);
+  }
+  return value.map((sibling, index) => {
+    const bytes = toBytes(sibling, `${label}[${index}]`);
+    if (bytes.length !== 32) {
+      throw new TypeError(`${label}[${index}] must be 32 bytes`);
+    }
+    return bytes;
+  });
+};
+
+export function canonicalSolanaSccpMessageProofBytes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana SCCP message proof input must be an object");
+  }
+  const sourceEventDigest = hexToBytes(
+    input.sourceEventDigest ?? input.source_event_digest,
+    "sourceEventDigest",
+    32,
+  );
+  const transactionStatusRoot = hexToBytes(
+    input.transactionStatusRoot ??
+      input.transaction_status_root ??
+      input.receiptOrMessageRoot ??
+      input.receipt_or_message_root,
+    "transactionStatusRoot",
+    32,
+  );
+  const inclusionBranch = normalizeSolanaInclusionBranch(
+    input.inclusionBranch ?? input.inclusion_branch,
+  );
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = concatBytes(out, sourceEventDigest, transactionStatusRoot);
+  out = writeU32Le(out, inclusionBranch.length);
+  for (const sibling of inclusionBranch) {
+    out = concatBytes(out, sibling);
+  }
+  return out;
+}
+
+export function solanaSccpMessageProofHash(input) {
+  return bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOLANA_MESSAGE_PROOF_PREFIX_V1,
+      canonicalSolanaSccpMessageProofBytes(input),
+    ),
+  );
+}
+
 export function normalizeSolanaSccpWitness(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("Solana SCCP witness must be an object");
@@ -778,6 +831,25 @@ export function normalizeSolanaSccpWitness(input) {
     input.targetDomain ?? input.target_domain ?? commitment.target_domain ?? SCCP_DOMAIN_SORA;
   const messageId = input.messageId ?? input.message_id ?? commitment.message_id;
   const payloadHash = input.payloadHash ?? input.payload_hash ?? commitment.payload_hash;
+  const transactionStatusRoot = normalizeHex32(
+    input.transactionStatusRoot ?? input.transaction_status_root,
+    "transactionStatusRoot",
+  );
+  const sourceEventDigest = normalizeHex32(
+    input.sourceEventDigest ?? input.source_event_digest,
+    "sourceEventDigest",
+  );
+  const inclusionBranch = input.inclusionBranch ?? input.inclusion_branch;
+  const messageProofHash =
+    input.messageProofHash ??
+    input.message_proof_hash ??
+    (inclusionBranch === undefined
+      ? undefined
+      : solanaSccpMessageProofHash({
+          sourceEventDigest,
+          transactionStatusRoot,
+          inclusionBranch,
+        }));
   return {
     version: 1,
     sourceDomain: SCCP_DOMAIN_SOL,
@@ -792,14 +864,8 @@ export function normalizeSolanaSccpWitness(input) {
     ).toString(),
     blockhash: normalizeNonEmptyString(input.blockhash, "blockhash"),
     bankHash: normalizeHex32(input.bankHash ?? input.bank_hash, "bankHash"),
-    transactionStatusRoot: normalizeHex32(
-      input.transactionStatusRoot ?? input.transaction_status_root,
-      "transactionStatusRoot",
-    ),
-    messageProofHash: normalizeHex32(
-      input.messageProofHash ?? input.message_proof_hash,
-      "messageProofHash",
-    ),
+    transactionStatusRoot,
+    messageProofHash: normalizeHex32(messageProofHash, "messageProofHash"),
     transactionSignature: normalizeNonEmptyString(
       input.transactionSignature ?? input.transaction_signature,
       "transactionSignature",
@@ -814,10 +880,11 @@ export function normalizeSolanaSccpWitness(input) {
       input.commitmentRoot ?? input.commitment_root ?? bundle?.commitment_root,
       "commitmentRoot",
     ),
-    sourceEventDigest: normalizeHex32(
-      input.sourceEventDigest ?? input.source_event_digest,
-      "sourceEventDigest",
-    ),
+    sourceEventDigest,
+    inclusionBranch:
+      inclusionBranch === undefined
+        ? undefined
+        : normalizeSolanaInclusionBranch(inclusionBranch).map((sibling) => bytesToHex(sibling)),
     payload,
   };
 }

@@ -120834,7 +120834,7 @@ async fn precommit_vote_rejects_newer_view_after_conflict() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_allows_newer_conflict_when_local_vote_completes_quorum() {
+async fn precommit_vote_rejects_newer_conflict_even_when_local_vote_would_complete_quorum() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -120875,10 +120875,10 @@ async fn precommit_vote_allows_newer_conflict_when_local_vote_completes_quorum()
     };
     let signature_topology =
         super::topology_for_view(&vote_topology, height, 1, mode_tag, prf_seed);
-    let local_idx = actor
+    let local_validator_idx = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local validator in view topology");
-    let local_idx = usize::try_from(local_idx).expect("local index fits usize");
+    let local_idx = usize::try_from(local_validator_idx).expect("local index fits usize");
     let required = signature_topology.min_votes_for_commit().max(1);
     assert!(
         signature_topology.as_ref().len().saturating_sub(1) >= required.saturating_sub(1),
@@ -120935,9 +120935,21 @@ async fn precommit_vote_allows_newer_conflict_when_local_vote_completes_quorum()
         !before.quorum_reached,
         "candidate must not already have quorum"
     );
+    assert!(
+        actor.candidate_commit_quorum_completes_with_local_vote(
+            block_b_hash,
+            height,
+            1,
+            &vote_topology,
+            &signature_topology,
+            local_validator_idx,
+            roots,
+        ),
+        "newer branch should be one local vote short of a valid commit quorum"
+    );
 
     assert!(
-        actor.emit_precommit_vote(
+        !actor.emit_precommit_vote(
             block_b_hash,
             height,
             1,
@@ -120947,12 +120959,16 @@ async fn precommit_vote_allows_newer_conflict_when_local_vote_completes_quorum()
             None,
             roots,
         ),
-        "newer view precommit should be allowed when it completes the candidate quorum"
+        "newer-view precommit must be rejected even when the local vote would complete quorum"
     );
     let after = actor.commit_vote_quorum_status_for_block_detail(block_b_hash, height, 1);
     assert!(
-        after.quorum_reached,
-        "local vote should complete the newer-view commit quorum"
+        !after.quorum_reached,
+        "local vote must not complete the newer-view commit quorum"
+    );
+    assert_eq!(
+        after.vote_count, before.vote_count,
+        "rejected newer-view local vote must not be recorded"
     );
 
     harness.shutdown.send();

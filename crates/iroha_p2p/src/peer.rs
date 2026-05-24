@@ -1991,7 +1991,7 @@ mod run {
     const HI_BUDGET_FALLBACK: u8 = 1;
     const HI_CONTROL_BURST_MAX: u8 = 4;
     const HI_CONSENSUS_BURST_MAX: u8 = 4;
-    const HI_PAYLOAD_BURST_MAX: u8 = 2;
+    const HI_PAYLOAD_BURST_MAX: u8 = 1;
     const HI_AVAILABILITY_BURST_MAX: u8 = 2;
     // Drain a few queued outbound posts per loop iteration to allow `MessageSender` to
     // batch multiple logical messages into fewer encrypted frames.
@@ -2067,6 +2067,11 @@ mod run {
                 decoded_messages,
             }
         }
+    }
+
+    struct MalformedParsedMessages<M> {
+        context: MalformedPayloadFrameContext,
+        messages: VecDeque<(M, usize)>,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3409,17 +3414,20 @@ mod run {
             framed_schema: [u8; 16],
             framed_padding: usize,
             decode_scratch: &mut Vec<u8>,
-        ) -> Result<VecDeque<(M, usize)>, MalformedPayloadFrameContext> {
+        ) -> Result<VecDeque<(M, usize)>, MalformedParsedMessages<M>> {
             let decrypted_len = decrypted.len();
             if decrypted_len == 0 {
-                return Err(MalformedPayloadFrameContext::new(
-                    MalformedPayloadFrameReason::EmptyDecryptedPayload,
-                    encrypted_size,
-                    Some(decrypted_len),
-                    0,
-                    0,
-                    0,
-                ));
+                return Err(MalformedParsedMessages {
+                    context: MalformedPayloadFrameContext::new(
+                        MalformedPayloadFrameReason::EmptyDecryptedPayload,
+                        encrypted_size,
+                        Some(decrypted_len),
+                        0,
+                        0,
+                        0,
+                    ),
+                    messages: VecDeque::new(),
+                });
             }
 
             let align = core::mem::align_of::<ncore::Archived<M>>();
@@ -3428,35 +3436,47 @@ mod run {
             let mut frame_messages = VecDeque::new();
             while offset < decrypted_len {
                 let Some(remaining) = decrypted.get(offset..) else {
-                    return Err(MalformedPayloadFrameContext::new(
-                        MalformedPayloadFrameReason::TrailingBytes,
-                        encrypted_size,
-                        Some(decrypted_len),
-                        offset,
-                        0,
-                        decoded_messages,
-                    ));
+                    return Err(MalformedParsedMessages {
+                        context: MalformedPayloadFrameContext::new(
+                            MalformedPayloadFrameReason::TrailingBytes,
+                            encrypted_size,
+                            Some(decrypted_len),
+                            offset,
+                            0,
+                            decoded_messages,
+                        ),
+                        messages: frame_messages,
+                    });
                 };
-                let frame_len = framed_message_len::<M>(remaining, framed_schema, framed_padding)
-                    .map_err(|reason| {
-                    MalformedPayloadFrameContext::new(
-                        reason,
-                        encrypted_size,
-                        Some(decrypted_len),
-                        offset,
-                        remaining.len(),
-                        decoded_messages,
-                    )
-                })?;
+                let frame_len =
+                    match framed_message_len::<M>(remaining, framed_schema, framed_padding) {
+                        Ok(frame_len) => frame_len,
+                        Err(reason) => {
+                            return Err(MalformedParsedMessages {
+                                context: MalformedPayloadFrameContext::new(
+                                    reason,
+                                    encrypted_size,
+                                    Some(decrypted_len),
+                                    offset,
+                                    remaining.len(),
+                                    decoded_messages,
+                                ),
+                                messages: frame_messages,
+                            });
+                        }
+                    };
                 let Some(frame) = remaining.get(..frame_len) else {
-                    return Err(MalformedPayloadFrameContext::new(
-                        MalformedPayloadFrameReason::InnerFrameTruncated,
-                        encrypted_size,
-                        Some(decrypted_len),
-                        offset,
-                        remaining.len(),
-                        decoded_messages,
-                    ));
+                    return Err(MalformedParsedMessages {
+                        context: MalformedPayloadFrameContext::new(
+                            MalformedPayloadFrameReason::InnerFrameTruncated,
+                            encrypted_size,
+                            Some(decrypted_len),
+                            offset,
+                            remaining.len(),
+                            decoded_messages,
+                        ),
+                        messages: frame_messages,
+                    });
                 };
                 let misaligned = align > 1
                     && !frame.is_empty()
@@ -3466,17 +3486,23 @@ mod run {
                     ncore::decode_from_bytes::<M>(aligned)
                 } else {
                     ncore::decode_from_bytes::<M>(frame)
-                }
-                .map_err(|_| {
-                    MalformedPayloadFrameContext::new(
-                        MalformedPayloadFrameReason::InnerDecodeFailed,
-                        encrypted_size,
-                        Some(decrypted_len),
-                        offset,
-                        remaining.len(),
-                        decoded_messages,
-                    )
-                })?;
+                };
+                let decoded = match decoded {
+                    Ok(decoded) => decoded,
+                    Err(_) => {
+                        return Err(MalformedParsedMessages {
+                            context: MalformedPayloadFrameContext::new(
+                                MalformedPayloadFrameReason::InnerDecodeFailed,
+                                encrypted_size,
+                                Some(decrypted_len),
+                                offset,
+                                remaining.len(),
+                                decoded_messages,
+                            ),
+                            messages: frame_messages,
+                        });
+                    }
+                };
                 frame_messages.push_back((decoded, frame_len));
                 decoded_messages = decoded_messages.saturating_add(1);
                 offset = offset.saturating_add(frame_len);
@@ -3574,10 +3600,9 @@ mod run {
                     &mut self.decode_scratch,
                 ) {
                     Ok(messages) => Ok(ParsedFrame::Messages(messages)),
-                    Err(context) => Ok(ParsedFrame::Malformed {
-                        context,
-                        messages: VecDeque::new(),
-                    }),
+                    Err(MalformedParsedMessages { context, messages }) => {
+                        Ok(ParsedFrame::Malformed { context, messages })
+                    }
                 }
             })();
 
@@ -3676,7 +3701,7 @@ mod run {
         const MAX_BATCH_HI_BURST: usize = 4;
         const MAX_BATCH_CONTROL_BURST: usize = 4;
         const MAX_BATCH_CONSENSUS_BURST: usize = 4;
-        const MAX_BATCH_PAYLOAD_BURST: usize = 2;
+        const MAX_BATCH_PAYLOAD_BURST: usize = 1;
         const MAX_BATCH_AVAILABILITY_BURST: usize = 2;
         const MAX_PLAINTEXT_MSGS_HI: usize = 16;
         const MAX_PLAINTEXT_MSGS_LO: usize = 32;

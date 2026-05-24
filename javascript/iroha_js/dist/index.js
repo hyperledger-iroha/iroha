@@ -335,6 +335,8 @@ export {
   sccpPayloadHash,
   sccpCommitmentLeafHash,
   sccpMerkleRootFromCommitment,
+  canonicalSolanaSccpMessageProofBytes,
+  solanaSccpMessageProofHash,
   normalizeSolanaSccpWitness,
   canonicalSolanaSccpWitnessBytes,
   buildSolanaSccpProofRequest,
