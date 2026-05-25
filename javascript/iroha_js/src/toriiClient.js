@@ -84,6 +84,7 @@ const DA_FETCH_ARTIFACT_PREFIX = "artifacts/da/fetch_";
 const DA_PROVE_ARTIFACT_PREFIX = "artifacts/da/prove_availability_";
 const TX_STATUS_POLL_OPTION_KEYS = new Set([
   "signal",
+  "scope",
   "intervalMs",
   "timeoutMs",
   "maxAttempts",
@@ -3800,7 +3801,7 @@ export class ToriiClient {
     const scope = normalizeTransactionStatusScope(
       optionRecord.scope,
       "getTransactionStatus options.scope",
-      this._config.transactionStatusScope || "auto",
+      this._config.transactionStatusScope || "global",
     );
     const endpointCandidates = normalizeStatusEndpointCandidates(
       this._baseUrl,
@@ -3907,6 +3908,7 @@ export class ToriiClient {
    *   intervalMs?: number,
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
+   *   scope?: "local" | "auto" | "global",
    *   successStatuses?: Iterable<string>,
    *   failureStatuses?: Iterable<string>,
    *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
@@ -3928,6 +3930,7 @@ export class ToriiClient {
       successSet,
       failureSet,
       onStatus,
+      scope,
     } = ToriiClient._normalizeTransactionStatusPollOptions(
       options,
       "waitForTransactionStatus options",
@@ -3943,7 +3946,7 @@ export class ToriiClient {
     while (true) {
       throwIfAborted(signal);
       attempts += 1;
-      lastPayload = await this.getTransactionStatus(normalizedHash, { signal });
+      lastPayload = await this.getTransactionStatus(normalizedHash, { signal, scope });
       const status = extractPipelineStatusKind(lastPayload);
       if (onStatus) {
         await onStatus(status, lastPayload, attempts);
@@ -10011,6 +10014,7 @@ export class ToriiClient {
         successSet: normalizeStatusSet(undefined, DEFAULT_SUCCESS_STATUSES),
         failureSet: normalizeStatusSet(undefined, DEFAULT_FAILURE_STATUSES),
         onStatus: null,
+        scope: "global",
       };
     }
     const record = requirePlainObjectOption(options, context);
@@ -10020,6 +10024,11 @@ export class ToriiClient {
         ? context.slice(0, -8)
         : context;
     const { signal } = normalizeSignalOption(record, signalContext);
+    const scope = normalizeTransactionStatusScope(
+      record.scope,
+      `${context}.scope`,
+      "global",
+    );
     let intervalMs = DEFAULT_TX_STATUS_POLL_INTERVAL_MS;
     if (record.intervalMs !== undefined && record.intervalMs !== null) {
       intervalMs = ToriiClient._normalizeUnsignedInteger(
@@ -10066,6 +10075,7 @@ export class ToriiClient {
       successSet: normalizeStatusSet(record.successStatuses, DEFAULT_SUCCESS_STATUSES),
       failureSet: normalizeStatusSet(record.failureStatuses, DEFAULT_FAILURE_STATUSES),
       onStatus,
+      scope,
     };
   }
 

@@ -6856,7 +6856,7 @@ test("getTransactionStatus queries pipeline endpoint", async () => {
   const fetchImpl = async (url) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashParam}&scope=auto`,
+      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashParam}&scope=global`,
     );
     return createResponse({
       status: 200,
@@ -6880,14 +6880,14 @@ test("getTransactionStatus normalizes typed pipeline status responses", async ()
   const fetchImpl = async (url) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`,
+      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=global`,
     );
     return createResponse({
       status: 200,
       jsonData: {
         hash: hashHex,
         resolved_from: "state",
-        scope: "auto",
+        scope: "global",
         status: {
           kind: "Applied",
           block_height: 7,
@@ -6901,7 +6901,7 @@ test("getTransactionStatus normalizes typed pipeline status responses", async ()
   assert.deepEqual(result, {
     hash: hashHex,
     resolved_from: "state",
-    scope: "auto",
+    scope: "global",
     status: {
       kind: "Applied",
       block_height: 7,
@@ -6949,6 +6949,7 @@ test("getTransactionStatus fans out to alternate endpoints in auto scope", async
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
+    transactionStatusScope: "auto",
     statusEndpoints: [alternateBaseUrl],
   });
   const payload = await client.getTransactionStatus(hashHex);
@@ -7044,7 +7045,7 @@ test("getTransactionStatus validates scope option", async () => {
       attempts += 1;
       assert.equal(
         url,
-        `${BASE_URL}/v1/pipeline/transactions/status?hash=${hash}&scope=auto`,
+        `${BASE_URL}/v1/pipeline/transactions/status?hash=${hash}&scope=global`,
       );
       if (attempts === 1) {
         return createResponse({ status: 425, jsonData: { status: "TooEarly" } });
@@ -7076,7 +7077,7 @@ test("getTransactionStatus returns null when Torii responds with 404", async () 
   const fetchImpl = async (url) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`,
+      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=global`,
     );
     return createResponse({ status: 404 });
   };
@@ -7570,6 +7571,19 @@ test("waitForTransactionStatus validates signal option type", async () => {
   );
 });
 
+test("waitForTransactionStatus validates scope option", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
+  const hashHex = "ce".repeat(32);
+  await assert.rejects(
+    () => client.waitForTransactionStatus(hashHex, { scope: "global&scope=local" }),
+    /waitForTransactionStatus options\.scope must be one of: local, auto, global/,
+  );
+  await assert.rejects(
+    () => client.waitForTransactionStatus(hashHex, { scope: "global,local" }),
+    /waitForTransactionStatus options\.scope must be one of: local, auto, global/,
+  );
+});
+
 test("waitForTransactionStatus enforces onStatus callback type", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
   await assert.rejects(
@@ -7618,9 +7632,11 @@ test("waitForTransactionStatus forwards signal and aborts polling", async () => 
   const controller = new AbortController();
   let attempts = 0;
   let seenSignal = null;
+  let seenScope = null;
   client.getTransactionStatus = async (_hashHex, options = {}) => {
     attempts += 1;
     seenSignal = options.signal ?? null;
+    seenScope = options.scope ?? null;
     controller.abort(new Error("stop polling"));
     return {
       kind: "Transaction",
@@ -7640,6 +7656,29 @@ test("waitForTransactionStatus forwards signal and aborts polling", async () => 
   );
   assert.equal(attempts, 1);
   assert.equal(seenSignal, controller.signal);
+  assert.equal(seenScope, "global");
+});
+
+test("waitForTransactionStatus forwards explicit local scope", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
+  const txHash = "67".repeat(32);
+  const observed = [];
+  client.getTransactionStatus = async (_hashHex, options = {}) => {
+    observed.push(options);
+    return {
+      kind: "Transaction",
+      content: { hash: txHash, status: { kind: "Committed", content: null } },
+    };
+  };
+
+  await client.waitForTransactionStatus(txHash, {
+    intervalMs: 0,
+    maxAttempts: 1,
+    scope: "local",
+  });
+
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].scope, "local");
 });
 
 test("waitForTransactionStatusTyped normalises payload", async () => {

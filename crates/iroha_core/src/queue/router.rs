@@ -1591,9 +1591,11 @@ fn instruction_transaction_dataspace_target(
 
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
         return match register {
-            RegisterBox::Domain(register) => {
-                domain_dataspace_target(&register.object.id, dataspace_catalog)
-            }
+            RegisterBox::Domain(register) => domain_dataspace_target_with_state(
+                &register.object.id,
+                dataspace_catalog,
+                state_view,
+            ),
             RegisterBox::Account(register) => {
                 register.object.label.as_ref().map(|alias| alias.dataspace)
             }
@@ -1613,9 +1615,11 @@ fn instruction_transaction_dataspace_target(
 
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
         return match unregister {
-            UnregisterBox::Domain(unregister) => {
-                domain_dataspace_target(&unregister.object, dataspace_catalog)
-            }
+            UnregisterBox::Domain(unregister) => domain_dataspace_target_with_state(
+                &unregister.object,
+                dataspace_catalog,
+                state_view,
+            ),
             UnregisterBox::AssetDefinition(unregister) => asset_definition_dataspace_target(
                 &unregister.object,
                 None,
@@ -1633,7 +1637,9 @@ fn instruction_transaction_dataspace_target(
 
     if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
         return match set_key_value {
-            SetKeyValueBox::Domain(set) => domain_dataspace_target(&set.object, dataspace_catalog),
+            SetKeyValueBox::Domain(set) => {
+                domain_dataspace_target_with_state(&set.object, dataspace_catalog, state_view)
+            }
             SetKeyValueBox::Account(set) => {
                 account_dataspace_target(state_view.map(StateView::world), &set.object)
             }
@@ -1651,7 +1657,7 @@ fn instruction_transaction_dataspace_target(
     if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
         return match remove_key_value {
             RemoveKeyValueBox::Domain(remove) => {
-                domain_dataspace_target(&remove.object, dataspace_catalog)
+                domain_dataspace_target_with_state(&remove.object, dataspace_catalog, state_view)
             }
             RemoveKeyValueBox::Account(remove) => {
                 account_dataspace_target(state_view.map(StateView::world), &remove.object)
@@ -1670,7 +1676,7 @@ fn instruction_transaction_dataspace_target(
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         return match transfer {
             TransferBox::Domain(transfer) => {
-                domain_dataspace_target(&transfer.object, dataspace_catalog)
+                domain_dataspace_target_with_state(&transfer.object, dataspace_catalog, state_view)
             }
             TransferBox::AssetDefinition(transfer) => asset_definition_dataspace_target(
                 &transfer.object,
@@ -1754,22 +1760,35 @@ fn instruction_transaction_dataspace_target(
     }
 
     if let Some(publish) = any.downcast_ref::<PublishMusubiRelease>() {
-        return musubi_package_dataspace_target(
+        return musubi_package_dataspace_target_with_state(
             &publish.release.package.package,
             dataspace_catalog,
+            state_view,
         );
     }
 
     if let Some(yank) = any.downcast_ref::<YankMusubiRelease>() {
-        return musubi_package_dataspace_target(&yank.package.package, dataspace_catalog);
+        return musubi_package_dataspace_target_with_state(
+            &yank.package.package,
+            dataspace_catalog,
+            state_view,
+        );
     }
 
     if let Some(set_alias) = any.downcast_ref::<SetMusubiShortAlias>() {
-        return musubi_package_dataspace_target(&set_alias.alias.target, dataspace_catalog);
+        return musubi_package_dataspace_target_with_state(
+            &set_alias.alias.target,
+            dataspace_catalog,
+            state_view,
+        );
     }
 
     if let Some(assert_release) = any.downcast_ref::<AssertMusubiReleaseExists>() {
-        return musubi_package_dataspace_target(&assert_release.package, dataspace_catalog);
+        return musubi_package_dataspace_target_with_state(
+            &assert_release.package,
+            dataspace_catalog,
+            state_view,
+        );
     }
 
     if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
@@ -1807,7 +1826,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
         return match register {
             RegisterBox::Domain(register) => {
-                domain_dataspace_target(&register.object.id, dataspace_catalog)
+                domain_dataspace_target_with_world(&register.object.id, dataspace_catalog, world)
             }
             RegisterBox::Account(register) => {
                 register.object.label.as_ref().map(|alias| alias.dataspace)
@@ -1829,7 +1848,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
         return match unregister {
             UnregisterBox::Domain(unregister) => {
-                domain_dataspace_target(&unregister.object, dataspace_catalog)
+                domain_dataspace_target_with_world(&unregister.object, dataspace_catalog, world)
             }
             UnregisterBox::AssetDefinition(unregister) => {
                 asset_definition_dataspace_target_with_world(
@@ -1850,7 +1869,9 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
 
     if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
         return match set_key_value {
-            SetKeyValueBox::Domain(set) => domain_dataspace_target(&set.object, dataspace_catalog),
+            SetKeyValueBox::Domain(set) => {
+                domain_dataspace_target_with_world(&set.object, dataspace_catalog, world)
+            }
             SetKeyValueBox::Account(set) => account_dataspace_target(Some(world), &set.object),
             SetKeyValueBox::AssetDefinition(set) => asset_definition_dataspace_target_with_world(
                 &set.object,
@@ -1866,7 +1887,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
         return match remove_key_value {
             RemoveKeyValueBox::Domain(remove) => {
-                domain_dataspace_target(&remove.object, dataspace_catalog)
+                domain_dataspace_target_with_world(&remove.object, dataspace_catalog, world)
             }
             RemoveKeyValueBox::Account(remove) => {
                 account_dataspace_target(Some(world), &remove.object)
@@ -1887,7 +1908,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         return match transfer {
             TransferBox::Domain(transfer) => {
-                domain_dataspace_target(&transfer.object, dataspace_catalog)
+                domain_dataspace_target_with_world(&transfer.object, dataspace_catalog, world)
             }
             TransferBox::AssetDefinition(transfer) => asset_definition_dataspace_target_with_world(
                 &transfer.object,
@@ -1965,22 +1986,35 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     }
 
     if let Some(publish) = any.downcast_ref::<PublishMusubiRelease>() {
-        return musubi_package_dataspace_target(
+        return musubi_package_dataspace_target_with_world(
             &publish.release.package.package,
             dataspace_catalog,
+            world,
         );
     }
 
     if let Some(yank) = any.downcast_ref::<YankMusubiRelease>() {
-        return musubi_package_dataspace_target(&yank.package.package, dataspace_catalog);
+        return musubi_package_dataspace_target_with_world(
+            &yank.package.package,
+            dataspace_catalog,
+            world,
+        );
     }
 
     if let Some(set_alias) = any.downcast_ref::<SetMusubiShortAlias>() {
-        return musubi_package_dataspace_target(&set_alias.alias.target, dataspace_catalog);
+        return musubi_package_dataspace_target_with_world(
+            &set_alias.alias.target,
+            dataspace_catalog,
+            world,
+        );
     }
 
     if let Some(assert_release) = any.downcast_ref::<AssertMusubiReleaseExists>() {
-        return musubi_package_dataspace_target(&assert_release.package, dataspace_catalog);
+        return musubi_package_dataspace_target_with_world(
+            &assert_release.package,
+            dataspace_catalog,
+            world,
+        );
     }
 
     if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
@@ -2061,31 +2095,50 @@ fn authority_dataspace_target_with_world<W: WorldReadOnly>(
         .and_then(|authority| account_dataspace_target(world, authority))
 }
 
-fn domain_dataspace_target(
+fn domain_dataspace_target_with_state(
     domain_id: &DomainId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
-    if domain_id
-        .dataspace()
-        .as_ref()
-        .eq_ignore_ascii_case("universal")
-    {
-        return Some(DataSpaceId::UNIVERSAL);
-    }
-    dataspace_catalog?
-        .by_alias(domain_id.dataspace().as_ref())
-        .map(|entry| entry.id)
+    dataspace_alias_target_with_state(
+        domain_id.dataspace().as_ref(),
+        dataspace_catalog,
+        state_view,
+    )
+}
+
+fn domain_dataspace_target_with_world<W: WorldReadOnly>(
+    domain_id: &DomainId,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    dataspace_alias_target_with_world(domain_id.dataspace().as_ref(), dataspace_catalog, world)
 }
 
 fn contract_address_dataspace_target(contract_address: &ContractAddress) -> Option<DataSpaceId> {
     contract_address.dataspace_id().ok()
 }
 
-fn musubi_namespace_dataspace_target(
+fn musubi_namespace_dataspace_target_with_state(
     namespace: &MusubiNamespace,
     dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
-    let dataspace_alias = namespace.dataspace_segment();
+    dataspace_alias_target_with_state(namespace.dataspace_segment(), dataspace_catalog, state_view)
+}
+
+fn musubi_namespace_dataspace_target_with_world<W: WorldReadOnly>(
+    namespace: &MusubiNamespace,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    dataspace_alias_target_with_world(namespace.dataspace_segment(), dataspace_catalog, world)
+}
+
+fn dataspace_alias_target(
+    dataspace_alias: &str,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+) -> Option<DataSpaceId> {
     if dataspace_alias.eq_ignore_ascii_case("universal") {
         return Some(DataSpaceId::UNIVERSAL);
     }
@@ -2094,18 +2147,64 @@ fn musubi_namespace_dataspace_target(
         .map(|entry| entry.id)
 }
 
-fn musubi_package_dataspace_target(
-    package: &MusubiPackageId,
+fn dataspace_alias_target_with_state(
+    dataspace_alias: &str,
     dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
-    musubi_namespace_dataspace_target(&package.namespace, dataspace_catalog)
+    let Some(view) = state_view else {
+        return dataspace_alias_target(dataspace_alias, dataspace_catalog);
+    };
+    let catalog = dataspace_catalog?;
+    crate::sns::active_dataspace_id_by_alias(
+        view.world(),
+        catalog,
+        dataspace_alias,
+        state_view_ledger_time_ms(view),
+    )
+    .or_else(|| dataspace_alias_target(dataspace_alias, Some(catalog)))
 }
 
-fn asset_definition_target_from_parts(
+fn dataspace_alias_target_with_world<W: WorldReadOnly>(
+    dataspace_alias: &str,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    let catalog = dataspace_catalog?;
+    crate::sns::active_dataspace_id_by_alias(world, catalog, dataspace_alias, 0)
+        .or_else(|| dataspace_alias_target(dataspace_alias, Some(catalog)))
+}
+
+fn state_view_ledger_time_ms(state_view: &StateView<'_>) -> u64 {
+    state_view
+        .latest_block()
+        .as_ref()
+        .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+fn musubi_package_dataspace_target_with_state(
+    package: &MusubiPackageId,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Option<DataSpaceId> {
+    musubi_namespace_dataspace_target_with_state(&package.namespace, dataspace_catalog, state_view)
+}
+
+fn musubi_package_dataspace_target_with_world<W: WorldReadOnly>(
+    package: &MusubiPackageId,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    musubi_namespace_dataspace_target_with_world(&package.namespace, dataspace_catalog, world)
+}
+
+fn asset_definition_target_from_parts_with_state(
     asset_definition_id: &AssetDefinitionId,
     alias: Option<&AssetDefinitionAlias>,
     balance_scope_policy: Option<AssetBalancePolicy>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
     let dataspace_alias = alias
         .map(|alias| alias.dataspace_segment().to_owned())
@@ -2119,12 +2218,29 @@ fn asset_definition_target_from_parts(
             .is_some_and(|policy| policy == AssetBalancePolicy::Global)
             .then_some(DataSpaceId::UNIVERSAL);
     };
-    if dataspace_alias.eq_ignore_ascii_case("universal") {
-        return Some(DataSpaceId::UNIVERSAL);
-    }
-    dataspace_catalog?
-        .by_alias(&dataspace_alias)
-        .map(|entry| entry.id)
+    dataspace_alias_target_with_state(&dataspace_alias, dataspace_catalog, state_view)
+}
+
+fn asset_definition_target_from_parts_with_world<W: WorldReadOnly>(
+    asset_definition_id: &AssetDefinitionId,
+    alias: Option<&AssetDefinitionAlias>,
+    balance_scope_policy: Option<AssetBalancePolicy>,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    let dataspace_alias = alias
+        .map(|alias| alias.dataspace_segment().to_owned())
+        .or_else(|| {
+            asset_definition_id
+                .try_domain()
+                .map(|domain| domain.dataspace().as_ref().to_owned())
+        });
+    let Some(dataspace_alias) = dataspace_alias else {
+        return balance_scope_policy
+            .is_some_and(|policy| policy == AssetBalancePolicy::Global)
+            .then_some(DataSpaceId::UNIVERSAL);
+    };
+    dataspace_alias_target_with_world(&dataspace_alias, dataspace_catalog, world)
 }
 
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
@@ -2303,11 +2419,12 @@ fn asset_definition_dataspace_target(
         .as_ref()
         .map(|(_, policy, _)| *policy)
         .or(balance_scope_policy);
-    asset_definition_target_from_parts(
+    asset_definition_target_from_parts_with_state(
         effective_id,
         effective_alias,
         effective_policy,
         dataspace_catalog,
+        state_view,
     )
 }
 
@@ -2334,11 +2451,12 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
         .as_ref()
         .map(|(_, policy, _)| *policy)
         .or(balance_scope_policy);
-    asset_definition_target_from_parts(
+    asset_definition_target_from_parts_with_world(
         effective_id,
         effective_alias,
         effective_policy,
         dataspace_catalog,
+        world,
     )
 }
 
@@ -2364,13 +2482,27 @@ fn asset_definition_for_routing<W: WorldReadOnly>(
         })
 }
 
-fn account_alias_permission_scope_dataspace_target(
+fn account_alias_permission_scope_dataspace_target_with_state(
     scope: &AccountAliasPermissionScope,
     dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
     match scope {
         AccountAliasPermissionScope::Domain(domain_id) => {
-            domain_dataspace_target(domain_id, dataspace_catalog)
+            domain_dataspace_target_with_state(domain_id, dataspace_catalog, state_view)
+        }
+        AccountAliasPermissionScope::Dataspace(dataspace_id) => Some(*dataspace_id),
+    }
+}
+
+fn account_alias_permission_scope_dataspace_target_with_world<W: WorldReadOnly>(
+    scope: &AccountAliasPermissionScope,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    match scope {
+        AccountAliasPermissionScope::Domain(domain_id) => {
+            domain_dataspace_target_with_world(domain_id, dataspace_catalog, world)
         }
         AccountAliasPermissionScope::Dataspace(dataspace_id) => Some(*dataspace_id),
     }
@@ -2502,14 +2634,22 @@ fn dataspace_scoped_permission_target(
                 .try_into_any_norito::<CanManageAccountAlias>()
                 .ok()
                 .and_then(|token| {
-                    account_alias_permission_scope_dataspace_target(&token.scope, dataspace_catalog)
+                    account_alias_permission_scope_dataspace_target_with_state(
+                        &token.scope,
+                        dataspace_catalog,
+                        state_view,
+                    )
                 }),
             "CanResolveAccountAlias" => permission
                 .payload()
                 .try_into_any_norito::<CanResolveAccountAlias>()
                 .ok()
                 .and_then(|token| {
-                    account_alias_permission_scope_dataspace_target(&token.scope, dataspace_catalog)
+                    account_alias_permission_scope_dataspace_target_with_state(
+                        &token.scope,
+                        dataspace_catalog,
+                        state_view,
+                    )
                 }),
             _ => None,
         };
@@ -2612,14 +2752,22 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .try_into_any_norito::<CanManageAccountAlias>()
                 .ok()
                 .and_then(|token| {
-                    account_alias_permission_scope_dataspace_target(&token.scope, dataspace_catalog)
+                    account_alias_permission_scope_dataspace_target_with_world(
+                        &token.scope,
+                        dataspace_catalog,
+                        world,
+                    )
                 }),
             "CanResolveAccountAlias" => permission
                 .payload()
                 .try_into_any_norito::<CanResolveAccountAlias>()
                 .ok()
                 .and_then(|token| {
-                    account_alias_permission_scope_dataspace_target(&token.scope, dataspace_catalog)
+                    account_alias_permission_scope_dataspace_target_with_world(
+                        &token.scope,
+                        dataspace_catalog,
+                        world,
+                    )
                 }),
             _ => None,
         };
@@ -2902,7 +3050,10 @@ pub fn resolve_routing_decision(
         .entries()
         .iter()
         .any(|entry| entry.id == decision.dataspace_id);
-    if !dataspace_known {
+    let default_public_lane_for_dynamic_dataspace = decision.dataspace_id != DataSpaceId::UNIVERSAL
+        && lane.id == LaneId::SINGLE
+        && lane.dataspace_id == DataSpaceId::UNIVERSAL;
+    if !dataspace_known && !default_public_lane_for_dynamic_dataspace {
         return Err(RoutingResolveError::UnknownDataspace {
             dataspace_id: decision.dataspace_id,
         });
@@ -4131,8 +4282,8 @@ mod tests {
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
-        IntoKeyValue,
-        account::AccountAliasDomain,
+        Encode, IntoKeyValue,
+        account::{AccountAddress, AccountAliasDomain},
         asset::{
             AssetDefinitionAlias, Mintable, NewAssetDefinition, definition::AssetConfidentialPolicy,
         },
@@ -4150,6 +4301,7 @@ mod tests {
         offline::{OfflineNoteIssueV2, OfflineNoteKeyCertificateV2},
         permission::Permission,
         prelude::*,
+        sns::{NameControllerV1, NameRecordV1},
         transaction::TransactionBuilder,
     };
     use iroha_executor_data_model::permission::{
@@ -4329,6 +4481,27 @@ mod tests {
             }
         }));
         DataSpaceCatalog::new(metadata).expect("valid dataspace catalog")
+    }
+
+    fn world_with_dynamic_dataspace(alias: &str, owner: &AccountId) -> crate::state::World {
+        let selector = crate::sns::selector_for_dataspace_alias(alias).expect("selector");
+        let address = AccountAddress::from_account_id(owner).expect("account address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        let mut world = crate::state::World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(crate::sns::record_storage_key(&selector), record.encode());
+        world
     }
 
     fn account_alias(literal: &str, catalog: &DataSpaceCatalog) -> AccountAlias {
@@ -5063,6 +5236,103 @@ mod tests {
             helper_err,
             RoutingResolveError::UnknownDataspace { .. }
         ));
+    }
+
+    #[test]
+    fn route_resolution_accepts_dynamic_dataspace_on_default_public_lane() {
+        let dynamic_dataspace = DataSpaceId::new(4_242);
+        let lane_catalog =
+            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
+        let catalog = dataspace_catalog(&[]);
+        let decision = RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace);
+
+        assert_eq!(
+            resolve_routing_decision(decision, &lane_catalog, &catalog),
+            Ok(decision)
+        );
+    }
+
+    #[test]
+    fn route_resolution_rejects_unknown_dataspace_on_non_default_universal_lane() {
+        let dynamic_dataspace = DataSpaceId::new(4_242);
+        let lane_catalog =
+            catalog_with_lane_dataspaces(&[(LaneId::new(2), DataSpaceId::UNIVERSAL)]);
+        let catalog = dataspace_catalog(&[]);
+        let err = resolve_routing_decision(
+            RoutingDecision::new(LaneId::new(2), dynamic_dataspace),
+            &lane_catalog,
+            &catalog,
+        )
+        .expect_err("non-default universal lanes must not accept unknown dataspaces");
+
+        assert!(matches!(
+            err,
+            RoutingResolveError::UnknownDataspace { dataspace_id }
+                if dataspace_id == dynamic_dataspace
+        ));
+    }
+
+    #[test]
+    fn route_resolution_rejects_dynamic_dataspace_on_dataspace_scoped_lane() {
+        let configured_dataspace = DataSpaceId::new(7);
+        let dynamic_dataspace = DataSpaceId::new(4_242);
+        let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, configured_dataspace)]);
+        let catalog = dataspace_catalog(&[(configured_dataspace, "configured")]);
+        let err = resolve_routing_decision(
+            RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace),
+            &lane_catalog,
+            &catalog,
+        )
+        .expect_err("dataspace-scoped lanes must not accept unknown dataspaces");
+
+        assert!(matches!(
+            err,
+            RoutingResolveError::UnknownDataspace { dataspace_id }
+                if dataspace_id == dynamic_dataspace
+        ));
+    }
+
+    #[test]
+    fn route_resolution_rejects_universal_when_catalog_omits_universal() {
+        let lane_catalog =
+            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
+        let catalog = DataSpaceCatalog::new(vec![iroha_data_model::nexus::DataSpaceMetadata {
+            id: DataSpaceId::new(7),
+            alias: "configured".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("catalog without universal");
+        let err = resolve_routing_decision(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            &lane_catalog,
+            &catalog,
+        )
+        .expect_err("reserved universal dataspace still needs a catalog entry");
+
+        assert!(matches!(
+            err,
+            RoutingResolveError::UnknownDataspace { dataspace_id }
+                if dataspace_id == DataSpaceId::UNIVERSAL
+        ));
+    }
+
+    #[test]
+    fn dataspace_alias_target_with_world_resolves_active_sns_dataspace() {
+        let (authority_id, _) = gen_account_in("wonderland");
+        let catalog = dataspace_catalog(&[]);
+        let world = world_with_dynamic_dataspace("boi", &authority_id);
+        let view = world.view();
+        let expected = crate::sns::dataspace_id_for_sns_alias("boi").expect("dynamic id");
+
+        assert_eq!(
+            dataspace_alias_target_with_world("boi", Some(&catalog), &view),
+            Some(expected)
+        );
+        assert_eq!(
+            dataspace_alias_target_with_world("missing", Some(&catalog), &view),
+            None
+        );
     }
 
     #[test]

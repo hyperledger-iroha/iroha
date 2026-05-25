@@ -900,18 +900,19 @@ fn resolve_contract_alias_on_chain(
         )));
     }
 
-    let nexus = app.state.nexus_snapshot();
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_str(trimmed)
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    contract_alias
-        .resolve_components(&nexus.dataspace_catalog)
-        .map_err(|err| {
+    let alias_dataspace_id = contract_alias_dataspace_id(app.as_ref(), &contract_alias)
+        .ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "unknown or inactive dataspace alias `{}` in contract alias",
+                    contract_alias.dataspace_segment()
+                )),
             ))
         })?;
 
@@ -927,16 +928,19 @@ fn resolve_contract_alias_on_chain(
         .contract_alias_bindings()
         .get(&contract_address)
         .cloned();
-    let dataspace_alias = contract_address
-        .dataspace_id()
-        .ok()
-        .and_then(|dataspace_id| nexus.dataspace_catalog.by_id(dataspace_id))
+    if contract_address.dataspace_id().ok() != Some(alias_dataspace_id) {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "contract alias dataspace does not match bound contract address".to_string(),
+            ),
+        )));
+    }
+    let nexus = app.state.nexus_snapshot();
+    let dataspace_alias = nexus
+        .dataspace_catalog
+        .by_id(alias_dataspace_id)
         .map(|entry| entry.alias.clone())
-        .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        })?;
+        .unwrap_or_else(|| contract_alias.dataspace_segment().to_owned());
 
     Ok(Some((
         contract_alias,
@@ -12089,6 +12093,18 @@ fn resolve_torii_route_for_dataspace_id(
         .filter(|lane| lane.dataspace_id == dataspace_id)
         .map(|lane| lane.id)
         .min()
+        .or_else(|| {
+            (dataspace_id != DataSpaceId::UNIVERSAL).then(|| {
+                nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .find(|lane| {
+                        lane.id == LaneId::SINGLE && lane.dataspace_id == DataSpaceId::UNIVERSAL
+                    })
+                    .map(|lane| lane.id)
+            })?
+        })
         .ok_or(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id })?;
 
     iroha_core::queue::resolve_routing_decision(
@@ -15004,15 +15020,30 @@ where
 
 #[cfg(feature = "app_api")]
 fn dataspace_id_for_alias_segment(app: &AppState, dataspace_alias: &str) -> Option<DataSpaceId> {
-    if dataspace_alias.eq_ignore_ascii_case("universal") {
-        return Some(DataSpaceId::UNIVERSAL);
-    }
-    app.state
-        .view()
-        .nexus()
-        .dataspace_catalog
-        .by_alias(dataspace_alias)
-        .map(|entry| entry.id)
+    let state_view = app.state.view();
+    let catalog = &state_view.nexus().dataspace_catalog;
+    iroha_core::sns::active_dataspace_id_by_alias(
+        state_view.world(),
+        catalog,
+        dataspace_alias,
+        torii_state_view_ledger_time_ms(&state_view),
+    )
+    .or_else(|| {
+        if dataspace_alias.eq_ignore_ascii_case("universal") {
+            Some(DataSpaceId::UNIVERSAL)
+        } else {
+            catalog.by_alias(dataspace_alias).map(|entry| entry.id)
+        }
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn torii_state_view_ledger_time_ms(state_view: &iroha_core::state::StateView<'_>) -> u64 {
+    state_view
+        .latest_block()
+        .as_ref()
+        .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 #[cfg(feature = "app_api")]
@@ -30866,7 +30897,7 @@ fn parse_pipeline_status_scope(raw: Option<&str>) -> Result<PipelineStatusReadSc
     let normalized = raw
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("local")
+        .unwrap_or("global")
         .to_ascii_lowercase();
     match normalized.as_str() {
         "local" => Ok(PipelineStatusReadScope::Local),
@@ -56718,6 +56749,43 @@ mod tests {
         },
     };
     use iroha_core::smartcontracts::Execute;
+
+    #[test]
+    fn parse_pipeline_status_scope_defaults_to_global_and_trims_case() {
+        assert_eq!(
+            parse_pipeline_status_scope(None).expect("default scope"),
+            PipelineStatusReadScope::Global
+        );
+        assert_eq!(
+            parse_pipeline_status_scope(Some("")).expect("blank scope"),
+            PipelineStatusReadScope::Global
+        );
+        assert_eq!(
+            parse_pipeline_status_scope(Some(" GLOBAL ")).expect("case-insensitive global"),
+            PipelineStatusReadScope::Global
+        );
+        assert_eq!(
+            parse_pipeline_status_scope(Some(" local ")).expect("case-insensitive local"),
+            PipelineStatusReadScope::Local
+        );
+    }
+
+    #[test]
+    fn parse_pipeline_status_scope_rejects_auto_and_injected_values() {
+        for raw in [
+            "auto",
+            "global&scope=local",
+            "local,global",
+            "../global",
+            "global\nscope=local",
+        ] {
+            let err = parse_pipeline_status_scope(Some(raw)).expect_err("invalid scope");
+            assert!(
+                format!("{err:?}").contains("expected local|global"),
+                "unexpected error for {raw:?}: {err:?}"
+            );
+        }
+    }
 
     fn bind_asset_alias_for_test(
         app: &SharedAppState,

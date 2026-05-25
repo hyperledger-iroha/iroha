@@ -978,6 +978,10 @@ impl DevCallArgs {
                 terminal_kind: status.terminal_kind,
                 attempts: status.attempts,
                 elapsed_ms: status.elapsed_ms,
+                block_height: status.block_height,
+                rejection_reason: status.rejection_reason,
+                scope: status.scope,
+                resolved_from: status.resolved_from,
                 r#final: status.r#final,
             })
         } else {
@@ -1885,7 +1889,16 @@ pub struct DeployArgs {
     pub authority: String,
     /// Stable on-chain contract alias (`name::domain.dataspace` or `name::dataspace`)
     #[arg(long)]
-    pub contract_alias: String,
+    pub contract_alias: Option<String>,
+    /// Contract alias name segment. Prefer this with --dataspace over precomposed --contract-alias.
+    #[arg(long, conflicts_with = "contract_alias")]
+    pub alias: Option<String>,
+    /// Contract alias domain segment.
+    #[arg(long, conflicts_with = "contract_alias")]
+    pub domain: Option<String>,
+    /// Contract alias dataspace segment.
+    #[arg(long, conflicts_with = "contract_alias")]
+    pub dataspace: Option<String>,
     /// Optional lease expiry timestamp (unix ms) for the alias binding
     #[arg(long)]
     pub lease_expiry_ms: Option<u64>,
@@ -1919,10 +1932,12 @@ impl Run for DeployArgs {
         } else {
             return Err(eyre!("either --code-file or --code-b64 must be provided"));
         };
-        let contract_alias: iroha::data_model::smart_contract::ContractAlias = self
-            .contract_alias
-            .parse()
-            .wrap_err("invalid --contract-alias")?;
+        let contract_alias = resolve_deploy_contract_alias(
+            self.contract_alias.as_deref(),
+            self.alias.as_deref(),
+            self.domain.as_deref(),
+            self.dataspace.as_deref(),
+        )?;
         let v = client.post_contract_deploy_json(
             &authority,
             &private_key,
@@ -1939,6 +1954,10 @@ impl Run for DeployArgs {
                 terminal_kind: status.terminal_kind,
                 attempts: status.attempts,
                 elapsed_ms: status.elapsed_ms,
+                block_height: status.block_height,
+                rejection_reason: status.rejection_reason,
+                scope: status.scope,
+                resolved_from: status.resolved_from,
                 r#final: status.r#final,
             })?;
         } else {
@@ -1946,6 +1965,35 @@ impl Run for DeployArgs {
         }
         Ok(())
     }
+}
+
+fn resolve_deploy_contract_alias(
+    contract_alias: Option<&str>,
+    alias: Option<&str>,
+    domain: Option<&str>,
+    dataspace: Option<&str>,
+) -> Result<iroha::data_model::smart_contract::ContractAlias> {
+    if let Some(contract_alias) = contract_alias.map(str::trim).filter(|value| !value.is_empty()) {
+        if alias.is_some() || domain.is_some() || dataspace.is_some() {
+            return Err(eyre!(
+                "use either --contract-alias or the explicit --alias/--domain/--dataspace fields"
+            ));
+        }
+        return contract_alias.parse().wrap_err("invalid --contract-alias");
+    }
+
+    let alias = alias
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| eyre!("provide --alias and --dataspace, or pass --contract-alias"))?;
+    let dataspace = dataspace
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| eyre!("provide --dataspace with --alias"))?;
+    let domain = domain.map(str::trim).filter(|value| !value.is_empty());
+    iroha::data_model::smart_contract::ContractAlias::from_components(alias, domain, dataspace)
+        .map_err(|err| eyre!(err.to_string()))
+        .wrap_err("invalid contract alias fields")
 }
 
 #[derive(clap::Args, Debug)]
@@ -2069,6 +2117,10 @@ struct ContractSubmissionWaitResponse {
     terminal_kind: String,
     attempts: u64,
     elapsed_ms: u64,
+    block_height: Option<u64>,
+    rejection_reason: Option<iroha::data_model::transaction::error::TransactionRejectionReason>,
+    scope: String,
+    resolved_from: String,
     r#final: iroha_torii_shared::PipelineTransactionStatusResponse,
 }
 
@@ -2187,6 +2239,10 @@ impl Run for CallArgs {
                 terminal_kind: status.terminal_kind,
                 attempts: status.attempts,
                 elapsed_ms: status.elapsed_ms,
+                block_height: status.block_height,
+                rejection_reason: status.rejection_reason,
+                scope: status.scope,
+                resolved_from: status.resolved_from,
                 r#final: status.r#final,
             })?;
         } else {
@@ -3853,6 +3909,90 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("deadbeef")
         );
+    }
+
+    #[test]
+    fn resolve_deploy_contract_alias_composes_explicit_fields() {
+        let alias = resolve_deploy_contract_alias(None, Some("router"), None, Some("is"))
+            .expect("domainless alias");
+        assert_eq!(alias.to_string(), "router::is");
+
+        let domain_alias =
+            resolve_deploy_contract_alias(None, Some("router"), Some("boi"), Some("is"))
+                .expect("domain-scoped alias");
+        assert_eq!(domain_alias.to_string(), "router::boi.is");
+    }
+
+    #[test]
+    fn resolve_deploy_contract_alias_trims_explicit_fields_and_blank_domain() {
+        let alias =
+            resolve_deploy_contract_alias(None, Some(" router "), Some("  "), Some(" is "))
+                .expect("trimmed explicit alias");
+
+        assert_eq!(alias.to_string(), "router::is");
+    }
+
+    #[test]
+    fn resolve_deploy_contract_alias_preserves_legacy_contract_alias() {
+        let alias = resolve_deploy_contract_alias(
+            Some("router::boi.is"),
+            None,
+            None,
+            None,
+        )
+        .expect("legacy alias");
+
+        assert_eq!(alias.to_string(), "router::boi.is");
+    }
+
+    #[test]
+    fn resolve_deploy_contract_alias_rejects_ambiguous_or_partial_inputs() {
+        let ambiguous = resolve_deploy_contract_alias(
+            Some("router::universal"),
+            Some("router"),
+            None,
+            Some("is"),
+        )
+        .expect_err("legacy and explicit fields conflict");
+        assert!(
+            ambiguous.to_string().contains("use either --contract-alias"),
+            "unexpected error: {ambiguous}"
+        );
+
+        let missing_dataspace =
+            resolve_deploy_contract_alias(None, Some("router"), None, None)
+                .expect_err("dataspace is required with alias");
+        assert!(
+            missing_dataspace
+                .to_string()
+                .contains("provide --dataspace with --alias"),
+            "unexpected error: {missing_dataspace}"
+        );
+
+        let missing_alias = resolve_deploy_contract_alias(None, None, None, Some("is"))
+            .expect_err("alias is required with dataspace");
+        assert!(
+            missing_alias
+                .to_string()
+                .contains("provide --alias and --dataspace"),
+            "unexpected error: {missing_alias}"
+        );
+    }
+
+    #[test]
+    fn resolve_deploy_contract_alias_rejects_adversarial_components() {
+        for (alias, domain, dataspace) in [
+            ("", None, "is"),
+            ("router::evil", None, "is"),
+            ("router", Some("bad domain"), "is"),
+            ("router", None, ""),
+            ("router", None, "bad dataspace"),
+        ] {
+            assert!(
+                resolve_deploy_contract_alias(None, Some(alias), domain, Some(dataspace)).is_err(),
+                "adversarial alias components should fail: alias={alias:?} domain={domain:?} dataspace={dataspace:?}"
+            );
+        }
     }
 
     #[test]

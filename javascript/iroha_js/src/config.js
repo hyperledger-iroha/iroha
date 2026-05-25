@@ -11,7 +11,7 @@ const DEFAULT_TORII_CLIENT_CONFIG = Object.freeze({
   defaultHeaders: Object.freeze({ Accept: "application/json" }),
   authToken: null,
   apiToken: null,
-  transactionStatusScope: "auto",
+  transactionStatusScope: "global",
   statusEndpoints: Object.freeze([]),
   retryTelemetryHook: null,
   insecureTransportTelemetryHook: null,

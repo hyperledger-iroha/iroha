@@ -69,13 +69,26 @@ pub mod isi {
     }
 
     fn dataspace_id_for_alias_segment(
-        catalog: &DataSpaceCatalog,
+        state_transaction: &StateTransaction<'_, '_>,
         dataspace_alias: &str,
     ) -> Option<DataSpaceId> {
-        if dataspace_alias.eq_ignore_ascii_case("universal") {
-            return Some(DataSpaceId::UNIVERSAL);
-        }
-        catalog.by_alias(dataspace_alias).map(|entry| entry.id)
+        crate::sns::active_dataspace_id_by_alias(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            dataspace_alias,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .or_else(|| {
+            if dataspace_alias.eq_ignore_ascii_case("universal") {
+                Some(DataSpaceId::UNIVERSAL)
+            } else {
+                state_transaction
+                    .nexus
+                    .dataspace_catalog
+                    .by_alias(dataspace_alias)
+                    .map(|entry| entry.id)
+            }
+        })
     }
 
     fn asset_definition_home_dataspace_for_alias(
@@ -93,9 +106,7 @@ pub mod isi {
             });
 
         match dataspace_alias {
-            Some(alias) => {
-                dataspace_id_for_alias_segment(&state_transaction.nexus.dataspace_catalog, &alias)
-            }
+            Some(alias) => dataspace_id_for_alias_segment(state_transaction, &alias),
             None if definition.balance_scope_policy() == AssetBalancePolicy::Global => {
                 Some(DataSpaceId::UNIVERSAL)
             }
@@ -390,22 +401,71 @@ pub mod isi {
         }
     }
 
+    fn resolve_contract_alias_components(
+        state_transaction: &StateTransaction<'_, '_>,
+        alias: &ContractAlias,
+    ) -> Result<(Name, Option<AccountAliasDomain>, DataSpaceId), InstructionExecutionError> {
+        let label_name = alias.name_segment().parse::<Name>().map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "contract alias name segment is invalid".into(),
+            ))
+        })?;
+        let domain = alias
+            .domain_segment()
+            .map(str::parse::<AccountAliasDomain>)
+            .map(|result| {
+                result.map_err(|_| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "contract alias domain segment is invalid".into(),
+                        ),
+                    )
+                })
+            })
+            .transpose()?;
+        let dataspace =
+            dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            format!(
+                                "unknown or inactive dataspace alias `{}` in contract alias",
+                                alias.dataspace_segment()
+                            )
+                            .into(),
+                        ),
+                    )
+                })?;
+        Ok((label_name, domain, dataspace))
+    }
+
+    fn account_alias_selector_for_contract_alias(
+        alias: &ContractAlias,
+    ) -> Result<iroha_data_model::sns::NameSelectorV1, InstructionExecutionError> {
+        let account_alias_literal = alias.domain_segment().map_or_else(
+            || format!("{}@{}", alias.name_segment(), alias.dataspace_segment()),
+            |domain| {
+                format!(
+                    "{}@{}.{}",
+                    alias.name_segment(),
+                    domain,
+                    alias.dataspace_segment()
+                )
+            },
+        );
+        Ok(iroha_data_model::sns::NameSelectorV1 {
+            version: iroha_data_model::sns::NameSelectorV1::VERSION,
+            suffix_id: crate::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+            label: account_alias_literal,
+        })
+    }
+
     fn ensure_account_alias_namespace_available_for_contract_alias(
         state_transaction: &StateTransaction<'_, '_>,
         alias: &ContractAlias,
     ) -> Result<(), InstructionExecutionError> {
-        let catalog = &state_transaction.nexus.dataspace_catalog;
-        let (label_name, domain, dataspace) = alias.resolve_components(catalog).map_err(|err| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                err.to_string().into(),
-            ))
-        })?;
-        let label = AccountAlias::new_in_dataspace(label_name, domain, dataspace);
-        let selector = crate::sns::selector_for_account_alias(&label, catalog).map_err(|err| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                err.to_string().into(),
-            ))
-        })?;
+        resolve_contract_alias_components(state_transaction, alias)?;
+        let selector = account_alias_selector_for_contract_alias(alias)?;
         let storage_key = crate::sns::record_storage_key(&selector);
         let Some(bytes) = state_transaction
             .world
@@ -2598,11 +2658,17 @@ pub mod isi {
                     err.to_string().into(),
                 ))
             })?;
-            if state_transaction
-                .nexus
-                .dataspace_catalog
-                .by_id(contract_dataspace_id)
-                .is_none()
+            let contract_deployed = state_transaction
+                .world
+                .contract_instances()
+                .get(&contract_address)
+                .is_some();
+            if !contract_deployed
+                && state_transaction
+                    .nexus
+                    .dataspace_catalog
+                    .by_id(contract_dataspace_id)
+                    .is_none()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "contract address dataspace is unknown".to_owned().into(),
@@ -2610,25 +2676,15 @@ pub mod isi {
                 .into());
             }
             if let Some(alias) = alias {
-                if state_transaction
-                    .world
-                    .contract_instances()
-                    .get(&contract_address)
-                    .is_none()
-                {
+                if !contract_deployed {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!("contract {contract_address} is not deployed").into(),
                     )
                     .into());
                 }
 
-                let (_, _, alias_dataspace_id) = alias
-                    .resolve_components(&state_transaction.nexus.dataspace_catalog)
-                    .map_err(|err| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(err.to_string().into()),
-                        )
-                    })?;
+                let (_, _, alias_dataspace_id) =
+                    resolve_contract_alias_components(state_transaction, &alias)?;
                 if alias_dataspace_id != contract_dataspace_id {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -3914,6 +3970,30 @@ mod tests {
                 }),
             );
         }
+    }
+
+    fn seed_dataspace_alias_lease(
+        tx: &mut StateTransaction<'_, '_>,
+        owner: &AccountId,
+        alias: &str,
+    ) {
+        let selector = crate::sns::selector_for_dataspace_alias(alias).expect("selector");
+        let address = AccountAddress::from_account_id(owner).expect("account address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        tx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
     }
 
     fn seed_domainful_alias_manage_permissions(
@@ -8789,6 +8869,73 @@ mod tests {
         assert_eq!(
             binding.grace_until_ms,
             Some(11_000 + 369u64 * 60 * 60 * 1_000)
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_allows_active_dynamic_sns_dataspace() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let dynamic_dataspace =
+            crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, dynamic_dataspace).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        seed_dataspace_alias_lease(&mut tx, &authority, "is");
+        tx.world.contract_instances.insert(
+            contract_address.clone(),
+            Hash::new("dynamic-contract-alias"),
+        );
+
+        let alias: ContractAlias = "router::is".parse().expect("alias");
+        SetContractAlias::bind(contract_address.clone(), alias.clone(), Some(11_000))
+            .execute(&authority, &mut tx)
+            .expect("bind dynamic dataspace contract alias");
+
+        assert_eq!(
+            tx.world.contract_aliases.get(&alias),
+            Some(&contract_address)
+        );
+        assert_eq!(
+            tx.world
+                .contract_alias_bindings
+                .get(&contract_address)
+                .map(|record| record.alias.clone()),
+            Some(alias)
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_rejects_unknown_dynamic_dataspace_alias() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let dynamic_dataspace = DataSpaceId::new(4_242);
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, dynamic_dataspace).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world.contract_instances.insert(
+            contract_address.clone(),
+            Hash::new("dynamic-contract-alias"),
+        );
+
+        let err = SetContractAlias::bind(
+            contract_address,
+            "router::missing".parse().expect("alias"),
+            Some(11_000),
+        )
+        .execute(&authority, &mut tx)
+        .expect_err("unknown dynamic dataspace must fail closed");
+
+        let err_debug = format!("{err:?}");
+        assert!(
+            err_debug.contains("unknown or inactive dataspace alias `missing`"),
+            "unexpected error: {err_debug}"
         );
     }
 

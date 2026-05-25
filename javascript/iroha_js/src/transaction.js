@@ -2600,7 +2600,10 @@ export async function submitSignedTransaction(
 
   let status;
   while (Date.now() <= deadline) {
-    status = await client.getTransactionStatus(hashHex, { allowShortHash: true });
+    status = await client.getTransactionStatus(hashHex, {
+      allowShortHash: true,
+      scope: options.scope ?? "global",
+    });
     if (isTerminalStatus(status)) {
       return { hash: hashHex, submission, status };
     }
@@ -2615,7 +2618,7 @@ export async function submitSignedTransaction(
  * Submit a raw transaction entrypoint payload and optionally wait for a terminal status.
  * @param {ToriiClient} client
  * @param {ArrayBufferView | ArrayBuffer | Buffer} transactionEntrypoint
- * @param {{ hashHex: string, waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number }} options
+ * @param {{ hashHex: string, waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number, scope?: "local" | "auto" | "global" }} options
  * @returns {Promise<{hash: string, submission: any, status?: any}>}
  */
 export async function submitTransactionEntrypoint(
@@ -2646,7 +2649,10 @@ export async function submitTransactionEntrypoint(
 
   let status;
   while (Date.now() <= deadline) {
-    status = await client.getTransactionStatus(hashHex, { allowShortHash: true });
+    status = await client.getTransactionStatus(hashHex, {
+      allowShortHash: true,
+      scope: options.scope ?? "global",
+    });
     if (isTerminalStatus(status)) {
       return { hash: hashHex.toLowerCase(), submission, status };
     }

@@ -8087,6 +8087,10 @@ fn wait_for_transaction_terminal_status_with_failover(
                         terminal_kind: kind.to_owned(),
                         attempts,
                         elapsed_ms: elapsed_ms_u64(start.elapsed()),
+                        block_height: response.status.block_height,
+                        rejection_reason: response.status.rejection_reason.clone(),
+                        scope: response.scope.clone(),
+                        resolved_from: response.resolved_from.clone(),
                         r#final: response,
                     },
                 ));

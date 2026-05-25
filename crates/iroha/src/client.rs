@@ -7129,6 +7129,14 @@ pub struct TransactionWaitOutcome {
     pub attempts: u64,
     /// Wall-clock time spent waiting, in milliseconds.
     pub elapsed_ms: u64,
+    /// Block height reported for the terminal status when available.
+    pub block_height: Option<u64>,
+    /// Rejection reason reported for rejected transactions.
+    pub rejection_reason: Option<iroha_data_model::transaction::error::TransactionRejectionReason>,
+    /// Status read scope used by Torii.
+    pub scope: String,
+    /// Source used by Torii to resolve the terminal status.
+    pub resolved_from: String,
     /// Final typed pipeline status payload returned by Torii.
     pub r#final: PipelineTransactionStatusResponse,
 }
@@ -8556,7 +8564,7 @@ impl Client {
         hash: HashOf<SignedTransaction>,
         _entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
-        match self.get_transaction_status_response_with_scope(hash, Some("local")) {
+        match self.get_transaction_status_response_with_scope(hash, Some("global")) {
             Ok(Some(payload)) => Ok(tx_confirmation_status_from_pipeline_response(&payload)),
             Ok(None) => Ok(None),
             Err(err) => Err(err),
@@ -8610,7 +8618,7 @@ impl Client {
         &self,
         hash: HashOf<SignedTransaction>,
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
-        self.get_transaction_status_response_with_scope(hash, None)
+        self.get_transaction_status_response_with_scope(hash, Some("global"))
     }
 
     /// GET `/v1/pipeline/transactions/status?scope=global` — typed pipeline status lookup
@@ -8687,7 +8695,7 @@ impl Client {
         loop {
             attempts = attempts.saturating_add(1);
             if let Some(response) =
-                self.get_transaction_status_response_with_scope(hash, Some("local"))?
+                self.get_transaction_status_response_with_scope(hash, Some("global"))?
             {
                 let kind = response.status.kind.as_str();
                 last_status = Some(kind.to_owned());
@@ -8698,11 +8706,19 @@ impl Client {
                     ));
                 }
                 if should_stop_waiting_on_pipeline_kind(kind, &stop_statuses) {
+                    let block_height = response.status.block_height;
+                    let rejection_reason = response.status.rejection_reason.clone();
+                    let scope = response.scope.clone();
+                    let resolved_from = response.resolved_from.clone();
                     return Ok(TransactionWaitOutcome {
                         hash: response.hash.clone(),
                         terminal_kind: kind.to_owned(),
                         attempts,
                         elapsed_ms: elapsed_ms_u64(start.elapsed()),
+                        block_height,
+                        rejection_reason,
+                        scope,
+                        resolved_from,
                         r#final: response,
                     });
                 }

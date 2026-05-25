@@ -21,7 +21,7 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     name::Name,
-    nexus::{DataSpaceCatalog, DataSpaceId},
+    nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
     permission::Permission,
     sns::{
         AuctionKind, FreezeNameRequestV1, GovernanceHookV1, NameAuctionStateV1, NameControllerV1,
@@ -70,6 +70,7 @@ pub fn quote_charge_amount_to_numeric(charge_amount_nanos: u64) -> Numeric {
 
 /// Reserved dataspace alias that must stay permanently defined.
 pub const RESERVED_UNIVERSAL_DATASPACE_ALIAS: &str = "universal";
+const SNS_DYNAMIC_DATASPACE_FAULT_TOLERANCE: u32 = 1;
 
 /// Errors returned by the ledger-backed SNS helpers.
 #[derive(Debug, Error)]
@@ -233,6 +234,21 @@ pub fn selector_for_domain(domain: &DomainId) -> Result<NameSelectorV1, NameSele
 /// Build the selector used for a canonical dataspace-alias lease record.
 pub fn selector_for_dataspace_alias(alias: &str) -> Result<NameSelectorV1, NameSelectorError> {
     NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias)
+}
+
+/// Derive the deterministic dataspace id for a SNS dataspace alias.
+///
+/// Configured Nexus dataspaces keep their explicit catalog ids. SNS-only
+/// dataspaces use the same stable name hash that keys the ledger record, so
+/// every peer can route a newly registered dataspace without an out-of-band
+/// catalog update.
+#[must_use]
+pub fn dataspace_id_for_sns_alias(alias: &str) -> Option<DataSpaceId> {
+    let selector = selector_for_dataspace_alias(alias.trim()).ok()?;
+    if selector.label == RESERVED_UNIVERSAL_DATASPACE_ALIAS {
+        return Some(DataSpaceId::UNIVERSAL);
+    }
+    Some(DataSpaceId::from_hash(&selector.name_hash()))
 }
 
 fn selector_for_account_alias_literal(
@@ -1867,6 +1883,48 @@ pub fn active_dataspace_owner_by_alias(
     active_owner_by_selector(world, &selector, now_ms)
 }
 
+/// Resolve an active dataspace alias to its canonical id.
+///
+/// The static Nexus catalog is treated as a bootstrap directory. Active SNS
+/// dataspace leases extend that directory at runtime.
+#[must_use]
+pub fn active_dataspace_id_by_alias(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &str,
+    now_ms: u64,
+) -> Option<DataSpaceId> {
+    let alias = alias.trim();
+    if let Some(entry) = catalog.by_alias(alias) {
+        return Some(entry.id);
+    }
+    active_dataspace_owner_by_alias(world, alias, now_ms)?;
+    dataspace_id_for_sns_alias(alias)
+}
+
+/// Resolve active dataspace metadata from the bootstrap catalog or SNS.
+#[must_use]
+pub fn active_dataspace_metadata_by_alias(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &str,
+    now_ms: u64,
+) -> Option<DataSpaceMetadata> {
+    let alias = alias.trim();
+    if let Some(entry) = catalog.by_alias(alias) {
+        return Some(entry.clone());
+    }
+    let selector = selector_for_dataspace_alias(alias).ok()?;
+    active_owner_by_selector(world, &selector, now_ms)?;
+    let id = DataSpaceId::from_hash(&selector.name_hash());
+    Some(DataSpaceMetadata {
+        id,
+        alias: selector.label,
+        description: Some("ledger-backed SNS dataspace".to_owned()),
+        fault_tolerance: SNS_DYNAMIC_DATASPACE_FAULT_TOLERANCE,
+    })
+}
+
 /// Resolve the active owner for the dataspace id using the current catalog alias.
 #[must_use]
 pub fn active_dataspace_owner_by_id(
@@ -1895,9 +1953,9 @@ mod tests {
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         sns::{
-            FreezeNameRequestV1, GovernanceHookV1, NameControllerV1, NameRecordV1, NameSelectorV1,
-            NameStatus, NameTombstoneStateV1, PaymentProofV1, RegisterNameRequestV1,
-            TransferNameRequestV1,
+            FreezeNameRequestV1, GovernanceHookV1, NameControllerV1, NameFrozenStateV1,
+            NameRecordV1, NameSelectorV1, NameStatus, NameTombstoneStateV1, PaymentProofV1,
+            RegisterNameRequestV1, TransferNameRequestV1,
         },
         transaction::TransactionBuilder,
     };
@@ -1977,6 +2035,37 @@ mod tests {
         }
     }
 
+    fn dataspace_record(
+        alias: &str,
+        owner: &AccountId,
+        expires_at_ms: u64,
+        grace_expires_at_ms: u64,
+        redemption_expires_at_ms: u64,
+    ) -> (NameSelectorV1, NameRecordV1) {
+        let selector = selector_for_dataspace_alias(alias).expect("selector");
+        let address = AccountAddress::from_account_id(owner).expect("account address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            10,
+            expires_at_ms,
+            grace_expires_at_ms,
+            redemption_expires_at_ms,
+            Metadata::default(),
+        );
+        (selector, record)
+    }
+
+    fn world_with_dataspace_record(selector: &NameSelectorV1, record: &NameRecordV1) -> World {
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(selector), record.encode());
+        world
+    }
+
     #[test]
     fn account_alias_selector_uses_canonical_literal() {
         let catalog = dataspace_catalog();
@@ -2046,6 +2135,148 @@ mod tests {
         assert_eq!(
             active_dataspace_owner_by_id(&view, &catalog, DataSpaceId::new(7), 50),
             Some(owner)
+        );
+    }
+
+    #[test]
+    fn active_dataspace_id_prefers_configured_catalog_entry() {
+        let catalog = dataspace_catalog();
+        let selector = selector_for_dataspace_alias("banking").expect("selector");
+        let owner = another_owner();
+        let address = AccountAddress::from_account_id(&owner).expect("account address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner,
+            vec![NameControllerV1::account(&address)],
+            0,
+            10,
+            110,
+            210,
+            310,
+            Metadata::default(),
+        );
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&selector), record.encode());
+
+        assert_eq!(
+            active_dataspace_id_by_alias(&world.view(), &catalog, "banking", 50),
+            Some(DataSpaceId::new(7))
+        );
+    }
+
+    #[test]
+    fn active_dataspace_id_derives_from_dynamic_sns_alias() {
+        let catalog = dataspace_catalog();
+        let selector = selector_for_dataspace_alias("boi").expect("selector");
+        let expected_id = DataSpaceId::from_hash(&selector.name_hash());
+        let owner = another_owner();
+        let address = AccountAddress::from_account_id(&owner).expect("account address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner,
+            vec![NameControllerV1::account(&address)],
+            0,
+            10,
+            110,
+            210,
+            310,
+            Metadata::default(),
+        );
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&selector), record.encode());
+
+        let view = world.view();
+        assert_eq!(
+            active_dataspace_id_by_alias(&view, &catalog, "boi", 50),
+            Some(expected_id)
+        );
+        let metadata =
+            active_dataspace_metadata_by_alias(&view, &catalog, "boi", 50).expect("metadata");
+        assert_eq!(metadata.id, expected_id);
+        assert_eq!(metadata.alias, "boi");
+    }
+
+    #[test]
+    fn dataspace_id_for_sns_alias_treats_universal_as_reserved_case_insensitively() {
+        assert_eq!(
+            dataspace_id_for_sns_alias("universal"),
+            Some(DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            dataspace_id_for_sns_alias(" Universal "),
+            Some(DataSpaceId::UNIVERSAL)
+        );
+    }
+
+    #[test]
+    fn dataspace_id_for_sns_alias_rejects_empty_or_invalid_aliases() {
+        assert_eq!(dataspace_id_for_sns_alias(""), None);
+        assert_eq!(dataspace_id_for_sns_alias("   "), None);
+        assert_eq!(dataspace_id_for_sns_alias("not valid"), None);
+    }
+
+    #[test]
+    fn active_dataspace_id_returns_none_for_unregistered_dynamic_alias() {
+        let catalog = dataspace_catalog();
+        let world = World::default();
+
+        assert_eq!(
+            active_dataspace_id_by_alias(&world.view(), &catalog, "boi", 50),
+            None
+        );
+        assert_eq!(
+            active_dataspace_metadata_by_alias(&world.view(), &catalog, "boi", 50),
+            None
+        );
+    }
+
+    #[test]
+    fn active_dataspace_id_ignores_expired_dynamic_alias() {
+        let catalog = dataspace_catalog();
+        let owner = another_owner();
+        let (selector, record) = dataspace_record("boi", &owner, 10, 20, 30);
+        let world = world_with_dataspace_record(&selector, &record);
+
+        assert_eq!(
+            active_dataspace_id_by_alias(&world.view(), &catalog, "boi", 10),
+            None
+        );
+        assert_eq!(
+            active_dataspace_owner_by_alias(&world.view(), "boi", 25),
+            None
+        );
+    }
+
+    #[test]
+    fn active_dataspace_id_ignores_frozen_or_tombstoned_dynamic_alias() {
+        let catalog = dataspace_catalog();
+        let owner = another_owner();
+        let (frozen_selector, mut frozen_record) =
+            dataspace_record("frozen-boi", &owner, 100, 200, 300);
+        frozen_record.status = NameStatus::Frozen(NameFrozenStateV1 {
+            reason: "governance hold".to_owned(),
+            until_ms: 90,
+        });
+        let frozen_world = world_with_dataspace_record(&frozen_selector, &frozen_record);
+        assert_eq!(
+            active_dataspace_id_by_alias(&frozen_world.view(), &catalog, "frozen-boi", 50),
+            None
+        );
+
+        let (tombstoned_selector, mut tombstoned_record) =
+            dataspace_record("retired-boi", &owner, 100, 200, 300);
+        tombstoned_record.status = NameStatus::Tombstoned(NameTombstoneStateV1 {
+            reason: "retired".to_owned(),
+        });
+        let tombstoned_world =
+            world_with_dataspace_record(&tombstoned_selector, &tombstoned_record);
+        assert_eq!(
+            active_dataspace_id_by_alias(&tombstoned_world.view(), &catalog, "retired-boi", 50),
+            None
         );
     }
 
