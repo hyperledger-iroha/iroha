@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for Torii MCP endpoints.
 
-use std::{net::SocketAddr, num::NonZeroU32, sync::Arc};
+use std::{collections::BTreeSet, net::SocketAddr, num::NonZeroU32, sync::Arc};
 
 use axum::{
     body::{Body, Bytes},
@@ -21,6 +21,7 @@ use norito::json::Value;
 use tower::ServiceExt as _;
 
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
+const TOOL_LIST_PAGE_LIMIT: usize = 32;
 
 fn build_router(cfg: iroha_config::parameters::actual::Root) -> axum::Router {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -147,9 +148,10 @@ async fn post_mcp_with_headers(
 
 async fn list_all_tool_names(app: &axum::Router) -> Vec<String> {
     let mut cursor: Option<String> = None;
+    let mut seen_cursors = BTreeSet::new();
     let mut names = Vec::new();
 
-    loop {
+    for _ in 0..TOOL_LIST_PAGE_LIMIT {
         let payload = if let Some(cursor_value) = cursor.clone() {
             norito::json!({
                 "jsonrpc": "2.0",
@@ -179,23 +181,22 @@ async fn list_all_tool_names(app: &axum::Router) -> Vec<String> {
             names.push(name.to_owned());
         }
 
-        cursor = result
-            .get("nextCursor")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        if cursor.is_none() {
-            break;
+        let next_cursor = checked_next_tools_cursor(result, cursor.as_deref(), &mut seen_cursors);
+        if next_cursor.is_none() {
+            return names;
         }
+        cursor = next_cursor;
     }
 
-    names
+    panic!("tools/list pagination exceeded {TOOL_LIST_PAGE_LIMIT} pages");
 }
 
 async fn list_all_tools(app: &axum::Router) -> Vec<Value> {
     let mut cursor: Option<String> = None;
+    let mut seen_cursors = BTreeSet::new();
     let mut tools = Vec::new();
 
-    loop {
+    for _ in 0..TOOL_LIST_PAGE_LIMIT {
         let payload = if let Some(cursor_value) = cursor.clone() {
             norito::json!({
                 "jsonrpc": "2.0",
@@ -222,22 +223,21 @@ async fn list_all_tools(app: &axum::Router) -> Vec<Value> {
             .expect("tools array");
         tools.extend(page.iter().cloned());
 
-        cursor = result
-            .get("nextCursor")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        if cursor.is_none() {
-            break;
+        let next_cursor = checked_next_tools_cursor(result, cursor.as_deref(), &mut seen_cursors);
+        if next_cursor.is_none() {
+            return tools;
         }
+        cursor = next_cursor;
     }
 
-    tools
+    panic!("tools/list pagination exceeded {TOOL_LIST_PAGE_LIMIT} pages");
 }
 
 async fn find_tool(app: &axum::Router, target_name: &str) -> Value {
     let mut cursor: Option<String> = None;
+    let mut seen_cursors = BTreeSet::new();
 
-    loop {
+    for _ in 0..TOOL_LIST_PAGE_LIMIT {
         let payload = if let Some(cursor_value) = cursor.clone() {
             norito::json!({
                 "jsonrpc": "2.0",
@@ -268,16 +268,37 @@ async fn find_tool(app: &axum::Router, target_name: &str) -> Value {
             }
         }
 
-        cursor = result
-            .get("nextCursor")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        if cursor.is_none() {
-            break;
+        let next_cursor = checked_next_tools_cursor(result, cursor.as_deref(), &mut seen_cursors);
+        if next_cursor.is_none() {
+            panic!("tool {target_name} not found in tools/list");
         }
+        cursor = next_cursor;
     }
 
-    panic!("tool {target_name} not found in tools/list");
+    panic!(
+        "tools/list pagination exceeded {TOOL_LIST_PAGE_LIMIT} pages while searching for {target_name}"
+    );
+}
+
+fn checked_next_tools_cursor(
+    result: &Value,
+    requested_cursor: Option<&str>,
+    seen_cursors: &mut BTreeSet<String>,
+) -> Option<String> {
+    let next_cursor = result
+        .get("nextCursor")
+        .and_then(Value::as_str)
+        .map(str::to_owned)?;
+    assert_ne!(
+        requested_cursor,
+        Some(next_cursor.as_str()),
+        "tools/list returned an unchanged nextCursor"
+    );
+    assert!(
+        seen_cursors.insert(next_cursor.clone()),
+        "tools/list repeated cursor {next_cursor}"
+    );
+    Some(next_cursor)
 }
 
 fn structured_content(response: &Value) -> &norito::json::Map {

@@ -126,11 +126,12 @@ available and can be used for smoke tests or feature gating.
 
 ## Maintenance & Sync
 Changes to the Rust Norito crate require corresponding updates in both
-`python/norito_py` and `java/norito_java`. CI and `cargo build -p norito` run
-`scripts/check_norito_bindings_sync.sh` (which forwards to a cross-platform Python helper) to enforce this by executing schema-hash
-and columnar parity checks across bindings. Trimmed source distributions that
-omit the sync script automatically skip the guard; no manual override is
-available.
+`python/norito_py`, `java/norito_java`, and `kotlin/core-jvm`. CI should run
+`scripts/check_norito_bindings_sync.sh` (which forwards to a cross-platform
+Python helper) to enforce this by executing schema-hash and columnar parity
+checks across bindings. Ordinary Cargo builds do not run the multi-SDK parity
+suite; set `NORITO_CHECK_BINDINGS_SYNC=1` for a local opt-in Cargo build guard
+or run the script directly.
 
 > Streaming manifests, control frames, and telemetry adapters now ship under
 > `NoritoStreaming`, while baseline RLE decoding and resume state helpers live

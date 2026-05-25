@@ -2,6 +2,33 @@
 
 Last updated: 2026-05-25
 
+## 2026-05-25 cargo test hang audit and timeout guards
+
+- `norito` no longer runs the Python/Java/Kotlin binding sync guard during
+  ordinary Rust builds. The guard is now opt-in via
+  `NORITO_CHECK_BINDINGS_SYNC=1`, while `NORITO_SKIP_BINDINGS_SYNC` still
+  bypasses it explicitly.
+- CLI smoke and Taikai policy tests now run spawned CLI processes with null
+  stdin and bounded waits, and the CLI Torii mock startup path times out instead
+  of blocking forever while reading the mock base URL.
+- ISO 20022 HTTP tests now use bounded accept/read/write waits and fail on EOF
+  while reading request headers instead of looping indefinitely.
+- MCP `tools/list` test helpers now reject repeated pagination cursors and cap
+  pagination depth, preventing infinite loops on server-side cursor regressions.
+- Updated Norito binding regeneration docs to describe the new opt-in sync
+  guard behavior.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_cli --test cli_smoke -- --list`
+  - `cargo check -p norito`
+  - `cargo test -p iroha_cli --test taikai_policy -- --list`
+  - `cargo test -p ivm --lib iso20022::tests::msg_send_http_without_override_sends_payload -- --exact --nocapture`
+  - `cargo test -p ivm --test iso20022_http msg_send_http_posts_payload_integration -- --exact --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints -- --list`
+- Full `cargo test` was not run because this audit specifically targeted the
+  hang sources without invoking the multi-hour workspace run.
+
 ## 2026-05-25 transaction status scope and dynamic SNS routing fixes
 
 - JavaScript transaction status polling now preserves the client-configured

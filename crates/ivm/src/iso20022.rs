@@ -3990,9 +3990,10 @@ fn set_http_sender_override(callback: Option<TestHttpSender>) {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::{BufRead, BufReader, ErrorKind, Read, Write},
-        net::TcpListener,
+        io::{self, BufRead, BufReader, ErrorKind, Read, Write},
+        net::{TcpListener, TcpStream},
         thread,
+        time::{Duration, Instant},
     };
 
     use ed25519_dalek::SigningKey;
@@ -4007,6 +4008,28 @@ mod tests {
         static HTTP_CALLS: RefCell<Vec<(String, u16, String, Vec<u8>)>> = const {
             RefCell::new(Vec::new())
         };
+    }
+
+    const HTTP_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+    const HTTP_TEST_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+    fn accept_http_test_stream(listener: &TcpListener) -> io::Result<TcpStream> {
+        let started = Instant::now();
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return Ok(stream),
+                Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                    if started.elapsed() >= HTTP_TEST_TIMEOUT {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "timed out waiting for ISO 20022 HTTP client",
+                        ));
+                    }
+                    thread::sleep(HTTP_TEST_POLL_INTERVAL);
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     // Helper to reset the thread-local between tests.
@@ -5881,15 +5904,19 @@ mod tests {
             Err(err) => panic!("listener: {err}"),
         };
         let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
         let handle = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_http_test_stream(&listener).unwrap();
+            stream.set_read_timeout(Some(HTTP_TEST_TIMEOUT)).unwrap();
+            stream.set_write_timeout(Some(HTTP_TEST_TIMEOUT)).unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut headers = String::new();
             let mut line = String::new();
             let mut content_len = 0usize;
             loop {
                 line.clear();
-                reader.read_line(&mut line).unwrap();
+                let read = reader.read_line(&mut line).unwrap();
+                assert_ne!(read, 0, "HTTP client closed before header terminator");
                 if line == "\r\n" {
                     break;
                 }

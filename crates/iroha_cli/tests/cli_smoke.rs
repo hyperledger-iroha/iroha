@@ -7,10 +7,14 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::{
+    ffi::OsStr,
     fs,
+    io::{self, Read},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, ExitStatus, Output, Stdio},
     sync::LazyLock,
+    thread,
+    time::{Duration, Instant},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -359,8 +363,124 @@ fn settlement_instruction(instruction: &InstructionBox) -> &SettlementInstructio
         .expect("settlement instruction payload")
 }
 
-fn command() -> Command {
-    let mut cmd = Command::new(cli_binary());
+const CLI_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const CLI_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+struct TestCommand {
+    inner: Command,
+    timeout: Duration,
+}
+
+impl TestCommand {
+    fn new(program: impl AsRef<OsStr>) -> Self {
+        Self {
+            inner: Command::new(program),
+            timeout: CLI_COMMAND_TIMEOUT,
+        }
+    }
+
+    fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.arg(arg);
+        self
+    }
+
+    fn args<I, S>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.inner.args(args);
+        self
+    }
+
+    fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
+        self.inner.current_dir(dir);
+        self
+    }
+
+    fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.env(key, value);
+        self
+    }
+
+    fn output(&mut self) -> io::Result<Output> {
+        self.inner
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = self.inner.spawn()?;
+        let stdout = child.stdout.take().map(read_pipe);
+        let stderr = child.stderr.take().map(read_pipe);
+        let Some(status) = wait_for_exit(&mut child, self.timeout)? else {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = join_pipe(stdout);
+            let _ = join_pipe(stderr);
+            return Err(command_timeout_error(&self.inner, self.timeout));
+        };
+
+        Ok(Output {
+            status,
+            stdout: join_pipe(stdout),
+            stderr: join_pipe(stderr),
+        })
+    }
+
+    fn status(&mut self) -> io::Result<ExitStatus> {
+        self.inner.stdin(Stdio::null());
+        let mut child = self.inner.spawn()?;
+        let Some(status) = wait_for_exit(&mut child, self.timeout)? else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(command_timeout_error(&self.inner, self.timeout));
+        };
+        Ok(status)
+    }
+}
+
+fn read_pipe<R>(mut pipe: R) -> thread::JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = pipe.read_to_end(&mut bytes);
+        bytes
+    })
+}
+
+fn join_pipe(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
+}
+
+fn wait_for_exit(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> io::Result<Option<ExitStatus>> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
+            return Ok(None);
+        }
+        thread::sleep(CLI_COMMAND_POLL_INTERVAL.min(timeout - elapsed));
+    }
+}
+
+fn command_timeout_error(command: &Command, timeout: Duration) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("command {command:?} timed out after {timeout:?}"),
+    )
+}
+
+fn command() -> TestCommand {
+    let mut cmd = TestCommand::new(cli_binary());
     // Disable ANSI color codes so the assertions can match plain text.
     cmd.env("NO_COLOR", "1");
     cmd.env("CLICOLOR", "0");
@@ -4949,7 +5069,7 @@ fn address_convert_outputs_i105_by_default() {
     let expected_i105 =
         encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105 string");
 
-    let output = Command::new(cli_binary())
+    let output = command()
         .args(["tools", "address", "convert", &expected_i105])
         .output()
         .expect("run address convert");
@@ -4983,7 +5103,7 @@ fn address_convert_json_summary_contains_i105_and_canonical_hex() {
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105 string");
     let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical");
 
-    let output = Command::new(cli_binary())
+    let output = command()
         .args([
             "tools",
             "address",
@@ -5051,7 +5171,7 @@ fn address_convert_rejects_domain_suffix() {
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
     let literal = format!("{i105}@{domain}");
 
-    let output = Command::new(cli_binary())
+    let output = command()
         .current_dir(workspace_root())
         .args([
             "--config",
@@ -5085,7 +5205,7 @@ fn address_convert_json_rejects_domain_suffix() {
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
     let literal = format!("{i105}@universal");
 
-    let output = Command::new(cli_binary())
+    let output = command()
         .current_dir(workspace_root())
         .args([
             "--config",
@@ -5121,7 +5241,7 @@ fn address_convert_json_summary_is_domainless() {
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
 
-    let output = Command::new(cli_binary())
+    let output = command()
         .current_dir(workspace_root())
         .args([
             "--config",
@@ -5167,7 +5287,7 @@ fn address_audit_reports_parsed_and_errors() {
     let contents = format!("# sample addresses\n{local_i105}\n{default_i105}\ninvalid-address\n");
     fs::write(&input_path, contents).expect("write addresses");
 
-    let output = Command::new(cli_binary())
+    let output = command()
         .current_dir(workspace_root())
         .args([
             "--config",
@@ -5219,7 +5339,7 @@ fn address_audit_rejects_domain_suffix() {
     let path = temp_dir.path().join("addresses.txt");
     fs::write(&path, format!("{literal}\n")).expect("write addresses");
 
-    let output = Command::new(cli_binary())
+    let output = command()
         .current_dir(workspace_root())
         .args([
             "--config",
@@ -5258,7 +5378,7 @@ fn address_audit_supports_csv_output() {
     let path = temp_dir.path().join("addresses.txt");
     fs::write(&path, format!("{i105}\ninvalid-address\n")).expect("write addresses");
 
-    let output = Command::new(cli_binary())
+    let output = command()
         .current_dir(workspace_root())
         .args([
             "--config",
@@ -5430,7 +5550,7 @@ fn space_directory_manifest_audit_bundle_cli() {
     let bundle_dir = temp_dir.path().join("bundle");
     let bundle_dir_str = bundle_dir.to_str().expect("bundle path utf-8").to_owned();
 
-    let status = Command::new(cli_binary())
+    let status = command()
         .args([
             "app",
             "space-directory",
@@ -5496,12 +5616,15 @@ mod torii_mock_support {
         net::{TcpListener, TcpStream},
         path::{Path, PathBuf},
         process::{Command, Stdio},
+        sync::mpsc,
         thread,
-        time::{SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     use norito::json;
     use url::Url;
+
+    const MOCK_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
     #[derive(Debug)]
     pub enum SpawnError {
@@ -5575,19 +5698,33 @@ mod torii_mock_support {
                     .stdout
                     .take()
                     .ok_or_else(|| SpawnError::Setup("missing stdout pipe".into()))?;
-                let mut reader = BufReader::new(stdout);
-                let mut line = String::new();
-                match reader.read_line(&mut line) {
-                    Ok(0) => {
+                let (line_tx, line_rx) = mpsc::channel();
+                let startup_thread = thread::spawn(move || {
+                    let mut reader = BufReader::new(stdout);
+                    let mut line = String::new();
+                    let result = reader.read_line(&mut line).map(|read| (read, line, reader));
+                    let _ = line_tx.send(result);
+                });
+                match line_rx.recv_timeout(MOCK_STARTUP_TIMEOUT) {
+                    Ok(Ok((0, _, _))) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = startup_thread.join();
                         last_error = Some(io::Error::new(
                             io::ErrorKind::UnexpectedEof,
                             "torii mock exited early",
                         ));
-                        let _ = child.wait();
                     }
-                    Ok(_) => {
-                        let base_url = parse_base_url(line.trim())?;
-                        let captured_url = base_url.clone();
+                    Ok(Ok((_, line, reader))) => {
+                        let _ = startup_thread.join();
+                        let base_url = match parse_base_url(line.trim()) {
+                            Ok(base_url) => base_url,
+                            Err(err) => {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                return Err(err);
+                            }
+                        };
                         let stdout_thread = thread::spawn(move || {
                             let mut reader = reader;
                             let mut sink = io::sink();
@@ -5595,14 +5732,31 @@ mod torii_mock_support {
                         });
                         return Ok(Self {
                             child,
-                            base_url: captured_url,
+                            base_url,
                             stdout_thread: Some(stdout_thread),
                         });
                     }
-                    Err(err) => {
+                    Ok(Err(err)) => {
+                        let _ = startup_thread.join();
                         let _ = child.kill();
                         let _ = child.wait();
                         return Err(SpawnError::Io(err));
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = startup_thread.join();
+                        return Err(SpawnError::Setup(format!(
+                            "torii mock did not announce base_url within {MOCK_STARTUP_TIMEOUT:?}"
+                        )));
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = startup_thread.join();
+                        return Err(SpawnError::Setup(
+                            "torii mock startup reader stopped before base_url".into(),
+                        ));
                     }
                 }
             }
