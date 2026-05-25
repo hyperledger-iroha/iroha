@@ -32115,6 +32115,13 @@ impl StateTransaction<'_, '_> {
         }
     }
 
+    fn trigger_host_args(&self, event: &EventBox, fallback: Json) -> Json {
+        match event {
+            EventBox::ExecuteTrigger(_) | EventBox::Data(_) => self.trigger_args_from_event(event),
+            _ => fallback,
+        }
+    }
+
     fn trigger_args_from_data_event(&self, event: &data_pre::DataEvent) -> Json {
         use data_pre::{AccountEvent, AssetEvent, DataEvent, DomainEvent};
 
@@ -32334,12 +32341,14 @@ impl StateTransaction<'_, '_> {
                     })?;
                 }
                 let contract_runtime_context = contract_call_context.runtime_context();
+                let host_args =
+                    self.trigger_host_args(&event, contract_call_context.args().clone());
                 let accounts = self.trigger_accounts_snapshot();
                 let mut host =
                     crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                         authority.clone(),
                         accounts,
-                        contract_call_context.args().clone(),
+                        host_args,
                     );
                 let current_block_time_ms =
                     u64::try_from(self._curr_block.creation_time().as_millis())
@@ -32455,9 +32464,10 @@ impl StateTransaction<'_, '_> {
                             ))
                         })?;
                     }
-                    let host_args = contract_call_context
+                    let fallback_args = contract_call_context
                         .as_ref()
                         .map_or(trigger_args, |context| context.args().clone());
+                    let host_args = self.trigger_host_args(&event, fallback_args);
                     let contract_runtime_context = contract_call_context
                         .as_ref()
                         .and_then(|context| context.runtime_context());
@@ -50185,6 +50195,120 @@ mod tests {
             eprintln!("after execute_called_trigger");
             stx.apply();
             state_block.commit().unwrap();
+        }
+    }
+
+    #[test]
+    fn execute_called_contract_call_trigger_uses_event_args_for_trigger_event() {
+        use iroha_data_model::{
+            events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+            smart_contract::ContractAddress,
+            transaction::{Executable, executable::ContractInvocation},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+        use iroha_test_samples::ALICE_KEYPAIR;
+        use ivm::KotodamaCompiler;
+
+        use crate::smartcontracts::code::{
+            activate_instance, register_code_bytes, register_manifest,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let src = r#"
+            seiyaku TriggerPayloadProbe {
+              kotoage fn native_by_call_settle() {
+                let ev = trigger_event();
+                let condition_code = ev.get_int(name("condition_code"));
+                assert(condition_code == 7, "condition_code mismatch");
+              }
+
+              register_trigger semantic_probe_decl {
+                call native_by_call_settle;
+                on execute trigger semantic_probe_decl;
+              }
+            }
+        "#;
+        let (code, mut manifest) = KotodamaCompiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile contract-call trigger probe");
+
+        let trigger_id: TriggerId = "contract_call_payload_probe".parse().unwrap();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &ALICE_ID,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 1;
+        });
+        {
+            let mut state_block = state.block(block1.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let code_hash =
+                register_code_bytes(&ALICE_ID, code, &mut stx).expect("register contract bytecode");
+            manifest.code_hash = Some(code_hash);
+            let manifest = manifest.signed(&ALICE_KEYPAIR);
+            register_manifest(&ALICE_ID, manifest, &mut stx).expect("register contract manifest");
+            activate_instance(&ALICE_ID, contract_address.clone(), code_hash, &mut stx)
+                .expect("activate contract instance");
+
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::ContractCall(ContractInvocation {
+                        contract_address: contract_address.clone(),
+                        entrypoint: "native_by_call_settle".to_owned(),
+                        payload: None,
+                    }),
+                    Repeats::Indefinitely,
+                    ALICE_ID.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(ALICE_ID.clone()),
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+        }
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 2;
+        });
+        {
+            let mut state_block = state.block(block2.as_ref().header());
+            let mut stx = state_block.transaction();
+            let event = ExecuteTriggerEvent {
+                trigger_id: trigger_id.clone(),
+                authority: ALICE_ID.clone(),
+                args: Json::from_string_unchecked(r#"{"condition_code":7}"#.to_owned()),
+            };
+            stx.execute_called_trigger(&trigger_id, &event)
+                .expect("contract-call trigger should read by-call args via trigger_event");
         }
     }
 

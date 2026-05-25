@@ -202,6 +202,8 @@ thread_local! {
     static FUNCTION_PARAMS: RefCell<HashMap<String, Vec<TypedParam>>> = RefCell::new(HashMap::new());
     static FUNCTION_SUMMARY: RefCell<HashMap<String, FunctionSummary>> = RefCell::new(HashMap::new());
     static CURRENT_FUNCTION_MODIFIERS: RefCell<Option<FunctionModifiers>> = const { RefCell::new(None) };
+    static CURRENT_FUNCTION_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
+    static TRIGGER_CALLBACK_FUNCTIONS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     static CURRENT_STATE_PARAM_NAMES: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
@@ -261,13 +263,18 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     let mut const_decls: Vec<ConstDecl> = Vec::new();
     let mut fn_returns: HashMap<String, Type> = HashMap::new();
     let mut fn_modifiers: HashMap<String, FunctionModifiers> = HashMap::new();
+    let mut trigger_callbacks: HashSet<String> = HashSet::new();
     let mut kotoba_entries: Vec<KotobaEntry> = Vec::new();
     FUNCTION_SUMMARY.with(|map| map.borrow_mut().clear());
     CONST_ENV.with(|env| env.borrow_mut().clear());
     FUNCTION_MODIFIERS.with(|env| env.borrow_mut().clear());
     FUNCTION_PARAMS.with(|env| env.borrow_mut().clear());
+    TRIGGER_CALLBACK_FUNCTIONS.with(|callbacks| callbacks.borrow_mut().clear());
     CURRENT_FUNCTION_MODIFIERS.with(|mods| {
         mods.borrow_mut().take();
+    });
+    CURRENT_FUNCTION_NAME.with(|name| {
+        name.borrow_mut().take();
     });
     CURRENT_STATE_PARAM_NAMES.with(|env| env.borrow_mut().clear());
     for item in &program.items {
@@ -294,7 +301,9 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
                 fn_returns.insert(f.name.clone(), ret);
                 fn_modifiers.insert(f.name.clone(), f.modifiers.clone());
             }
-            Item::Trigger(_) => {}
+            Item::Trigger(trigger) => {
+                trigger_callbacks.insert(trigger.call.entrypoint.clone());
+            }
             Item::Kotoba(block) => {
                 kotoba_entries.extend(block.entries.clone());
             }
@@ -323,6 +332,7 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     STATE_ENV.with(|env| env.replace(resolved_state));
     FUNCTION_RETURNS.with(|env| env.replace(fn_returns));
     FUNCTION_MODIFIERS.with(|env| env.replace(fn_modifiers.clone()));
+    TRIGGER_CALLBACK_FUNCTIONS.with(|callbacks| callbacks.replace(trigger_callbacks));
     let mut fn_params: HashMap<String, Vec<TypedParam>> = HashMap::new();
     for item in &program.items {
         let Item::Function(f) = item else { continue };
@@ -1756,11 +1766,16 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
     let expected_ret = parse_declared_type(&func.ret_ty)?;
     let previous_modifiers =
         CURRENT_FUNCTION_MODIFIERS.with(|mods| mods.borrow_mut().replace(func.modifiers.clone()));
+    let previous_name =
+        CURRENT_FUNCTION_NAME.with(|name| name.borrow_mut().replace(func.name.clone()));
     let previous_state_params = CURRENT_STATE_PARAM_NAMES
         .with(|env| std::mem::replace(&mut *env.borrow_mut(), state_param_names.clone()));
     let body_result = analyze_block(&func.body, &mut vars, expected_ret.as_ref(), 0);
     CURRENT_FUNCTION_MODIFIERS.with(|mods| {
         *mods.borrow_mut() = previous_modifiers;
+    });
+    CURRENT_FUNCTION_NAME.with(|name| {
+        *name.borrow_mut() = previous_name;
     });
     CURRENT_STATE_PARAM_NAMES.with(|env| {
         *env.borrow_mut() = previous_state_params;
@@ -1806,8 +1821,11 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
 fn reject_public_payload_helper(name: &str) -> Result<(), SemanticError> {
     let forbidden = CURRENT_FUNCTION_MODIFIERS.with(|mods| {
         mods.borrow().as_ref().is_some_and(|modifiers| {
+            if modifiers.kind == FunctionKind::View {
+                return true;
+            }
             modifiers.visibility == FunctionVisibility::Public
-                || modifiers.kind == FunctionKind::View
+                && !current_public_trigger_callback_allows_payload_helper()
         })
     });
     if forbidden {
@@ -1818,6 +1836,14 @@ fn reject_public_payload_helper(name: &str) -> Result<(), SemanticError> {
         });
     }
     Ok(())
+}
+
+fn current_public_trigger_callback_allows_payload_helper() -> bool {
+    let current = CURRENT_FUNCTION_NAME.with(|name| name.borrow().clone());
+    let Some(current) = current else {
+        return false;
+    };
+    TRIGGER_CALLBACK_FUNCTIONS.with(|callbacks| callbacks.borrow().contains(&current))
 }
 
 fn current_function_is_test() -> bool {
@@ -7952,6 +7978,28 @@ mod tests {
             "unexpected error message: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn trigger_callbacks_accept_trigger_event_payload_helpers() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                kotoage fn run() {
+                    let ev = trigger_event();
+                    let _escrow_id = ev.get_name(name("escrow_id"));
+                    let _condition_code = ev.get_int(name("condition_code"));
+                }
+
+                register_trigger wake {
+                    call run;
+                    on execute trigger wake;
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger callback trigger_event");
+        analyze(&program).expect("trigger callback trigger_event should type-check");
     }
 
     #[test]

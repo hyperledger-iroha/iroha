@@ -109,7 +109,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vec![InstructionRow {
                         index: 0,
                         kind: "Ivm".to_string(),
-                        json: format!("{{\"Ivm\":{{\"bytecode_size\":{}}}}}", bytecode.size_bytes()),
+                        json: format!(
+                            "{{\"Ivm\":{{\"bytecode_size\":{}}}}}",
+                            bytecode.size_bytes()
+                        ),
                     }]
                 }
                 Executable::IvmProved(proved) => {
@@ -163,7 +166,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if result_ok { "Committed" } else { "Rejected" },
                 true,
             )?;
-            write_optional_field(&mut out, "operation_type", summary.operation_type.as_deref(), true)?;
+            write_optional_field(
+                &mut out,
+                "operation_type",
+                summary.operation_type.as_deref(),
+                true,
+            )?;
             write_optional_field(&mut out, "from_account_id", summary.from.as_deref(), true)?;
             write_optional_field(&mut out, "to_account_id", summary.to.as_deref(), true)?;
             write_optional_field(&mut out, "amount", summary.amount.as_deref(), true)?;
@@ -348,11 +356,23 @@ fn instruction_kind(instruction: &InstructionBox) -> &'static str {
         "Burn"
     } else if instruction.as_any().downcast_ref::<RegisterBox>().is_some() {
         "Register"
-    } else if instruction.as_any().downcast_ref::<UnregisterBox>().is_some() {
+    } else if instruction
+        .as_any()
+        .downcast_ref::<UnregisterBox>()
+        .is_some()
+    {
         "Unregister"
-    } else if instruction.as_any().downcast_ref::<SetKeyValueBox>().is_some() {
+    } else if instruction
+        .as_any()
+        .downcast_ref::<SetKeyValueBox>()
+        .is_some()
+    {
         "SetKeyValue"
-    } else if instruction.as_any().downcast_ref::<RemoveKeyValueBox>().is_some() {
+    } else if instruction
+        .as_any()
+        .downcast_ref::<RemoveKeyValueBox>()
+        .is_some()
+    {
         "RemoveKeyValue"
     } else if instruction.as_any().downcast_ref::<GrantBox>().is_some() {
         "Grant"
