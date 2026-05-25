@@ -68,7 +68,7 @@ use crate::{
         extract_authority_domains as extract_directory_authority_domains,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
-    queue::evaluate_policy_with_catalog_and_world,
+    queue::evaluate_policy_with_catalog_and_world_at,
     smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -3574,12 +3574,13 @@ impl StateBlock<'_> {
             Some(decision) => decision,
             None => {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
-                evaluate_policy_with_catalog_and_world(
+                evaluate_policy_with_catalog_and_world_at(
                     &state_transaction.nexus.routing_policy,
                     &state_transaction.nexus.lane_catalog,
                     &state_transaction.nexus.dataspace_catalog,
                     &accepted,
                     &state_transaction.world,
+                    state_transaction.block_unix_timestamp_ms(),
                 )
                 .map_err(|err| {
                     TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(

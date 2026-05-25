@@ -500,17 +500,59 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
     tx: &AcceptedTransaction<'_>,
     world: &W,
 ) -> Result<RoutingDecision, RoutingResolveError> {
+    evaluate_policy_with_catalog_and_world_at_opt(
+        policy,
+        lane_catalog,
+        dataspace_catalog,
+        tx,
+        world,
+        None,
+    )
+}
+
+/// Evaluate the routing policy against catalogs and the current world at a deterministic ledger time.
+pub fn evaluate_policy_with_catalog_and_world_at<W: WorldReadOnly>(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    tx: &AcceptedTransaction<'_>,
+    world: &W,
+    ledger_time_ms: u64,
+) -> Result<RoutingDecision, RoutingResolveError> {
+    evaluate_policy_with_catalog_and_world_at_opt(
+        policy,
+        lane_catalog,
+        dataspace_catalog,
+        tx,
+        world,
+        Some(ledger_time_ms),
+    )
+}
+
+fn evaluate_policy_with_catalog_and_world_at_opt<W: WorldReadOnly>(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    tx: &AcceptedTransaction<'_>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Result<RoutingDecision, RoutingResolveError> {
     if let Some(decision) = dataspace_scoped_permission_routing_decision_with_world(
         tx,
         Some(lane_catalog),
         Some(dataspace_catalog),
         world,
+        ledger_time_ms,
     )? {
         return Ok(decision);
     }
-    if let Some(decision) =
-        settlement_routing_decision_with_world(tx, lane_catalog, dataspace_catalog, world)?
-    {
+    if let Some(decision) = settlement_routing_decision_with_world(
+        tx,
+        lane_catalog,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )? {
         return Ok(decision);
     }
     if let Some(account_id) = account_permission_holder_routing_target(tx) {
@@ -520,14 +562,19 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
             dataspace_catalog,
             account_id,
             world,
+            ledger_time_ms,
         );
     }
-    let mut target =
-        transaction_dataspace_routing_target_info_with_world(tx, Some(dataspace_catalog), world)?;
+    let mut target = transaction_dataspace_routing_target_info_with_world(
+        tx,
+        Some(dataspace_catalog),
+        world,
+        ledger_time_ms,
+    )?;
     let matched_rule = policy
         .rules
         .iter()
-        .find(|rule| rule_matches_with_world(rule, tx, dataspace_catalog, world));
+        .find(|rule| rule_matches_with_world(rule, tx, dataspace_catalog, world, ledger_time_ms));
     apply_authority_dataspace_target(
         &mut target,
         authority_dataspace_target_with_world(Some(world), tx),
@@ -551,17 +598,59 @@ pub fn evaluate_policy_plan_with_catalog_and_world<W: WorldReadOnly>(
     tx: &AcceptedTransaction<'_>,
     world: &W,
 ) -> Result<RoutingPlan, RoutingResolveError> {
+    evaluate_policy_plan_with_catalog_and_world_at_opt(
+        policy,
+        lane_catalog,
+        dataspace_catalog,
+        tx,
+        world,
+        None,
+    )
+}
+
+/// Evaluate the routing policy and resolve the full plan at a deterministic ledger time.
+pub fn evaluate_policy_plan_with_catalog_and_world_at<W: WorldReadOnly>(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    tx: &AcceptedTransaction<'_>,
+    world: &W,
+    ledger_time_ms: u64,
+) -> Result<RoutingPlan, RoutingResolveError> {
+    evaluate_policy_plan_with_catalog_and_world_at_opt(
+        policy,
+        lane_catalog,
+        dataspace_catalog,
+        tx,
+        world,
+        Some(ledger_time_ms),
+    )
+}
+
+fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    tx: &AcceptedTransaction<'_>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Result<RoutingPlan, RoutingResolveError> {
     if let Some(decision) = dataspace_scoped_permission_routing_decision_with_world(
         tx,
         Some(lane_catalog),
         Some(dataspace_catalog),
         world,
+        ledger_time_ms,
     )? {
         return Ok(RoutingPlan::single(decision));
     }
-    if let Some(decision) =
-        settlement_routing_decision_with_world(tx, lane_catalog, dataspace_catalog, world)?
-    {
+    if let Some(decision) = settlement_routing_decision_with_world(
+        tx,
+        lane_catalog,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )? {
         return Ok(RoutingPlan::single(decision));
     }
     if let Some(account_id) = account_permission_holder_routing_target(tx) {
@@ -571,15 +660,20 @@ pub fn evaluate_policy_plan_with_catalog_and_world<W: WorldReadOnly>(
             dataspace_catalog,
             account_id,
             world,
+            ledger_time_ms,
         )
         .map(RoutingPlan::single);
     }
-    let mut target =
-        transaction_dataspace_routing_target_info_with_world(tx, Some(dataspace_catalog), world)?;
+    let mut target = transaction_dataspace_routing_target_info_with_world(
+        tx,
+        Some(dataspace_catalog),
+        world,
+        ledger_time_ms,
+    )?;
     let matched_rule = policy
         .rules
         .iter()
-        .find(|rule| rule_matches_with_world(rule, tx, dataspace_catalog, world));
+        .find(|rule| rule_matches_with_world(rule, tx, dataspace_catalog, world, ledger_time_ms));
     apply_authority_dataspace_target(
         &mut target,
         authority_dataspace_target_with_world(Some(world), tx),
@@ -663,6 +757,7 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
     lane_catalog: Option<&LaneCatalog>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
     let mut target_dataspace: Option<DataSpaceId> = None;
     let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
@@ -679,6 +774,7 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
                         &**instruction,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     ),
                     reject_cross_dataspace,
                     NativeDataspaceConflict::Permission,
@@ -702,6 +798,7 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
                         &**instruction,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     ),
                     reject_cross_dataspace,
                     NativeDataspaceConflict::Permission,
@@ -749,10 +846,14 @@ fn settlement_routing_decision_with_world<W: WorldReadOnly>(
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
-    let Some(dataspace_id) =
-        settlement_transaction_dataspace_target_with_world(tx, Some(dataspace_catalog), world)
-    else {
+    let Some(dataspace_id) = settlement_transaction_dataspace_target_with_world(
+        tx,
+        Some(dataspace_catalog),
+        world,
+        ledger_time_ms,
+    ) else {
         return Ok(None);
     };
     canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
@@ -871,6 +972,7 @@ fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     tx: &AcceptedTransaction<'_>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let Some(executable) = transaction_executable(tx) else {
         return None;
@@ -886,6 +988,7 @@ fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                         &**instruction,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     ),
                 );
             }
@@ -899,6 +1002,7 @@ fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                         &**instruction,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     ),
                 );
             }
@@ -997,6 +1101,7 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
 
@@ -1008,6 +1113,7 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                 None,
                 dataspace_catalog,
                 world,
+                ledger_time_ms,
             ),
             asset_definition_dataspace_target_with_world(
                 dvp.payment_leg().asset_definition_id(),
@@ -1015,6 +1121,7 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                 None,
                 dataspace_catalog,
                 world,
+                ledger_time_ms,
             ),
         );
     }
@@ -1027,6 +1134,7 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                 None,
                 dataspace_catalog,
                 world,
+                ledger_time_ms,
             ),
             asset_definition_dataspace_target_with_world(
                 pvp.counter_leg().asset_definition_id(),
@@ -1034,6 +1142,7 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                 None,
                 dataspace_catalog,
                 world,
+                ledger_time_ms,
             ),
         );
     }
@@ -1047,6 +1156,7 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                     None,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                 ),
                 asset_definition_dataspace_target_with_world(
                     dvp.payment_leg().asset_definition_id(),
@@ -1054,6 +1164,7 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                     None,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                 ),
             ),
             SettlementInstructionBox::Pvp(pvp) => settlement_pair_dataspace_target(
@@ -1063,6 +1174,7 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                     None,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                 ),
                 asset_definition_dataspace_target_with_world(
                     pvp.counter_leg().asset_definition_id(),
@@ -1070,6 +1182,7 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
                     None,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                 ),
             ),
         };
@@ -1288,6 +1401,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
     tx: &AcceptedTransaction<'_>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Result<TransactionDataspaceTarget, RoutingResolveError> {
     let Some(executable) = transaction_executable(tx) else {
         return Ok(TransactionDataspaceTarget::default());
@@ -1304,6 +1418,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
                         &**instruction,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     ),
                     reject_cross_dataspace,
                 )?;
@@ -1318,6 +1433,7 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
                         &**instruction,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     ),
                     reject_cross_dataspace,
                 )?;
@@ -1398,6 +1514,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             instruction,
             Some(dataspace_catalog),
             world,
+            None,
         ),
     );
 
@@ -1412,6 +1529,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     None,
                     Some(dataspace_catalog),
                     world,
+                    None,
                 ),
             );
             insert_native_amx_participant(
@@ -1440,6 +1558,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     None,
                     Some(dataspace_catalog),
                     world,
+                    None,
                 ),
             );
             insert_native_amx_participant(
@@ -1464,6 +1583,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     None,
                     Some(dataspace_catalog),
                     world,
+                    None,
                 ),
             );
             insert_native_amx_participant(
@@ -1484,6 +1604,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             instruction,
             Some(dataspace_catalog),
             world,
+            None,
         ),
     );
 }
@@ -1820,14 +1941,18 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
 
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
         return match register {
-            RegisterBox::Domain(register) => {
-                domain_dataspace_target_with_world(&register.object.id, dataspace_catalog, world)
-            }
+            RegisterBox::Domain(register) => domain_dataspace_target_with_world(
+                &register.object.id,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            ),
             RegisterBox::Account(register) => {
                 register.object.label.as_ref().map(|alias| alias.dataspace)
             }
@@ -1837,6 +1962,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 Some(register.object.balance_scope_policy),
                 dataspace_catalog,
                 world,
+                ledger_time_ms,
             ),
             RegisterBox::Peer(_)
             | RegisterBox::Nft(_)
@@ -1847,9 +1973,12 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
 
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
         return match unregister {
-            UnregisterBox::Domain(unregister) => {
-                domain_dataspace_target_with_world(&unregister.object, dataspace_catalog, world)
-            }
+            UnregisterBox::Domain(unregister) => domain_dataspace_target_with_world(
+                &unregister.object,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            ),
             UnregisterBox::AssetDefinition(unregister) => {
                 asset_definition_dataspace_target_with_world(
                     &unregister.object,
@@ -1857,6 +1986,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                     None,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                 )
             }
             UnregisterBox::Peer(_)
@@ -1869,9 +1999,12 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
 
     if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
         return match set_key_value {
-            SetKeyValueBox::Domain(set) => {
-                domain_dataspace_target_with_world(&set.object, dataspace_catalog, world)
-            }
+            SetKeyValueBox::Domain(set) => domain_dataspace_target_with_world(
+                &set.object,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            ),
             SetKeyValueBox::Account(set) => account_dataspace_target(Some(world), &set.object),
             SetKeyValueBox::AssetDefinition(set) => asset_definition_dataspace_target_with_world(
                 &set.object,
@@ -1879,6 +2012,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 None,
                 dataspace_catalog,
                 world,
+                ledger_time_ms,
             ),
             SetKeyValueBox::Nft(_) | SetKeyValueBox::Trigger(_) => None,
         };
@@ -1886,9 +2020,12 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
 
     if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
         return match remove_key_value {
-            RemoveKeyValueBox::Domain(remove) => {
-                domain_dataspace_target_with_world(&remove.object, dataspace_catalog, world)
-            }
+            RemoveKeyValueBox::Domain(remove) => domain_dataspace_target_with_world(
+                &remove.object,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            ),
             RemoveKeyValueBox::Account(remove) => {
                 account_dataspace_target(Some(world), &remove.object)
             }
@@ -1899,6 +2036,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                     None,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                 )
             }
             RemoveKeyValueBox::Nft(_) | RemoveKeyValueBox::Trigger(_) => None,
@@ -1907,15 +2045,19 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
 
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         return match transfer {
-            TransferBox::Domain(transfer) => {
-                domain_dataspace_target_with_world(&transfer.object, dataspace_catalog, world)
-            }
+            TransferBox::Domain(transfer) => domain_dataspace_target_with_world(
+                &transfer.object,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            ),
             TransferBox::AssetDefinition(transfer) => asset_definition_dataspace_target_with_world(
                 &transfer.object,
                 None,
                 None,
                 dataspace_catalog,
                 world,
+                ledger_time_ms,
             ),
             TransferBox::Asset(transfer) => asset_balance_operation_dataspace_target(
                 asset_definition_dataspace_target_with_world(
@@ -1924,6 +2066,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                     None,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                 ),
                 asset_id_explicit_dataspace_target(&transfer.source),
                 [
@@ -1944,6 +2087,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                     None,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                 ),
                 asset_id_explicit_dataspace_target(&mint.destination),
                 [account_dataspace_target(
@@ -1964,6 +2108,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                     None,
                     dataspace_catalog,
                     world,
+                    ledger_time_ms,
                 ),
                 asset_id_explicit_dataspace_target(&burn.destination),
                 [account_dataspace_target(
@@ -1982,6 +2127,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             None,
             dataspace_catalog,
             world,
+            ledger_time_ms,
         );
     }
 
@@ -1990,6 +2136,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             &publish.release.package.package,
             dataspace_catalog,
             world,
+            ledger_time_ms,
         );
     }
 
@@ -1998,6 +2145,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             &yank.package.package,
             dataspace_catalog,
             world,
+            ledger_time_ms,
         );
     }
 
@@ -2006,6 +2154,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             &set_alias.alias.target,
             dataspace_catalog,
             world,
+            ledger_time_ms,
         );
     }
 
@@ -2014,6 +2163,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             &assert_release.package,
             dataspace_catalog,
             world,
+            ledger_time_ms,
         );
     }
 
@@ -2036,6 +2186,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             None,
             dataspace_catalog,
             world,
+            ledger_time_ms,
         );
     }
 
@@ -2111,8 +2262,14 @@ fn domain_dataspace_target_with_world<W: WorldReadOnly>(
     domain_id: &DomainId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
-    dataspace_alias_target_with_world(domain_id.dataspace().as_ref(), dataspace_catalog, world)
+    dataspace_alias_target_with_world(
+        domain_id.dataspace().as_ref(),
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )
 }
 
 fn contract_address_dataspace_target(contract_address: &ContractAddress) -> Option<DataSpaceId> {
@@ -2131,8 +2288,14 @@ fn musubi_namespace_dataspace_target_with_world<W: WorldReadOnly>(
     namespace: &MusubiNamespace,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
-    dataspace_alias_target_with_world(namespace.dataspace_segment(), dataspace_catalog, world)
+    dataspace_alias_target_with_world(
+        namespace.dataspace_segment(),
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )
 }
 
 fn dataspace_alias_target(
@@ -2169,9 +2332,13 @@ fn dataspace_alias_target_with_world<W: WorldReadOnly>(
     dataspace_alias: &str,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let catalog = dataspace_catalog?;
-    crate::sns::active_dataspace_id_by_alias(world, catalog, dataspace_alias, 0)
+    ledger_time_ms
+        .and_then(|now_ms| {
+            crate::sns::active_dataspace_id_by_alias(world, catalog, dataspace_alias, now_ms)
+        })
         .or_else(|| dataspace_alias_target(dataspace_alias, Some(catalog)))
 }
 
@@ -2195,8 +2362,14 @@ fn musubi_package_dataspace_target_with_world<W: WorldReadOnly>(
     package: &MusubiPackageId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
-    musubi_namespace_dataspace_target_with_world(&package.namespace, dataspace_catalog, world)
+    musubi_namespace_dataspace_target_with_world(
+        &package.namespace,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )
 }
 
 fn asset_definition_target_from_parts_with_state(
@@ -2227,6 +2400,7 @@ fn asset_definition_target_from_parts_with_world<W: WorldReadOnly>(
     balance_scope_policy: Option<AssetBalancePolicy>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let dataspace_alias = alias
         .map(|alias| alias.dataspace_segment().to_owned())
@@ -2240,7 +2414,7 @@ fn asset_definition_target_from_parts_with_world<W: WorldReadOnly>(
             .is_some_and(|policy| policy == AssetBalancePolicy::Global)
             .then_some(DataSpaceId::UNIVERSAL);
     };
-    dataspace_alias_target_with_world(&dataspace_alias, dataspace_catalog, world)
+    dataspace_alias_target_with_world(&dataspace_alias, dataspace_catalog, world, ledger_time_ms)
 }
 
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
@@ -2366,6 +2540,7 @@ fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
 
@@ -2375,6 +2550,7 @@ fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 &grant.object,
                 dataspace_catalog,
                 world,
+                ledger_time_ms,
             ),
             GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
         };
@@ -2386,6 +2562,7 @@ fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 &revoke.object,
                 dataspace_catalog,
                 world,
+                ledger_time_ms,
             ),
             RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
         };
@@ -2434,6 +2611,7 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
     balance_scope_policy: Option<AssetBalancePolicy>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let resolved = asset_definition_for_routing(world, asset_definition_id).map(|definition| {
         let balance_scope_policy = definition.balance_scope_policy();
@@ -2457,6 +2635,7 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
         effective_policy,
         dataspace_catalog,
         world,
+        ledger_time_ms,
     )
 }
 
@@ -2499,10 +2678,11 @@ fn account_alias_permission_scope_dataspace_target_with_world<W: WorldReadOnly>(
     scope: &AccountAliasPermissionScope,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     match scope {
         AccountAliasPermissionScope::Domain(domain_id) => {
-            domain_dataspace_target_with_world(domain_id, dataspace_catalog, world)
+            domain_dataspace_target_with_world(domain_id, dataspace_catalog, world, ledger_time_ms)
         }
         AccountAliasPermissionScope::Dataspace(dataspace_id) => Some(*dataspace_id),
     }
@@ -2666,6 +2846,7 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
     permission: &Permission,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     if permission.name() != "CanPublishSpaceDirectoryManifest" {
         return match permission.name() {
@@ -2680,6 +2861,7 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         None,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     )
                 }),
             "CanBurnAssetWithDefinition" => permission
@@ -2693,6 +2875,7 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         None,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     )
                 }),
             "CanTransferAssetWithDefinition" => permission
@@ -2706,6 +2889,7 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         None,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     )
                 }),
             "CanModifyAssetMetadataWithDefinition" => permission
@@ -2719,6 +2903,7 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         None,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     )
                 }),
             "CanUnregisterAssetDefinition" => permission
@@ -2732,6 +2917,7 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         None,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     )
                 }),
             "CanModifyAssetDefinitionMetadata" => permission
@@ -2745,6 +2931,7 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         None,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     )
                 }),
             "CanManageAccountAlias" => permission
@@ -2756,6 +2943,7 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         &token.scope,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     )
                 }),
             "CanResolveAccountAlias" => permission
@@ -2767,6 +2955,7 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         &token.scope,
                         dataspace_catalog,
                         world,
+                        ledger_time_ms,
                     )
                 }),
             _ => None,
@@ -3011,6 +3200,7 @@ fn resolve_query_routing_decision_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     authority: &AccountId,
     world: &W,
+    _ledger_time_ms: Option<u64>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
     let matched_rule = policy
         .rules
@@ -3126,6 +3316,7 @@ fn rule_matches_with_world<W: WorldReadOnly>(
     tx: &AcceptedTransaction<'_>,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
+    _ledger_time_ms: Option<u64>,
 ) -> bool {
     let matcher = &rule.matcher;
 
@@ -4483,7 +4674,11 @@ mod tests {
         DataSpaceCatalog::new(metadata).expect("valid dataspace catalog")
     }
 
-    fn world_with_dynamic_dataspace(alias: &str, owner: &AccountId) -> crate::state::World {
+    fn world_with_dynamic_dataspace_until(
+        alias: &str,
+        owner: &AccountId,
+        expires_at_ms: u64,
+    ) -> crate::state::World {
         let selector = crate::sns::selector_for_dataspace_alias(alias).expect("selector");
         let address = AccountAddress::from_account_id(owner).expect("account address");
         let record = NameRecordV1::new(
@@ -4492,9 +4687,9 @@ mod tests {
             vec![NameControllerV1::account(&address)],
             0,
             0,
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
+            expires_at_ms,
+            expires_at_ms.saturating_add(100),
+            expires_at_ms.saturating_add(200),
             Metadata::default(),
         );
         let mut world = crate::state::World::default();
@@ -4502,6 +4697,10 @@ mod tests {
             .smart_contract_state_mut_for_testing()
             .insert(crate::sns::record_storage_key(&selector), record.encode());
         world
+    }
+
+    fn world_with_dynamic_dataspace(alias: &str, owner: &AccountId) -> crate::state::World {
+        world_with_dynamic_dataspace_until(alias, owner, u64::MAX)
     }
 
     fn account_alias(literal: &str, catalog: &DataSpaceCatalog) -> AccountAlias {
@@ -5326,12 +5525,175 @@ mod tests {
         let expected = crate::sns::dataspace_id_for_sns_alias("boi").expect("dynamic id");
 
         assert_eq!(
-            dataspace_alias_target_with_world("boi", Some(&catalog), &view),
+            dataspace_alias_target_with_world("boi", Some(&catalog), &view, Some(0)),
             Some(expected)
         );
         assert_eq!(
-            dataspace_alias_target_with_world("missing", Some(&catalog), &view),
+            dataspace_alias_target_with_world("missing", Some(&catalog), &view, Some(0)),
             None
+        );
+        assert_eq!(
+            dataspace_alias_target_with_world("boi", Some(&catalog), &view, None),
+            None
+        );
+    }
+
+    #[test]
+    fn dataspace_alias_target_with_world_rejects_inactive_sns_dataspace_at_ledger_time() {
+        let (authority_id, _) = gen_account_in("wonderland");
+        let catalog = dataspace_catalog(&[]);
+        let world = world_with_dynamic_dataspace_until("boi", &authority_id, 10);
+        let view = world.view();
+        let expected = crate::sns::dataspace_id_for_sns_alias("boi").expect("dynamic id");
+
+        assert_eq!(
+            dataspace_alias_target_with_world("boi", Some(&catalog), &view, Some(9)),
+            Some(expected)
+        );
+        assert_eq!(
+            dataspace_alias_target_with_world("boi", Some(&catalog), &view, Some(10)),
+            None
+        );
+    }
+
+    #[test]
+    fn evaluate_policy_with_catalog_and_world_resolves_static_alias_without_ledger_time() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let static_dataspace = DataSpaceId::new(7);
+        let catalog = dataspace_catalog(&[(static_dataspace, "boi")]);
+        let lane_catalog =
+            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("static", "boi").expect("domain"),
+            )))],
+        );
+        let world = crate::state::World::default();
+        let view = world.view();
+
+        assert_eq!(
+            evaluate_policy_with_catalog_and_world(&policy, &lane_catalog, &catalog, &tx, &view)
+                .expect("static alias should resolve without a ledger time"),
+            RoutingDecision::new(LaneId::SINGLE, static_dataspace)
+        );
+    }
+
+    #[test]
+    fn evaluate_policy_with_catalog_and_world_at_respects_dynamic_sns_ledger_time() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let catalog = dataspace_catalog(&[]);
+        let lane_catalog =
+            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("dynamic", "boi").expect("domain"),
+            )))],
+        );
+        let world = world_with_dynamic_dataspace_until("boi", &authority_id, 10);
+        let view = world.view();
+        let expected = crate::sns::dataspace_id_for_sns_alias("boi").expect("dynamic id");
+
+        assert_eq!(
+            evaluate_policy_with_catalog_and_world_at(
+                &policy,
+                &lane_catalog,
+                &catalog,
+                &tx,
+                &view,
+                9,
+            )
+            .expect("active dynamic route should resolve"),
+            RoutingDecision::new(LaneId::SINGLE, expected)
+        );
+        assert_eq!(
+            evaluate_policy_with_catalog_and_world_at(
+                &policy,
+                &lane_catalog,
+                &catalog,
+                &tx,
+                &view,
+                10,
+            )
+            .expect("inactive dynamic route should fall back to default"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            evaluate_policy_with_catalog_and_world(&policy, &lane_catalog, &catalog, &tx, &view)
+                .expect("no-time world route should fall back to static catalog only"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+    }
+
+    #[test]
+    fn evaluate_policy_plan_with_catalog_and_world_at_respects_dynamic_sns_ledger_time() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let catalog = dataspace_catalog(&[]);
+        let lane_catalog =
+            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("dynamic", "boi").expect("domain"),
+            )))],
+        );
+        let world = world_with_dynamic_dataspace_until("boi", &authority_id, 10);
+        let view = world.view();
+        let expected = crate::sns::dataspace_id_for_sns_alias("boi").expect("dynamic id");
+
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world_at(
+                &policy,
+                &lane_catalog,
+                &catalog,
+                &tx,
+                &view,
+                9,
+            )
+            .expect("active dynamic plan should resolve"),
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, expected))
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world_at(
+                &policy,
+                &lane_catalog,
+                &catalog,
+                &tx,
+                &view,
+                10,
+            )
+            .expect("inactive dynamic plan should fall back to default"),
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &catalog,
+                &tx,
+                &view
+            )
+            .expect("no-time world plan should fall back to static catalog only"),
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
         );
     }
 

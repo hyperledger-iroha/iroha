@@ -1,6 +1,42 @@
 # Status
 
-Last updated: 2026-05-24
+Last updated: 2026-05-25
+
+## 2026-05-25 transaction status scope and dynamic SNS routing fixes
+
+- JavaScript transaction status polling now preserves the client-configured
+  `transactionStatusScope` unless a helper call explicitly overrides it.
+- Rust transaction wait polling now uses local status scope when callers wait
+  for non-terminal cache statuses such as queued, approved, or committed.
+- `SetContractAlias::clear` can remove stale dynamic-dataspace alias bindings
+  after the contract is no longer deployed.
+- Dynamic SNS dataspace routing through world-aware policy evaluation now uses
+  the block or transaction ledger time, and no longer treats dynamic leases as
+  active when no ledger time is available.
+- Added negative and adversarial coverage for null and explicit status-scope
+  overrides, mixed terminal wait targets, stale or unknown dynamic alias clears,
+  and dynamic SNS routing with and without ledger time.
+- Focused and broader validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `npm run build:dist`
+  - `npm run lint`
+  - `cd javascript/iroha_js && node --test test/toriiClient.test.js test/transaction.test.js test/privateKaigiTransaction.test.js`
+  - `cargo check -p iroha_core --lib`
+  - `cargo check -p iroha --lib`
+  - `cargo test -p iroha wait_for_transaction_terminal_status --lib`
+  - `cargo test -p iroha --lib`
+  - `cargo test -p iroha_core set_contract_alias --lib`
+  - `cargo test -p iroha_core dataspace_alias_target --lib`
+  - `cargo test -p iroha_core evaluate_policy_with_catalog_and_world --lib`
+  - `cargo test -p iroha_core evaluate_policy_with_catalog_and_world_at_respects_dynamic_sns_ledger_time --lib`
+  - `cargo test -p iroha_core evaluate_policy_plan_with_catalog_and_world_at_respects_dynamic_sns_ledger_time --lib`
+  - `cargo test -p iroha_core queue::router --lib`
+  - `cargo test -p iroha_core --lib`
+  - `git diff --check`
+- Broader JavaScript dist validation attempted with `npm run test:dist`; it
+  still fails in unrelated `test/sorafsReplicationOrder.test.js` lane fixture
+  precondition (`16 !== 1`) before exercising the decoder.
 
 ## 2026-05-24 hard-fork bootstrap validation follow-up
 

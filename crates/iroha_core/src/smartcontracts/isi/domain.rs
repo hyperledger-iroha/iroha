@@ -2653,29 +2653,29 @@ pub mod isi {
                 .into());
             }
 
-            let contract_dataspace_id = contract_address.dataspace_id().map_err(|err| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    err.to_string().into(),
-                ))
-            })?;
-            let contract_deployed = state_transaction
-                .world
-                .contract_instances()
-                .get(&contract_address)
-                .is_some();
-            if !contract_deployed
-                && state_transaction
-                    .nexus
-                    .dataspace_catalog
-                    .by_id(contract_dataspace_id)
-                    .is_none()
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "contract address dataspace is unknown".to_owned().into(),
-                )
-                .into());
-            }
             if let Some(alias) = alias {
+                let contract_dataspace_id = contract_address.dataspace_id().map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(err.to_string().into()),
+                    )
+                })?;
+                let contract_deployed = state_transaction
+                    .world
+                    .contract_instances()
+                    .get(&contract_address)
+                    .is_some();
+                if !contract_deployed
+                    && state_transaction
+                        .nexus
+                        .dataspace_catalog
+                        .by_id(contract_dataspace_id)
+                        .is_none()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "contract address dataspace is unknown".to_owned().into(),
+                    )
+                    .into());
+                }
                 if !contract_deployed {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!("contract {contract_address} is not deployed").into(),
@@ -8977,6 +8977,90 @@ mod tests {
                 .get(&"router::universal".parse::<ContractAlias>().expect("alias"))
                 .is_none(),
             "alias index should be removed"
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_clear_allows_stale_dynamic_dataspace_binding() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let dynamic_dataspace =
+            crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, dynamic_dataspace).expect("address");
+        let alias: ContractAlias = "router::is".parse().expect("alias");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world
+            .bind_contract_alias(&contract_address, alias.clone(), None, None, 10_000)
+            .expect("seed stale dynamic contract alias");
+
+        SetContractAlias::clear(contract_address.clone())
+            .execute(&authority, &mut tx)
+            .expect("clear should tolerate undeployed dynamic alias");
+
+        assert!(
+            tx.world
+                .contract_alias_bindings
+                .get(&contract_address)
+                .is_none(),
+            "binding index should be removed"
+        );
+        assert!(
+            tx.world.contract_aliases.get(&alias).is_none(),
+            "alias index should be removed"
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_clear_allows_unknown_dynamic_dataspace_without_binding() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::new(4_242)).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        SetContractAlias::clear(contract_address.clone())
+            .execute(&authority, &mut tx)
+            .expect("clear should be a no-op for unknown undeployed dynamic address");
+
+        assert!(
+            tx.world
+                .contract_alias_bindings
+                .get(&contract_address)
+                .is_none(),
+            "clear should not create a binding"
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_clear_rejects_lease_without_alias() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::new(4_242)).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let err = SetContractAlias {
+            contract_address,
+            alias: None,
+            lease_expiry_ms: Some(11_000),
+        }
+        .execute(&authority, &mut tx)
+        .expect_err("lease metadata without alias must fail");
+
+        let err_debug = format!("{err:?}");
+        assert!(
+            err_debug.contains("lease_expiry_ms requires alias binding"),
+            "unexpected error: {err_debug}"
         );
     }
 

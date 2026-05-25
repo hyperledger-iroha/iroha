@@ -7656,7 +7656,7 @@ test("waitForTransactionStatus forwards signal and aborts polling", async () => 
   );
   assert.equal(attempts, 1);
   assert.equal(seenSignal, controller.signal);
-  assert.equal(seenScope, "global");
+  assert.equal(seenScope, null);
 });
 
 test("waitForTransactionStatus forwards explicit local scope", async () => {
@@ -7679,6 +7679,93 @@ test("waitForTransactionStatus forwards explicit local scope", async () => {
 
   assert.equal(observed.length, 1);
   assert.equal(observed[0].scope, "local");
+});
+
+test("waitForTransactionStatus explicit scope overrides configured scope", async () => {
+  const txHash = "69".repeat(32);
+  const seenUrls = [];
+  const client = new ToriiClient(BASE_URL, {
+    transactionStatusScope: "local",
+    fetchImpl: async (url) => {
+      seenUrls.push(url);
+      return createResponse({
+        status: 200,
+        jsonData: {
+          kind: "Transaction",
+          content: { hash: txHash, status: { kind: "Committed", content: null } },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  await client.waitForTransactionStatus(txHash, {
+    intervalMs: 0,
+    maxAttempts: 1,
+    scope: "global",
+  });
+
+  assert.deepEqual(seenUrls, [
+    `${BASE_URL}/v1/pipeline/transactions/status?hash=${txHash}&scope=global`,
+  ]);
+});
+
+test("waitForTransactionStatus inherits configured transaction status scope", async () => {
+  const txHash = "68".repeat(32);
+  const seenUrls = [];
+  const fetchImpl = async (url) => {
+    seenUrls.push(url);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        kind: "Transaction",
+        content: { hash: txHash, status: { kind: "Committed", content: null } },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    transactionStatusScope: "local",
+  });
+
+  await client.waitForTransactionStatus(txHash, {
+    intervalMs: 0,
+    maxAttempts: 1,
+  });
+
+  assert.deepEqual(seenUrls, [
+    `${BASE_URL}/v1/pipeline/transactions/status?hash=${txHash}&scope=local`,
+  ]);
+});
+
+test("waitForTransactionStatus treats null scope as inherited configured scope", async () => {
+  const txHash = "6a".repeat(32);
+  const seenUrls = [];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      seenUrls.push(url);
+      return createResponse({
+        status: 200,
+        jsonData: {
+          kind: "Transaction",
+          content: { hash: txHash, status: { kind: "Committed", content: null } },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+    transactionStatusScope: "auto",
+  });
+
+  await client.waitForTransactionStatus(txHash, {
+    intervalMs: 0,
+    maxAttempts: 1,
+    scope: null,
+  });
+
+  assert.deepEqual(seenUrls, [
+    `${BASE_URL}/v1/pipeline/transactions/status?hash=${txHash}&scope=auto`,
+  ]);
 });
 
 test("waitForTransactionStatusTyped normalises payload", async () => {

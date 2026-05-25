@@ -65,7 +65,8 @@ pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
     RoutingPlan, RoutingResolveError, SingleLaneRouter, evaluate_policy,
     evaluate_policy_plan_with_catalog, evaluate_policy_plan_with_catalog_and_world,
-    evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world,
+    evaluate_policy_plan_with_catalog_and_world_at, evaluate_policy_with_catalog,
+    evaluate_policy_with_catalog_and_world, evaluate_policy_with_catalog_and_world_at,
     resolve_query_routing_decision, resolve_routing_decision,
 };
 use thiserror::Error;

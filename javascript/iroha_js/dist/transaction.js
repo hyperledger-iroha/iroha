@@ -2600,10 +2600,13 @@ export async function submitSignedTransaction(
 
   let status;
   while (Date.now() <= deadline) {
-    status = await client.getTransactionStatus(hashHex, {
+    const statusOptions = {
       allowShortHash: true,
-      scope: options.scope ?? "global",
-    });
+    };
+    if (options.scope !== undefined && options.scope !== null) {
+      statusOptions.scope = options.scope;
+    }
+    status = await client.getTransactionStatus(hashHex, statusOptions);
     if (isTerminalStatus(status)) {
       return { hash: hashHex, submission, status };
     }
@@ -2649,10 +2652,13 @@ export async function submitTransactionEntrypoint(
 
   let status;
   while (Date.now() <= deadline) {
-    status = await client.getTransactionStatus(hashHex, {
+    const statusOptions = {
       allowShortHash: true,
-      scope: options.scope ?? "global",
-    });
+    };
+    if (options.scope !== undefined && options.scope !== null) {
+      statusOptions.scope = options.scope;
+    }
+    status = await client.getTransactionStatus(hashHex, statusOptions);
     if (isTerminalStatus(status)) {
       return { hash: hashHex.toLowerCase(), submission, status };
     }

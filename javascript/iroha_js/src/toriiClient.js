@@ -10014,7 +10014,7 @@ export class ToriiClient {
         successSet: normalizeStatusSet(undefined, DEFAULT_SUCCESS_STATUSES),
         failureSet: normalizeStatusSet(undefined, DEFAULT_FAILURE_STATUSES),
         onStatus: null,
-        scope: "global",
+        scope: undefined,
       };
     }
     const record = requirePlainObjectOption(options, context);
@@ -10024,11 +10024,10 @@ export class ToriiClient {
         ? context.slice(0, -8)
         : context;
     const { signal } = normalizeSignalOption(record, signalContext);
-    const scope = normalizeTransactionStatusScope(
-      record.scope,
-      `${context}.scope`,
-      "global",
-    );
+    const scope =
+      record.scope === undefined || record.scope === null
+        ? undefined
+        : normalizeTransactionStatusScope(record.scope, `${context}.scope`, "global");
     let intervalMs = DEFAULT_TX_STATUS_POLL_INTERVAL_MS;
     if (record.intervalMs !== undefined && record.intervalMs !== null) {
       intervalMs = ToriiClient._normalizeUnsignedInteger(

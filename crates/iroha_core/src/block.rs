@@ -911,7 +911,7 @@ use crate::{
     },
     prelude::*,
     queue::{
-        evaluate_policy_plan_with_catalog_and_world, resolve_routing_decision, routing_ledger,
+        evaluate_policy_plan_with_catalog_and_world_at, resolve_routing_decision, routing_ledger,
     },
     smartcontracts::isi::triggers::{set::SetReadOnly, specialized::LoadedActionTrait},
     state::{
@@ -6055,12 +6055,15 @@ pub(crate) mod valid {
                 let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                     Cow::Owned(entrypoint.clone()),
                 );
-                let plan = evaluate_policy_plan_with_catalog_and_world(
+                let routing_ledger_time_ms =
+                    u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
+                let plan = evaluate_policy_plan_with_catalog_and_world_at(
                     &nexus.routing_policy,
                     &nexus.lane_catalog,
                     &nexus.dataspace_catalog,
                     &accepted,
                     state.world(),
+                    routing_ledger_time_ms,
                 )
                 .map_err(|err| {
                     Self::execution_context_error(format!(
@@ -6989,6 +6992,8 @@ pub(crate) mod valid {
             };
             let start = timings.as_ref().map(|_| Instant::now());
             let n = entrypoints.len();
+            let routing_ledger_time_ms =
+                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
             #[allow(clippy::disallowed_types)]
             let tx_hashes: std::collections::HashSet<_> = entrypoints
                 .iter()
@@ -7019,12 +7024,13 @@ pub(crate) mod valid {
                     let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                         Cow::Borrowed(entrypoint),
                     );
-                    match evaluate_policy_plan_with_catalog_and_world(
+                    match evaluate_policy_plan_with_catalog_and_world_at(
                         routing_policy,
                         lane_catalog,
                         dataspace_catalog,
                         &accepted,
                         &state_block.world,
+                        routing_ledger_time_ms,
                     ) {
                         Ok(plan) => {
                             decisions.push(plan.coordinator_route());
@@ -7386,6 +7392,8 @@ pub(crate) mod valid {
             let crypto_cfg = Arc::clone(&state_block.crypto);
             let chain_id = state_block.chain_id.clone();
             let block_creation_time = block.header().creation_time();
+            let routing_ledger_time_ms =
+                u64::try_from(block_creation_time.as_millis()).unwrap_or(u64::MAX);
             let is_genesis_block = block.header().is_genesis();
             let debug_trace_scheduler_inputs = state_block.pipeline.debug_trace_scheduler_inputs;
             let debug_trace_tx_eval = state_block.pipeline.debug_trace_tx_eval;
@@ -7429,12 +7437,13 @@ pub(crate) mod valid {
                                     let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                         Cow::Borrowed(*tx),
                                     );
-                                    evaluate_policy_plan_with_catalog_and_world(
+                                    evaluate_policy_plan_with_catalog_and_world_at(
                                         routing_policy,
                                         &lane_catalog,
                                         &dataspace_catalog,
                                         &accepted,
                                         &state_block.world,
+                                        routing_ledger_time_ms,
                                     )
                                     .map(|plan| plan.coordinator_route())
                                 })
@@ -7446,12 +7455,13 @@ pub(crate) mod valid {
                                 let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                     Cow::Borrowed(*tx),
                                 );
-                                evaluate_policy_plan_with_catalog_and_world(
+                                evaluate_policy_plan_with_catalog_and_world_at(
                                     routing_policy,
                                     &lane_catalog,
                                     &dataspace_catalog,
                                     &accepted,
                                     &state_block.world,
+                                    routing_ledger_time_ms,
                                 )
                                 .map(|plan| plan.coordinator_route())
                             })
@@ -7462,12 +7472,13 @@ pub(crate) mod valid {
                         .map(|tx| {
                             let accepted =
                                 crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
-                            evaluate_policy_plan_with_catalog_and_world(
+                            evaluate_policy_plan_with_catalog_and_world_at(
                                 routing_policy,
                                 &lane_catalog,
                                 &dataspace_catalog,
                                 &accepted,
                                 &state_block.world,
+                                routing_ledger_time_ms,
                             )
                             .map(|plan| plan.coordinator_route())
                         })
