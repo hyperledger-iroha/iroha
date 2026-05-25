@@ -26,6 +26,8 @@ public enum OfflineNoteV2WalletError: Error, LocalizedError, Equatable {
     case inputCertificateMismatch
     case proofVerificationFailed
     case certificateVerificationFailed
+    case missingBearerAuditTrail
+    case missingAtomicDefundSubmitter
 
     public var errorDescription: String? {
         switch self {
@@ -53,6 +55,10 @@ public enum OfflineNoteV2WalletError: Error, LocalizedError, Equatable {
             return "Offline Note V2 recursive proof verification failed."
         case .certificateVerificationFailed:
             return "Offline Note V2 key certificate is not trusted for this wallet operation."
+        case .missingBearerAuditTrail:
+            return "Offline Note V2 bearer note is missing the audit trail required for defunding."
+        case .missingAtomicDefundSubmitter:
+            return "Offline Note V2 bearer defunding requires an atomic audit-plus-redeem submitter."
         }
     }
 }
@@ -66,6 +72,7 @@ public struct OfflineNoteV2WalletNote: Equatable, Sendable {
     public let noteCommitment: Data
     public let noteSecret: Data
     public let origin: OfflineNoteCommitmentOriginV2
+    public let bearerAuditTrail: [OfflineNoteAuditBundleV2]
     public let state: OfflineNoteV2WalletNoteState
     public let createdAtMs: UInt64
     public let updatedAtMs: UInt64
@@ -78,6 +85,7 @@ public struct OfflineNoteV2WalletNote: Equatable, Sendable {
                 noteCommitment: Data,
                 noteSecret: Data,
                 origin: OfflineNoteCommitmentOriginV2,
+                bearerAuditTrail: [OfflineNoteAuditBundleV2] = [],
                 state: OfflineNoteV2WalletNoteState,
                 createdAtMs: UInt64,
                 updatedAtMs: UInt64) throws {
@@ -90,6 +98,7 @@ public struct OfflineNoteV2WalletNote: Equatable, Sendable {
         self.noteCommitment = noteCommitment
         self.noteSecret = noteSecret
         self.origin = origin
+        self.bearerAuditTrail = Self.normalizedBearerAuditTrail(bearerAuditTrail)
         self.state = state
         self.createdAtMs = createdAtMs
         self.updatedAtMs = updatedAtMs
@@ -119,10 +128,42 @@ public struct OfflineNoteV2WalletNote: Equatable, Sendable {
             noteCommitment: noteCommitment,
             noteSecret: noteSecret,
             origin: origin,
+            bearerAuditTrail: bearerAuditTrail,
             state: state,
             createdAtMs: createdAtMs,
             updatedAtMs: updatedAtMs
         )
+    }
+
+    public func withBearerAuditTrail(_ bearerAuditTrail: [OfflineNoteAuditBundleV2],
+                                     updatedAtMs: UInt64) throws -> OfflineNoteV2WalletNote {
+        try OfflineNoteV2WalletNote(
+            chainId: chainId,
+            accountId: accountId,
+            assetId: assetId,
+            amount: amount,
+            keyCertificate: keyCertificate,
+            noteCommitment: noteCommitment,
+            noteSecret: noteSecret,
+            origin: origin,
+            bearerAuditTrail: bearerAuditTrail,
+            state: state,
+            createdAtMs: createdAtMs,
+            updatedAtMs: updatedAtMs
+        )
+    }
+
+    private static func normalizedBearerAuditTrail(
+        _ audits: [OfflineNoteAuditBundleV2]
+    ) -> [OfflineNoteAuditBundleV2] {
+        var seen: Set<String> = []
+        var result: [OfflineNoteAuditBundleV2] = []
+        for audit in audits {
+            let key = audit.tokenId.hexLowercased()
+            guard seen.insert(key).inserted else { continue }
+            result.append(audit)
+        }
+        return result
     }
 }
 
@@ -571,6 +612,7 @@ public struct OfflineNoteV2PaymentToken: Equatable, Sendable {
     public let tokenNonce: Data
     public let tokenId: Data
     public let audit: OfflineNoteAuditBundleV2
+    public let bearerAuditTrail: [OfflineNoteAuditBundleV2]
     public let createdAtMs: UInt64
 
     public init(chainId: String,
@@ -578,17 +620,37 @@ public struct OfflineNoteV2PaymentToken: Equatable, Sendable {
                 tokenNonce: Data,
                 tokenId: Data,
                 audit: OfflineNoteAuditBundleV2,
+                bearerAuditTrail: [OfflineNoteAuditBundleV2]? = nil,
                 createdAtMs: UInt64) {
         self.chainId = chainId
         self.paymentRequestId = paymentRequestId
         self.tokenNonce = tokenNonce
         self.tokenId = tokenId
         self.audit = audit
+        self.bearerAuditTrail = Self.normalizedBearerAuditTrail(bearerAuditTrail, terminalAudit: audit)
         self.createdAtMs = createdAtMs
     }
 
     public var tokenIdHex: String {
         tokenId.hexLowercased()
+    }
+
+    private static func normalizedBearerAuditTrail(
+        _ audits: [OfflineNoteAuditBundleV2]?,
+        terminalAudit: OfflineNoteAuditBundleV2
+    ) -> [OfflineNoteAuditBundleV2] {
+        var seen: Set<String> = []
+        var result: [OfflineNoteAuditBundleV2] = []
+        for audit in audits ?? [] {
+            let key = audit.tokenId.hexLowercased()
+            guard seen.insert(key).inserted else { continue }
+            result.append(audit)
+        }
+        let terminalKey = terminalAudit.tokenId.hexLowercased()
+        if !seen.contains(terminalKey) {
+            result.append(terminalAudit)
+        }
+        return result
     }
 }
 
@@ -614,19 +676,27 @@ public enum OfflineNoteV2PaymentTokenCodecError: Error, LocalizedError, Equatabl
 
 public enum OfflineNoteV2PaymentTokenCodec {
     public static let type = "offline_payment_token_v2"
-    public static let version: UInt64 = 2
+    public static let legacyVersion: UInt64 = 2
+    public static let version: UInt64 = 3
     public static let textPrefix = "wallet-offline-payment-v2:"
     private static let envelopeTypeName = "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelopeV2"
 
     public static func encodeNorito(_ token: OfflineNoteV2PaymentToken) throws -> Data {
+        let carriesExtendedAuditTrail = token.bearerAuditTrail.count != 1
+            || token.bearerAuditTrail.first?.tokenId != token.audit.tokenId
         var writer = OfflineCompactNoritoWriter()
-        writer.writeField(OfflineCompactNorito.encodeUInt64(version))
+        writer.writeField(OfflineCompactNorito.encodeUInt64(
+            carriesExtendedAuditTrail ? version : legacyVersion
+        ))
         writer.writeField(OfflineCompactNorito.encodeString(token.chainId))
         writer.writeField(OfflineCompactNorito.encodeString(token.paymentRequestId))
         writer.writeField(OfflineCompactNorito.encodeUInt64(token.createdAtMs))
         writer.writeField(OfflineNorito.encodeBytesVec(token.tokenNonce))
         writer.writeField(try OfflineCompactNorito.encodeHash(token.tokenId))
         writer.writeField(OfflineNorito.encodeBytesVec(try token.audit.noritoEncoded()))
+        if carriesExtendedAuditTrail {
+            writer.writeField(try encodeAuditTrail(token.bearerAuditTrail))
+        }
         return noritoEncode(typeName: envelopeTypeName, payload: writer.data, flags: NoritoHeader.compactLen)
     }
 
@@ -644,7 +714,7 @@ public enum OfflineNoteV2PaymentTokenCodec {
         }
         var reader = OfflineNoritoReader(data: frame.payload)
         let decodedVersion = try field(&reader, "version") { try $0.readUInt64LE() }
-        guard decodedVersion == version else {
+        guard decodedVersion == legacyVersion || decodedVersion == version else {
             throw OfflineNoteV2PaymentTokenCodecError.invalidField("version")
         }
         let chainId = try field(&reader, "chain_id", readString)
@@ -653,6 +723,12 @@ public enum OfflineNoteV2PaymentTokenCodec {
         let tokenNonce = try field(&reader, "token_nonce", readBytesVec)
         let tokenId = try field(&reader, "token_id") { try readHash(reader: &$0, field: "token_id") }
         let auditBytes = try field(&reader, "audit", readBytesVec)
+        let bearerAuditTrail: [OfflineNoteAuditBundleV2]
+        if decodedVersion == version {
+            bearerAuditTrail = try field(&reader, "bearer_audit_trail", readAuditTrail)
+        } else {
+            bearerAuditTrail = []
+        }
         guard reader.remaining() == 0 else {
             throw OfflineNoteV2PaymentTokenCodecError.invalidField("trailing_bytes")
         }
@@ -666,6 +742,7 @@ public enum OfflineNoteV2PaymentTokenCodec {
             tokenNonce: tokenNonce,
             tokenId: tokenId,
             audit: audit,
+            bearerAuditTrail: bearerAuditTrail,
             createdAtMs: createdAtMs
         )
     }
@@ -719,6 +796,37 @@ public enum OfflineNoteV2PaymentTokenCodec {
             throw OfflineNoteV2PaymentTokenCodecError.invalidField(field)
         }
         return value
+    }
+
+    private static func encodeAuditTrail(_ audits: [OfflineNoteAuditBundleV2]) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt64LE(UInt64(audits.count))
+        for audit in audits {
+            writer.writeField(OfflineNorito.encodeBytesVec(try audit.noritoEncoded()))
+        }
+        return writer.data
+    }
+
+    private static func readAuditTrail(_ reader: inout OfflineNoritoReader) throws -> [OfflineNoteAuditBundleV2] {
+        let count = try reader.readUInt64LE()
+        guard count <= UInt64(Int.max) else {
+            throw OfflineNoteV2PaymentTokenCodecError.invalidField("bearer_audit_trail")
+        }
+        var audits: [OfflineNoteAuditBundleV2] = []
+        audits.reserveCapacity(Int(count))
+        for index in 0..<count {
+            var auditReader = OfflineNoritoReader(data: try reader.readCompactField())
+            let auditBytes = try readBytesVec(&auditReader)
+            guard auditReader.remaining() == 0 else {
+                throw OfflineNoteV2PaymentTokenCodecError.invalidField("bearer_audit_trail[\(index)]")
+            }
+            do {
+                audits.append(try OfflineNoteV2Decoding.decodeAudit(auditBytes))
+            } catch {
+                throw OfflineNoteV2PaymentTokenCodecError.invalidField("bearer_audit_trail[\(index)]")
+            }
+        }
+        return audits
     }
 
     private static func readString(_ reader: inout OfflineNoritoReader) throws -> String {
@@ -1008,6 +1116,18 @@ public enum OfflineNoteV2ReceiptAckCodec {
 public protocol OfflineNoteV2TransactionSubmitter {
     func submitAudit(_ audit: OfflineNoteAuditBundleV2) async throws
     func submitRedeem(_ redemption: OfflineNoteRedeemV2) async throws
+    func submitDefund(_ redemption: OfflineNoteRedeemV2,
+                      bearerAuditTrail: [OfflineNoteAuditBundleV2]) async throws
+}
+
+public extension OfflineNoteV2TransactionSubmitter {
+    func submitDefund(_ redemption: OfflineNoteRedeemV2,
+                      bearerAuditTrail: [OfflineNoteAuditBundleV2]) async throws {
+        guard bearerAuditTrail.isEmpty else {
+            throw OfflineNoteV2WalletError.missingAtomicDefundSubmitter
+        }
+        try await submitRedeem(redemption)
+    }
 }
 
 public struct OfflineNoteV2SyncResolution: Equatable, Sendable {
@@ -1248,6 +1368,19 @@ public final class IrohaOfflineNoteV2TransactionSubmitter: OfflineNoteV2Transact
             signingKey: signingKey
         )
     }
+
+    public func submitDefund(_ redemption: OfflineNoteRedeemV2,
+                             bearerAuditTrail: [OfflineNoteAuditBundleV2]) async throws {
+        try await sdk.submit(
+            defundOfflineNoteV2: DefundOfflineNoteV2Request(
+                chainId: chainId,
+                authority: authority,
+                bearerAuditTrail: bearerAuditTrail,
+                redemption: redemption
+            ),
+            signingKey: signingKey
+        )
+    }
 }
 
 public final class OfflineNoteV2Wallet {
@@ -1436,6 +1569,7 @@ public final class OfflineNoteV2Wallet {
         try requireTrustedCertificate(senderCertificate, expectedAccountId: accountId)
         let senderCertificateHash = try senderCertificate.payloadHash()
         for note in selected {
+            _ = try bearerAuditTrail(for: note)
             try requireTrustedCertificate(note.keyCertificate, expectedAccountId: accountId)
             if try note.keyCertificate.payloadHash() != senderCertificateHash {
                 throw OfflineNoteV2WalletError.inputCertificateMismatch
@@ -1516,6 +1650,7 @@ public final class OfflineNoteV2Wallet {
         guard try proofVerifier.verifyAudit(audit) else {
             throw OfflineNoteV2WalletError.proofVerificationFailed
         }
+        let outputBearerAuditTrail = try bearerAuditTrail(forInputs: selected, appending: audit)
         try store.mutateNotes { notes in
             for note in selected {
                 guard notes[note.noteCommitmentHex]?.state == .spendable else {
@@ -1529,7 +1664,10 @@ public final class OfflineNoteV2Wallet {
                 notes[note.noteCommitmentHex] = try note.withState(.spent, updatedAtMs: createdAtMs)
             }
             if let changeNote {
-                notes[changeNote.noteCommitmentHex] = changeNote
+                notes[changeNote.noteCommitmentHex] = try changeNote.withBearerAuditTrail(
+                    outputBearerAuditTrail,
+                    updatedAtMs: createdAtMs
+                )
             }
         }
         return OfflineNoteV2PaymentToken(
@@ -1538,6 +1676,7 @@ public final class OfflineNoteV2Wallet {
             tokenNonce: tokenNonce,
             tokenId: tokenId,
             audit: audit,
+            bearerAuditTrail: outputBearerAuditTrail,
             createdAtMs: createdAtMs
         )
     }
@@ -1553,6 +1692,38 @@ public final class OfflineNoteV2Wallet {
             }
             throw OfflineNoteV2WalletError.invalidState
         }
+    }
+
+    private func bearerAuditTrail(for note: OfflineNoteV2WalletNote) throws -> [OfflineNoteAuditBundleV2] {
+        switch note.origin {
+        case .issuerLoad:
+            return []
+        case .p2pOutput:
+            guard !note.bearerAuditTrail.isEmpty else {
+                throw OfflineNoteV2WalletError.missingBearerAuditTrail
+            }
+            return note.bearerAuditTrail
+        }
+    }
+
+    private func bearerAuditTrail(
+        forInputs inputNotes: [OfflineNoteV2WalletNote],
+        appending audit: OfflineNoteAuditBundleV2
+    ) throws -> [OfflineNoteAuditBundleV2] {
+        var seen: Set<String> = []
+        var result: [OfflineNoteAuditBundleV2] = []
+        for note in inputNotes {
+            for inputAudit in try bearerAuditTrail(for: note) {
+                let key = inputAudit.tokenId.hexLowercased()
+                guard seen.insert(key).inserted else { continue }
+                result.append(inputAudit)
+            }
+        }
+        let auditKey = audit.tokenId.hexLowercased()
+        if !seen.contains(auditKey) {
+            result.append(audit)
+        }
+        return result
     }
 
     public func accept(_ paymentToken: OfflineNoteV2PaymentToken) throws -> OfflineNoteV2WalletNote {
@@ -1576,7 +1747,10 @@ public final class OfflineNoteV2Wallet {
                 else {
                     throw OfflineNoteV2WalletError.outputMismatch
                 }
-                let accepted = try pending.withState(.spendable, updatedAtMs: clock())
+                let now = clock()
+                let accepted = try pending
+                    .withState(.spendable, updatedAtMs: now)
+                    .withBearerAuditTrail(paymentToken.bearerAuditTrail, updatedAtMs: now)
                 notes[pending.noteCommitmentHex] = accepted
                 return accepted
             }
@@ -1604,6 +1778,7 @@ public final class OfflineNoteV2Wallet {
         guard current.state == .spendable else {
             throw OfflineNoteV2WalletError.invalidState
         }
+        let bearerAuditTrail = try bearerAuditTrail(for: current)
         try requireTrustedCertificate(current.keyCertificate, expectedAccountId: current.accountId)
         let inputNullifier = try deriveInputNullifier(current)
         let draft = try OfflineNoteRedeemV2(
@@ -1629,7 +1804,7 @@ public final class OfflineNoteV2Wallet {
             notes[current.noteCommitmentHex] = pending
             return pending
         }
-        try await transactionSubmitter.submitRedeem(redemption)
+        try await transactionSubmitter.submitDefund(redemption, bearerAuditTrail: bearerAuditTrail)
         return pending
     }
 

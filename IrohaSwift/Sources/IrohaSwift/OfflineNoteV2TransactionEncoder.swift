@@ -21,7 +21,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
             creationTimeMs: creationTimeMs,
             ttlMs: ttlMs,
             nonce: nonce,
-            instructionPayload: instruction,
+            instructionPayloads: [instruction],
             signingKey: signingKey
         )
     }
@@ -45,7 +45,42 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
             creationTimeMs: creationTimeMs,
             ttlMs: ttlMs,
             nonce: nonce,
-            instructionPayload: instruction,
+            instructionPayloads: [instruction],
+            signingKey: signingKey
+        )
+    }
+
+    static func encodeDefund(chainId: String,
+                             authority: String,
+                             creationTimeMs: UInt64,
+                             ttlMs: UInt64?,
+                             nonce: UInt32?,
+                             bearerAuditTrail: [OfflineNoteAuditBundleV2],
+                             redemption: OfflineNoteRedeemV2,
+                             signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        var instructions: [Data] = []
+        instructions.reserveCapacity(bearerAuditTrail.count + 1)
+        for audit in bearerAuditTrail {
+            try audit.validateProofBinding()
+            instructions.append(try encodeInstruction(
+                wireName: OfflineNoteV2TypeNames.auditInstruction,
+                typeName: OfflineNoteV2TypeNames.auditInstruction,
+                modelPayload: OfflineNoteV2Encoding.encodeAudit(audit)
+            ))
+        }
+        try redemption.validateProofBinding()
+        instructions.append(try encodeInstruction(
+            wireName: OfflineNoteV2TypeNames.redeemInstruction,
+            typeName: OfflineNoteV2TypeNames.redeemInstruction,
+            modelPayload: OfflineNoteV2Encoding.encodeRedeem(redemption)
+        ))
+        return try encodeTransaction(
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            nonce: nonce,
+            instructionPayloads: instructions,
             signingKey: signingKey
         )
     }
@@ -69,7 +104,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
             creationTimeMs: creationTimeMs,
             ttlMs: ttlMs,
             nonce: nonce,
-            instructionPayload: instruction,
+            instructionPayloads: [instruction],
             signingKey: signingKey
         )
     }
@@ -96,7 +131,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                                           creationTimeMs: UInt64,
                                           ttlMs: UInt64?,
                                           nonce: UInt32?,
-                                          instructionPayload: Data,
+                                          instructionPayloads: [Data],
                                           signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         let transactionPayload = try encodeTransactionPayload(
             chainId: chainId,
@@ -104,7 +139,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
             creationTimeMs: creationTimeMs,
             ttlMs: ttlMs,
             nonce: nonce,
-            instructionPayload: instructionPayload
+            instructionPayloads: instructionPayloads
         )
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
         let signedTransaction = encodeSignedTransaction(
@@ -127,22 +162,24 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                                                  creationTimeMs: UInt64,
                                                  ttlMs: UInt64?,
                                                  nonce: UInt32?,
-                                                 instructionPayload: Data) throws -> Data {
+                                                 instructionPayloads: [Data]) throws -> Data {
         var transactionPayload = OfflineNoritoWriter()
         transactionPayload.writeField(OfflineNorito.encodeString(chainId))
         transactionPayload.writeField(OfflineNorito.encodeString(authority))
         transactionPayload.writeField(OfflineNorito.encodeUInt64(creationTimeMs))
-        transactionPayload.writeField(encodeExecutable(instructionPayload: instructionPayload))
+        transactionPayload.writeField(encodeExecutable(instructionPayloads: instructionPayloads))
         transactionPayload.writeField(try OfflineNorito.encodeOption(ttlMs, encode: OfflineNorito.encodeUInt64))
         transactionPayload.writeField(try OfflineNorito.encodeOption(nonce, encode: OfflineNorito.encodeUInt32))
         transactionPayload.writeField(encodeEmptyMetadata())
         return transactionPayload.data
     }
 
-    private static func encodeExecutable(instructionPayload: Data) -> Data {
+    private static func encodeExecutable(instructionPayloads: [Data]) -> Data {
         var instructions = OfflineNoritoWriter()
-        instructions.writeLength(1)
-        instructions.writeField(instructionPayload)
+        instructions.writeLength(UInt64(instructionPayloads.count))
+        for instructionPayload in instructionPayloads {
+            instructions.writeField(instructionPayload)
+        }
 
         var executable = OfflineNoritoWriter()
         executable.writeUInt32LE(0)
@@ -233,6 +270,36 @@ extension SwiftTransactionEncoder {
         )
     }
 
+    static func encodeDefundOfflineNoteV2(request: DefundOfflineNoteV2Request,
+                                          keypair: Keypair,
+                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try encodeDefundOfflineNoteV2(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: creationTimeMs
+        )
+    }
+
+    static func encodeDefundOfflineNoteV2(request: DefundOfflineNoteV2Request,
+                                          signingKey: SigningKey,
+                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let ids = try TransactionInputValidator.validate(
+            chainId: request.chainId,
+            authorityId: request.authority
+        )
+        return try OfflineNoteV2SwiftNoritoEncoder.encodeDefund(
+            chainId: ids.chainId,
+            authority: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            ttlMs: request.ttlMs,
+            nonce: request.nonce,
+            bearerAuditTrail: request.bearerAuditTrail,
+            redemption: request.redemption,
+            signingKey: signingKey
+        )
+    }
+
     static func encodeAuditOfflineNoteV2(request: AuditOfflineNoteV2Request,
                                          keypair: Keypair,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
@@ -300,6 +367,24 @@ public extension IrohaSDK {
         )
     }
 
+    func buildDefundOfflineNoteV2(request: DefundOfflineNoteV2Request,
+                                  keypair: Keypair) throws -> SignedTransactionEnvelope {
+        try SwiftTransactionEncoder.encodeDefundOfflineNoteV2(
+            request: request,
+            keypair: keypair,
+            creationTimeMs: creationTimeProvider()
+        )
+    }
+
+    func buildDefundOfflineNoteV2(request: DefundOfflineNoteV2Request,
+                                  signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        try SwiftTransactionEncoder.encodeDefundOfflineNoteV2(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: creationTimeProvider()
+        )
+    }
+
     func buildAuditOfflineNoteV2(request: AuditOfflineNoteV2Request,
                                  keypair: Keypair) throws -> SignedTransactionEnvelope {
         try SwiftTransactionEncoder.encodeAuditOfflineNoteV2(
@@ -346,6 +431,20 @@ public extension IrohaSDK {
         submit(envelope: envelope, completion: completion)
     }
 
+    func submit(defundOfflineNoteV2 request: DefundOfflineNoteV2Request,
+                keypair: Keypair,
+                completion: @Sendable @escaping (Error?) -> Void) throws {
+        let envelope = try buildDefundOfflineNoteV2(request: request, keypair: keypair)
+        submit(envelope: envelope, completion: completion)
+    }
+
+    func submit(defundOfflineNoteV2 request: DefundOfflineNoteV2Request,
+                signingKey: SigningKey,
+                completion: @Sendable @escaping (Error?) -> Void) throws {
+        let envelope = try buildDefundOfflineNoteV2(request: request, signingKey: signingKey)
+        submit(envelope: envelope, completion: completion)
+    }
+
     func submit(auditOfflineNoteV2 request: AuditOfflineNoteV2Request,
                 keypair: Keypair,
                 completion: @Sendable @escaping (Error?) -> Void) throws {
@@ -382,6 +481,18 @@ public extension IrohaSDK {
     func submit(redeemOfflineNoteV2 request: RedeemOfflineNoteV2Request,
                 signingKey: SigningKey) async throws {
         try await submit(envelope: buildRedeemOfflineNoteV2(request: request, signingKey: signingKey))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func submit(defundOfflineNoteV2 request: DefundOfflineNoteV2Request,
+                keypair: Keypair) async throws {
+        try await submit(envelope: buildDefundOfflineNoteV2(request: request, keypair: keypair))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func submit(defundOfflineNoteV2 request: DefundOfflineNoteV2Request,
+                signingKey: SigningKey) async throws {
+        try await submit(envelope: buildDefundOfflineNoteV2(request: request, signingKey: signingKey))
     }
 
     @available(iOS 15.0, macOS 12.0, *)

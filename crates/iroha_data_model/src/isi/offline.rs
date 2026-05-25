@@ -10,7 +10,11 @@ isi! {
 }
 
 isi! {
-    /// Redeem a production Offline V2 bearer note token.
+    /// Redeem a production Offline V2 bearer note claim.
+    ///
+    /// This instruction consumes a claim that is already known to ledger state. For a
+    /// peer-to-peer bearer output that has not been audited yet, submit the ordered
+    /// `AuditOfflineNoteV2` lineage before this instruction in the same transaction.
     pub struct RedeemOfflineNoteV2 {
         /// Compact recursive proof and consumed nullifiers.
         pub redemption: OfflineNoteRedeemV2,
@@ -18,7 +22,10 @@ isi! {
 }
 
 isi! {
-    /// Submit an optional Offline V2 audit bundle without requiring online settlement for finality.
+    /// Submit an Offline V2 audit bundle.
+    ///
+    /// Audits are optional for offline transfer finality, but they are the lineage that makes
+    /// peer-to-peer bearer outputs recognizable to the ledger before later defunding.
     pub struct AuditOfflineNoteV2 {
         /// Compact audit payload.
         pub audit: OfflineNoteAuditBundleV2,

@@ -592,24 +592,37 @@ deriving the note commitment from `settlement.entry_hash`. Redemption and audit
 payloads are submitted as direct transaction instructions; the legacy non-V2
 offline HTTP routes are no longer published.
 Swift exposes `OfflineNoteIssueV2`, `OfflineNoteRedeemV2`, and `OfflineNoteAuditBundleV2`
-models plus `buildIssueOfflineNoteV2`, `buildRedeemOfflineNoteV2`, and
-`buildAuditOfflineNoteV2` transaction builders on `IrohaSDK`. Redeem and audit builders verify
-that the recursive proof's public-input hash matches the canonical Swift/Rust Norito payload
-before signing, so callers pass real prover output instead of mock-proof placeholders.
+models plus `buildIssueOfflineNoteV2`, `buildRedeemOfflineNoteV2`,
+`buildAuditOfflineNoteV2`, and `buildDefundOfflineNoteV2` transaction builders on
+`IrohaSDK`. Redeem and audit builders verify that the recursive proof's public-input hash
+matches the canonical Swift/Rust Norito payload before signing, so callers pass real prover
+output instead of mock-proof placeholders.
+
+`buildRedeemOfflineNoteV2` signs a single redeem instruction. It is only appropriate when the
+source note's issued claim is already recorded on-chain, such as issuer-loaded notes or outputs
+whose audit lineage has already been published. P2P offline cash is a bearer transfer: the
+recipient must not require the note to have been pre-issued on-chain before accepting or
+redeeming it. For bearer defunding, use `DefundOfflineNoteV2Request` through
+`buildDefundOfflineNoteV2` or `submit(defundOfflineNoteV2:...)`; it puts the ordered
+`bearerAuditTrail` audits before the final `RedeemOfflineNoteV2` instruction in the same signed
+transaction, so the output claim is anchored and redeemed atomically.
+
 `OfflineNoteV2Wallet` adds the app-facing one-call flow for load, receive
 request preparation, P2P pay, accept, optional audit publication, redeem
 submission, and sync. Offline-to-offline pay/accept is local-final and
 irrevocable: the sender immediately records spent inputs and spendable change,
 while the recipient marks the matched pending output spendable after local
 token and proof verification. No online sync is required for the value transfer.
-`publishAudit` is a separate online evidence-submission step and does not change
+Payment tokens carry the bearer audit trail needed to defund received notes; accepted P2P notes
+persist that trail locally, and wallet `redeem(_:)` submits an atomic defund instead of a naked
+redeem. `publishAudit` is a separate online evidence-submission step and does not change
 wallet note spendability. The first release surface is dependency-injected:
 apps provide Torii canonical auth, device binding, attestation, proof
 generation/verification, transaction submission, and persistent storage.
 `sync()` can also use an app-provided transaction-outcome resolver to finalize
 redeem-pending note records after redeem finality. The SDK includes an in-memory store, a
 `ToriiOfflineNoteV2IssuerClient` for body-signed key-refill plus note-issue
-loads, and a direct `IrohaSDK` audit/redeem submitter.
+loads, and a direct `IrohaSDK` audit/redeem/defund submitter.
 `OfflineNoteV2TransferHandoff` wraps the canonical payment token into app-facing
 transfer modalities. Use `qrStreamingFrameBytes(for:)` for animated/binary QR
 flows, `nfcFrameBytes(for:)` for APDU-sized NFC frame exchange, and
