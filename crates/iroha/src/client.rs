@@ -6379,6 +6379,20 @@ mod evidence_http_tests {
         assert_eq!(outcome.hash, expected_hash);
         assert_eq!(outcome.terminal_kind, "Rejected");
         assert_eq!(outcome.attempts, 1);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("status snapshot");
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("global".to_owned())
+        );
     }
 
     #[test]
@@ -6416,6 +6430,148 @@ mod evidence_http_tests {
         assert_eq!(outcome.hash, expected_hash);
         assert_eq!(outcome.terminal_kind, "Expired");
         assert_eq!(outcome.attempts, 1);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("status snapshot");
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("global".to_owned())
+        );
+    }
+
+    #[test]
+    fn wait_for_transaction_terminal_status_uses_local_scope_for_non_terminal_target() {
+        let hash =
+            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                Hash::prehashed([0x33; Hash::LENGTH]),
+            );
+        let expected_hash = hash.to_string();
+        let payload = norito::json!({
+            "hash": expected_hash,
+            "status": { "kind": "Queued" },
+            "scope": "local",
+            "resolved_from": "queue",
+        });
+        let body = norito::json::to_string(&payload).expect("status payload");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let outcome = with_mock_http(
+            respond_with(&store, json_response(StatusCode::OK, &body)),
+            || {
+                let client = client_with_base_url(base_url());
+                client.wait_for_transaction_terminal_status(
+                    hash,
+                    TransactionWaitOptions {
+                        timeout: Duration::from_millis(50),
+                        poll_interval: Duration::from_millis(1),
+                        terminal_statuses: vec![TransactionWaitTerminalStatus::Queued],
+                    },
+                )
+            },
+        )
+        .expect("configured queued status should be returned");
+
+        assert_eq!(outcome.hash, expected_hash);
+        assert_eq!(outcome.terminal_kind, "Queued");
+        assert_eq!(outcome.attempts, 1);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("status snapshot");
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
+        );
+    }
+
+    #[test]
+    fn wait_for_transaction_terminal_status_uses_local_scope_for_mixed_targets() {
+        let hash =
+            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                Hash::prehashed([0x34; Hash::LENGTH]),
+            );
+        let expected_hash = hash.to_string();
+        let payload = norito::json!({
+            "hash": expected_hash,
+            "status": { "kind": "Approved", "block_height": 7 },
+            "scope": "local",
+            "resolved_from": "cache",
+        });
+        let body = norito::json::to_string(&payload).expect("status payload");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        let outcome = with_mock_http(
+            respond_with(&store, json_response(StatusCode::OK, &body)),
+            || {
+                let client = client_with_base_url(base_url());
+                client.wait_for_transaction_terminal_status(
+                    hash,
+                    TransactionWaitOptions {
+                        timeout: Duration::from_millis(50),
+                        poll_interval: Duration::from_millis(1),
+                        terminal_statuses: vec![
+                            TransactionWaitTerminalStatus::Rejected,
+                            TransactionWaitTerminalStatus::Approved,
+                        ],
+                    },
+                )
+            },
+        )
+        .expect("mixed targets should stop on approved status");
+
+        assert_eq!(outcome.hash, expected_hash);
+        assert_eq!(outcome.terminal_kind, "Approved");
+        assert_eq!(outcome.block_height, Some(7));
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("status snapshot");
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
+        );
+    }
+
+    #[test]
+    fn wait_for_transaction_terminal_status_scope_is_global_for_terminal_only_targets() {
+        assert_eq!(
+            transaction_wait_status_scope(&[
+                TransactionWaitTerminalStatus::Applied,
+                TransactionWaitTerminalStatus::Rejected,
+                TransactionWaitTerminalStatus::Expired,
+            ]),
+            "global"
+        );
+        assert_eq!(
+            transaction_wait_status_scope(&[TransactionWaitTerminalStatus::Committed]),
+            "local"
+        );
+        assert_eq!(
+            transaction_wait_status_scope(&[
+                TransactionWaitTerminalStatus::Expired,
+                TransactionWaitTerminalStatus::Queued,
+            ]),
+            "local"
+        );
     }
 
     #[test]
@@ -7129,6 +7285,14 @@ pub struct TransactionWaitOutcome {
     pub attempts: u64,
     /// Wall-clock time spent waiting, in milliseconds.
     pub elapsed_ms: u64,
+    /// Block height reported for the terminal status when available.
+    pub block_height: Option<u64>,
+    /// Rejection reason reported for rejected transactions.
+    pub rejection_reason: Option<iroha_data_model::transaction::error::TransactionRejectionReason>,
+    /// Status read scope used by Torii.
+    pub scope: String,
+    /// Source used by Torii to resolve the terminal status.
+    pub resolved_from: String,
     /// Final typed pipeline status payload returned by Torii.
     pub r#final: PipelineTransactionStatusResponse,
 }
@@ -8680,6 +8844,7 @@ impl Client {
         } else {
             terminal_statuses
         };
+        let poll_scope = transaction_wait_status_scope(&stop_statuses);
         let target_description = format_transaction_wait_target(&stop_statuses);
         let mut attempts = 0_u64;
         let mut last_status: Option<String> = None;
@@ -8687,7 +8852,7 @@ impl Client {
         loop {
             attempts = attempts.saturating_add(1);
             if let Some(response) =
-                self.get_transaction_status_response_with_scope(hash, Some("local"))?
+                self.get_transaction_status_response_with_scope(hash, Some(poll_scope))?
             {
                 let kind = response.status.kind.as_str();
                 last_status = Some(kind.to_owned());
@@ -8698,11 +8863,19 @@ impl Client {
                     ));
                 }
                 if should_stop_waiting_on_pipeline_kind(kind, &stop_statuses) {
+                    let block_height = response.status.block_height;
+                    let rejection_reason = response.status.rejection_reason.clone();
+                    let scope = response.scope.clone();
+                    let resolved_from = response.resolved_from.clone();
                     return Ok(TransactionWaitOutcome {
                         hash: response.hash.clone(),
                         terminal_kind: kind.to_owned(),
                         attempts,
                         elapsed_ms: elapsed_ms_u64(start.elapsed()),
+                        block_height,
+                        rejection_reason,
+                        scope,
+                        resolved_from,
                         r#final: response,
                     });
                 }
@@ -12829,6 +13002,23 @@ fn should_stop_waiting_on_pipeline_kind(
         || terminal_statuses
             .iter()
             .any(|status| status.as_str().eq_ignore_ascii_case(kind))
+}
+
+fn transaction_wait_status_scope(
+    terminal_statuses: &[TransactionWaitTerminalStatus],
+) -> &'static str {
+    if terminal_statuses.iter().any(|status| {
+        matches!(
+            status,
+            TransactionWaitTerminalStatus::Queued
+                | TransactionWaitTerminalStatus::Approved
+                | TransactionWaitTerminalStatus::Committed
+        )
+    }) {
+        "local"
+    } else {
+        "global"
+    }
 }
 
 fn should_error_on_unrequested_transaction_failure(

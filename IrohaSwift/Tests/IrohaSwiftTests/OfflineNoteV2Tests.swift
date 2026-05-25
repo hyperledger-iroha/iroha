@@ -221,9 +221,11 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(noritoDecoded.tokenIdHex, token.tokenIdHex)
         XCTAssertEqual(noritoDecoded.paymentRequestId, token.paymentRequestId)
         XCTAssertEqual(try noritoDecoded.audit.noritoEncoded(), try token.audit.noritoEncoded())
+        XCTAssertEqual(noritoDecoded.bearerAuditTrail.map(\.tokenId), [token.tokenId])
         let canonicalDecoded = try OfflineNoteV2PaymentTokenCodec.decodeNorito(canonicalPayload)
         XCTAssertEqual(canonicalDecoded.tokenIdHex, token.tokenIdHex)
         XCTAssertEqual(try canonicalDecoded.audit.noritoEncoded(), try token.audit.noritoEncoded())
+        XCTAssertEqual(canonicalDecoded.bearerAuditTrail.map(\.tokenId), [token.tokenId])
 
         let text = try OfflineNoteV2PaymentTokenCodec.encodeText(token)
         XCTAssertEqual(text, fixture.sdkInterop.paymentTokenText)
@@ -1919,11 +1921,13 @@ final class OfflineNoteV2Tests: XCTestCase {
         // exercise the escape path. `JSONSerialization` with only
         // `[.sortedKeys]` would emit `\/` here.
         let offlinePublicKey = "AB//CD/EFGH//IJ="
+        let attestationKeyId = "attestation/key//with/slash"
         let deviceBinding = try OfflineNoteV2IssuerDeviceBinding(
             deviceId: "device-1",
             offlinePublicKey: offlinePublicKey,
             deviceBinding: [
                 "device_id": "device-1",
+                "attestation_key_id": attestationKeyId,
                 "offline_public_key": offlinePublicKey,
                 "signature_base64": "ABC//DEF/GHI/JKL=",
             ]
@@ -1977,6 +1981,10 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertTrue(
             rawString.contains(offlinePublicKey),
             "expected the raw offline_public_key (with /) to appear unescaped in the body"
+        )
+        XCTAssertTrue(
+            rawString.contains(attestationKeyId),
+            "expected the raw attestation_key_id (with /) to appear unescaped in the body"
         )
     }
 
@@ -2041,9 +2049,12 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(recipientSubmitter.audits.count, 1)
         let redeeming = try await recipientWallet.redeem(accepted)
         XCTAssertEqual(redeeming.state, .redeemPending)
-        XCTAssertEqual(recipientSubmitter.redemptions.count, 1)
+        XCTAssertTrue(recipientSubmitter.redemptions.isEmpty)
+        XCTAssertEqual(recipientSubmitter.defunds.count, 1)
+        let defund = try XCTUnwrap(recipientSubmitter.defunds.first)
+        XCTAssertEqual(defund.bearerAuditTrail.map(\.tokenId), [token.tokenId])
         XCTAssertEqual(
-            try recipientSubmitter.redemptions[0].publicInputsHash().hexLowercased(),
+            try defund.redemption.publicInputsHash().hexLowercased(),
             fixture.chainVectors.redeem.publicInputsHash
         )
     }
@@ -2483,6 +2494,108 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         let accepted = try recipientWallet.accept(token)
         XCTAssertEqual(accepted.state, .spendable)
+        XCTAssertEqual(accepted.bearerAuditTrail.map(\.tokenId), [token.tokenId])
+    }
+
+    func testOfflineNoteV2WalletRedeemDefundsP2pBearerWithAuditTrail() async throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        let senderStore = InMemoryOfflineNoteV2Store()
+        try senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
+        let senderWallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: senderStore,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: try Self.certificateVerifier(fixture),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.tokenNonceHex),
+                try Self.hex(derivation.changeNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_002_700 }
+        )
+        let recipientStore = InMemoryOfflineNoteV2Store()
+        let recipientSubmitter = RecordingTransactionSubmitter()
+        let recipientWallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
+            store: recipientStore,
+            transactionSubmitter: recipientSubmitter,
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: try Self.certificateVerifier(fixture),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.recipientNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_002_800 }
+        )
+
+        let receiveRequest = try recipientWallet.prepareReceive(
+            assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
+            amount: fixture.chainVectors.redeem.amount
+        )
+        let token = try senderWallet.pay(receiveRequest)
+        let accepted = try recipientWallet.accept(token)
+
+        _ = try await recipientWallet.redeem(accepted)
+
+        XCTAssertEqual(recipientSubmitter.defunds.count, 1)
+        let defund = try XCTUnwrap(recipientSubmitter.defunds.first)
+        XCTAssertEqual(defund.bearerAuditTrail.map(\.tokenId), [token.tokenId])
+        XCTAssertEqual(defund.redemption.sourceNoteCommitment, accepted.noteCommitment)
+        XCTAssertTrue(recipientSubmitter.redemptions.isEmpty)
+    }
+
+    func testOfflineNoteV2WalletRejectsP2pRedeemWithoutBearerAuditTrail() async throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        let recipientStore = InMemoryOfflineNoteV2Store()
+        let note = try OfflineNoteV2WalletNote(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            assetId: fixture.chainVectors.redeem.assetId,
+            amount: fixture.chainVectors.redeem.amount,
+            keyCertificate: recipientCertificate,
+            noteCommitment: try Self.hex(derivation.recipientOutputCommitment),
+            noteSecret: try Self.hex(derivation.recipientNoteSecretHex),
+            origin: .p2pOutput(OfflineNoteP2pOutputOriginV2(
+                paymentRequestId: derivation.paymentRequestId,
+                outputIndex: 0
+            )),
+            state: .spendable,
+            createdAtMs: 1_700_000_002_900,
+            updatedAtMs: 1_700_000_002_900
+        )
+        try recipientStore.upsert(note)
+        let submitter = RecordingTransactionSubmitter()
+        let wallet = OfflineNoteV2Wallet(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
+            store: recipientStore,
+            transactionSubmitter: submitter,
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: try Self.certificateVerifier(fixture),
+            randomSource: QueueRandomSource(values: []),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_003_000 }
+        )
+
+        await XCTAssertThrowsErrorAsync(try await wallet.redeem(note)) { error in
+            XCTAssertEqual(error as? OfflineNoteV2WalletError, .missingBearerAuditTrail)
+        }
+        XCTAssertTrue(submitter.defunds.isEmpty)
+        XCTAssertTrue(submitter.redemptions.isEmpty)
     }
 
     func testOfflineNoteV2WalletSyncReconcilesFailedAuditAndRedeemOutcomes() async throws {
@@ -2674,15 +2787,31 @@ final class OfflineNoteV2Tests: XCTestCase {
             keypair: keypair,
             creationTimeMs: creationTimeMs
         )
+        let defund = try SwiftTransactionEncoder.encodeDefundOfflineNoteV2(
+            request: DefundOfflineNoteV2Request(
+                chainId: chainId,
+                authority: authority,
+                bearerAuditTrail: [Self.audit(fixture)],
+                redemption: Self.redeem(fixture),
+                ttlMs: 60_000
+            ),
+            keypair: keypair,
+            creationTimeMs: creationTimeMs
+        )
 
-        for envelope in [issue, audit, redeem] {
+        for envelope in [issue, audit, redeem, defund] {
             XCTAssertEqual(envelope.norito.first, 1)
             XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
             XCTAssertEqual(envelope.transactionHash.count, 32)
             XCTAssertNil(envelope.payload)
         }
+        XCTAssertEqual(try Self.instructionCount(in: issue), 1)
+        XCTAssertEqual(try Self.instructionCount(in: audit), 1)
+        XCTAssertEqual(try Self.instructionCount(in: redeem), 1)
+        XCTAssertEqual(try Self.instructionCount(in: defund), 2)
         XCTAssertNotEqual(issue.transactionHash, audit.transactionHash)
         XCTAssertNotEqual(audit.transactionHash, redeem.transactionHash)
+        XCTAssertNotEqual(redeem.transactionHash, defund.transactionHash)
     }
 
     func testRedeemBuilderRejectsMismatchedProofBinding() throws {
@@ -3919,6 +4048,7 @@ final class OfflineNoteV2Tests: XCTestCase {
     private final class RecordingTransactionSubmitter: OfflineNoteV2TransactionSubmitter {
         private(set) var audits: [OfflineNoteAuditBundleV2] = []
         private(set) var redemptions: [OfflineNoteRedeemV2] = []
+        private(set) var defunds: [(redemption: OfflineNoteRedeemV2, bearerAuditTrail: [OfflineNoteAuditBundleV2])] = []
 
         func submitAudit(_ audit: OfflineNoteAuditBundleV2) async throws {
             audits.append(audit)
@@ -3926,6 +4056,11 @@ final class OfflineNoteV2Tests: XCTestCase {
 
         func submitRedeem(_ redemption: OfflineNoteRedeemV2) async throws {
             redemptions.append(redemption)
+        }
+
+        func submitDefund(_ redemption: OfflineNoteRedeemV2,
+                          bearerAuditTrail: [OfflineNoteAuditBundleV2]) async throws {
+            defunds.append((redemption, bearerAuditTrail))
         }
     }
 
@@ -3965,6 +4100,22 @@ final class OfflineNoteV2Tests: XCTestCase {
                 modelPayload: OfflineNoteV2Encoding.encodeIssue(issue)
             )
         )
+    }
+
+    private static func instructionCount(in envelope: SignedTransactionEnvelope) throws -> UInt64 {
+        var signedTransaction = OfflineNoritoReader(data: envelope.signedTransaction)
+        _ = try signedTransaction.readField()
+        let transactionPayload = try signedTransaction.readField()
+        var transaction = OfflineNoritoReader(data: transactionPayload)
+        _ = try transaction.readField()
+        _ = try transaction.readField()
+        _ = try transaction.readField()
+        let executablePayload = try transaction.readField()
+        var executable = OfflineNoritoReader(data: executablePayload)
+        XCTAssertEqual(try executable.readUInt32LE(), 0)
+        let instructionsPayload = try executable.readField()
+        var instructions = OfflineNoritoReader(data: instructionsPayload)
+        return try instructions.readUInt64LE()
     }
 
     private static func auditInstructionEnvelope(_ audit: OfflineNoteAuditBundleV2) throws -> Data {

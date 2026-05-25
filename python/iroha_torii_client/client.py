@@ -4671,6 +4671,7 @@ class ToriiClient:
         entrypoint: Optional[str] = None,
         payload: Any = None,
         gas_asset_id: Optional[str] = None,
+        fee_sponsor: Optional[str] = None,
         gas_limit: Any,
     ) -> ContractCallResponse:
         """Invoke a deployed contract via ``POST /v1/contracts/call``."""
@@ -4706,6 +4707,11 @@ class ToriiClient:
             request_payload["gas_asset_id"] = self._require_non_empty_string(
                 gas_asset_id,
                 "call_contract.gas_asset_id",
+            )
+        if fee_sponsor is not None:
+            request_payload["fee_sponsor"] = self._normalize_canonical_account_id(
+                fee_sponsor,
+                "call_contract.fee_sponsor",
             )
         gas_limit_value = self._coerce_int(gas_limit, "call_contract.gas_limit")
         if gas_limit_value < 0:
@@ -6001,7 +6007,9 @@ class ToriiClient:
 
     @staticmethod
     def _normalize_required_base64_payload(value: Any, context: str) -> str:
-        literal = ToriiClient._require_non_empty_string(value, context)
+        if not isinstance(value, str):
+            raise TypeError(f"{context} must be a string")
+        literal = value.strip()
         try:
             decoded = base64.b64decode(literal, validate=True)
         except (binascii.Error, ValueError) as exc:

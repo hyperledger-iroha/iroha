@@ -569,6 +569,50 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
     }
 
 
+def test_call_contract_posts_fee_sponsor_and_rejects_adversarial_sponsor() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload={
+                "ok": True,
+                "submitted": True,
+                "dataspace": "universal",
+                "code_hash_hex": "22" * 32,
+                "abi_hash_hex": "33" * 32,
+                "creation_time_ms": 42,
+                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "tx_hash_hex": "44" * 32,
+                "entrypoint": "ping",
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    client.call_contract(
+        authority=CANONICAL_OWNER,
+        private_key="00" * 32,
+        contract_alias="router::is",
+        entrypoint="ping",
+        payload={},
+        gas_limit=5000,
+        fee_sponsor=CANONICAL_OWNER,
+    )
+
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload["fee_sponsor"] == CANONICAL_OWNER
+    assert payload["contract_alias"] == "router::is"
+
+    with pytest.raises(ValueError, match="call_contract.fee_sponsor"):
+        client.call_contract(
+            authority=CANONICAL_OWNER,
+            private_key="00" * 32,
+            contract_alias="router::is",
+            gas_limit=5000,
+            fee_sponsor="bad sponsor",
+        )
+
+
 def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
     session = RecordingSession()
     instruction = b"\x01\x02\x03\x04"

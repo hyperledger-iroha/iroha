@@ -2773,6 +2773,7 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
 
 export interface TransactionStatusPollOptions {
   signal?: AbortSignal;
+  scope?: "local" | "auto" | "global";
   intervalMs?: number;
   timeoutMs?: number | null;
   maxAttempts?: number | null;
@@ -7398,7 +7399,12 @@ export declare class ToriiClient {
   submitTransaction(payload: ArrayBufferView | ArrayBuffer | Buffer): Promise<unknown>;
   getTransactionStatus(
     hashHex: string,
-    options?: { allowShortHash?: boolean; signal?: AbortSignal },
+    options?: {
+      allowShortHash?: boolean;
+      signal?: AbortSignal;
+      scope?: "local" | "auto" | "global";
+      endpoints?: ReadonlyArray<string> | string;
+    },
   ): Promise<ToriiPipelineTransactionStatus | null>;
   waitForTransactionStatus(
     hashHex: string,
@@ -7410,7 +7416,12 @@ export declare class ToriiClient {
   ): Promise<ToriiPipelineTransactionStatus>;
   getTransactionStatusTyped(
     hashHex: string,
-    options?: { allowShortHash?: boolean; signal?: AbortSignal },
+    options?: {
+      allowShortHash?: boolean;
+      signal?: AbortSignal;
+      scope?: "local" | "auto" | "global";
+      endpoints?: ReadonlyArray<string> | string;
+    },
   ): Promise<ToriiPipelineStatus | null>;
   waitForTransactionStatusTyped(
     hashHex: string,

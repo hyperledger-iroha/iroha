@@ -870,6 +870,12 @@ public struct IssueOfflineNoteV2Request: Sendable {
     }
 }
 
+/// A single `RedeemOfflineNoteV2` instruction.
+///
+/// Use this only when the source note's issued claim is already recorded on-chain, such as
+/// issuer-loaded notes or P2P outputs whose audit lineage was already published. For offline
+/// bearer notes, prefer `DefundOfflineNoteV2Request` so the audit lineage and redemption are
+/// submitted atomically in one transaction.
 public struct RedeemOfflineNoteV2Request: Sendable {
     public let chainId: String
     public let authority: String
@@ -884,6 +890,35 @@ public struct RedeemOfflineNoteV2Request: Sendable {
                 nonce: UInt32? = nil) {
         self.chainId = chainId
         self.authority = authority
+        self.redemption = redemption
+        self.ttlMs = ttlMs
+        self.nonce = nonce
+    }
+}
+
+/// Atomic defunding request for an offline bearer note.
+///
+/// `bearerAuditTrail` contains the ordered P2P audit lineage that anchors the bearer note's
+/// issued claim before the final redemption instruction in the same signed transaction. Empty
+/// lineage is valid for issuer-loaded notes, but P2P notes should carry at least the payment
+/// token audit that created the redeemed output.
+public struct DefundOfflineNoteV2Request: Sendable {
+    public let chainId: String
+    public let authority: String
+    public let bearerAuditTrail: [OfflineNoteAuditBundleV2]
+    public let redemption: OfflineNoteRedeemV2
+    public let ttlMs: UInt64?
+    public let nonce: UInt32?
+
+    public init(chainId: String,
+                authority: String,
+                bearerAuditTrail: [OfflineNoteAuditBundleV2],
+                redemption: OfflineNoteRedeemV2,
+                ttlMs: UInt64? = nil,
+                nonce: UInt32? = nil) {
+        self.chainId = chainId
+        self.authority = authority
+        self.bearerAuditTrail = bearerAuditTrail
         self.redemption = redemption
         self.ttlMs = ttlMs
         self.nonce = nonce

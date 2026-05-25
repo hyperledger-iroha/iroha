@@ -203,7 +203,11 @@ mod model {
         pub amount: Numeric,
     }
 
-    /// Ledger-issued note claim bound to one compact Offline V2 note certificate.
+    /// Ledger-recognized note claim bound to one compact Offline V2 note certificate.
+    ///
+    /// Issuer loads create this claim directly; P2P bearer outputs create the same claim only
+    /// when their audit lineage is submitted, either before redemption or earlier in the same
+    /// transaction.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -223,6 +227,9 @@ mod model {
     }
 
     /// Redeemable note output observed during Offline V2 audit.
+    ///
+    /// The output is final for offline bearers when received locally. The ledger recognizes it
+    /// after the corresponding audit is committed.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -239,14 +246,17 @@ mod model {
         pub amount: Numeric,
     }
 
-    /// Redemption token submitted online after optional sync.
+    /// Redemption payload submitted online when defunding a bearer note.
+    ///
+    /// The source claim must already be ledger-recognized. For unanchored P2P bearer outputs,
+    /// submit their ordered audit lineage before this redeem instruction in the same transaction.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct OfflineNoteRedeemV2 {
-        /// Issued note commitment consumed by this redemption.
+        /// Ledger-recognized note commitment consumed by this redemption.
         pub source_note_commitment: Hash,
         /// Nullifiers consumed by the redeeming token.
         pub input_nullifiers: Vec<Hash>,
@@ -271,7 +281,7 @@ mod model {
     pub struct OfflineNoteRedeemPublicInputsV2 {
         /// Domain separator for the redemption public inputs.
         pub domain: String,
-        /// Issued note commitment consumed by this redemption.
+        /// Ledger-recognized note commitment consumed by this redemption.
         pub source_note_commitment: Hash,
         /// Nullifiers consumed by the redeeming token.
         pub input_nullifiers: Vec<Hash>,
@@ -285,7 +295,10 @@ mod model {
         pub amount: Numeric,
     }
 
-    /// Optional audit bundle. It is not required for offline finality.
+    /// Audit bundle for Offline V2 P2P bearer lineage.
+    ///
+    /// It is not required for offline transfer finality, but it anchors P2P output claims so the
+    /// ledger can later redeem them from offline escrow.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",

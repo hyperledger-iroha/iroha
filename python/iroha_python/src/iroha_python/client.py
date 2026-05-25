@@ -7048,6 +7048,14 @@ _DEFAULT_SUCCESS_STATUSES = frozenset({"Approved", "Committed", "Applied"})
 _DEFAULT_FAILURE_STATUSES = frozenset({"Rejected", "Expired"})
 _DEFAULT_RETRY_STATUSES = frozenset({502, 503, 504})
 _DEFAULT_RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_TRANSACTION_STATUS_SCOPES = frozenset({"local", "global"})
+
+
+def _normalize_transaction_status_scope(value: str, context: str) -> str:
+    normalized = _require_non_empty_string(value, context).lower()
+    if normalized not in _TRANSACTION_STATUS_SCOPES:
+        raise ValueError(f"{context} must be one of: local, global")
+    return normalized
 
 try:  # pragma: no cover - optional dependency
     import websocket
@@ -7283,6 +7291,7 @@ class ToriiClient(_BaseToriiClient):
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
+        scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
@@ -7303,6 +7312,7 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
             timeout=timeout,
             max_attempts=max_attempts,
+            scope=scope,
             success_statuses=success_statuses,
             failure_statuses=failure_statuses,
             on_status=on_status,
@@ -7342,6 +7352,7 @@ class ToriiClient(_BaseToriiClient):
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
+        scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
@@ -7354,6 +7365,7 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
             timeout=timeout,
             max_attempts=max_attempts,
+            scope=scope,
             success_statuses=success_statuses,
             failure_statuses=failure_statuses,
             on_status=on_status,
@@ -7366,6 +7378,7 @@ class ToriiClient(_BaseToriiClient):
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
+        scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
@@ -7394,6 +7407,7 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
             timeout=timeout,
             max_attempts=max_attempts,
+            scope=scope,
             success_statuses=success_statuses,
             failure_statuses=failure_statuses,
             on_status=on_status,
@@ -9098,6 +9112,7 @@ class ToriiClient(_BaseToriiClient):
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
+        scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
@@ -9137,6 +9152,7 @@ class ToriiClient(_BaseToriiClient):
                 interval=interval,
                 timeout=timeout,
                 max_attempts=max_attempts,
+                scope=scope,
                 success_statuses=success_statuses,
                 failure_statuses=failure_statuses,
                 on_status=on_status,
@@ -9147,13 +9163,19 @@ class ToriiClient(_BaseToriiClient):
             response = {}
         return envelope_out, response
 
-    def get_transaction_status(self, hash_hex: str) -> Optional[Any]:
+    def get_transaction_status(
+        self,
+        hash_hex: str,
+        *,
+        scope: str = "global",
+    ) -> Optional[Any]:
         """Fetch transaction pipeline status for the given hash (hex encoded)."""
 
+        scope = _normalize_transaction_status_scope(scope, "get_transaction_status.scope")
         response = self._request(
             "GET",
             "/v1/pipeline/transactions/status",
-            params={"hash": hash_hex},
+            params={"hash": hash_hex, "scope": scope},
         )
         if response.status_code == 404:
             return None
@@ -9167,6 +9189,7 @@ class ToriiClient(_BaseToriiClient):
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
+        scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
@@ -9179,6 +9202,7 @@ class ToriiClient(_BaseToriiClient):
         a failure status is observed within the configured bounds.
         """
 
+        scope = _normalize_transaction_status_scope(scope, "wait_for_transaction_status.scope")
         success_set = (
             frozenset(str(s) for s in success_statuses)
             if success_statuses is not None
@@ -9195,7 +9219,7 @@ class ToriiClient(_BaseToriiClient):
 
         while True:
             attempts += 1
-            payload = self.get_transaction_status(hash_hex)
+            payload = self.get_transaction_status(hash_hex, scope=scope)
             status = _extract_pipeline_status_kind(payload)
 
             if on_status is not None:

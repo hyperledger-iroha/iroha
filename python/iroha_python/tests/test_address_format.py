@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
+from types import SimpleNamespace
 from typing import Any, Dict, Optional, Union
 
 import pytest
 import requests
 from requests.structures import CaseInsensitiveDict
 
+import iroha_python.client as client_module
 from iroha_python import (
     MultisigResponse,
     ToriiClient,
@@ -72,6 +74,94 @@ def _client_with_session() -> tuple[ToriiClient, RecordingSession]:
     session = RecordingSession()
     client = ToriiClient("http://localhost:8080", session=session)
     return client, session
+
+
+def test_get_transaction_status_defaults_to_global_scope() -> None:
+    client, session = _client_with_session()
+    session._response = StubResponse(payload={"status": "Committed"})
+    tx_hash = "aa" * 32
+
+    payload = client.get_transaction_status(tx_hash)
+
+    assert payload == {"status": "Committed"}
+    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["url"] == "http://localhost:8080/v1/pipeline/transactions/status"
+    assert session.calls[0]["params"] == {"hash": tx_hash, "scope": "global"}
+
+
+def test_wait_for_transaction_status_forwards_explicit_scope() -> None:
+    client, session = _client_with_session()
+    session._response = StubResponse(payload={"status": "Committed"})
+    tx_hash = "bb" * 32
+
+    payload = client.wait_for_transaction_status(
+        tx_hash,
+        interval=0,
+        timeout=1,
+        scope="local",
+    )
+
+    assert payload == {"status": "Committed"}
+    assert session.calls[0]["params"] == {"hash": tx_hash, "scope": "local"}
+
+
+def test_transaction_status_scope_rejects_auto_and_injected_values() -> None:
+    client, session = _client_with_session()
+    tx_hash = "cc" * 32
+
+    for scope in ("auto", "global&scope=local", "local,global", "../global"):
+        with pytest.raises(ValueError, match="must be one of: local, global"):
+            client.get_transaction_status(tx_hash, scope=scope)
+
+    with pytest.raises(ValueError, match="must be one of: local, global"):
+        client.wait_for_transaction_status(
+            tx_hash,
+            interval=0,
+            timeout=0,
+            scope="GLOBAL\nscope=local",
+        )
+
+    assert session.calls == []
+
+
+def test_build_and_submit_transaction_forwards_wait_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _session = _client_with_session()
+    envelope = SimpleNamespace(hash=b"\xaa" * 32)
+    captured: Dict[str, Any] = {}
+
+    class FakeCrypto:
+        @staticmethod
+        def build_signed_transaction(*_args: Any, **_kwargs: Any) -> Any:
+            return envelope
+
+    def fake_submit_transaction_envelope_and_wait(
+        submitted_envelope: Any,
+        **kwargs: Any,
+    ) -> Dict[str, str]:
+        captured["envelope"] = submitted_envelope
+        captured.update(kwargs)
+        return {"status": "Committed"}
+
+    monkeypatch.setattr(client_module, "_require_crypto", lambda: FakeCrypto)
+    monkeypatch.setattr(
+        client,
+        "submit_transaction_envelope_and_wait",
+        fake_submit_transaction_envelope_and_wait,
+    )
+
+    envelope_out, result = client.build_and_submit_transaction(
+        "00000000-0000-0000-0000-000000000000",
+        "testu-authority",
+        b"\x11" * 32,
+        scope="local",
+    )
+
+    assert envelope_out is envelope
+    assert result == {"status": "Committed"}
+    assert captured["envelope"] is envelope
+    assert captured["scope"] == "local"
 
 
 def test_account_query_envelope_omits_canonical_i105() -> None:

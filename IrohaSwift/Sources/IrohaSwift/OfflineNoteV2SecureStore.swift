@@ -30,6 +30,9 @@ public enum OfflineNoteV2WalletNoteJsonCodec {
             "note_commitment_hex": note.noteCommitmentHex,
             "note_secret_base64": note.noteSecret.base64EncodedString(),
             "origin": try encodeOrigin(note.origin),
+            "bearer_audit_trail_norito_base64": try note.bearerAuditTrail.map {
+                try $0.noritoEncoded().base64EncodedString()
+            },
             "state": note.state.rawValue,
             "created_at_ms": NSNumber(value: note.createdAtMs),
             "updated_at_ms": NSNumber(value: note.updatedAtMs)
@@ -72,6 +75,7 @@ public enum OfflineNoteV2WalletNoteJsonCodec {
             noteCommitment: noteCommitment,
             noteSecret: noteSecret,
             origin: decodeOrigin(dictionary(object["origin"], field: "origin")),
+            bearerAuditTrail: try decodeAuditTrail(object["bearer_audit_trail_norito_base64"]),
             state: state,
             createdAtMs: uint(object["created_at_ms"], field: "created_at_ms"),
             updatedAtMs: uint(object["updated_at_ms"], field: "updated_at_ms")
@@ -115,6 +119,24 @@ public enum OfflineNoteV2WalletNoteJsonCodec {
             ))
         default:
             throw OfflineNoteV2WalletNoteJsonCodecError.invalidField("origin.type")
+        }
+    }
+
+    private static func decodeAuditTrail(_ value: Any?) throws -> [OfflineNoteAuditBundleV2] {
+        guard let value else {
+            return []
+        }
+        guard let values = value as? [Any] else {
+            throw OfflineNoteV2WalletNoteJsonCodecError.invalidField("bearer_audit_trail_norito_base64")
+        }
+        return try values.enumerated().map { index, item in
+            guard let encoded = item as? String,
+                  let bytes = Data(base64Encoded: encoded) else {
+                throw OfflineNoteV2WalletNoteJsonCodecError.invalidField(
+                    "bearer_audit_trail_norito_base64[\(index)]"
+                )
+            }
+            return try OfflineNoteV2Decoding.decodeAudit(bytes)
         }
     }
 

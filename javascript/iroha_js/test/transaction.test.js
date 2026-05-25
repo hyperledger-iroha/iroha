@@ -128,7 +128,7 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
     }
     if (url.endsWith("/v1/pipeline/transactions")) {
       assert.ok(Buffer.isBuffer(init.body));
-      assert.deepEqual([...init.body.values()], [...signedBytes.values()]);
+      assert.deepEqual([...init.body.values()], [0x01, ...signedBytes.values()]);
       return submissionResponse;
     }
     return statusQueue.shift() ?? statusQueue[statusQueue.length - 1];
@@ -153,6 +153,214 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   assert.equal(result.hash, hashBytes.toString("hex"));
   assert.deepEqual(result.status, { status: "Committed" });
   assert.equal(calls.length >= 3, true);
+  const statusCalls = calls.filter((call) =>
+    String(call.url).includes("/v1/pipeline/transactions/status"),
+  );
+  assert.equal(statusCalls.length, 3);
+  assert.deepEqual(
+    statusCalls.map((call) => new URL(call.url).searchParams.get("scope")),
+    ["global", "global", "global"],
+  );
+});
+
+test("submitSignedTransaction forwards explicit transaction status scope", async () => {
+  const txBytes = Buffer.from([0xcc]);
+  const signedBytes = Buffer.from([0xdd]);
+  const binding = {
+    hashSignedTransaction: () => Buffer.alloc(32, 0x66),
+    signTransaction: () => signedBytes,
+  };
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url.endsWith("/v1/node/capabilities")) {
+      return createResponse({
+        status: 200,
+        jsonData: NODE_CAPABILITIES,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/pipeline/transactions")) {
+      return createResponse({
+        status: 202,
+        jsonData: { status: "Accepted" },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return createResponse({
+      status: 200,
+      jsonData: { status: "Committed" },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  await withNativeBinding(binding, () =>
+    submitSignedTransaction(client, txBytes, {
+      waitForCommit: true,
+      pollIntervalMs: 0,
+      privateKey: Buffer.alloc(32, 0x01),
+      scope: "local",
+    }),
+  );
+
+  const statusCall = calls.find((call) =>
+    String(call.url).includes("/v1/pipeline/transactions/status"),
+  );
+  assert.ok(statusCall);
+  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "local");
+});
+
+test("submitSignedTransaction explicit status scope overrides client configuration", async () => {
+  const txBytes = Buffer.from([0xd0]);
+  const signedBytes = Buffer.from([0xd1]);
+  const binding = {
+    hashSignedTransaction: () => Buffer.alloc(32, 0x68),
+    signTransaction: () => signedBytes,
+  };
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url.endsWith("/v1/node/capabilities")) {
+      return createResponse({
+        status: 200,
+        jsonData: NODE_CAPABILITIES,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/pipeline/transactions")) {
+      return createResponse({
+        status: 202,
+        jsonData: { status: "Accepted" },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return createResponse({
+      status: 200,
+      jsonData: { status: "Committed" },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    transactionStatusScope: "local",
+  });
+
+  await withNativeBinding(binding, () =>
+    submitSignedTransaction(client, txBytes, {
+      waitForCommit: true,
+      pollIntervalMs: 0,
+      privateKey: Buffer.alloc(32, 0x01),
+      scope: "global",
+    }),
+  );
+
+  const statusCall = calls.find((call) =>
+    String(call.url).includes("/v1/pipeline/transactions/status"),
+  );
+  assert.ok(statusCall);
+  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "global");
+});
+
+test("submitSignedTransaction inherits client transaction status scope", async () => {
+  const txBytes = Buffer.from([0xce]);
+  const signedBytes = Buffer.from([0xcf]);
+  const binding = {
+    hashSignedTransaction: () => Buffer.alloc(32, 0x67),
+    signTransaction: () => signedBytes,
+  };
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url.endsWith("/v1/node/capabilities")) {
+      return createResponse({
+        status: 200,
+        jsonData: NODE_CAPABILITIES,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/pipeline/transactions")) {
+      return createResponse({
+        status: 202,
+        jsonData: { status: "Accepted" },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return createResponse({
+      status: 200,
+      jsonData: { status: "Committed" },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    transactionStatusScope: "local",
+  });
+
+  await withNativeBinding(binding, () =>
+    submitSignedTransaction(client, txBytes, {
+      waitForCommit: true,
+      pollIntervalMs: 0,
+      privateKey: Buffer.alloc(32, 0x01),
+    }),
+  );
+
+  const statusCall = calls.find((call) =>
+    String(call.url).includes("/v1/pipeline/transactions/status"),
+  );
+  assert.ok(statusCall);
+  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "local");
+});
+
+test("submitSignedTransaction null status scope inherits client configuration", async () => {
+  const txBytes = Buffer.from([0xd2]);
+  const signedBytes = Buffer.from([0xd3]);
+  const binding = {
+    hashSignedTransaction: () => Buffer.alloc(32, 0x69),
+    signTransaction: () => signedBytes,
+  };
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url.endsWith("/v1/node/capabilities")) {
+      return createResponse({
+        status: 200,
+        jsonData: NODE_CAPABILITIES,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/pipeline/transactions")) {
+      return createResponse({
+        status: 202,
+        jsonData: { status: "Accepted" },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return createResponse({
+      status: 200,
+      jsonData: { status: "Committed" },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    transactionStatusScope: "auto",
+  });
+
+  await withNativeBinding(binding, () =>
+    submitSignedTransaction(client, txBytes, {
+      waitForCommit: true,
+      pollIntervalMs: 0,
+      privateKey: Buffer.alloc(32, 0x01),
+      scope: null,
+    }),
+  );
+
+  const statusCall = calls.find((call) =>
+    String(call.url).includes("/v1/pipeline/transactions/status"),
+  );
+  assert.ok(statusCall);
+  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "auto");
 });
 
 test("submitSignedTransaction times out when no terminal status", async () => {
