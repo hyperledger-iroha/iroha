@@ -30920,16 +30920,16 @@ fn pipeline_status_response(
     scope: PipelineStatusReadScope,
     resolved_from: &'static str,
 ) -> PipelineTransactionStatusResponse {
-    PipelineTransactionStatusResponse {
-        hash: hash.to_string(),
-        status: PipelineTransactionStatus {
+    PipelineTransactionStatusResponse::new(
+        hash.to_string(),
+        PipelineTransactionStatus {
             kind: entry.kind.as_str().to_owned(),
             block_height: entry.block_height.map(NonZeroU64::get),
             rejection_reason: entry.rejection.clone(),
         },
-        scope: scope.as_str().to_owned(),
-        resolved_from: resolved_from.to_owned(),
-    }
+        scope.as_str().to_owned(),
+        resolved_from.to_owned(),
+    )
 }
 
 fn pipeline_status_from_state(

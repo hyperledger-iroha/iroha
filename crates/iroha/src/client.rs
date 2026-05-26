@@ -6582,16 +6582,16 @@ mod evidence_http_tests {
             HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                 Hash::prehashed([0x44; Hash::LENGTH]),
             );
-        let payload = PipelineTransactionStatusResponse {
-            hash: hash.to_string(),
-            status: PipelineTransactionStatus {
+        let payload = PipelineTransactionStatusResponse::new(
+            hash.to_string(),
+            PipelineTransactionStatus {
                 kind: "Queued".to_owned(),
                 block_height: None,
                 rejection_reason: None,
             },
-            scope: "global".to_owned(),
-            resolved_from: "queue".to_owned(),
-        };
+            "global".to_owned(),
+            "queue".to_owned(),
+        );
         let body = norito::json::to_string(
             &norito::json::to_value(&payload).expect("status payload value"),
         )
@@ -6634,16 +6634,16 @@ mod evidence_http_tests {
             HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                 Hash::prehashed([0x45; Hash::LENGTH]),
             );
-        let payload = PipelineTransactionStatusResponse {
-            hash: hash.to_string(),
-            status: PipelineTransactionStatus {
+        let payload = PipelineTransactionStatusResponse::new(
+            hash.to_string(),
+            PipelineTransactionStatus {
                 kind: "Committed".to_owned(),
                 block_height: Some(7),
                 rejection_reason: None,
             },
-            scope: "global".to_owned(),
-            resolved_from: "state".to_owned(),
-        };
+            "global".to_owned(),
+            "state".to_owned(),
+        );
         let body = norito::json::to_string(
             &norito::json::to_value(&payload).expect("status payload value"),
         )
@@ -7293,6 +7293,12 @@ pub struct TransactionWaitOutcome {
     pub scope: String,
     /// Source used by Torii to resolve the terminal status.
     pub resolved_from: String,
+    /// One-line finality summary supplied by Torii.
+    pub summary: String,
+    /// Structured diagnostics supplied by Torii.
+    pub diagnostics: Vec<iroha_torii_shared::PipelineDiagnostic>,
+    /// Trigger completions supplied by Torii when available.
+    pub trigger_completions: Vec<iroha_torii_shared::TriggerCompletionSummary>,
     /// Final typed pipeline status payload returned by Torii.
     pub r#final: PipelineTransactionStatusResponse,
 }
@@ -8867,6 +8873,9 @@ impl Client {
                     let rejection_reason = response.status.rejection_reason.clone();
                     let scope = response.scope.clone();
                     let resolved_from = response.resolved_from.clone();
+                    let summary = response.summary.clone();
+                    let diagnostics = response.diagnostics.clone();
+                    let trigger_completions = response.trigger_completions.clone();
                     return Ok(TransactionWaitOutcome {
                         hash: response.hash.clone(),
                         terminal_kind: kind.to_owned(),
@@ -8876,6 +8885,9 @@ impl Client {
                         rejection_reason,
                         scope,
                         resolved_from,
+                        summary,
+                        diagnostics,
+                        trigger_completions,
                         r#final: response,
                     });
                 }
@@ -14009,16 +14021,16 @@ mod tx_hash_tests {
         let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "nope".to_string(),
         ));
-        let payload = PipelineTransactionStatusResponse {
-            hash: "deadbeef".to_owned(),
-            status: PipelineTransactionStatus {
+        let payload = PipelineTransactionStatusResponse::new(
+            "deadbeef".to_owned(),
+            PipelineTransactionStatus {
                 kind: "Rejected".to_owned(),
                 block_height: None,
                 rejection_reason: Some(reason.clone()),
             },
-            scope: "auto".to_owned(),
-            resolved_from: "state".to_owned(),
-        };
+            "auto".to_owned(),
+            "state".to_owned(),
+        );
 
         let status = super::tx_confirmation_status_from_pipeline_response(&payload);
         assert_eq!(
@@ -14031,26 +14043,26 @@ mod tx_hash_tests {
     fn tx_confirmation_status_from_pipeline_response_accepts_terminal_kinds() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
 
-        let committed_payload = PipelineTransactionStatusResponse {
-            hash: "deadbeef".to_owned(),
-            status: PipelineTransactionStatus {
+        let committed_payload = PipelineTransactionStatusResponse::new(
+            "deadbeef".to_owned(),
+            PipelineTransactionStatus {
                 kind: "Committed".to_owned(),
                 block_height: None,
                 rejection_reason: None,
             },
-            scope: "auto".to_owned(),
-            resolved_from: "state".to_owned(),
-        };
-        let applied_payload = PipelineTransactionStatusResponse {
-            hash: "deadbeef".to_owned(),
-            status: PipelineTransactionStatus {
+            "auto".to_owned(),
+            "state".to_owned(),
+        );
+        let applied_payload = PipelineTransactionStatusResponse::new(
+            "deadbeef".to_owned(),
+            PipelineTransactionStatus {
                 kind: "Applied".to_owned(),
                 block_height: None,
                 rejection_reason: None,
             },
-            scope: "auto".to_owned(),
-            resolved_from: "state".to_owned(),
-        };
+            "auto".to_owned(),
+            "state".to_owned(),
+        );
 
         assert_eq!(
             super::tx_confirmation_status_from_pipeline_response(&committed_payload),
@@ -14066,26 +14078,26 @@ mod tx_hash_tests {
     fn tx_confirmation_status_from_pipeline_response_accepts_non_terminal_kinds() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
 
-        let queued_payload = PipelineTransactionStatusResponse {
-            hash: "deadbeef".to_owned(),
-            status: PipelineTransactionStatus {
+        let queued_payload = PipelineTransactionStatusResponse::new(
+            "deadbeef".to_owned(),
+            PipelineTransactionStatus {
                 kind: "Queued".to_owned(),
                 block_height: None,
                 rejection_reason: None,
             },
-            scope: "auto".to_owned(),
-            resolved_from: "queue".to_owned(),
-        };
-        let approved_payload = PipelineTransactionStatusResponse {
-            hash: "deadbeef".to_owned(),
-            status: PipelineTransactionStatus {
+            "auto".to_owned(),
+            "queue".to_owned(),
+        );
+        let approved_payload = PipelineTransactionStatusResponse::new(
+            "deadbeef".to_owned(),
+            PipelineTransactionStatus {
                 kind: "Approved".to_owned(),
                 block_height: Some(7),
                 rejection_reason: None,
             },
-            scope: "auto".to_owned(),
-            resolved_from: "state".to_owned(),
-        };
+            "auto".to_owned(),
+            "state".to_owned(),
+        );
 
         assert_eq!(
             super::tx_confirmation_status_from_pipeline_response(&queued_payload),

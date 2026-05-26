@@ -982,6 +982,9 @@ impl DevCallArgs {
                 rejection_reason: status.rejection_reason,
                 scope: status.scope,
                 resolved_from: status.resolved_from,
+                summary: status.summary,
+                diagnostics: status.diagnostics,
+                trigger_completions: status.trigger_completions,
                 r#final: status.r#final,
             })
         } else {
@@ -1103,6 +1106,9 @@ impl DevSmokeArgs {
                             "terminal_kind": (status.terminal_kind),
                             "attempts": (status.attempts),
                             "elapsed_ms": (status.elapsed_ms),
+                            "summary": (status.summary),
+                            "diagnostics": (status.diagnostics),
+                            "trigger_completions": (status.trigger_completions),
                             "final": (status.r#final),
                         })
                     } else {
@@ -1958,6 +1964,9 @@ impl Run for DeployArgs {
                 rejection_reason: status.rejection_reason,
                 scope: status.scope,
                 resolved_from: status.resolved_from,
+                summary: status.summary,
+                diagnostics: status.diagnostics,
+                trigger_completions: status.trigger_completions,
                 r#final: status.r#final,
             })?;
         } else {
@@ -2121,6 +2130,9 @@ struct ContractSubmissionWaitResponse {
     rejection_reason: Option<iroha::data_model::transaction::error::TransactionRejectionReason>,
     scope: String,
     resolved_from: String,
+    summary: String,
+    diagnostics: Vec<iroha_torii_shared::PipelineDiagnostic>,
+    trigger_completions: Vec<iroha_torii_shared::TriggerCompletionSummary>,
     r#final: iroha_torii_shared::PipelineTransactionStatusResponse,
 }
 
@@ -2243,6 +2255,9 @@ impl Run for CallArgs {
                 rejection_reason: status.rejection_reason,
                 scope: status.scope,
                 resolved_from: status.resolved_from,
+                summary: status.summary,
+                diagnostics: status.diagnostics,
+                trigger_completions: status.trigger_completions,
                 r#final: status.r#final,
             })?;
         } else {
