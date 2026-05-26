@@ -2,6 +2,84 @@
 
 Last updated: 2026-05-26
 
+## 2026-05-26 Offline Bearer SDK ownership and settlement hardening
+
+- Rust, Swift, Kotlin, and Java Android SDK paths now expose canonical
+  Norito-backed Offline Bearer v2 payloads for policy bundles, purse
+  certificates, receive requests, debit receipts, credit receipts, and
+  settlement batches.
+- Swift, Kotlin, and Java Android also expose SDK-owned Bearer text codecs for
+  the production `wallet-offline-bearer-receive:`,
+  `wallet-offline-bearer-payment:`, and `wallet-offline-bearer-ack:` prefixes,
+  and reject the old OfflineNote production prefixes in the new Bearer codec
+  tests.
+- Swift, Kotlin, and Java Android SDKs now verify Offline Bearer v2 policy,
+  issuer certificates, receive requests, debit receipts, and credit receipts
+  with SDK-owned Ed25519 and P-256 signature handling and fail-closed default
+  hardware capability checks.
+- SDK settlement-batch verifiers now reject stale policy or certificates,
+  revoked transfer/request ids, blacklisted users, asset-limit violations,
+  purse/chain mismatches, and invalid debit/credit balance transitions before
+  app or server settlement submission.
+- Torii Offline Bearer settlement validation now checks batch chain/purse
+  consistency, certificate freshness at event time, issuer policy hashes,
+  asset and purse binding, positive and bounded amounts, non-negative balances,
+  exact debit/credit balance transitions, matching debit/credit transfer ids,
+  receiver-batch debit inclusion, and required receipt signatures.
+- Torii now classifies duplicate receiver settlement submissions
+  deterministically from both the running issuer runtime and durable issuer
+  account metadata markers, and rejects tampered variants after the first
+  accepted transfer fingerprint.
+- Torii settlement completion now submits an issuer-authority transaction for
+  accepted receiver-complete Bearer transfers. The transaction moves the
+  configured asset from sender to recipient and records the accepted transfer
+  fingerprint under issuer metadata for restart-surviving replay protection.
+- Torii key-refill and note-issue responses now include issuer-signed
+  `bearer_policy_bundle` and `bearer_purse_certificate` fields alongside the
+  legacy key-certificate fields, giving SDK-owned Bearer wallets canonical
+  policy/certificate material to install during app cutover.
+- The Java Android SDK now has a Bearer-named NFC APDU facade so Android app
+  QR/NFC/Nearby transport code can route through SDK Bearer prefixes/codecs
+  without app-local OfflineNote transport wrappers.
+- Android app QR/NFC/Nearby production flows now route through SDK Bearer
+  codecs and submit receiver-complete settlement batches; the old OfflineNote
+  load/redeem paths fail closed until a hardware-backed rollback-resistant
+  purse is wired into production constructors.
+- PK and BPNG iOS production release paths now reject old OfflineNote text
+  prefixes, decode Bearer receipts through `IrohaSwift` Bearer codecs, and
+  keep unsupported secure-element hardware fail-closed instead of falling back
+  to app-local proof engines.
+- Remaining follow-up: retire or rename residual legacy DTO/test-fixture names
+  once downstream response contracts no longer expose OfflineNote-shaped
+  fields, broaden physical-device secure-element rollout evidence beyond the
+  simulator/JVM corridors, and remove temporary SDK compatibility shims after
+  all app imports have moved to canonical SDK packages.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii bearer_settlement -- --nocapture`
+  - `cd IrohaSwift && swift test --filter Offline`
+  - `cd kotlin && ./gradlew :core-jvm:test --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `cd ../pk-retail-wallet-android && ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `cd ../bpng/png2-android && ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `cd ../pk-retail-wallet-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Release -destination 'id=0C0009F1-A828-40CC-AD7E-639582DDEE24'`
+  - `cd ../bpng/png2-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Release -destination 'id=0C0009F1-A828-40CC-AD7E-639582DDEE24'`
+  - `cd ../bpng/png2-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'id=0C0009F1-A828-40CC-AD7E-639582DDEE24' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/OfflineViewModelTests -only-testing:RetailWalletIOSTests/OfflineViewFormattingTests -only-testing:RetailWalletIOSTests/OfflineNfcApduProtocolTests`
+  - `cd ../pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'id=0C0009F1-A828-40CC-AD7E-639582DDEE24' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/OfflineViewModelTests -only-testing:RetailWalletIOSTests/OfflineViewFormattingTests` was run; it exited with only known expected legacy cutover failures and no unexpected failures.
+  - Production source audits across the PK/BPNG Android and iOS app repos found
+    no remaining production references to `OfflineNoteWallet`,
+    `OfflineNotePaymentTokenCodec`, `Halo2OfflineNoteProver`,
+    `OfflineRecursiveProofs`, or the other retired app-local proof engines.
+  - `git diff --check` passed in the main Iroha repo and the four app repos.
+- Known validation gap: the PK iOS focused `xcodebuild` offline suite still
+  reports expected legacy cutover failures because some deleted-history tests
+  intentionally exercise old OfflineNote receive/payment-token and
+  recursive-proof fixture assumptions. The BPNG iOS focused offline suite now
+  succeeds with those legacy expectations classified.
+- Full workspace `cargo test` was not run because the focused SDK and Torii
+  coverage exercises the changed Offline Bearer paths without invoking the
+  multi-hour workspace suite.
+
 ## 2026-05-26 integration-test hang hardening follow-up
 
 - `iroha_test_network::NetworkBuilder::new()` now defaults to a 4-peer local

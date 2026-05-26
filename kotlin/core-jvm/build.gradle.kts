@@ -2,6 +2,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.serialization)
     `maven-publish`
 }
 
@@ -15,6 +16,7 @@ repositories {
 dependencies {
     implementation(libs.zstd.jni)
     implementation(libs.bcprov)
+    implementation(libs.serialization.json)
     testImplementation(kotlin("test"))
     testImplementation(libs.junit.params)
 }

@@ -39,6 +39,14 @@ pub const OFFLINE_NOTE_NOTE_COMMITMENT_DOMAIN: &str = "iroha:offline-note:note-c
 pub const OFFLINE_NOTE_INPUT_NULLIFIER_DOMAIN: &str = "iroha:offline-note:input-nullifier";
 /// Domain-separation tag for wallet-derived Offline Note payment token identifiers.
 pub const OFFLINE_NOTE_PAYMENT_TOKEN_ID_DOMAIN: &str = "iroha:offline-note:payment-token-id";
+/// Signature algorithm label for Ed25519 Offline Bearer v2 signatures.
+pub const OFFLINE_BEARER_SIGNATURE_ALGORITHM_ED25519: &str = "ed25519";
+/// Signature algorithm label for ECDSA P-256 with SHA-256 Offline Bearer v2 signatures.
+pub const OFFLINE_BEARER_SIGNATURE_ALGORITHM_ECDSA_P256_SHA256: &str = "ecdsa_p256_sha256";
+/// Raw Ed25519 public-key encoding label for Offline Bearer v2 certificates.
+pub const OFFLINE_BEARER_PUBLIC_KEY_ENCODING_RAW_ED25519: &str = "raw_ed25519";
+/// X9.62 uncompressed P-256 public-key encoding label for Offline Bearer v2 certificates.
+pub const OFFLINE_BEARER_PUBLIC_KEY_ENCODING_X963_P256: &str = "x963_uncompressed_p256";
 
 /// Error returned when Offline Note canonical derivation inputs are invalid.
 #[derive(Debug)]
@@ -439,6 +447,461 @@ mod model {
         /// Output commitments created by the token.
         pub output_commitments: Vec<Hash>,
     }
+
+    /// Per-asset Offline Bearer send limits distributed in policy bundles.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerAssetSendLimitV2 {
+        /// Asset definition governed by this limit.
+        pub asset_definition_id: String,
+        /// Maximum amount allowed for a single transfer of this asset.
+        pub max_transaction_amount: String,
+        /// Maximum amount allowed per local day.
+        pub daily_send_limit: String,
+        /// Maximum amount allowed per local month.
+        pub monthly_send_limit: String,
+    }
+
+    /// Signed Offline Bearer v2 issuer policy bundle.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerPolicyBundleV2 {
+        /// Issuer-scoped policy identifier.
+        pub policy_id: String,
+        /// Hash of the current policy contents as published by the issuer.
+        pub policy_hash_hex: String,
+        /// Settlement issuer identifier.
+        pub issuer_id: String,
+        /// Policy issue time in Unix milliseconds.
+        pub issued_at_ms: u64,
+        /// Policy expiry time in Unix milliseconds.
+        pub expires_at_ms: u64,
+        /// Maximum certificate age accepted at event time.
+        pub max_certificate_age_ms: u64,
+        /// Maximum policy age accepted at event time.
+        pub max_policy_age_ms: u64,
+        /// Maximum receive/debit token age.
+        pub max_token_age_ms: u64,
+        /// Maximum offline balance a purse may hold.
+        pub max_offline_balance: String,
+        /// Maximum amount allowed for one transfer.
+        pub max_transaction_amount: String,
+        /// Hardware classes allowed by this policy.
+        pub allowed_hardware_classes: Vec<String>,
+        /// Blacklisted canonical account identifiers.
+        pub blacklisted_account_ids: Vec<String>,
+        /// Blacklisted device identifiers.
+        pub blacklisted_device_ids: Vec<String>,
+        /// Blacklisted key identifiers.
+        pub blacklisted_key_ids: Vec<String>,
+        /// Signature algorithm used for the issuer signature.
+        pub signature_algorithm: String,
+        /// Issuer signature over the canonical policy payload.
+        pub issuer_signature: Vec<u8>,
+        /// Monotonic policy epoch.
+        pub policy_epoch: u64,
+        /// Human-readable policy source.
+        pub policy_source: String,
+        /// Revoked certificate identifiers.
+        pub revoked_certificate_ids: Vec<String>,
+        /// Revoked transfer or receive-request identifiers.
+        pub revoked_transfer_ids: Vec<String>,
+        /// Per-asset send limits.
+        pub asset_send_limits: Vec<OfflineBearerAssetSendLimitV2>,
+    }
+
+    /// Canonical payload signed by Offline Bearer policy issuers.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerPolicyBundlePayloadV2 {
+        /// Domain separator for the signed payload.
+        pub domain: String,
+        /// Issuer-scoped policy identifier.
+        pub policy_id: String,
+        /// Hash of the current policy contents as published by the issuer.
+        pub policy_hash_hex: String,
+        /// Settlement issuer identifier.
+        pub issuer_id: String,
+        /// Policy issue time in Unix milliseconds.
+        pub issued_at_ms: u64,
+        /// Policy expiry time in Unix milliseconds.
+        pub expires_at_ms: u64,
+        /// Maximum certificate age accepted at event time.
+        pub max_certificate_age_ms: u64,
+        /// Maximum policy age accepted at event time.
+        pub max_policy_age_ms: u64,
+        /// Maximum receive/debit token age.
+        pub max_token_age_ms: u64,
+        /// Maximum offline balance a purse may hold.
+        pub max_offline_balance: String,
+        /// Maximum amount allowed for one transfer.
+        pub max_transaction_amount: String,
+        /// Hardware classes allowed by this policy.
+        pub allowed_hardware_classes: Vec<String>,
+        /// Blacklisted canonical account identifiers.
+        pub blacklisted_account_ids: Vec<String>,
+        /// Blacklisted device identifiers.
+        pub blacklisted_device_ids: Vec<String>,
+        /// Blacklisted key identifiers.
+        pub blacklisted_key_ids: Vec<String>,
+        /// Signature algorithm used for the issuer signature.
+        pub signature_algorithm: String,
+        /// Monotonic policy epoch.
+        pub policy_epoch: u64,
+        /// Human-readable policy source.
+        pub policy_source: String,
+        /// Revoked certificate identifiers.
+        pub revoked_certificate_ids: Vec<String>,
+        /// Revoked transfer or receive-request identifiers.
+        pub revoked_transfer_ids: Vec<String>,
+        /// Per-asset send limits.
+        pub asset_send_limits: Vec<OfflineBearerAssetSendLimitV2>,
+    }
+
+    /// Signed Offline Bearer v2 purse certificate.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerCertificateV2 {
+        /// Issuer-scoped certificate identifier.
+        pub certificate_id: String,
+        /// Chain identifier that scopes the purse.
+        pub chain_id: String,
+        /// Settlement issuer identifier.
+        pub issuer_id: String,
+        /// Hardware purse identifier.
+        pub purse_id: String,
+        /// Canonical account identifier.
+        pub account_id: String,
+        /// Asset definition held by this purse.
+        pub asset_definition_id: String,
+        /// Device identifier certified by the issuer.
+        pub device_id: String,
+        /// Signing key identifier certified by the issuer.
+        pub key_id: String,
+        /// Hardware class certified by the issuer.
+        pub hardware_class: String,
+        /// Signature algorithm used by this purse key.
+        pub signature_algorithm: String,
+        /// Public-key encoding for this purse key.
+        pub public_key_encoding: String,
+        /// Purse public key bytes.
+        pub public_key: Vec<u8>,
+        /// Certificate issue time in Unix milliseconds.
+        pub issued_at_ms: u64,
+        /// Certificate expiry time in Unix milliseconds.
+        pub expires_at_ms: u64,
+        /// Policy identifier bound by this certificate.
+        pub policy_id: String,
+        /// Policy hash bound by this certificate.
+        pub policy_hash_hex: String,
+        /// Issuer signature over the canonical certificate payload.
+        pub issuer_signature: Vec<u8>,
+    }
+
+    /// Canonical payload signed by Offline Bearer certificate issuers.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerCertificatePayloadV2 {
+        /// Domain separator for the signed payload.
+        pub domain: String,
+        /// Issuer-scoped certificate identifier.
+        pub certificate_id: String,
+        /// Chain identifier that scopes the purse.
+        pub chain_id: String,
+        /// Settlement issuer identifier.
+        pub issuer_id: String,
+        /// Hardware purse identifier.
+        pub purse_id: String,
+        /// Canonical account identifier.
+        pub account_id: String,
+        /// Asset definition held by this purse.
+        pub asset_definition_id: String,
+        /// Device identifier certified by the issuer.
+        pub device_id: String,
+        /// Signing key identifier certified by the issuer.
+        pub key_id: String,
+        /// Hardware class certified by the issuer.
+        pub hardware_class: String,
+        /// Signature algorithm used by this purse key.
+        pub signature_algorithm: String,
+        /// Public-key encoding for this purse key.
+        pub public_key_encoding: String,
+        /// Purse public key bytes.
+        pub public_key: Vec<u8>,
+        /// Certificate issue time in Unix milliseconds.
+        pub issued_at_ms: u64,
+        /// Certificate expiry time in Unix milliseconds.
+        pub expires_at_ms: u64,
+        /// Policy identifier bound by this certificate.
+        pub policy_id: String,
+        /// Policy hash bound by this certificate.
+        pub policy_hash_hex: String,
+    }
+
+    /// Recipient challenge for an Offline Bearer v2 payment.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerReceiveRequestV2 {
+        /// Payload version.
+        pub version: u16,
+        /// Chain identifier that scopes the request.
+        pub chain_id: String,
+        /// Wallet-local receive request identifier.
+        pub payment_request_id: String,
+        /// Recipient purse certificate.
+        pub recipient_certificate: OfflineBearerCertificateV2,
+        /// Asset requested.
+        pub asset_definition_id: String,
+        /// Canonical decimal amount requested.
+        pub amount: String,
+        /// Request creation time in Unix milliseconds.
+        pub created_at_ms: u64,
+        /// Request expiry time in Unix milliseconds.
+        pub expires_at_ms: u64,
+        /// Policy hash bound by this request.
+        pub policy_hash_hex: String,
+        /// Signature algorithm used for `challenge_signature`.
+        pub signature_algorithm: String,
+        /// Recipient purse signature over the canonical receive-request payload.
+        pub challenge_signature: Vec<u8>,
+    }
+
+    /// Canonical payload signed by Offline Bearer receive request recipients.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerReceiveRequestPayloadV2 {
+        /// Domain separator for the signed payload.
+        pub domain: String,
+        /// Payload version.
+        pub version: u16,
+        /// Chain identifier that scopes the request.
+        pub chain_id: String,
+        /// Wallet-local receive request identifier.
+        pub payment_request_id: String,
+        /// Hash of the signed recipient certificate.
+        pub recipient_certificate_hash: Hash,
+        /// Asset requested.
+        pub asset_definition_id: String,
+        /// Canonical decimal amount requested.
+        pub amount: String,
+        /// Request creation time in Unix milliseconds.
+        pub created_at_ms: u64,
+        /// Request expiry time in Unix milliseconds.
+        pub expires_at_ms: u64,
+        /// Policy hash bound by this request.
+        pub policy_hash_hex: String,
+        /// Signature algorithm used for `challenge_signature`.
+        pub signature_algorithm: String,
+    }
+
+    /// Sender debit receipt transferred to the recipient.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerDebitReceiptV2 {
+        /// Payload version.
+        pub version: u16,
+        /// Transfer identifier.
+        pub transfer_id: String,
+        /// Chain identifier that scopes the transfer.
+        pub chain_id: String,
+        /// Receive request identifier satisfied by this debit.
+        pub payment_request_id: String,
+        /// Sender purse certificate.
+        pub sender_certificate: OfflineBearerCertificateV2,
+        /// Recipient purse certificate.
+        pub recipient_certificate: OfflineBearerCertificateV2,
+        /// Asset transferred.
+        pub asset_definition_id: String,
+        /// Canonical decimal amount transferred.
+        pub amount: String,
+        /// Sender balance before debit.
+        pub sender_pre_balance: String,
+        /// Sender balance after debit.
+        pub sender_post_balance: String,
+        /// Sender purse sequence after debit.
+        pub sender_sequence: u64,
+        /// Debit creation time in Unix milliseconds.
+        pub created_at_ms: u64,
+        /// Debit expiry time in Unix milliseconds.
+        pub expires_at_ms: u64,
+        /// Policy hash bound by this debit.
+        pub policy_hash_hex: String,
+        /// Recipient receive-request signature copied into the debit.
+        pub receive_challenge_signature: Vec<u8>,
+        /// Signature algorithm used for `debit_signature`.
+        pub signature_algorithm: String,
+        /// Sender purse signature over the canonical debit payload.
+        pub debit_signature: Vec<u8>,
+    }
+
+    /// Canonical payload signed by Offline Bearer debit senders.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerDebitReceiptPayloadV2 {
+        /// Domain separator for the signed payload.
+        pub domain: String,
+        /// Payload version.
+        pub version: u16,
+        /// Transfer identifier.
+        pub transfer_id: String,
+        /// Chain identifier that scopes the transfer.
+        pub chain_id: String,
+        /// Receive request identifier satisfied by this debit.
+        pub payment_request_id: String,
+        /// Hash of the signed sender certificate.
+        pub sender_certificate_hash: Hash,
+        /// Hash of the signed recipient certificate.
+        pub recipient_certificate_hash: Hash,
+        /// Asset transferred.
+        pub asset_definition_id: String,
+        /// Canonical decimal amount transferred.
+        pub amount: String,
+        /// Sender balance before debit.
+        pub sender_pre_balance: String,
+        /// Sender balance after debit.
+        pub sender_post_balance: String,
+        /// Sender purse sequence after debit.
+        pub sender_sequence: u64,
+        /// Debit creation time in Unix milliseconds.
+        pub created_at_ms: u64,
+        /// Debit expiry time in Unix milliseconds.
+        pub expires_at_ms: u64,
+        /// Policy hash bound by this debit.
+        pub policy_hash_hex: String,
+        /// Recipient receive-request signature copied into the debit.
+        pub receive_challenge_signature: Vec<u8>,
+        /// Signature algorithm used for `debit_signature`.
+        pub signature_algorithm: String,
+    }
+
+    /// Recipient credit receipt retained for settlement.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerCreditReceiptV2 {
+        /// Payload version.
+        pub version: u16,
+        /// Transfer identifier.
+        pub transfer_id: String,
+        /// Chain identifier that scopes the transfer.
+        pub chain_id: String,
+        /// Recipient purse certificate.
+        pub recipient_certificate: OfflineBearerCertificateV2,
+        /// Canonical decimal amount credited.
+        pub amount: String,
+        /// Recipient balance before credit.
+        pub recipient_pre_balance: String,
+        /// Recipient balance after credit.
+        pub recipient_post_balance: String,
+        /// Recipient purse sequence after credit.
+        pub recipient_sequence: u64,
+        /// Credit acceptance time in Unix milliseconds.
+        pub accepted_at_ms: u64,
+        /// Signature algorithm used for `credit_signature`.
+        pub signature_algorithm: String,
+        /// Recipient purse signature over the canonical credit payload.
+        pub credit_signature: Vec<u8>,
+    }
+
+    /// Canonical payload signed by Offline Bearer credit recipients.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerCreditReceiptPayloadV2 {
+        /// Domain separator for the signed payload.
+        pub domain: String,
+        /// Payload version.
+        pub version: u16,
+        /// Transfer identifier.
+        pub transfer_id: String,
+        /// Chain identifier that scopes the transfer.
+        pub chain_id: String,
+        /// Hash of the signed recipient certificate.
+        pub recipient_certificate_hash: Hash,
+        /// Canonical decimal amount credited.
+        pub amount: String,
+        /// Recipient balance before credit.
+        pub recipient_pre_balance: String,
+        /// Recipient balance after credit.
+        pub recipient_post_balance: String,
+        /// Recipient purse sequence after credit.
+        pub recipient_sequence: u64,
+        /// Credit acceptance time in Unix milliseconds.
+        pub accepted_at_ms: u64,
+        /// Signature algorithm used for `credit_signature`.
+        pub signature_algorithm: String,
+    }
+
+    /// Compact settlement batch exported from a local Offline Bearer v2 purse journal.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerSettlementBatchV2 {
+        /// Payload version.
+        pub version: u16,
+        /// Chain identifier that scopes the settlement.
+        pub chain_id: String,
+        /// Exporting purse identifier.
+        pub purse_id: String,
+        /// Accepted debit receipts.
+        pub debit_receipts: Vec<OfflineBearerDebitReceiptV2>,
+        /// Accepted credit receipts.
+        pub credit_receipts: Vec<OfflineBearerCreditReceiptV2>,
+    }
+
+    /// Canonical payload representing a settlement batch digest set.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineBearerSettlementBatchPayloadV2 {
+        /// Domain separator for the payload.
+        pub domain: String,
+        /// Payload version.
+        pub version: u16,
+        /// Chain identifier that scopes the settlement.
+        pub chain_id: String,
+        /// Exporting purse identifier.
+        pub purse_id: String,
+        /// Hashes of signed debit receipts.
+        pub debit_receipt_hashes: Vec<Hash>,
+        /// Hashes of signed credit receipts.
+        pub credit_receipt_hashes: Vec<Hash>,
+    }
 }
 
 /// Origin of a wallet-derived Offline Note note commitment.
@@ -460,6 +923,14 @@ const OFFLINE_NOTE_KEY_CERTIFICATE_PAYLOAD_DOMAIN: &str =
 const OFFLINE_NOTE_ISSUED_CLAIM_DOMAIN: &str = "iroha:offline-note:issued-claim";
 const OFFLINE_NOTE_REDEEM_PUBLIC_INPUTS_DOMAIN: &str = "iroha:offline-note:redeem-public-inputs";
 const OFFLINE_NOTE_AUDIT_PUBLIC_INPUTS_DOMAIN: &str = "iroha:offline-note:audit-public-inputs";
+const OFFLINE_BEARER_POLICY_BUNDLE_PAYLOAD_DOMAIN: &str = "iroha:offline-bearer-v2:policy-bundle";
+const OFFLINE_BEARER_CERTIFICATE_PAYLOAD_DOMAIN: &str = "iroha:offline-bearer-v2:certificate";
+const OFFLINE_BEARER_RECEIVE_REQUEST_PAYLOAD_DOMAIN: &str =
+    "iroha:offline-bearer-v2:receive-request";
+const OFFLINE_BEARER_DEBIT_RECEIPT_PAYLOAD_DOMAIN: &str = "iroha:offline-bearer-v2:debit-receipt";
+const OFFLINE_BEARER_CREDIT_RECEIPT_PAYLOAD_DOMAIN: &str = "iroha:offline-bearer-v2:credit-receipt";
+const OFFLINE_BEARER_SETTLEMENT_BATCH_PAYLOAD_DOMAIN: &str =
+    "iroha:offline-bearer-v2:settlement-batch";
 /// Canonical public-input schema descriptor for Offline recursive note proofs.
 pub const OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"offline_note_recursive","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","proof_mode","input_count","output_count","input_amount_sum","output_amount_sum","input_nullifier_sum_limb0","output_commitment_sum_limb0","key_certificate_payload_hash_limb0","source_or_token_limb0","input_claim_hash_sum_limb0","output_claim_hash_sum_limb0","reserved_zero"]}"#;
 
@@ -646,6 +1117,230 @@ impl OfflineNoteRedeem {
     pub fn public_inputs_hash(&self) -> Result<Hash, norito::Error> {
         OfflineNoteRedeemPublicInputs::from_redemption(self)?.public_inputs_hash()
     }
+}
+
+impl From<&OfflineBearerPolicyBundleV2> for OfflineBearerPolicyBundlePayloadV2 {
+    fn from(policy: &OfflineBearerPolicyBundleV2) -> Self {
+        Self {
+            domain: OFFLINE_BEARER_POLICY_BUNDLE_PAYLOAD_DOMAIN.to_owned(),
+            policy_id: policy.policy_id.clone(),
+            policy_hash_hex: policy.policy_hash_hex.clone(),
+            issuer_id: policy.issuer_id.clone(),
+            issued_at_ms: policy.issued_at_ms,
+            expires_at_ms: policy.expires_at_ms,
+            max_certificate_age_ms: policy.max_certificate_age_ms,
+            max_policy_age_ms: policy.max_policy_age_ms,
+            max_token_age_ms: policy.max_token_age_ms,
+            max_offline_balance: policy.max_offline_balance.clone(),
+            max_transaction_amount: policy.max_transaction_amount.clone(),
+            allowed_hardware_classes: sorted_strings(&policy.allowed_hardware_classes),
+            blacklisted_account_ids: sorted_strings(&policy.blacklisted_account_ids),
+            blacklisted_device_ids: sorted_strings(&policy.blacklisted_device_ids),
+            blacklisted_key_ids: sorted_strings(&policy.blacklisted_key_ids),
+            signature_algorithm: policy.signature_algorithm.clone(),
+            policy_epoch: policy.policy_epoch,
+            policy_source: policy.policy_source.clone(),
+            revoked_certificate_ids: sorted_strings(&policy.revoked_certificate_ids),
+            revoked_transfer_ids: sorted_strings(&policy.revoked_transfer_ids),
+            asset_send_limits: sorted_asset_send_limits(&policy.asset_send_limits),
+        }
+    }
+}
+
+impl OfflineBearerPolicyBundleV2 {
+    /// Canonical payload bytes signed by the Offline Bearer policy issuer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload cannot be serialized with Norito.
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
+        to_bytes(&OfflineBearerPolicyBundlePayloadV2::from(self))
+    }
+}
+
+impl From<&OfflineBearerCertificateV2> for OfflineBearerCertificatePayloadV2 {
+    fn from(certificate: &OfflineBearerCertificateV2) -> Self {
+        Self {
+            domain: OFFLINE_BEARER_CERTIFICATE_PAYLOAD_DOMAIN.to_owned(),
+            certificate_id: certificate.certificate_id.clone(),
+            chain_id: certificate.chain_id.clone(),
+            issuer_id: certificate.issuer_id.clone(),
+            purse_id: certificate.purse_id.clone(),
+            account_id: certificate.account_id.clone(),
+            asset_definition_id: certificate.asset_definition_id.clone(),
+            device_id: certificate.device_id.clone(),
+            key_id: certificate.key_id.clone(),
+            hardware_class: certificate.hardware_class.clone(),
+            signature_algorithm: certificate.signature_algorithm.clone(),
+            public_key_encoding: certificate.public_key_encoding.clone(),
+            public_key: certificate.public_key.clone(),
+            issued_at_ms: certificate.issued_at_ms,
+            expires_at_ms: certificate.expires_at_ms,
+            policy_id: certificate.policy_id.clone(),
+            policy_hash_hex: certificate.policy_hash_hex.clone(),
+        }
+    }
+}
+
+impl OfflineBearerCertificateV2 {
+    /// Canonical payload bytes signed by the Offline Bearer certificate issuer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload cannot be serialized with Norito.
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
+        to_bytes(&OfflineBearerCertificatePayloadV2::from(self))
+    }
+
+    /// Deterministic hash of the signed certificate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the certificate cannot be serialized with Norito.
+    pub fn certificate_hash(&self) -> Result<Hash, norito::Error> {
+        to_bytes(self).map(Hash::new)
+    }
+}
+
+impl OfflineBearerReceiveRequestV2 {
+    /// Canonical payload bytes signed by the recipient purse.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload cannot be serialized with Norito.
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
+        to_bytes(&OfflineBearerReceiveRequestPayloadV2 {
+            domain: OFFLINE_BEARER_RECEIVE_REQUEST_PAYLOAD_DOMAIN.to_owned(),
+            version: self.version,
+            chain_id: self.chain_id.clone(),
+            payment_request_id: self.payment_request_id.clone(),
+            recipient_certificate_hash: self.recipient_certificate.certificate_hash()?,
+            asset_definition_id: self.asset_definition_id.clone(),
+            amount: self.amount.clone(),
+            created_at_ms: self.created_at_ms,
+            expires_at_ms: self.expires_at_ms,
+            policy_hash_hex: self.policy_hash_hex.clone(),
+            signature_algorithm: self.signature_algorithm.clone(),
+        })
+    }
+}
+
+impl OfflineBearerDebitReceiptV2 {
+    /// Canonical payload bytes signed by the sender purse.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload cannot be serialized with Norito.
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
+        to_bytes(&OfflineBearerDebitReceiptPayloadV2 {
+            domain: OFFLINE_BEARER_DEBIT_RECEIPT_PAYLOAD_DOMAIN.to_owned(),
+            version: self.version,
+            transfer_id: self.transfer_id.clone(),
+            chain_id: self.chain_id.clone(),
+            payment_request_id: self.payment_request_id.clone(),
+            sender_certificate_hash: self.sender_certificate.certificate_hash()?,
+            recipient_certificate_hash: self.recipient_certificate.certificate_hash()?,
+            asset_definition_id: self.asset_definition_id.clone(),
+            amount: self.amount.clone(),
+            sender_pre_balance: self.sender_pre_balance.clone(),
+            sender_post_balance: self.sender_post_balance.clone(),
+            sender_sequence: self.sender_sequence,
+            created_at_ms: self.created_at_ms,
+            expires_at_ms: self.expires_at_ms,
+            policy_hash_hex: self.policy_hash_hex.clone(),
+            receive_challenge_signature: self.receive_challenge_signature.clone(),
+            signature_algorithm: self.signature_algorithm.clone(),
+        })
+    }
+
+    /// Deterministic hash of the signed debit receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the receipt cannot be serialized with Norito.
+    pub fn receipt_hash(&self) -> Result<Hash, norito::Error> {
+        to_bytes(self).map(Hash::new)
+    }
+}
+
+impl OfflineBearerCreditReceiptV2 {
+    /// Canonical payload bytes signed by the recipient purse.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload cannot be serialized with Norito.
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
+        to_bytes(&OfflineBearerCreditReceiptPayloadV2 {
+            domain: OFFLINE_BEARER_CREDIT_RECEIPT_PAYLOAD_DOMAIN.to_owned(),
+            version: self.version,
+            transfer_id: self.transfer_id.clone(),
+            chain_id: self.chain_id.clone(),
+            recipient_certificate_hash: self.recipient_certificate.certificate_hash()?,
+            amount: self.amount.clone(),
+            recipient_pre_balance: self.recipient_pre_balance.clone(),
+            recipient_post_balance: self.recipient_post_balance.clone(),
+            recipient_sequence: self.recipient_sequence,
+            accepted_at_ms: self.accepted_at_ms,
+            signature_algorithm: self.signature_algorithm.clone(),
+        })
+    }
+
+    /// Deterministic hash of the signed credit receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the receipt cannot be serialized with Norito.
+    pub fn receipt_hash(&self) -> Result<Hash, norito::Error> {
+        to_bytes(self).map(Hash::new)
+    }
+}
+
+impl OfflineBearerSettlementBatchV2 {
+    /// Canonical settlement batch digest payload bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a receipt or payload cannot be serialized with Norito.
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
+        let debit_receipt_hashes = self
+            .debit_receipts
+            .iter()
+            .map(OfflineBearerDebitReceiptV2::receipt_hash)
+            .collect::<Result<Vec<_>, _>>()?;
+        let credit_receipt_hashes = self
+            .credit_receipts
+            .iter()
+            .map(OfflineBearerCreditReceiptV2::receipt_hash)
+            .collect::<Result<Vec<_>, _>>()?;
+        to_bytes(&OfflineBearerSettlementBatchPayloadV2 {
+            domain: OFFLINE_BEARER_SETTLEMENT_BATCH_PAYLOAD_DOMAIN.to_owned(),
+            version: self.version,
+            chain_id: self.chain_id.clone(),
+            purse_id: self.purse_id.clone(),
+            debit_receipt_hashes,
+            credit_receipt_hashes,
+        })
+    }
+}
+
+fn sorted_strings(values: &[String]) -> Vec<String> {
+    let mut normalized = values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn sorted_asset_send_limits(
+    limits: &[OfflineBearerAssetSendLimitV2],
+) -> Vec<OfflineBearerAssetSendLimitV2> {
+    let mut sorted = limits.to_vec();
+    sorted.sort_by(|lhs, rhs| lhs.asset_definition_id.cmp(&rhs.asset_definition_id));
+    sorted
 }
 
 fn validate_offline_note_random_bytes(

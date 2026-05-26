@@ -651,6 +651,9 @@ fn nexus_protocol_fee_exempt_instructions(instructions: &[InstructionBox]) -> bo
 }
 
 fn nexus_protocol_fee_exempt_transaction(transaction: &SignedTransaction) -> bool {
+    if crate::tx::is_heartbeat_transaction(transaction) {
+        return true;
+    }
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return false;
     };
@@ -1371,7 +1374,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
         md,
         state_transaction.current_dataspace_id,
     )?;
-    let skip_nexus_fee = nexus_protocol_fee_exempt_instructions(overlay.instruction_slice())
+    let skip_nexus_fee = nexus_protocol_fee_exempt_transaction(transaction)
         || successful_claim_fee_exempt_instructions(
             &state_transaction.world,
             &state_transaction.nexus,
@@ -1387,7 +1390,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
     let gas_asset_opt = md.get("gas_asset_id").map(|j| j.as_ref().to_string());
     let gas_limit_md = parse_gas_limit(md)?;
     let pipeline_gas = &state_transaction.pipeline.gas;
-    if !pipeline_gas.accepted_assets.is_empty() {
+    if !skip_nexus_fee && !pipeline_gas.accepted_assets.is_empty() {
         let Some(ref gas_asset_id_str) = gas_asset_opt else {
             return Err(ValidationFail::NotPermitted(
                 "missing gas_asset_id in transaction metadata".to_owned(),
@@ -1456,7 +1459,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
         bytes
     };
 
-    if let Some(gas_asset_id_str) = gas_asset_opt {
+    if !skip_nexus_fee && let Some(gas_asset_id_str) = gas_asset_opt {
         let (units_per_gas, twap_local_per_xor, volatility_bucket, liquidity_profile) = {
             let gas_rate = state_transaction
                 .pipeline
@@ -2091,7 +2094,7 @@ impl Executor {
         state_transaction.last_tx_gas_used = used;
 
         // 5) Charge gas fees when configured and the transaction specified a gas asset.
-        if let Some(gas_asset_id_str) = gas_asset_opt {
+        if !skip_nexus_fee && let Some(gas_asset_id_str) = gas_asset_opt {
             // Determine rate; require explicit mapping for determinism
             let gas_rate = state_transaction
                 .pipeline
@@ -2354,7 +2357,7 @@ impl Executor {
                 state_transaction.block_unix_timestamp_ms(),
             );
         let pipeline_gas = &state_transaction.pipeline.gas;
-        if !pipeline_gas.accepted_assets.is_empty() {
+        if !skip_nexus_fee && !pipeline_gas.accepted_assets.is_empty() {
             let Some(ref gas_asset_id_str) = gas_asset_opt else {
                 return Err(ValidationFail::NotPermitted(
                     "missing gas_asset_id in transaction metadata".to_owned(),
@@ -5534,7 +5537,7 @@ mod tests {
         isi::multisig::{MultisigRegister, MultisigSpec},
         permission::nexus::CanUseFeeSponsor,
     };
-    use iroha_primitives::json::Json;
+    use iroha_primitives::{json::Json, time::TimeSource};
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{
@@ -7665,6 +7668,41 @@ mod tests {
         let view = state.view();
         check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
             .expect("protocol proof registration must not require a fee receipt");
+    }
+
+    #[test]
+    fn heartbeat_execution_skips_required_gas_asset_metadata() {
+        use std::time::Duration;
+
+        let chain: ChainId = "heartbeat-gas-admission".parse().unwrap();
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        state.pipeline.gas.accepted_assets = vec!["xor#universal".to_owned()];
+
+        let tx_params = state.view().world().parameters().transaction();
+        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let tx = crate::tx::build_heartbeat_transaction_with_time_source(
+            chain,
+            &signer,
+            &tx_params,
+            1,
+            &time_source,
+        );
+        let authority = tx.authority().clone();
+
+        let executor = super::Executor::default();
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        executor
+            .execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
+            .expect("heartbeat should not require gas_asset_id metadata");
+        assert_eq!(stx.last_tx_gas_used, 0);
     }
 
     #[test]

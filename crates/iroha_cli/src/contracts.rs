@@ -3968,9 +3968,9 @@ mod tests {
         assert_eq!(alias.to_string(), "router::is");
 
         let domain_alias =
-            resolve_deploy_contract_alias(None, Some("router"), Some("boi"), Some("is"))
+            resolve_deploy_contract_alias(None, Some("router"), Some("finance"), Some("alpha"))
                 .expect("domain-scoped alias");
-        assert_eq!(domain_alias.to_string(), "router::boi.is");
+        assert_eq!(domain_alias.to_string(), "router::finance.alpha");
     }
 
     #[test]
@@ -3985,14 +3985,14 @@ mod tests {
     #[test]
     fn resolve_deploy_contract_alias_preserves_legacy_contract_alias() {
         let alias = resolve_deploy_contract_alias(
-            Some("router::boi.is"),
+            Some("router::finance.alpha"),
             None,
             None,
             None,
         )
         .expect("legacy alias");
 
-        assert_eq!(alias.to_string(), "router::boi.is");
+        assert_eq!(alias.to_string(), "router::finance.alpha");
     }
 
     #[test]
