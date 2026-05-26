@@ -17,11 +17,12 @@ use std::{
     num::NonZero,
     ops::Deref,
     path::{Component, Path, PathBuf},
-    process::{ExitStatus, Stdio},
+    process::{ExitStatus, Output, Stdio},
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
+    thread,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -448,12 +449,15 @@ const DEFAULT_RBC_STORE_SOFT_SESSIONS: i64 = 192;
 const DEFAULT_RBC_STORE_MAX_BYTES: i64 = 64 * 1024 * 1024;
 const DEFAULT_RBC_STORE_SOFT_BYTES: i64 = 48 * 1024 * 1024;
 const LOCALNET_RBC_CHUNK_MAX_BYTES: i64 = 256 * 1024;
+const DEFAULT_NETWORK_PEERS: usize = 4;
 const DA_ENABLED_ENV: &str = "SUMERAGI_DA_ENABLED";
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 const NETWORK_PERMIT_DIR_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_DIR";
 const NETWORK_PERMIT_WAIT_TIMEOUT_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT";
 const NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5 * 60);
+const BUILD_COMMAND_TIMEOUT_ENV: &str = "IROHA_TEST_BUILD_TIMEOUT_MS";
+const BUILD_COMMAND_TIMEOUT_DEFAULT: Duration = Duration::from_secs(20 * 60);
 const NETWORK_PERMIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const NETWORK_PERMIT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const NETWORK_PERMIT_STALE_TTL: Duration = Duration::from_secs(60 * 60 * 12);
@@ -493,6 +497,73 @@ fn read_env_duration(var: &str, default: Duration) -> Duration {
         }
     }
     default
+}
+
+fn build_command_timeout_env() -> Duration {
+    read_env_duration(BUILD_COMMAND_TIMEOUT_ENV, BUILD_COMMAND_TIMEOUT_DEFAULT)
+}
+
+fn command_output_with_timeout(
+    command: &mut std::process::Command,
+    timeout: Duration,
+) -> std::io::Result<Output> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let command_debug = format!("{command:?}");
+    let mut child = command.spawn()?;
+    let stdout = child.stdout.take().map(read_pipe);
+    let stderr = child.stderr.take().map(read_pipe);
+    let Some(status) = wait_for_child_exit(&mut child, timeout)? else {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = join_pipe(stdout);
+        let _ = join_pipe(stderr);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("command {command_debug} timed out after {timeout:?}"),
+        ));
+    };
+    Ok(Output {
+        status,
+        stdout: join_pipe(stdout),
+        stderr: join_pipe(stderr),
+    })
+}
+
+fn read_pipe<R>(mut pipe: R) -> thread::JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = pipe.read_to_end(&mut bytes);
+        bytes
+    })
+}
+
+fn join_pipe(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
+}
+
+fn wait_for_child_exit(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> std::io::Result<Option<ExitStatus>> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
+            return Ok(None);
+        }
+        thread::sleep(NETWORK_PERMIT_POLL_INTERVAL.min(timeout.saturating_sub(elapsed)));
+    }
 }
 
 fn unix_timestamp_ms_now() -> u128 {
@@ -1643,9 +1714,8 @@ fn ensure_binary_fresh(
             for (key, value) in build_env_overrides() {
                 command.env(key, value);
             }
-            let output = command
-                .current_dir(repo)
-                .output()
+            command.current_dir(repo);
+            let output = command_output_with_timeout(&mut command, build_command_timeout_env())
                 .wrap_err("failed to invoke cargo to build binary")?;
             if output.status.success() {
                 break;
@@ -4630,7 +4700,7 @@ impl NetworkBuilder {
         // avoid injecting explicit on-chain timings when defaults are sufficient.
         let mut builder = Self {
             env: Environment::new(),
-            n_peers: 1,
+            n_peers: DEFAULT_NETWORK_PEERS,
             config_layers: vec![],
             pipeline_time: Some(LOCALNET_PIPELINE_TIME),
             sync_timeout: None,
@@ -9612,6 +9682,12 @@ mod tests {
         let network =
             build_with_isolated_permit(NetworkBuilder::new().with_peers(5).with_min_peers(4));
         assert_eq!(network.peers().len(), 5);
+    }
+
+    #[test]
+    fn network_builder_defaults_to_four_peers() {
+        let network = build_with_isolated_permit(NetworkBuilder::new());
+        assert_eq!(network.peers().len(), DEFAULT_NETWORK_PEERS);
     }
 
     #[test]

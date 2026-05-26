@@ -7,6 +7,8 @@ use std::{
     time::SystemTime,
 };
 
+use crate::process::{output_with_timeout, process_timeout};
+
 /// Resolve the `iroha` CLI binary, preferring already-built targets when available.
 pub fn iroha_program() -> eyre::Result<PathBuf> {
     prepare_iroha_cli_test_environment();
@@ -152,11 +154,9 @@ pub const fn irohad_binary_name() -> &'static str {
 
 /// Check whether an existing CLI binary exposes the training-job command surface.
 pub fn binary_supports_training_job_commands(path: &Path) -> bool {
-    let output = ProcessCommand::new(path)
-        .arg("soracloud")
-        .arg("model")
-        .arg("--help")
-        .output();
+    let mut command = ProcessCommand::new(path);
+    command.arg("soracloud").arg("model").arg("--help");
+    let output = output_with_timeout(&mut command, process_timeout());
     let Ok(output) = output else {
         return false;
     };

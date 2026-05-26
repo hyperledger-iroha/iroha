@@ -13,7 +13,7 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, ensure, eyre};
-use integration_tests::{kagami::resolve_kagami_bin, sandbox};
+use integration_tests::{kagami::resolve_kagami_bin, process as test_process, sandbox};
 use iroha::{
     client::Client,
     config::{Config, LoadPath},
@@ -415,10 +415,12 @@ impl Drop for ManagedLocalnet {
         if cfg!(unix) {
             let script = self.dir.join("stop.sh");
             if script.exists() {
-                let _ = Command::new("bash")
-                    .arg(script)
-                    .current_dir(&self.dir)
-                    .output();
+                let mut command = Command::new("bash");
+                command.arg(script).current_dir(&self.dir);
+                let _ = test_process::output_with_timeout(
+                    &mut command,
+                    test_process::process_timeout(),
+                );
             }
         }
     }
@@ -2504,7 +2506,8 @@ fn generate_localnet(
     seed: &str,
 ) -> Result<()> {
     let kagami_bin = resolve_kagami_bin()?;
-    let output = Command::new(kagami_bin)
+    let mut command = Command::new(kagami_bin);
+    command
         .arg("localnet")
         .arg("--build-line")
         .arg("iroha3")
@@ -2529,8 +2532,8 @@ fn generate_localnet(
         .arg("--commit-time-ms")
         .arg(LOCALNET_COMMIT_TIME_MS.to_string())
         .arg("--out-dir")
-        .arg(out_dir.to_string_lossy().to_string())
-        .output()
+        .arg(out_dir.to_string_lossy().to_string());
+    let output = test_process::output_with_timeout(&mut command, test_process::process_timeout())
         .wrap_err("run kagami localnet")?;
     ensure!(
         output.status.success(),

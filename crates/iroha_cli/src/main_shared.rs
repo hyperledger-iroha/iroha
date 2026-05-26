@@ -5208,6 +5208,11 @@ mod trigger {
         Burn(IdInt),
         /// Execute a by-call trigger with optional JSON arguments
         Execute(Execute),
+        /// Inspect trigger declaration and optional live completion evidence
+        Inspect(Inspect),
+        /// Collect or watch trigger completion events
+        #[command(subcommand)]
+        Completed(Completed),
         /// Read and write metadata
         #[command(subcommand)]
         Meta(metadata::trigger::Command),
@@ -5253,6 +5258,8 @@ mod trigger {
                         .wrap_err("Failed to burn trigger repetitions")
                 }
                 Execute(args) => args.run(context),
+                Inspect(args) => args.run(context),
+                Completed(cmd) => cmd.run(context),
                 Meta(cmd) => cmd.run(context),
             }
         }
@@ -5326,17 +5333,301 @@ mod trigger {
         /// JSON object passed as trigger execution arguments
         #[arg(long, default_value = "{}")]
         pub args_json: String,
+        /// Include trace intent in the submission envelope. Runtime trace hydration is best effort.
+        #[arg(long)]
+        pub trace: bool,
+        #[command(flatten)]
+        pub wait: TransactionWaitArgs,
     }
 
     impl Execute {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let args: norito::json::Value = crate::parse_json(&self.args_json)
                 .wrap_err("Failed to parse --args-json as JSON")?;
-            let instruction = iroha::data_model::isi::ExecuteTrigger::new(self.id).with_args(args);
-            context
-                .finish([instruction])
-                .wrap_err("Failed to execute trigger")
+            let instruction =
+                iroha::data_model::isi::ExecuteTrigger::new(self.id.clone()).with_args(args);
+            let executable = Executable::Instructions(vec![InstructionBox::from(instruction)].into());
+            let metadata = context.transaction_metadata().cloned().unwrap_or_default();
+            validate_executable_metadata(&executable, &metadata)?;
+            let client = context.client_from_config();
+            let transaction = client.build_transaction(executable, metadata);
+            let hash = transaction.hash();
+            client
+                .submit_transaction(&transaction)
+                .wrap_err("Failed to submit trigger execution transaction")?;
+
+            let mut pairs = vec![
+                ("hash", json_utils::json_value(&hash)?),
+                ("trigger_id", json_utils::json_value(&self.id)?),
+                ("transaction", json_utils::json_value(&transaction)?),
+                ("trace_requested", json_utils::json_value(&self.trace)?),
+            ];
+            if self.wait.is_enabled() {
+                let status = wait_for_transaction_status(&client, hash, &self.wait)?;
+                pairs.push(("finalized", json_utils::json_value(&true)?));
+                pairs.push(("terminal_kind", json_utils::json_value(&status.terminal_kind)?));
+                pairs.push(("attempts", json_utils::json_value(&status.attempts)?));
+                pairs.push(("elapsed_ms", json_utils::json_value(&status.elapsed_ms)?));
+                pairs.push(("block_height", json_utils::json_value(&status.block_height)?));
+                pairs.push((
+                    "rejection_reason",
+                    json_utils::json_value(&status.rejection_reason)?,
+                ));
+                pairs.push(("scope", json_utils::json_value(&status.scope)?));
+                pairs.push(("resolved_from", json_utils::json_value(&status.resolved_from)?));
+                pairs.push(("summary", json_utils::json_value(&status.summary)?));
+                pairs.push(("diagnostics", json_utils::json_value(&status.diagnostics)?));
+                pairs.push((
+                    "trigger_completions",
+                    json_utils::json_value(&status.trigger_completions)?,
+                ));
+                pairs.push(("final", json_utils::json_value(&status.r#final)?));
+            } else {
+                pairs.push(("finalized", json_utils::json_value(&false)?));
+            }
+            let response = json_utils::json_object(pairs)?;
+            context.print_data(&response)
         }
+    }
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Completed {
+        /// Collect matching trigger completion events from the live event stream.
+        List(CompletedList),
+        /// Stream matching trigger completion events until interrupted, timed out, or limited.
+        Watch(CompletedWatch),
+    }
+
+    impl Completed {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            match self {
+                Self::List(args) => args.run(context),
+                Self::Watch(args) => args.run(context),
+            }
+        }
+    }
+
+    #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum CompletedOutcomeArg {
+        All,
+        Success,
+        Failure,
+    }
+
+    impl CompletedOutcomeArg {
+        fn as_str(self) -> &'static str {
+            match self {
+                Self::All => "all",
+                Self::Success => "success",
+                Self::Failure => "failure",
+            }
+        }
+
+        fn apply(
+            self,
+            filter: iroha::data_model::events::trigger_completed::TriggerCompletedEventFilter,
+        ) -> iroha::data_model::events::trigger_completed::TriggerCompletedEventFilter {
+            use iroha::data_model::events::trigger_completed::TriggerCompletedOutcomeType;
+            match self {
+                Self::All => filter,
+                Self::Success => filter.for_outcome(TriggerCompletedOutcomeType::Success),
+                Self::Failure => filter.for_outcome(TriggerCompletedOutcomeType::Failure),
+            }
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct CompletedList {
+        /// Optional trigger ID filter.
+        #[arg(long)]
+        pub id: Option<TriggerId>,
+        /// Optional completion outcome filter.
+        #[arg(long, value_enum, default_value_t = CompletedOutcomeArg::All)]
+        pub outcome: CompletedOutcomeArg,
+        /// Maximum events to collect before returning.
+        #[arg(long, default_value_t = 10)]
+        pub limit: u64,
+        /// Maximum live-stream collection time.
+        #[arg(long, default_value_t = 5_000)]
+        pub timeout_ms: u64,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct CompletedWatch {
+        /// Optional trigger ID filter.
+        #[arg(long)]
+        pub id: Option<TriggerId>,
+        /// Optional completion outcome filter.
+        #[arg(long, value_enum, default_value_t = CompletedOutcomeArg::All)]
+        pub outcome: CompletedOutcomeArg,
+        /// Optional maximum events to emit before returning.
+        #[arg(long)]
+        pub limit: Option<u64>,
+        /// Optional maximum live-stream watch time.
+        #[arg(long)]
+        pub timeout_ms: Option<u64>,
+    }
+
+    #[derive(crate::json_macros::JsonSerialize)]
+    struct TriggerCompletedCollectResponse {
+        trigger_id: Option<TriggerId>,
+        outcome: String,
+        timeout_ms: Option<u64>,
+        limit: Option<u64>,
+        count: u64,
+        events: Vec<iroha::data_model::events::trigger_completed::TriggerCompletedEvent>,
+    }
+
+    impl CompletedList {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let filter = completed_filter(self.id.clone(), self.outcome);
+            let events = collect_completed_events(
+                context,
+                filter,
+                Some(Duration::from_millis(self.timeout_ms)),
+                Some(self.limit),
+            )?;
+            context.print_data(&TriggerCompletedCollectResponse {
+                trigger_id: self.id,
+                outcome: self.outcome.as_str().to_owned(),
+                timeout_ms: Some(self.timeout_ms),
+                limit: Some(self.limit),
+                count: events.len() as u64,
+                events,
+            })
+        }
+    }
+
+    impl CompletedWatch {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let filter = completed_filter(self.id, self.outcome);
+            let timeout = self.timeout_ms.map(Duration::from_millis);
+            if timeout.is_none() && self.limit.is_none() {
+                let client = context.client_from_config();
+                client
+                    .listen_for_events([filter])
+                    .wrap_err("Failed to listen for trigger completion events")?
+                    .try_for_each(|event| {
+                        if let iroha::data_model::events::EventBox::TriggerCompleted(event) =
+                            event?
+                        {
+                            context.print_data(&event)?;
+                        }
+                        Ok::<(), eyre::Report>(())
+                    })?;
+                return Ok(());
+            }
+            let events = collect_completed_events(context, filter, timeout, self.limit)?;
+            for event in events {
+                context.print_data(&event)?;
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Inspect {
+        /// Trigger name.
+        pub id: TriggerId,
+        /// Also collect recent live completion evidence for this duration.
+        #[arg(long, default_value_t = 0)]
+        pub completion_timeout_ms: u64,
+        /// Maximum live completion events to include when completion collection is enabled.
+        #[arg(long, default_value_t = 5)]
+        pub completion_limit: u64,
+    }
+
+    impl Inspect {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let client = context.client_from_config();
+            let entry: Trigger = client
+                .query_single(FindTriggerById::new(self.id.clone()))
+                .wrap_err("Failed to get trigger")?;
+            let trigger = trigger_pretty_json(&entry)
+                .wrap_err("Failed to serialise trigger for display")?;
+            let completions = if self.completion_timeout_ms > 0 {
+                collect_completed_events(
+                    context,
+                    completed_filter(Some(self.id.clone()), CompletedOutcomeArg::All),
+                    Some(Duration::from_millis(self.completion_timeout_ms)),
+                    Some(self.completion_limit),
+                )?
+            } else {
+                Vec::new()
+            };
+            let response = json_utils::json_object(vec![
+                ("trigger", trigger),
+                (
+                    "completion_collection",
+                    json_utils::json_object(vec![
+                        (
+                            "enabled",
+                            json_utils::json_value(&(self.completion_timeout_ms > 0))?,
+                        ),
+                        (
+                            "timeout_ms",
+                            json_utils::json_value(&self.completion_timeout_ms)?,
+                        ),
+                        ("limit", json_utils::json_value(&self.completion_limit)?),
+                    ])?,
+                ),
+                ("recent_completions", json_utils::json_value(&completions)?),
+            ])?;
+            context.print_data(&response)
+        }
+    }
+
+    fn completed_filter(
+        id: Option<TriggerId>,
+        outcome: CompletedOutcomeArg,
+    ) -> iroha::data_model::events::EventFilterBox {
+        use iroha::data_model::events::trigger_completed::TriggerCompletedEventFilter;
+        let mut filter = TriggerCompletedEventFilter::new();
+        if let Some(id) = id {
+            filter = filter.for_trigger(id);
+        }
+        iroha::data_model::events::EventFilterBox::TriggerCompleted(outcome.apply(filter))
+    }
+
+    fn collect_completed_events<C: RunContext>(
+        context: &mut C,
+        filter: iroha::data_model::events::EventFilterBox,
+        timeout: Option<Duration>,
+        limit: Option<u64>,
+    ) -> Result<Vec<iroha::data_model::events::trigger_completed::TriggerCompletedEvent>> {
+        let client = context.client_from_config();
+        let rt = Runtime::new().wrap_err("Failed to create runtime")?;
+        rt.block_on(async move {
+            let mut stream = client
+                .listen_for_events_async([filter])
+                .await
+                .wrap_err("Failed to listen for trigger completion events")?;
+            let deadline = timeout.map(|duration| tokio::time::Instant::now() + duration);
+            let mut events = Vec::new();
+            loop {
+                if limit.is_some_and(|limit| events.len() as u64 >= limit) {
+                    break;
+                }
+                let next = if let Some(deadline) = deadline {
+                    if tokio::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    match tokio::time::timeout_at(deadline, stream.try_next()).await {
+                        Ok(result) => result?,
+                        Err(_) => break,
+                    }
+                } else {
+                    stream.try_next().await?
+                };
+                let Some(event) = next else {
+                    break;
+                };
+                if let iroha::data_model::events::EventBox::TriggerCompleted(event) = event {
+                    events.push(event);
+                }
+            }
+            Ok::<_, eyre::Report>(events)
+        })
     }
 
     #[derive(clap::Args, Debug)]

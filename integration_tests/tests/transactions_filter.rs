@@ -104,7 +104,7 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
         .torii_url
         .join(&format!("/v1/accounts/{alice_id_str}/transactions/query"))
         .unwrap();
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let resp = http
         .post(url)
         .header("Content-Type", "application/json")

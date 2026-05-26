@@ -15,6 +15,8 @@ use std::{
     process::Command,
 };
 
+use integration_tests::process::{output_with_timeout, process_timeout, status_with_timeout};
+
 fn on_path(bin: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     for p in env::split_paths(&path) {
@@ -78,23 +80,17 @@ fn compile_and_run_hello() {
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
 
     // Compile
-    let status = Command::new(&koto_bin)
-        .arg(&src)
-        .arg("-o")
-        .arg(&out)
-        .arg("--abi")
-        .arg("1")
-        .status()
-        .expect("failed to spawn koto_compile");
+    let mut command = Command::new(&koto_bin);
+    command.arg(&src).arg("-o").arg(&out).arg("--abi").arg("1");
+    let status =
+        status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto_compile");
     assert!(status.success(), "koto_compile failed: {status:?}");
 
     // Run
-    let output = Command::new(&ivm_bin)
-        .arg(&out)
-        .arg("--args")
-        .arg("{}")
-        .output()
-        .expect("failed to spawn ivm_run");
+    let mut command = Command::new(&ivm_bin);
+    command.arg(&out).arg("--args").arg("{}");
+    let output =
+        output_with_timeout(&mut command, process_timeout()).expect("failed to spawn ivm_run");
     assert!(
         output.status.success(),
         "ivm_run failed: status={:?}\nstdout=\n{}\nstderr=\n{}",
@@ -132,10 +128,9 @@ fn inspect_hello() {
         "hello.to not found; run compile_and_run_hello first or compile manually"
     );
 
-    let output = Command::new(&ivm_tool)
-        .arg("inspect")
-        .arg(&out)
-        .output()
+    let mut command = Command::new(&ivm_tool);
+    command.arg("inspect").arg(&out);
+    let output = output_with_timeout(&mut command, process_timeout())
         .expect("failed to spawn ivm_tool inspect");
     let out_stdout = String::from_utf8_lossy(&output.stdout);
     let out_stderr = String::from_utf8_lossy(&output.stderr);
@@ -180,22 +175,16 @@ fn compile_and_run_nft() {
     let out = root.join("target/examples/nft.to");
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
 
-    let status = Command::new(&koto_bin)
-        .arg(&src)
-        .arg("-o")
-        .arg(&out)
-        .arg("--abi")
-        .arg("1")
-        .status()
-        .expect("failed to spawn koto_compile");
+    let mut command = Command::new(&koto_bin);
+    command.arg(&src).arg("-o").arg(&out).arg("--abi").arg("1");
+    let status =
+        status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto_compile");
     assert!(status.success(), "koto_compile failed: {status:?}");
 
-    let output = Command::new(&ivm_bin)
-        .arg(&out)
-        .arg("--args")
-        .arg("{}")
-        .output()
-        .expect("failed to spawn ivm_run");
+    let mut command = Command::new(&ivm_bin);
+    command.arg(&out).arg("--args").arg("{}");
+    let output =
+        output_with_timeout(&mut command, process_timeout()).expect("failed to spawn ivm_run");
     assert!(
         output.status.success(),
         "ivm_run failed: status={:?}\nstdout=\n{}\nstderr=\n{}",
