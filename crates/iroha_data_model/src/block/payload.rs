@@ -12,6 +12,7 @@ use crate::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
+    events::trigger_completed::TriggerCompletedEvent,
     fastpq::TransferTranscript,
     transaction::{
         error::TransactionRejectionReason,
@@ -106,6 +107,9 @@ mod model {
         /// Completed AXT envelopes recorded while executing the block.
         #[norito(default)]
         pub axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
+        /// Trigger completion events recorded while executing the block.
+        #[norito(default)]
+        pub trigger_completions: Vec<TriggerCompletedEvent>,
         /// Optional AXT policy snapshot used while executing the block.
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
@@ -198,6 +202,7 @@ impl PartialEq for BlockResult {
             && self.transaction_results == other.transaction_results
             && self.fastpq_transcripts == other.fastpq_transcripts
             && self.axt_envelopes == other.axt_envelopes
+            && self.trigger_completions == other.trigger_completions
             && self.axt_policy_snapshot == other.axt_policy_snapshot
     }
 }
@@ -219,6 +224,7 @@ impl Ord for BlockResult {
             &self.transaction_results,
             &self.fastpq_transcripts,
             &self.axt_envelopes,
+            &self.trigger_completions,
             &self.axt_policy_snapshot,
         )
             .cmp(&(
@@ -228,6 +234,7 @@ impl Ord for BlockResult {
                 &other.transaction_results,
                 &other.fastpq_transcripts,
                 &other.axt_envelopes,
+                &other.trigger_completions,
                 &other.axt_policy_snapshot,
             ))
     }
@@ -591,6 +598,14 @@ impl SignedBlock {
         self.result
             .as_ref()
             .map(|result| result.axt_envelopes.as_slice())
+    }
+
+    /// Trigger completion events recorded while executing the block.
+    #[inline]
+    pub fn trigger_completions(&self) -> Option<&[TriggerCompletedEvent]> {
+        self.result
+            .as_ref()
+            .map(|result| result.trigger_completions.as_slice())
     }
 
     /// AXT policy snapshot captured during execution (if any).

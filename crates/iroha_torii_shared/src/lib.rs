@@ -56,6 +56,8 @@ pub mod uri {
     pub const PROOF_RETENTION_STATUS: &str = "/v1/proofs/retention";
     /// URI used to fetch FASTPQ proof sidecars for a committed block height.
     pub const PIPELINE_FASTPQ_PROOFS: &str = "/v1/pipeline/recovery/{height}/fastpq-proofs";
+    /// URI used to list historical trigger completion records from committed blocks.
+    pub const TRIGGER_COMPLETIONS: &str = "/v1/triggers/completed";
     /// The web socket uri used to subscribe to blocks stream.
     pub const BLOCKS_STREAM: &str = "/v1/blocks/stream";
     /// Debug endpoint exposing cached AXT proof state per dataspace.
@@ -524,6 +526,43 @@ pub struct TriggerCompletionSummary {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+/// Historical trigger completion record returned by `/v1/triggers/completed`.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct TriggerCompletionRecord {
+    /// Block height containing this trigger completion.
+    pub block_height: u64,
+    /// Entrypoint/result index in the block when it can be resolved.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint_index: Option<u64>,
+    /// Compact completion payload.
+    pub completion: TriggerCompletionSummary,
+    /// Evidence source: `block_result` for persisted completion events or `reconstructed_result`
+    /// for legacy blocks reconstructed from transaction results.
+    pub source: String,
+}
+
+/// Historical trigger completion query response.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct TriggerCompletionListResponse {
+    /// Latest committed block height observed by the serving node.
+    pub latest_height: u64,
+    /// First block height scanned.
+    pub from_height: u64,
+    /// Last block height scanned.
+    pub to_height: u64,
+    /// Number of block heights inspected.
+    pub scanned_blocks: u64,
+    /// Maximum number of records requested.
+    pub limit: u64,
+    /// Matching completion records, newest block first.
+    pub completions: Vec<TriggerCompletionRecord>,
 }
 
 /// Status details embedded in [`PipelineTransactionStatusResponse`].
