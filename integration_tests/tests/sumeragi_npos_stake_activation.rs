@@ -603,7 +603,7 @@ async fn wait_for_single_collector(
     collectors_url: &reqwest::Url,
     expected_peer: &str,
 ) -> eyre::Result<()> {
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let deadline = Instant::now() + COLLECTOR_RETRY;
     loop {
         let peers = collector_peer_ids(&http, collectors_url).await?;
@@ -625,7 +625,7 @@ async fn assert_no_single_collector(
     expected_peer: &str,
     context: &str,
 ) -> eyre::Result<()> {
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let peers = collector_peer_ids(&http, collectors_url).await?;
     ensure!(
         peers.len() != 1 || peers[0] != expected_peer,
@@ -755,7 +755,7 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
         .torii_url
         .join("v1/sumeragi/collectors")
         .wrap_err("compose collectors URL")?;
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let deadline = Instant::now() + COLLECTOR_RETRY;
     loop {
         let peers = collector_peer_ids(&http, &collectors_url).await?;

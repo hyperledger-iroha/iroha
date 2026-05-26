@@ -240,6 +240,8 @@ const NETWORK_START_ATTEMPTS: usize = 3;
 const NETWORK_START_RETRY_DELAY: Duration = Duration::from_secs(1);
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
+const NETWORK_PERMIT_WAIT_TIMEOUT_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT";
+const NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5 * 60);
 
 fn network_permit_state() -> &'static Arc<NetworkPermitState> {
     static NETWORK_STATE: OnceLock<Arc<NetworkPermitState>> = OnceLock::new();
@@ -358,10 +360,19 @@ fn network_parallelism_limit() -> usize {
     default_network_parallelism()
 }
 
+fn network_permit_wait_timeout() -> Option<Duration> {
+    let timeout = crate::timeouts::read_env_duration(
+        NETWORK_PERMIT_WAIT_TIMEOUT_ENV,
+        NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT,
+    );
+    (!timeout.is_zero()).then_some(timeout)
+}
+
 fn acquire_network_permit() -> NetworkPermit {
     let state = network_permit_state().clone();
     let mut waited = Duration::ZERO;
     let mut next_log = SERIAL_GUARD_LOG_INTERVAL;
+    let wait_timeout = network_permit_wait_timeout();
     let mut guard = state.state.lock().expect("network permit mutex poisoned");
     loop {
         guard.limit = network_parallelism_limit();
@@ -377,6 +388,17 @@ fn acquire_network_permit() -> NetworkPermit {
                 limit = guard.limit
             );
             next_log = next_log.saturating_add(SERIAL_GUARD_LOG_INTERVAL);
+        }
+        if let Some(timeout) = wait_timeout
+            && waited >= timeout
+        {
+            panic!(
+                "timed out after {timeout:?} waiting for integration-test network permit; \
+                 {in_use}/{limit} permits in use. Set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 \
+                 to disable this timeout",
+                in_use = guard.in_use,
+                limit = guard.limit
+            );
         }
         let (next, _) = state
             .cvar
@@ -1058,6 +1080,56 @@ mod tests {
         assert_eq!(limit, 1);
         assert_eq!(in_use, 1);
         drop(guard);
+    }
+
+    #[test]
+    fn network_permit_wait_timeout_env_override_applies() {
+        let _env_guard = lock_env_guard();
+        let _timeout_guard = EnvRestore::remove(NETWORK_PERMIT_WAIT_TIMEOUT_ENV);
+        assert_eq!(
+            network_permit_wait_timeout(),
+            Some(NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT)
+        );
+
+        let _timeout_guard = EnvRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "25ms");
+        assert_eq!(
+            network_permit_wait_timeout(),
+            Some(Duration::from_millis(25))
+        );
+
+        drop(_timeout_guard);
+        let _timeout_guard = EnvRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "0");
+        assert_eq!(network_permit_wait_timeout(), None);
+    }
+
+    #[test]
+    fn serial_guard_panics_after_wait_timeout() {
+        let _env_guard = lock_env_guard();
+        wait_for_network_permits_to_drain("serial_guard_panics_after_wait_timeout");
+        let _timeout_guard = EnvRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "25ms");
+        let _override_guard = override_network_parallelism(Some(true), None);
+        let held_guard = serial_guard();
+
+        let started = Instant::now();
+        let panic = match std::panic::catch_unwind(serial_guard) {
+            Ok(_) => panic!("serial_guard should panic when permit wait timeout elapses"),
+            Err(panic) => panic,
+        };
+        let panic_message = panic
+            .downcast_ref::<&str>()
+            .map(std::string::ToString::to_string)
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<missing panic message>".to_owned());
+        assert!(
+            panic_message.contains("timed out"),
+            "panic should explain permit wait timeout, got: {panic_message}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(20),
+            "permit wait should not panic before timeout elapsed"
+        );
+
+        drop(held_guard);
     }
 
     #[test]

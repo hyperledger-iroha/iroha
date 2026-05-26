@@ -5,6 +5,7 @@
 use std::{path::PathBuf, process::Command};
 
 use eyre::{Result, WrapErr, ensure};
+use integration_tests::process::{process_timeout, status_with_timeout};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -30,10 +31,11 @@ fn cbdc_rollout_fixture_passes_validator() -> Result<()> {
         bundle_root.display()
     );
 
-    let status = Command::new(&script)
+    let mut command = Command::new(&script);
+    command
         .env("CBDC_ROLLOUT_BUNDLE", &bundle_root)
-        .current_dir(&root)
-        .status()
+        .current_dir(&root);
+    let status = status_with_timeout(&mut command, process_timeout())
         .wrap_err("failed to execute ci/check_cbdc_rollout.sh")?;
 
     ensure!(

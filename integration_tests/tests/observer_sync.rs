@@ -289,7 +289,7 @@ fn observer_node_catches_up() -> Result<()> {
             limit
         );
         let body = rt.block_on(async {
-            reqwest::Client::new()
+            integration_tests::http::client()
                 .get(url)
                 .header("Accept", "application/json")
                 .send()
@@ -371,7 +371,7 @@ fn observer_node_catches_up() -> Result<()> {
                 "pagination": {"limit": 100, "offset": 0}
             });
             let body = norito::json::to_json(&env)?;
-            let client = reqwest::Client::new();
+            let client = integration_tests::http::client();
             let resp_txt = rt.block_on(async {
                 client
                     .post(url)
@@ -485,7 +485,7 @@ fn observer_node_catches_up() -> Result<()> {
 
     let fetch_status_json = |url: String| -> Result<JsonValue> {
         let body = rt.block_on(async {
-            reqwest::Client::new()
+            integration_tests::http::client()
                 .get(&url)
                 .header("Accept", "application/json")
                 .send()

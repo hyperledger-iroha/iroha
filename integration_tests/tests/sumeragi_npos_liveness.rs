@@ -637,7 +637,7 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
             .torii_url
             .join("v1/sumeragi/pacemaker")
             .wrap_err("compose pacemaker URL")?;
-        let http = reqwest::Client::new();
+        let http = integration_tests::http::client();
 
         let pacemaker_before = fetch_pacemaker_status(&http, &pacemaker_url).await?;
         assert_pacemaker_matches_config(&pacemaker_before, "before restart");

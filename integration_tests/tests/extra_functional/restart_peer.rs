@@ -1295,7 +1295,7 @@ async fn post_private_uploaded_model_execute(
         .torii_url
         .join("/v1/soracloud/model/upload/private/execute")?;
     let body = json::to_vec(request)?;
-    let request = reqwest::Client::new()
+    let request = integration_tests::http::client()
         .post(url.clone())
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(reqwest::header::ACCEPT, "application/json")
@@ -1379,7 +1379,7 @@ async fn fetch_private_uploaded_model_receipt(
         .append_pair("weight_version", &expected.weight_version)
         .append_pair("limit", "1")
         .append_pair("count_mode", "exact");
-    let response = reqwest::Client::new()
+    let response = integration_tests::http::client()
         .get(url.clone())
         .header(reqwest::header::ACCEPT, "application/json");
     let response = add_canonical_app_headers(response, client, Method::GET, &url, &[])?

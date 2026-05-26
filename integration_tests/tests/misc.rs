@@ -33,7 +33,7 @@ fn status_eq_excluding_uptime_and_queue(lhs: &Status, rhs: &Status) -> bool {
 }
 
 async fn check(client: &client::Client, min_blocks_non_empty: u64) -> Result<()> {
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let body = http
         .get(client.torii_url.join("/status").unwrap())
         .header("Accept", "application/json")
@@ -125,7 +125,7 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
     assert!(version >= 1);
 
     // status_with_norito_accept_header
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let url = network.client().torii_url.join("/status").unwrap();
     let resp = http
         .get(url)

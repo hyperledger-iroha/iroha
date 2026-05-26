@@ -53,7 +53,7 @@ js_host_parity = []
 zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark"]
 
 [dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["fs", "process", "rt-multi-thread", "time"] }
 eyre = { workspace = true }
 iroha_test_network = { workspace = true }
 reed-solomon-erasure = { version = "6", default-features = false, features = ["std"], optional = true }
