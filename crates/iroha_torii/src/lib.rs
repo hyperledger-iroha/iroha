@@ -31081,6 +31081,7 @@ fn trigger_completion_records_for_block(
     block: &iroha_data_model::block::SignedBlock,
     block_height: u64,
     include_reconstructed: bool,
+    entrypoint_hash: Option<&str>,
 ) -> Vec<TriggerCompletionRecord> {
     let persisted = block
         .trigger_completions()
@@ -31090,10 +31091,35 @@ fn trigger_completion_records_for_block(
             trigger_completion_record_from_event(block, block_height, event, "block_result")
         })
         .collect::<Vec<_>>();
-    if !persisted.is_empty() || !include_reconstructed {
+    if !include_reconstructed {
         return persisted;
     }
-    reconstruct_trigger_completion_records(block, block_height)
+    if persisted.is_empty() {
+        return reconstruct_trigger_completion_records(block, block_height);
+    }
+    if let Some(entrypoint_hash) = entrypoint_hash
+        && !persisted
+            .iter()
+            .any(|record| record.completion.trigger_execution_hash == entrypoint_hash)
+    {
+        return reconstruct_trigger_completion_records(block, block_height);
+    }
+    persisted
+}
+
+fn trigger_completion_from_height(query: &TriggerCompletionQuery, requested_to: u64) -> u64 {
+    query.from_height.map_or_else(
+        || {
+            let scan_limit = query
+                .scan_limit_blocks
+                .unwrap_or(TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS)
+                .clamp(1, TRIGGER_COMPLETION_MAX_SCAN_BLOCKS);
+            requested_to
+                .saturating_sub(scan_limit.saturating_sub(1))
+                .max(1)
+        },
+        |from_height| from_height.max(1),
+    )
 }
 
 fn trigger_completion_query_response(
@@ -31105,10 +31131,6 @@ fn trigger_completion_query_response(
         .limit
         .unwrap_or(TRIGGER_COMPLETION_DEFAULT_LIMIT)
         .clamp(1, TRIGGER_COMPLETION_MAX_LIMIT);
-    let scan_limit = query
-        .scan_limit_blocks
-        .unwrap_or(TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS)
-        .clamp(1, TRIGGER_COMPLETION_MAX_SCAN_BLOCKS);
     let include_reconstructed = query.include_reconstructed.unwrap_or(true);
     let outcome = TriggerCompletionOutcomeFilter::parse(query.outcome.as_deref())?;
     let requested_to = query.to_height.unwrap_or(latest_height).min(latest_height);
@@ -31124,14 +31146,7 @@ fn trigger_completion_query_response(
         });
     }
 
-    let window_from = requested_to
-        .saturating_sub(scan_limit.saturating_sub(1))
-        .max(1);
-    let from_height = query
-        .from_height
-        .unwrap_or(window_from)
-        .max(window_from)
-        .max(1);
+    let from_height = trigger_completion_from_height(query, requested_to);
     if from_height > requested_to {
         return Ok(TriggerCompletionListResponse {
             latest_height,
@@ -31153,9 +31168,12 @@ fn trigger_completion_query_response(
         let Some(block) = app.kura.get_block(height_usize) else {
             continue;
         };
-        for record in
-            trigger_completion_records_for_block(block.as_ref(), height, include_reconstructed)
-        {
+        for record in trigger_completion_records_for_block(
+            block.as_ref(),
+            height,
+            include_reconstructed,
+            query.entrypoint_hash.as_deref(),
+        ) {
             if !trigger_completion_record_matches(
                 &record,
                 query.id.as_deref(),
@@ -33860,7 +33878,11 @@ pub mod zk_attachments;
 pub mod zk_prover;
 
 const DEFAULT_ROUTE_TIMEOUT: Duration = Duration::from_mins(1);
-const CONTRACT_DEPLOY_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
+// Large trigger-native bundles can legitimately spend many localnet blocks in
+// deploy/activation while pre-commit triggers are evaluated. Keep this route
+// above the CLI deploy-bundle wait budget so clients do not have to resume
+// otherwise healthy deployments every ten minutes.
+const CONTRACT_DEPLOY_ROUTE_TIMEOUT: Duration = Duration::from_mins(60);
 const SORAFS_STORAGE_PIN_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
 const HEADER_NORITO_RPC_ERROR: &str = "x-iroha-error-code";
 const NORITO_RPC_RETRY_AFTER_SECONDS: &str = "300";
@@ -39637,7 +39659,10 @@ pub(crate) mod tests_runtime_handlers {
             QcAggregate, VALIDATOR_SET_HASH_VERSION_V1,
         },
         domain::{Domain, DomainId},
-        events::pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
+        events::{
+            pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
+            trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
+        },
         isi::{Grant, Log, Register, RegisterPeerWithPop, consensus_keys::RegisterConsensusKey},
         level::Level,
         name::Name,
@@ -39650,7 +39675,7 @@ pub(crate) mod tests_runtime_handlers {
             SoranetPrivacyEventV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
         },
         transaction::{
-            Executable, IvmBytecode, IvmProved,
+            Executable, ExecutionStep, IvmBytecode, IvmProved,
             error::TransactionRejectionReason,
             signed::{
                 SealedTransactionReveal, SignedTransaction, TransactionBuilder,
@@ -39658,12 +39683,12 @@ pub(crate) mod tests_runtime_handlers {
                 compute_sealed_transaction_commitment,
             },
         },
-        trigger::DataTriggerSequence,
+        trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntrypoint, TriggerId},
     };
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanResolveAccountAlias,
     };
-    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric};
     use iroha_test_samples::ALICE_ID;
     use norito::codec::Encode;
 
@@ -45903,6 +45928,73 @@ pub(crate) mod tests_runtime_handlers {
         (block, entry_hash)
     }
 
+    struct PersistedDataTriggerCompletionBlock {
+        block: SignedBlock,
+        tx_hash: HashOf<SignedTransaction>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        trigger_execution_hash: HashOf<TransactionEntrypoint>,
+        trigger_id: TriggerId,
+    }
+
+    fn make_persisted_data_trigger_completion_block(
+        height: u64,
+        prev_hash: Option<HashOf<BlockHeader>>,
+    ) -> PersistedDataTriggerCompletionBlock {
+        let keypair = KeyPair::random();
+        let chain: ChainId = "trigger-completion-tests".parse().expect("chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let tx = TransactionBuilder::new(chain, authority.clone()).sign(keypair.private_key());
+        let tx_hash = tx.hash();
+        let entrypoint_hash = tx.hash_as_entrypoint();
+        let trigger_id: TriggerId = "persisted_data_trigger".parse().expect("trigger id");
+        let step = DataTriggerStep {
+            id: trigger_id.clone(),
+            instructions: ExecutionStep(ConstVec::new_empty()),
+        };
+        let trigger_execution_hash = TimeTriggerEntrypoint {
+            id: trigger_id.clone(),
+            instructions: step.instructions.clone(),
+            authority,
+        }
+        .hash_as_entrypoint();
+        assert_ne!(trigger_execution_hash, entrypoint_hash);
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("nonzero height"),
+            prev_hash,
+            None,
+            None,
+            0,
+            0,
+        );
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entrypoint_hash],
+                vec![TransactionResultInner::Ok(vec![step])],
+            )
+            .expect("test block entrypoint hash should match payload");
+        block.set_trigger_completions(vec![TriggerCompletedEvent::new(
+            trigger_id.clone(),
+            trigger_execution_hash,
+            0,
+            TriggerCompletedOutcome::Success,
+        )]);
+
+        PersistedDataTriggerCompletionBlock {
+            block,
+            tx_hash,
+            entrypoint_hash,
+            trigger_execution_hash,
+            trigger_id,
+        }
+    }
+
     fn make_sealed_reveal_block(
         height: u64,
         prev_hash: Option<HashOf<BlockHeader>>,
@@ -45945,6 +46037,17 @@ pub(crate) mod tests_runtime_handlers {
         let hash = block.hash();
         app.kura.store_block(Arc::new(block)).expect("store block");
         hash
+    }
+
+    fn record_committed_block_hash_for_test(
+        app: &SharedAppState,
+        header: BlockHeader,
+        block_hash: HashOf<BlockHeader>,
+    ) {
+        let mut block_hashes = app.state.block_hashes.block();
+        block_hashes.push_for_tests(block_hash);
+        block_hashes.commit_for_tests();
+        app.state.update_latest_block_header_cache_for_tests(header);
     }
 
     fn make_empty_signed_block(
@@ -46817,6 +46920,141 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    #[test]
+    fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
+        let app = mk_app_state_for_tests();
+        let sample = make_persisted_data_trigger_completion_block(1, None);
+        let header = sample.block.header();
+        let block_hash = store_block(&app, sample.block);
+        record_committed_block_hash_for_test(&app, header, block_hash);
+
+        let response = super::trigger_completion_query_response(
+            &app,
+            &TriggerCompletionQuery {
+                id: None,
+                entrypoint_hash: Some(sample.entrypoint_hash.to_string()),
+                outcome: None,
+                from_height: Some(1),
+                to_height: Some(1),
+                limit: Some(10),
+                scan_limit_blocks: Some(1),
+                include_reconstructed: Some(true),
+            },
+        )
+        .expect("query response");
+
+        assert_eq!(response.completions.len(), 1);
+        let record = response.completions.first().expect("completion");
+        assert_eq!(record.source, "reconstructed_result");
+        assert_eq!(record.block_height, 1);
+        assert_eq!(record.entrypoint_index, Some(0));
+        assert_eq!(record.completion.trigger_id, sample.trigger_id.to_string());
+        assert_eq!(
+            record.completion.trigger_execution_hash,
+            sample.entrypoint_hash.to_string()
+        );
+
+        let without_reconstruction = super::trigger_completion_query_response(
+            &app,
+            &TriggerCompletionQuery {
+                id: None,
+                entrypoint_hash: Some(sample.entrypoint_hash.to_string()),
+                outcome: None,
+                from_height: Some(1),
+                to_height: Some(1),
+                limit: Some(10),
+                scan_limit_blocks: Some(1),
+                include_reconstructed: Some(false),
+            },
+        )
+        .expect("query response");
+        assert!(without_reconstruction.completions.is_empty());
+
+        let persisted_response = super::trigger_completion_query_response(
+            &app,
+            &TriggerCompletionQuery {
+                id: None,
+                entrypoint_hash: Some(sample.trigger_execution_hash.to_string()),
+                outcome: None,
+                from_height: Some(1),
+                to_height: Some(1),
+                limit: Some(10),
+                scan_limit_blocks: Some(1),
+                include_reconstructed: Some(true),
+            },
+        )
+        .expect("query response");
+
+        assert_eq!(persisted_response.completions.len(), 1);
+        let persisted = persisted_response.completions.first().expect("completion");
+        assert_eq!(persisted.source, "block_result");
+        assert_eq!(
+            persisted.completion.trigger_execution_hash,
+            sample.trigger_execution_hash.to_string()
+        );
+    }
+
+    #[test]
+    fn trigger_completion_query_honors_explicit_from_height() {
+        let app = mk_app_state_for_tests();
+        let sample = make_persisted_data_trigger_completion_block(1, None);
+        let header = sample.block.header();
+        let block_hash = store_block(&app, sample.block);
+        record_committed_block_hash_for_test(&app, header, block_hash);
+
+        let mut prev_hash = Some(block_hash);
+        for height in 2..=4 {
+            let mut block = make_empty_signed_block(height, prev_hash, 0);
+            block
+                .set_transaction_results(Vec::new(), &[], Vec::new())
+                .expect("empty test block should accept empty results");
+            let header = block.header();
+            let hash = store_block(&app, block);
+            record_committed_block_hash_for_test(&app, header, hash);
+            prev_hash = Some(hash);
+        }
+
+        let bounded_window = super::trigger_completion_query_response(
+            &app,
+            &TriggerCompletionQuery {
+                id: Some(sample.trigger_id.to_string()),
+                entrypoint_hash: None,
+                outcome: None,
+                from_height: None,
+                to_height: Some(4),
+                limit: Some(10),
+                scan_limit_blocks: Some(2),
+                include_reconstructed: Some(true),
+            },
+        )
+        .expect("query response");
+        assert_eq!(bounded_window.from_height, 3);
+        assert_eq!(bounded_window.scanned_blocks, 2);
+        assert!(bounded_window.completions.is_empty());
+
+        let explicit_history = super::trigger_completion_query_response(
+            &app,
+            &TriggerCompletionQuery {
+                id: Some(sample.trigger_id.to_string()),
+                entrypoint_hash: None,
+                outcome: None,
+                from_height: Some(1),
+                to_height: Some(4),
+                limit: Some(10),
+                scan_limit_blocks: Some(2),
+                include_reconstructed: Some(true),
+            },
+        )
+        .expect("query response");
+        assert_eq!(explicit_history.from_height, 1);
+        assert_eq!(explicit_history.scanned_blocks, 4);
+        assert_eq!(explicit_history.completions.len(), 1);
+        assert_eq!(
+            explicit_history.completions[0].completion.trigger_id,
+            sample.trigger_id.to_string()
+        );
+    }
+
     #[tokio::test]
     async fn pipeline_status_handler_returns_applied_from_state() {
         let app = mk_app_state_for_tests();
@@ -46881,6 +47119,51 @@ pub(crate) mod tests_runtime_handlers {
             .and_then(|status| status.get("kind"))
             .and_then(norito::json::Value::as_str);
         assert_eq!(status_kind_entry, Some("Applied"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_hydrates_reconstructed_trigger_completion_for_entrypoint_hash() {
+        let app = mk_app_state_for_tests();
+        let sample = make_persisted_data_trigger_completion_block(1, None);
+        let header = sample.block.header();
+        let height = header.height();
+        let height_usize = usize::try_from(height.get()).expect("height usize");
+        let height_nz = NonZeroUsize::new(height_usize).expect("height");
+        let block_hash = store_block(&app, sample.block);
+        record_committed_block_hash_for_test(&app, header.clone(), block_hash);
+
+        let mut state_block = app.state.block(header);
+        let tx_hashes: HashSet<_> = [sample.tx_hash].into_iter().collect();
+        state_block.transactions.insert_block(tx_hashes, height_nz);
+        state_block.commit().expect("commit");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(sample.tx_hash.to_string()),
+                scope: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: PipelineTransactionStatusResponse =
+            norito::json::from_slice(&bytes).expect("json");
+
+        assert_eq!(payload.status.kind, "Applied");
+        assert_eq!(payload.trigger_completions.len(), 1);
+        let completion = payload.trigger_completions.first().expect("completion");
+        assert_eq!(completion.trigger_id, sample.trigger_id.to_string());
+        assert_eq!(
+            completion.trigger_execution_hash,
+            sample.entrypoint_hash.to_string()
+        );
     }
 
     #[tokio::test]
