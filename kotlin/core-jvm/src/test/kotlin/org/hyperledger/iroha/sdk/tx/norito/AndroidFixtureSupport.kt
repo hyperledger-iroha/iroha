@@ -7,6 +7,7 @@ import kotlin.io.path.readText
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 
 internal data class TransactionPayloadFixture(
@@ -158,9 +159,9 @@ internal object AndroidFixtureSupport {
 
         val metadata = payload["metadata"]?.let { raw ->
             asMap(raw, "$name.payload.metadata").mapValues { (_, value) ->
-                value?.toString() ?: "null"
+                JsonValue.string(value?.toString() ?: "null")
             }
-        } ?: emptyMap()
+        } ?: emptyMap<String, JsonValue>()
 
         return TransactionPayload(
             chainId = requiredString(payload["chain"], "$name.payload.chain"),

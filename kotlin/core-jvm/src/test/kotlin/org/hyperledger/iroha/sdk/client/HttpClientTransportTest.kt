@@ -22,6 +22,7 @@ import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -2318,7 +2319,7 @@ class HttpClientTransportTest {
                 creationTimeMs = 1_700_000_000_000L + seed,
                 timeToLiveMs = 5_000L,
                 nonce = seed + 1,
-                metadata = mapOf("note" to "tx-$seed"),
+                metadata = mapOf("note" to JsonValue.string("tx-$seed")),
             ),
         )
         val signature = ByteArray(64) { (seed + 1).toByte() }

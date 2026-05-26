@@ -11,6 +11,7 @@ import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
@@ -43,7 +44,7 @@ class NoritoJavaCodecAdapterParityTest {
             executable = Executable.ivm(instructions),
             timeToLiveMs = 5_000L,
             nonce = 42,
-            metadata = mapOf("purpose" to "unit-test"),
+            metadata = mapOf("purpose" to JsonValue.string("unit-test")),
         )
 
         val encoded = adapter.encodeTransaction(payload)
