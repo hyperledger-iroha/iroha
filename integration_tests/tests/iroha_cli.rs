@@ -24,7 +24,7 @@ use integration_tests::{
         prepare_iroha_cli_test_environment, should_reuse_existing_cli_binary_for_tests_from_value,
         workspace_root,
     },
-    process::{CommandTimeoutExt, TokioCommandTimeoutExt},
+    process::{CommandTimeoutExt, TokioCommandTimeoutExt, tokio_output_with_timeout},
     sandbox,
 };
 use iroha::{
@@ -52,6 +52,7 @@ use norito::json::{self, Value};
 use reqwest::Url;
 
 const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
+const SORACLOUD_TEST_SUBPROCESS_TIMEOUT_HEADROOM: Duration = Duration::from_secs(15);
 const SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "main";
 const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
@@ -423,13 +424,14 @@ async fn run_soracloud_command(
     args: &[&str],
 ) -> eyre::Result<std::process::Output> {
     let effective_args = soracloud_command_args(args);
-    Ok(tokio::process::Command::new(program())
+    let timeout = soracloud_subprocess_timeout(args);
+    let mut command = tokio::process::Command::new(program());
+    command
         .current_dir(cwd)
         .arg("soracloud")
         .args(&effective_args)
-        .envs(config.envs())
-        .bounded_output()
-        .await?)
+        .envs(config.envs());
+    Ok(tokio_output_with_timeout(&mut command, timeout).await?)
 }
 
 async fn wait_for_soracloud_json_command(
@@ -530,6 +532,23 @@ fn soracloud_command_args(args: &[&str]) -> Vec<String> {
     effective_args
 }
 
+fn soracloud_subprocess_timeout(args: &[&str]) -> Duration {
+    let control_plane_timeout_secs = args
+        .windows(2)
+        .find_map(|window| {
+            (window[0] == "--timeout-secs")
+                .then(|| window[1].parse::<u64>().ok())
+                .flatten()
+        })
+        .unwrap_or_else(|| {
+            SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS
+                .parse::<u64>()
+                .expect("default Soracloud test timeout is a valid integer")
+        });
+    Duration::from_secs(control_plane_timeout_secs)
+        .saturating_add(SORACLOUD_TEST_SUBPROCESS_TIMEOUT_HEADROOM)
+}
+
 fn namespaced_soracloud_command_args(args: &[&str]) -> Vec<String> {
     let Some((command, tail)) = args.split_first() else {
         return Vec::new();
@@ -613,6 +632,20 @@ fn soracloud_command_args_append_timeout_once() {
             "--timeout-secs".to_owned(),
             "15".to_owned(),
         ]
+    );
+    assert_eq!(
+        soracloud_subprocess_timeout(&["hf-deploy", "--repo-id", "openai/gpt-oss"]),
+        Duration::from_secs(75)
+    );
+    assert_eq!(
+        soracloud_subprocess_timeout(&[
+            "hf-status",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--timeout-secs",
+            "15",
+        ]),
+        Duration::from_secs(30)
     );
 }
 
