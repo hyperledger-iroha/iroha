@@ -2169,7 +2169,7 @@ mod tests {
     #[test]
     fn active_dataspace_id_derives_from_dynamic_sns_alias() {
         let catalog = dataspace_catalog();
-        let selector = selector_for_dataspace_alias("boi").expect("selector");
+        let selector = selector_for_dataspace_alias("alpha").expect("selector");
         let expected_id = DataSpaceId::from_hash(&selector.name_hash());
         let owner = another_owner();
         let address = AccountAddress::from_account_id(&owner).expect("account address");
@@ -2191,13 +2191,13 @@ mod tests {
 
         let view = world.view();
         assert_eq!(
-            active_dataspace_id_by_alias(&view, &catalog, "boi", 50),
+            active_dataspace_id_by_alias(&view, &catalog, "alpha", 50),
             Some(expected_id)
         );
         let metadata =
-            active_dataspace_metadata_by_alias(&view, &catalog, "boi", 50).expect("metadata");
+            active_dataspace_metadata_by_alias(&view, &catalog, "alpha", 50).expect("metadata");
         assert_eq!(metadata.id, expected_id);
-        assert_eq!(metadata.alias, "boi");
+        assert_eq!(metadata.alias, "alpha");
     }
 
     #[test]
@@ -2225,11 +2225,11 @@ mod tests {
         let world = World::default();
 
         assert_eq!(
-            active_dataspace_id_by_alias(&world.view(), &catalog, "boi", 50),
+            active_dataspace_id_by_alias(&world.view(), &catalog, "alpha", 50),
             None
         );
         assert_eq!(
-            active_dataspace_metadata_by_alias(&world.view(), &catalog, "boi", 50),
+            active_dataspace_metadata_by_alias(&world.view(), &catalog, "alpha", 50),
             None
         );
     }
@@ -2238,15 +2238,15 @@ mod tests {
     fn active_dataspace_id_ignores_expired_dynamic_alias() {
         let catalog = dataspace_catalog();
         let owner = another_owner();
-        let (selector, record) = dataspace_record("boi", &owner, 10, 20, 30);
+        let (selector, record) = dataspace_record("alpha", &owner, 10, 20, 30);
         let world = world_with_dataspace_record(&selector, &record);
 
         assert_eq!(
-            active_dataspace_id_by_alias(&world.view(), &catalog, "boi", 10),
+            active_dataspace_id_by_alias(&world.view(), &catalog, "alpha", 10),
             None
         );
         assert_eq!(
-            active_dataspace_owner_by_alias(&world.view(), "boi", 25),
+            active_dataspace_owner_by_alias(&world.view(), "alpha", 25),
             None
         );
     }
@@ -2256,26 +2256,26 @@ mod tests {
         let catalog = dataspace_catalog();
         let owner = another_owner();
         let (frozen_selector, mut frozen_record) =
-            dataspace_record("frozen-boi", &owner, 100, 200, 300);
+            dataspace_record("frozen-alpha", &owner, 100, 200, 300);
         frozen_record.status = NameStatus::Frozen(NameFrozenStateV1 {
             reason: "governance hold".to_owned(),
             until_ms: 90,
         });
         let frozen_world = world_with_dataspace_record(&frozen_selector, &frozen_record);
         assert_eq!(
-            active_dataspace_id_by_alias(&frozen_world.view(), &catalog, "frozen-boi", 50),
+            active_dataspace_id_by_alias(&frozen_world.view(), &catalog, "frozen-alpha", 50),
             None
         );
 
         let (tombstoned_selector, mut tombstoned_record) =
-            dataspace_record("retired-boi", &owner, 100, 200, 300);
+            dataspace_record("retired-alpha", &owner, 100, 200, 300);
         tombstoned_record.status = NameStatus::Tombstoned(NameTombstoneStateV1 {
             reason: "retired".to_owned(),
         });
         let tombstoned_world =
             world_with_dataspace_record(&tombstoned_selector, &tombstoned_record);
         assert_eq!(
-            active_dataspace_id_by_alias(&tombstoned_world.view(), &catalog, "retired-boi", 50),
+            active_dataspace_id_by_alias(&tombstoned_world.view(), &catalog, "retired-alpha", 50),
             None
         );
     }

@@ -137,29 +137,10 @@ final class OfflineQrStreamTests: XCTestCase {
     }
 
     func testTransferTextNearbyEnvelopeRoundTripsKinds() throws {
-        let payment = try Self.fixturePaymentTokenText()
-        let token = try OfflineNotePaymentTokenCodec.decodeText(payment)
-        let receiveOutput = try XCTUnwrap(token.audit.outputClaims.first)
-        let assetDefinitionId = try XCTUnwrap(
-            receiveOutput.assetId.split(separator: "#", maxSplits: 1).first
-        ).description
-        let receiveRequest = try OfflineNoteReceiveRequest(
-            chainId: token.chainId,
-            paymentRequestId: token.paymentRequestId,
-            accountId: receiveOutput.keyCertificate.accountId,
-            assetDefinitionId: assetDefinitionId,
-            assetId: receiveOutput.assetId,
-            amount: receiveOutput.amount,
-            keyCertificate: receiveOutput.keyCertificate,
-            outputCommitment: receiveOutput.noteCommitment
-        )
-        let receiptAck = try OfflineNoteReceiptAck.fromPaymentToken(
-            token,
-            recipientAccountId: receiveOutput.keyCertificate.accountId,
-            acceptedAtMs: 1_706_000_000_444
-        )
-        let challenge = try OfflineNoteReceiveRequestCodec.encodeText(receiveRequest)
-        let ack = try OfflineNoteReceiptAckCodec.encodeText(receiptAck)
+        let payloads = try OfflineBearerWalletTests.bearerTextPayloadFixture()
+        let challenge = payloads.receiveRequest
+        let payment = payloads.payment
+        let ack = payloads.ack
         let pairing = try OfflineNoteNearbyPairingChallenge(assetName: "nearby_pairing_stars")
 
         let challengeBytes = try OfflineNoteTransferHandoff.nearbyTextEnvelopeBytes(

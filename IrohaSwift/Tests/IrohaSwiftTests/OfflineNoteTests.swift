@@ -230,13 +230,12 @@ final class OfflineNoteTests: XCTestCase {
         let text = try OfflineNotePaymentTokenCodec.encodeText(token)
         XCTAssertEqual(text, fixture.sdkInterop.paymentTokenText)
         XCTAssertTrue(text.hasPrefix(OfflineNotePaymentTokenCodec.textPrefix))
-        XCTAssertEqual(OfflineNotePaymentTokenCodec.textPrefix, OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix)
+        XCTAssertNotEqual(OfflineNotePaymentTokenCodec.textPrefix, OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix)
         XCTAssertEqual(try OfflineNotePaymentTokenCodec.decodeText(text).tokenIdHex, token.tokenIdHex)
-        XCTAssertEqual(
+        XCTAssertThrowsError(
             try OfflineNotePaymentTokenCodec.decodeText(
                 OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix + String(text.split(separator: ":").last!)
-            ).tokenIdHex,
-            token.tokenIdHex
+            )
         )
 
         let frames = try OfflineNotePaymentTokenCodec.encodeQrFrameBytes(
@@ -1017,9 +1016,10 @@ final class OfflineNoteTests: XCTestCase {
             payload: OfflineNoteTransferHandoff.rawReceiptAckBytes(for: receiptAck),
             contentType: OfflineNoteTransferHandoff.receiptAckContentType
         )
-        let textChallenge = try OfflineNoteReceiveRequestCodec.encodeText(receiveRequest)
-        let textPayment = try OfflineNotePaymentTokenCodec.encodeText(token)
-        let textAck = try OfflineNoteReceiptAckCodec.encodeText(receiptAck)
+        let bearerTextPayloads = try OfflineBearerWalletTests.bearerTextPayloadFixture()
+        let textChallenge = bearerTextPayloads.receiveRequest
+        let textPayment = bearerTextPayloads.payment
+        let textAck = bearerTextPayloads.ack
         let textChallengeBytes = try OfflineNoteTransferHandoff.nearbyTextEnvelopeBytes(
             payload: textChallenge,
             kind: .receiveRequest,
