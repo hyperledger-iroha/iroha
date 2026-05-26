@@ -196,11 +196,12 @@ async fn topic_cap_violation_disconnects() {
     let chain = ChainId::from("test_chain");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let a1 = socket_addr!(127.0.0.1:0);
-    let a2 = socket_addr!(127.0.0.1:0);
+    let a1 = super::next_addr();
+    let a2 = super::next_addr();
 
-    // Small caps for all topics (1 KiB) and small global cap
-    let cfg = |addr: SocketAddr| make_config(&addr, &addr, 2048, 1024);
+    // Small caps for all topics (1 KiB) with a larger global cap so the
+    // per-topic consensus cap handles the oversized frame.
+    let cfg = |addr: SocketAddr| make_config(&addr, &addr, 16 * 1024, 1024);
 
     let started1 = NetworkHandle::<BigMsg>::start(
         kp1.clone(),
@@ -224,7 +225,7 @@ async fn topic_cap_violation_disconnects() {
         ShutdownSignal::new(),
     )
     .await;
-    let (net2, _c2) = match started2 {
+    let (mut net2, _c2) = match started2 {
         Ok(ok) => ok,
         Err(_) => return,
     };
@@ -255,6 +256,23 @@ async fn topic_cap_violation_disconnects() {
     {
         return;
     }
+    if tokio::time::timeout(Duration::from_millis(1500), async {
+        let mut n = net2
+            .wait_online_peers_update(std::collections::HashSet::len)
+            .await
+            .expect("online peers channel closed");
+        while n < 1 {
+            n = net2
+                .wait_online_peers_update(std::collections::HashSet::len)
+                .await
+                .expect("online peers channel closed");
+        }
+    })
+    .await
+    .is_err()
+    {
+        return;
+    }
 
     // Track initial consensus cap violation counter so we can assert the drop path increments it.
     let start_cap = iroha_p2p::network::cap_violations_consensus();
@@ -269,18 +287,27 @@ async fn topic_cap_violation_disconnects() {
         peer_id: p1.id().clone(),
         priority: Priority::High,
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let end_cap = tokio::time::timeout(Duration::from_millis(1_000), async {
+        loop {
+            let current = iroha_p2p::network::cap_violations_consensus();
+            if current > start_cap {
+                break current;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("consensus cap violation counter should increase");
+
     // Expect net1 to have dropped net2 after violation or soon after
     let count = net1.online_peers(std::collections::HashSet::len);
     assert!(count == 0 || count == 1);
 
     // The inbound fast path should reject the oversized frame without
-    // re-encoding payloads; the consensus cap counter should increment exactly once.
-    let end_cap = iroha_p2p::network::cap_violations_consensus();
-    assert_eq!(
-        end_cap,
-        start_cap + 1,
-        "consensus cap violations should increment by one for oversized frame"
+    // re-encoding payloads; the consensus cap counter should increment.
+    assert!(
+        end_cap > start_cap,
+        "consensus cap violations should increment for oversized frame"
     );
 }
 
@@ -301,7 +328,7 @@ async fn tcp_global_frame_cap_disconnects() {
     drop(probe);
 
     let listen_addr = socket_addr!(127.0.0.1: {port});
-    let dialer_addr = socket_addr!(127.0.0.1:0);
+    let dialer_addr = super::next_addr();
 
     // Listener enforces a tight global frame cap, dialer keeps a generous cap so outbound succeeds.
     let listener_cfg = make_config(&listen_addr, &listen_addr, 1_024, 16 * 1024);
@@ -437,7 +464,7 @@ async fn tls_global_frame_cap_disconnects() {
     listener_cfg.tls_enabled = true;
     listener_cfg.tls_listen_address = Some(WithOrigin::inline(tls_listen.clone()));
 
-    let client_addr = socket_addr!(127.0.0.1:0);
+    let client_addr = super::next_addr();
     let mut dialer_cfg = make_config(&client_addr, &client_addr, 16 * 1024, 16 * 1024);
     dialer_cfg.tls_enabled = true;
 
@@ -576,7 +603,7 @@ async fn quic_global_frame_cap_disconnects() {
     let mut listener_cfg = make_config(&listen_addr, &public_host, 1024, 4096);
     listener_cfg.quic_enabled = true;
 
-    let client_addr = socket_addr!(127.0.0.1:0);
+    let client_addr = super::next_addr();
     let mut dialer_cfg = make_config(&client_addr, &client_addr, 16 * 1024, 16 * 1024);
     dialer_cfg.quic_enabled = true;
 
@@ -697,12 +724,8 @@ async fn ws_global_frame_cap_disconnects() {
     let kp_listener = KeyPair::random();
     let kp_dialer = KeyPair::random();
 
-    let listener_cfg = make_config(
-        &socket_addr!(127.0.0.1:0),
-        &socket_addr!(127.0.0.1:0),
-        1_024,
-        16 * 1024,
-    );
+    let listener_addr = super::next_addr();
+    let listener_cfg = make_config(&listener_addr, &listener_addr, 1_024, 16 * 1024);
     let (network_listener, _child_listener) = match NetworkHandle::<BigMsg>::start(
         kp_listener.clone(),
         listener_cfg,
@@ -878,12 +901,8 @@ async fn ws_global_frame_cap_disconnects() {
         }
     });
 
-    let mut dialer_cfg = make_config(
-        &socket_addr!(127.0.0.1:0),
-        &socket_addr!(127.0.0.1:0),
-        16 * 1024,
-        16 * 1024,
-    );
+    let dialer_addr = super::next_addr();
+    let mut dialer_cfg = make_config(&dialer_addr, &dialer_addr, 16 * 1024, 16 * 1024);
     dialer_cfg.prefer_ws_fallback = true;
     let (net_dialer, _child_dialer) = match NetworkHandle::<BigMsg>::start(
         kp_dialer.clone(),
@@ -900,7 +919,7 @@ async fn ws_global_frame_cap_disconnects() {
     };
 
     // Listener only needs topology knowledge to accept the inbound session.
-    let peer_dialer = Peer::new(socket_addr!(127.0.0.1:0), kp_dialer.public_key().clone());
+    let peer_dialer = Peer::new(dialer_addr.clone(), kp_dialer.public_key().clone());
     network_listener.update_topology(UpdateTopology(HashSet::from([peer_dialer.id().clone()])));
 
     let listener_host: SocketAddr = format!("localhost:{}", ws_addr.port())

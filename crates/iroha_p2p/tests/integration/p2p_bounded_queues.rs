@@ -10,7 +10,6 @@ use iroha_crypto::KeyPair;
 use iroha_data_model::{ChainId, prelude::Peer};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{NetworkHandle, network, network::message::*};
-use iroha_primitives::addr::socket_addr;
 use norito::codec::{Decode, Encode};
 use tokio::time::Duration;
 
@@ -84,7 +83,7 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr, cap_high: usize, cap_low: usize
 async fn drops_increment_for_high_post_queue() {
     let chain = ChainId::from("test_chain");
     let kp = KeyPair::random();
-    let addr = socket_addr!(127.0.0.1:0);
+    let addr = super::next_addr();
     let (net, _child) = match NetworkHandle::<Msg>::start(
         kp.clone(),
         cfg(addr.clone(), 1, 128),
@@ -124,7 +123,7 @@ async fn drops_increment_for_high_post_queue() {
 async fn drops_increment_for_low_broadcast_queue() {
     let chain = ChainId::from("test_chain");
     let kp = KeyPair::random();
-    let addr = socket_addr!(127.0.0.1:0);
+    let addr = super::next_addr();
     let (net, _child) = match NetworkHandle::<Msg>::start(
         kp.clone(),
         cfg(addr.clone(), 128, 1),
@@ -162,8 +161,8 @@ async fn per_peer_post_channel_overflow_disconnects() {
     let chain = ChainId::from("test_chain");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let a1 = socket_addr!(127.0.0.1:0);
-    let a2 = socket_addr!(127.0.0.1:0);
+    let a1 = super::next_addr();
+    let a2 = super::next_addr();
 
     let mut c1 = cfg(a1.clone(), 128, 128);
     c1.p2p_post_queue_cap = core::num::NonZeroUsize::new(1).unwrap();
@@ -251,8 +250,8 @@ async fn per_peer_overflow_drop_policy_keeps_connection() {
     let chain = ChainId::from("test_chain");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let a1 = socket_addr!(127.0.0.1:0);
-    let a2 = socket_addr!(127.0.0.1:0);
+    let a1 = super::next_addr();
+    let a2 = super::next_addr();
 
     let mut c1 = cfg(a1.clone(), 128, 128);
     c1.p2p_post_queue_cap = core::num::NonZeroUsize::new(1).unwrap();
@@ -332,8 +331,8 @@ async fn overflow_metrics_increment_for_consensus_and_other() {
     let chain = ChainId::from("test_chain");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let a1 = socket_addr!(127.0.0.1:0);
-    let a2 = socket_addr!(127.0.0.1:0);
+    let a1 = super::next_addr();
+    let a2 = super::next_addr();
 
     let mut c1 = cfg(a1.clone(), 128, 128);
     c1.p2p_post_queue_cap = core::num::NonZeroUsize::new(1).unwrap();

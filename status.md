@@ -15,9 +15,14 @@ Last updated: 2026-05-26
 - Nested Cargo/Kagami/localnet and CLI integration subprocess callsites now use
   bounded waits; Kagami fallback builds use the isolated test target directory.
   CLI Torii mock config posts now set socket read/write deadlines.
+- P2P integration tests now advertise concrete loopback test ports instead of
+  `127.0.0.1:0`, so peer reconnect logic no longer dials an impossible port
+  forever. The cap/crypto tests also use bounded readiness waits where fixed
+  sleeps hid races.
 - Focused validation passed:
   - `cargo fmt --all`
   - `cargo fmt --all --check`
+  - `cargo test -p iroha_p2p --test mod`
   - `cargo check -p integration_tests --tests`
   - `cargo test -p integration_tests process::tests::output_with_timeout_fails_fast -- --exact`
   - `cargo test -p integration_tests process::tests::tokio_output_with_timeout_fails_fast -- --exact`
