@@ -392,12 +392,13 @@ fn acquire_network_permit() -> NetworkPermit {
         if let Some(timeout) = wait_timeout
             && waited >= timeout
         {
+            let in_use = guard.in_use;
+            let limit = guard.limit;
+            drop(guard);
             panic!(
                 "timed out after {timeout:?} waiting for integration-test network permit; \
                  {in_use}/{limit} permits in use. Set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 \
-                 to disable this timeout",
-                in_use = guard.in_use,
-                limit = guard.limit
+                 to disable this timeout"
             );
         }
         let (next, _) = state

@@ -1,6 +1,33 @@
 # Status
 
-Last updated: 2026-05-25
+Last updated: 2026-05-26
+
+## 2026-05-26 integration-test hang hardening follow-up
+
+- `iroha_test_network::NetworkBuilder::new()` now defaults to a 4-peer local
+  network so DA/RBC-enabled test networks do not accidentally start from the
+  old single-peer default. Tests can still use `with_peers(...)` for explicit
+  topologies.
+- Integration tests now have shared bounded subprocess helpers with default
+  ordinary-command and nested-build timeouts, and bounded ad hoc HTTP client
+  helpers. The integration sandbox permit now fails after a bounded wait by
+  default instead of convoying later network tests forever.
+- Nested Cargo/Kagami/localnet and CLI integration subprocess callsites now use
+  bounded waits; Kagami fallback builds use the isolated test target directory.
+  CLI Torii mock config posts now set socket read/write deadlines.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo check -p integration_tests --tests`
+  - `cargo test -p integration_tests process::tests::output_with_timeout_fails_fast -- --exact`
+  - `cargo test -p integration_tests process::tests::tokio_output_with_timeout_fails_fast -- --exact`
+  - `cargo test -p integration_tests timeouts::tests::read_env_duration_accepts_seconds_and_milliseconds -- --exact`
+  - `cargo test -p integration_tests sandbox::tests::serial_guard_panics_after_wait_timeout -- --exact`
+  - `cargo test -p iroha_test_network tests::network_builder_defaults_to_four_peers -- --exact`
+- Static audits found no remaining raw `reqwest::Client::new()` usage or raw
+  unbounded process waits under `integration_tests`.
+- Full `cargo test` was not run because this work specifically avoids invoking
+  the known multi-hour/hang-prone workspace run.
 
 ## 2026-05-25 cargo test hang audit and timeout guards
 

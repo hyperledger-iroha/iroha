@@ -38,8 +38,7 @@ mod tests {
     impl EnvRestore {
         fn set(key: &'static str, value: &str) -> Self {
             let previous = env::var(key).ok();
-            // Safety: this test serializes env mutation with ENV_LOCK.
-            unsafe { env::set_var(key, value) };
+            set_env_var(key, value);
             Self {
                 key,
                 value: previous,
@@ -50,13 +49,23 @@ mod tests {
     impl Drop for EnvRestore {
         fn drop(&mut self) {
             if let Some(value) = &self.value {
-                // Safety: this test serializes env mutation with ENV_LOCK.
-                unsafe { env::set_var(self.key, value) };
+                set_env_var(self.key, value);
             } else {
-                // Safety: this test serializes env mutation with ENV_LOCK.
-                unsafe { env::remove_var(self.key) };
+                remove_env_var(self.key);
             }
         }
+    }
+
+    #[allow(unsafe_code)]
+    fn set_env_var(key: &str, value: &str) {
+        // Safety: this test serializes env mutation with ENV_LOCK.
+        unsafe { env::set_var(key, value) };
+    }
+
+    #[allow(unsafe_code)]
+    fn remove_env_var(key: &str) {
+        // Safety: this test serializes env mutation with ENV_LOCK.
+        unsafe { env::remove_var(key) };
     }
 
     #[test]
