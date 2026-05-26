@@ -5849,6 +5849,8 @@ private_key = \"{private_key}\"\n",
             json::to_vec(config).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
 
         let mut stream = TcpStream::connect((host, port))?;
+        stream.set_read_timeout(Some(MOCK_STARTUP_TIMEOUT))?;
+        stream.set_write_timeout(Some(MOCK_STARTUP_TIMEOUT))?;
         write!(
             stream,
             "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

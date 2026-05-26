@@ -155,7 +155,7 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
         status.blocks
     );
 
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let torii = client.torii_url.clone();
     let collectors_url = torii
         .join("v1/sumeragi/collectors")
@@ -285,7 +285,7 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
     let status = client.get_status()?;
     let expected_height = status.blocks + 1;
 
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let start = Instant::now();
 
     let status_url_primary = client
@@ -426,7 +426,7 @@ async fn npos_rbc_large_payload_delivers_and_commits() -> eyre::Result<()> {
     let status = client.get_status()?;
     let expected_height = status.blocks + 1;
 
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let status_urls = network
         .peers()
         .iter()

@@ -215,7 +215,7 @@ fn rotation_signer_indices_match_expected_set_a() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
 
     // Let the network produce a few blocks
     drive_network_to_total_height(&network, &rt, &client, 6, "set a tick")?;
@@ -267,7 +267,7 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
         return Ok(());
     };
     let client = network.client();
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
 
     // Let the network produce a number of blocks (>= 10 total)
     drive_network_to_total_height(&network, &rt, &client, 10, "set a n7 tick")?;
@@ -328,7 +328,7 @@ fn canonical_certificate_identical_across_peers() -> Result<()> {
     drive_network_to_total_height(&network, &rt, &client, 5, "set a cert tick")?;
 
     let expected_height = client.get_status()?.blocks;
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
 
     // For each peer, fetch commit certificate for the same height and ensure
     // quorum is available for a consistent validator roster.

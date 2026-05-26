@@ -3,14 +3,12 @@ package org.hyperledger.iroha.sdk.offline
 import java.util.zip.CRC32
 import org.hyperledger.iroha.sdk.crypto.Blake2b
 
-/** Fountain QR V1 framing helpers for Offline V2 payload transfer. */
+/** Fountain QR framing helpers for offline payload transfer. */
 object OfflineQrStream {
 
     private val MAGIC = byteArrayOf(0x49, 0x51)
-    private const val FRAME_VERSION: Byte = 1
-    private const val ENVELOPE_VERSION: Byte = 1
     private const val ENCODING_BINARY: Byte = 0
-    private const val ENVELOPE_LENGTH = 48
+    private const val ENVELOPE_LENGTH = 47
 
     enum class FrameKind(val value: Int) {
         HEADER(0), DATA(1), PARITY(2);
@@ -26,10 +24,9 @@ object OfflineQrStream {
 
     enum class PayloadKind(val value: Int) {
         UNSPECIFIED(0),
-        OFFLINE_RECEIVE_REQUEST_V2(1),
-        OFFLINE_RECEIVE_CHALLENGE_V2(1),
-        OFFLINE_PAYMENT_TOKEN_V2(2),
-        OFFLINE_RECEIPT_ACK_V2(3);
+        OFFLINE_RECEIVE_REQUEST(1),
+        OFFLINE_PAYMENT_TOKEN(2),
+        OFFLINE_RECEIPT_ACK(3);
 
         companion object {
             @JvmStatic
@@ -39,7 +36,7 @@ object OfflineQrStream {
     }
 
     object TextCodec {
-        private const val PREFIX = "iroha:qr1:"
+        private const val PREFIX = "iroha:qr:"
 
         @JvmStatic
         fun encode(data: ByteArray, encoding: FrameEncoding): String {
@@ -110,7 +107,6 @@ object OfflineQrStream {
         fun encode(): ByteArray {
             val out = ByteArray(ENVELOPE_LENGTH)
             var offset = 0
-            out[offset++] = ENVELOPE_VERSION
             out[offset++] = flags.toByte()
             out[offset++] = encoding.toByte()
             out[offset++] = parityGroup.toByte()
@@ -128,8 +124,6 @@ object OfflineQrStream {
             fun decode(bytes: ByteArray): Envelope {
                 require(bytes.size == ENVELOPE_LENGTH) { "Envelope length mismatch" }
                 var offset = 0
-                val version = bytes[offset++].toInt() and 0xFF
-                require(version == ENVELOPE_VERSION.toInt()) { "Unsupported envelope version: $version" }
                 val flags = bytes[offset++].toInt() and 0xFF
                 val encoding = bytes[offset++].toInt() and 0xFF
                 val parityGroup = bytes[offset++].toInt() and 0xFF
@@ -168,11 +162,11 @@ object OfflineQrStream {
         fun streamId(): ByteArray = _streamId.copyOf()
 
         fun encode(): ByteArray {
-            val headerLength = 2 + 1 + 1 + 16 + 2 + 2 + 2
+            val headerLength = 2 + 1 + 16 + 2 + 2 + 2
             val out = ByteArray(headerLength + _payload.size + 4)
             var offset = 0
             out[offset++] = MAGIC[0]; out[offset++] = MAGIC[1]
-            out[offset++] = FRAME_VERSION; out[offset++] = kind.value.toByte()
+            out[offset++] = kind.value.toByte()
             System.arraycopy(_streamId, 0, out, offset, _streamId.size); offset += _streamId.size
             writeUInt16LE(out, offset, index); offset += 2
             writeUInt16LE(out, offset, total); offset += 2
@@ -186,19 +180,17 @@ object OfflineQrStream {
         companion object {
             @JvmStatic
             fun decode(bytes: ByteArray): Frame {
-                val headerLength = 2 + 1 + 1 + 16 + 2 + 2 + 2
+                val headerLength = 2 + 1 + 16 + 2 + 2 + 2
                 require(bytes.size >= headerLength + 4) { "Frame is too short" }
                 require(bytes[0] == MAGIC[0] && bytes[1] == MAGIC[1]) { "Frame magic mismatch" }
-                val version = bytes[2].toInt() and 0xFF
-                require(version == FRAME_VERSION.toInt()) { "Unsupported frame version: $version" }
-                val kind = FrameKind.fromValue(bytes[3].toInt() and 0xFF)
-                val streamId = bytes.copyOfRange(4, 20)
-                val index = readUInt16LE(bytes, 20)
-                val total = readUInt16LE(bytes, 22)
-                val payloadLength = readUInt16LE(bytes, 24)
-                val payloadEnd = 26 + payloadLength
+                val kind = FrameKind.fromValue(bytes[2].toInt() and 0xFF)
+                val streamId = bytes.copyOfRange(3, 19)
+                val index = readUInt16LE(bytes, 19)
+                val total = readUInt16LE(bytes, 21)
+                val payloadLength = readUInt16LE(bytes, 23)
+                val payloadEnd = 25 + payloadLength
                 require(payloadEnd + 4 == bytes.size) { "Frame payload length mismatch" }
-                val payload = bytes.copyOfRange(26, payloadEnd)
+                val payload = bytes.copyOfRange(25, payloadEnd)
                 val expected = readUInt32LE(bytes, payloadEnd)
                 val computed = crc32(bytes, 2, payloadEnd - 2)
                 require(expected == computed) { "Frame checksum mismatch" }

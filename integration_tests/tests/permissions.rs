@@ -41,7 +41,7 @@ fn start_network_with_builder(
 }
 
 fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f64, f64, f64)> {
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut prepared_seen: f64 = 0.0;
     let mut merged_seen: f64 = 0.0;

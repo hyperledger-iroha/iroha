@@ -146,7 +146,7 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
         );
         let expected_height = status.blocks;
         let required = commit_quorum_from_len(network.peers().len());
-        let http = reqwest::Client::new();
+        let http = integration_tests::http::client();
         let torii_urls = network.torii_urls();
         let metrics_url = client
             .torii_url
@@ -233,7 +233,7 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
             )
         })?;
 
-        let http = reqwest::Client::new();
+        let http = integration_tests::http::client();
         let restart_torii = restart_peer.torii_url();
         let cert =
             wait_for_commit_certificate(&http, restart_torii.as_str(), expected_height).await?;
@@ -334,7 +334,7 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
         );
         let expected_height = status.blocks;
 
-        let http = reqwest::Client::new();
+        let http = integration_tests::http::client();
         let submit_torii = network
             .torii_urls()
             .into_iter()

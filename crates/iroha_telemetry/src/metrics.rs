@@ -6338,15 +6338,15 @@ pub struct Metrics {
     pub subscription_billing_attempts_total: IntCounterVec,
     /// Subscription billing outcomes grouped by pricing kind and result.
     pub subscription_billing_outcomes_total: IntCounterVec,
-    /// Offline V2 note lifecycle events grouped by event kind.
+    /// Offline note lifecycle events grouped by event kind.
     pub offline_note_events_total: IntCounterVec,
-    /// Aggregate Offline V2 receipt-ack counters grouped by event kind.
+    /// Aggregate Offline receipt-ack counters grouped by event kind.
     pub offline_note_receipts_total: IntCounterVec,
-    /// Distribution of redeemed Offline V2 note amounts.
+    /// Distribution of redeemed Offline note amounts.
     pub offline_note_settled_amount: Histogram,
     /// Offline note validation rejections grouped by platform and reason.
     pub offline_note_rejections_total: IntCounterVec,
-    /// Offline V2 note records pruned from hot storage.
+    /// Offline note records pruned from hot storage.
     pub offline_note_pruned_total: IntCounter,
     /// Offline attestation tokens processed grouped by integrity policy.
     pub offline_attestation_policy_total: IntCounterVec,
@@ -15970,7 +15970,7 @@ impl Metrics {
             .inc_by(u128_to_f64(haircut_micro) / 1_000_000.0);
     }
 
-    /// Record a settled offline V2 note bundle.
+    /// Record a settled offline note bundle.
     pub fn record_offline_note_settlement(&self, amount: f64, receipt_count: u32) {
         self.offline_note_events_total
             .with_label_values(&["settled"])
@@ -15993,7 +15993,7 @@ impl Metrics {
             .inc();
     }
 
-    /// Record an Offline V2 note record being pruned from hot storage.
+    /// Record an Offline note record being pruned from hot storage.
     pub fn inc_offline_note_pruned(&self) {
         self.offline_note_events_total
             .with_label_values(&["pruned"])
@@ -16001,7 +16001,7 @@ impl Metrics {
         self.offline_note_pruned_total.inc();
     }
 
-    /// Record a validation rejection for an Offline V2 note operation.
+    /// Record a validation rejection for an Offline note operation.
     pub fn record_offline_note_rejection(&self, platform: &str, reason: &str) {
         self.offline_note_rejections_total
             .with_label_values(&[platform, reason])

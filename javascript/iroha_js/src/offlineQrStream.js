@@ -1,10 +1,8 @@
 import { blake2b256 } from "./blake2b.js";
 
 const QR_STREAM_MAGIC = Buffer.from([0x49, 0x51]);
-const QR_STREAM_VERSION = 1;
-const ENVELOPE_VERSION = 1;
 const ENCODING_BINARY = 0;
-const QR_TEXT_PREFIX = "iroha:qr1:";
+const QR_TEXT_PREFIX = "iroha:qr:";
 
 export const OfflineQrStreamFrameKind = Object.freeze({
   header: 0,
@@ -19,9 +17,9 @@ export const OfflineQrStreamFrameEncoding = Object.freeze({
 
 export const OfflineQrPayloadKind = Object.freeze({
   unspecified: 0,
-  offlineReceiveRequestV2: 1,
-  offlinePaymentTokenV2: 2,
-  offlineReceiptAckV2: 3,
+  offlineReceiveRequest: 1,
+  offlinePaymentToken: 2,
+  offlineReceiptAck: 3,
 });
 
 export class OfflineQrStreamOptions {
@@ -54,7 +52,6 @@ export class OfflineQrStreamEnvelope {
     payloadLength,
     payloadHash,
   }) {
-    this.version = ENVELOPE_VERSION;
     this.flags = flags;
     this.encoding = encoding;
     this.parityGroup = parityGroup;
@@ -74,9 +71,8 @@ export class OfflineQrStreamEnvelope {
   }
 
   encode() {
-    const buffer = Buffer.alloc(1 + 1 + 1 + 1 + 2 + 2 + 2 + 2 + 4 + 32);
+    const buffer = Buffer.alloc(1 + 1 + 1 + 2 + 2 + 2 + 2 + 4 + 32);
     let offset = 0;
-    buffer.writeUInt8(this.version, offset++);
     buffer.writeUInt8(this.flags, offset++);
     buffer.writeUInt8(this.encoding, offset++);
     buffer.writeUInt8(this.parityGroup, offset++);
@@ -96,14 +92,10 @@ export class OfflineQrStreamEnvelope {
 
   static decode(bytes) {
     const buffer = toBuffer(bytes, "envelope");
-    if (buffer.length < 46) {
+    if (buffer.length < 47) {
       throw new TypeError("envelope is too short");
     }
     let offset = 0;
-    const version = buffer.readUInt8(offset++);
-    if (version !== ENVELOPE_VERSION) {
-      throw new TypeError(`unsupported envelope version ${version}`);
-    }
     const flags = buffer.readUInt8(offset++);
     const encoding = buffer.readUInt8(offset++);
     const parityGroup = buffer.readUInt8(offset++);
@@ -149,12 +141,11 @@ export class OfflineQrStreamFrame {
     if (payloadLength > 0xffff) {
       throw new TypeError("payload length exceeds 65535");
     }
-    const headerLength = 2 + 1 + 1 + 16 + 2 + 2 + 2;
+    const headerLength = 2 + 1 + 16 + 2 + 2 + 2;
     const buffer = Buffer.alloc(headerLength + payloadLength + 4);
     let offset = 0;
     QR_STREAM_MAGIC.copy(buffer, offset);
     offset += 2;
-    buffer.writeUInt8(QR_STREAM_VERSION, offset++);
     buffer.writeUInt8(this.kind, offset++);
     this.streamId.copy(buffer, offset);
     offset += 16;
@@ -173,30 +164,26 @@ export class OfflineQrStreamFrame {
 
   static decode(bytes) {
     const buffer = toBuffer(bytes, "frame");
-    const headerLength = 2 + 1 + 1 + 16 + 2 + 2 + 2;
+    const headerLength = 2 + 1 + 16 + 2 + 2 + 2;
     if (buffer.length < headerLength + 4) {
       throw new TypeError("frame is too short");
     }
     if (buffer[0] !== QR_STREAM_MAGIC[0] || buffer[1] !== QR_STREAM_MAGIC[1]) {
       throw new TypeError("frame magic mismatch");
     }
-    const version = buffer.readUInt8(2);
-    if (version !== QR_STREAM_VERSION) {
-      throw new TypeError(`unsupported frame version ${version}`);
-    }
-    const kind = buffer.readUInt8(3);
+    const kind = buffer.readUInt8(2);
     if (!Object.values(OfflineQrStreamFrameKind).includes(kind)) {
       throw new TypeError(`unsupported frame kind ${kind}`);
     }
-    const streamId = buffer.subarray(4, 20);
-    const index = buffer.readUInt16LE(20);
-    const total = buffer.readUInt16LE(22);
-    const payloadLength = buffer.readUInt16LE(24);
-    const payloadEnd = 26 + payloadLength;
+    const streamId = buffer.subarray(3, 19);
+    const index = buffer.readUInt16LE(19);
+    const total = buffer.readUInt16LE(21);
+    const payloadLength = buffer.readUInt16LE(23);
+    const payloadEnd = 25 + payloadLength;
     if (payloadEnd + 4 > buffer.length) {
       throw new TypeError("frame payload length exceeds buffer size");
     }
-    const payload = buffer.subarray(26, payloadEnd);
+    const payload = buffer.subarray(25, payloadEnd);
     const expected = buffer.readUInt32LE(payloadEnd);
     const computed = crc32(buffer.subarray(2, payloadEnd));
     if (expected !== computed) {

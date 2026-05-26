@@ -30,9 +30,22 @@ implementation("org.hyperledger.iroha.sdk:client-android:0.1-SNAPSHOT")
 implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1-SNAPSHOT")
 ```
 
-### Offline Note V2 wallet flow
+### Offline Note wallet flow
 
-`core-jvm` exposes `OfflineNoteV2Wallet` for the one-call Offline Note V2 app
+`core-jvm` also exposes `OfflineBearerWallet` for the v2 hardware-backed
+Offline Bearer purse model. Apps must inject an `OfflineBearerSecureElement`
+that reports both `hardwareBacked` and `statefulPurse`; the default
+`UnsupportedOfflineBearerSecureElement` fails closed and never stores value.
+The secure element owns the mutable purse balance and sequence, so users can
+send partial amounts, such as 2 out of 50, and recipients can re-spend received
+value without carrying a growing transfer trail. Sender debit receipts and
+receiver credit receipts are kept in a compact settlement batch for later
+online submission. `OfflineBearerPolicyBundleV2` gates correct apps on allowed
+hardware class, certificate age, policy age, token age, issuer/policy hash,
+blacklisted accounts/devices/keys, maximum transaction amount, and maximum
+offline balance.
+
+`core-jvm` exposes `OfflineNoteWallet` for the one-call Offline Note app
 actions: load, prepare receive, pay, accept, optional audit publication, redeem,
 and sync. Offline-to-offline `pay` and `accept` are the local-final value
 transfer: the sender marks inputs spent and change spendable immediately, and
@@ -45,30 +58,30 @@ proof generation/verification, persistence, and direct audit/redeem transaction
 submission through injectable interfaces. The `sync()` call uses an optional
 transaction-outcome resolver to reconcile redeem-pending note records once the
 app's Torii/outcome index observes redeem finality.
-JVM core includes an in-memory store, `IrohaOfflineNoteV2TransactionSubmitter`,
-and `ToriiOfflineNoteV2IssuerClient` for Torii key-refill plus note-issue
+JVM core includes an in-memory store, `IrohaOfflineNoteTransactionSubmitter`,
+and `ToriiOfflineNoteIssuerClient` for Torii key-refill plus note-issue
 loads. Apps provide canonical auth and a device-binding provider; Android
 secure storage remains in the platform wallet layer. The Android
-`AndroidOfflineNoteV2SecureStore` rotates a non-exportable Android Keystore key
+`AndroidOfflineNoteSecureStore` rotates a non-exportable Android Keystore key
 on every committed wallet-state revision and rejects app-data rollback or
 cloned preference snapshots when the old revision key is no longer present.
 Legacy `SPEND_PENDING` records are migrated to `SPENT`, and legacy
 `CHANGE_PENDING` records are migrated to `SPENDABLE`.
-`OfflineNoteV2TransferHandoff` exposes one integration surface for local token
+`OfflineNoteTransferHandoff` exposes one integration surface for local token
 handoff modalities: `qrStreamingFrameBytes(token)` for animated/binary QR,
 `nfcFrameBytes(token)` for APDU-sized NFC frame exchange, and
 `nearbyPayload(token)` / `nearbyFrameBytes(token)` for Nearby Connections,
 Bluetooth, Wi-Fi Direct, or any app-owned byte channel. The receiver
-`OfflineNoteV2TransferStreamReceiver` accepts those stream frames and returns a
+`OfflineNoteTransferStreamReceiver` accepts those stream frames and returns a
 decoded payment token when complete. Android apps can call
-`AndroidOfflineNoteV2TransferCapabilities.current(context)` from
+`AndroidOfflineNoteTransferCapabilities.current(context)` from
 `offline-wallet-android` to include NFC only on devices that advertise HCE.
-For png2-style NFC, bind `OfflineNoteV2NfcApduProtocol` to an Android
+For png2-style NFC, bind `OfflineNoteNfcApduProtocol` to an Android
 `HostApduService`/`IsoDep` reader: select the Iroha AID, exchange metadata,
 transfer bounded chunks, commit, then poll/read a local `RECEIPT_ACK`. The
 default `nfcPaymentTokenWriteApdus(token)` uses 240-byte chunks because Android
 NFC APDU limits vary by device; extended iOS-to-iOS chunks are exposed only as
-an explicit opt-in. `OfflineNoteV2NearbyEnvelope` provides the sorted-key
+an explicit opt-in. `OfflineNoteNearbyEnvelope` provides the sorted-key
 Nearby JSON envelope with unpadded base64url payloads and a human-verifiable
 pairing challenge for Google Nearby Connections, Bluetooth, Wi-Fi Direct, or
 another reliable byte channel.

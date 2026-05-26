@@ -4078,6 +4078,52 @@ export class ToriiClient {
   }
 
   /**
+   * Fetch committed FASTPQ proof batches for a block height
+   * (`GET /v1/pipeline/recovery/{height}/fastpq-proofs`).
+   * Returns null when the node has no recovery artefacts for the requested height.
+   * @param {number | string | bigint} height
+   * @param {{ signal?: AbortSignal }} [options]
+   * @returns {Promise<any | null>}
+   */
+  async getPipelineRecoveryFastpqProofs(height, options = {}) {
+    const normalizedHeight = ToriiClient._normalizeUnsignedInteger(height, "height", {
+      allowZero: true,
+    });
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "getPipelineRecoveryFastpqProofs",
+    );
+    const response = await this._request(
+      "GET",
+      `/v1/pipeline/recovery/${normalizedHeight}/fastpq-proofs`,
+      { headers: { Accept: "application/json" }, signal },
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("pipeline recovery FASTPQ proofs endpoint returned no payload");
+    }
+    return payload;
+  }
+
+  /**
+   * Fetch committed FASTPQ proof batches and normalise them into typed fields.
+   * @param {number | string | bigint} height
+   * @param {{ signal?: AbortSignal }} [options]
+   * @returns {Promise<ToriiPipelineRecoveryFastpqProofs | null>}
+   */
+  async getPipelineRecoveryFastpqProofsTyped(height, options = {}) {
+    const payload = await this.getPipelineRecoveryFastpqProofs(height, options);
+    if (!payload) {
+      return null;
+    }
+    return normalizePipelineRecoveryFastpqProofs(payload);
+  }
+
+  /**
    * Fetch Torii health snapshot (`GET /v1/health`).
    * @param {{ signal?: AbortSignal }} [options]
    * @returns {Promise<Record<string, unknown> | {status: string} | null>}
@@ -7763,22 +7809,22 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch Offline V2 feature readiness (`GET /v1/offline/v2/readiness`).
+   * Fetch Offline feature readiness (`GET /v1/offline/readiness`).
    * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineV2ReadinessResponse>}
+   * @returns {Promise<ToriiOfflineReadinessResponse>}
    */
-  async getOfflineV2Readiness(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getOfflineV2Readiness");
-    const response = await this._request("GET", "/v1/offline/v2/readiness", {
+  async getOfflineReadiness(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getOfflineReadiness");
+    const response = await this._request("GET", "/v1/offline/readiness", {
       headers: { Accept: "application/json" },
       signal,
     });
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("offline v2 readiness response missing JSON body");
+      throw new Error("offline readiness response missing JSON body");
     }
-    return normalizeOfflineV2ReadinessResponse(body, "offline v2 readiness response");
+    return normalizeOfflineReadinessResponse(body, "offline readiness response");
   }
 
   /**
@@ -21829,6 +21875,67 @@ function normalizePipelineRecoverySidecar(payload, context = "pipeline recovery 
   };
 }
 
+function normalizePipelineRecoveryFastpqProofs(
+  payload,
+  context = "pipeline recovery FASTPQ proofs response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  const rawProofs = record.proofs ?? [];
+  if (!Array.isArray(rawProofs)) {
+    throw new TypeError(`${context}.proofs must be an array`);
+  }
+  return {
+    height: ToriiClient._normalizeUnsignedInteger(record.height, `${context}.height`, {
+      allowZero: true,
+    }),
+    blockHashHex: normalizeHex32String(record.block_hash ?? "", `${context}.block_hash`),
+    proofs: rawProofs.map((entry, index) =>
+      normalizePipelineRecoveryFastpqProof(
+        entry,
+        `${context}.proofs[${index}]`,
+      ),
+    ),
+  };
+}
+
+function normalizePipelineRecoveryFastpqProof(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    entryHash: normalizeHex32String(record.entry_hash ?? "", `${context}.entry_hash`),
+    batchIndex: ToriiClient._normalizeUnsignedInteger(
+      record.batch_index,
+      `${context}.batch_index`,
+      { allowZero: true },
+    ),
+    parameter: requireNonEmptyString(record.parameter ?? "", `${context}.parameter`),
+    transitionCount: ToriiClient._normalizeUnsignedInteger(
+      record.transition_count,
+      `${context}.transition_count`,
+      { allowZero: true },
+    ),
+    traceCommitment: normalizeHex32String(
+      record.trace_commitment ?? "",
+      `${context}.trace_commitment`,
+    ),
+    proofDigest: normalizeHex32String(
+      record.proof_digest ?? "",
+      `${context}.proof_digest`,
+    ),
+    batchBase64: optionalString(record.batch, `${context}.batch`),
+    proofBase64: optionalString(record.proof, `${context}.proof`),
+    batchCompact: optionalBoolean(record.batch_compact, `${context}.batch_compact`),
+    batchReconstructedFromBlock: optionalBoolean(
+      record.batch_reconstructed_from_block,
+      `${context}.batch_reconstructed_from_block`,
+    ),
+    batchReconstructionError: optionalString(
+      record.batch_reconstruction_error,
+      `${context}.batch_reconstruction_error`,
+    ),
+    raw: Object.freeze({ ...record }),
+  };
+}
+
 function normalizePipelineDagSnapshot(payload, context = "pipeline recovery dag") {
   const record = ensureRecord(payload ?? {}, context);
   return {
@@ -25510,11 +25617,11 @@ function normalizeSubscriptionGetResponse(payload) {
   return normalizeSubscriptionListItem(record, "subscription get response");
 }
 
-function normalizeOfflineV2ReadinessResponse(payload, context) {
+function normalizeOfflineReadinessResponse(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   return {
     ...record,
-    offline_note_v2: coerceBoolean(record.offline_note_v2, `${context}.offline_note_v2`),
+    offline_note: coerceBoolean(record.offline_note, `${context}.offline_note`),
     offline_one_use_keys: coerceBoolean(
       record.offline_one_use_keys,
       `${context}.offline_one_use_keys`,
@@ -25523,9 +25630,9 @@ function normalizeOfflineV2ReadinessResponse(payload, context) {
       record.offline_recursive_note_proof,
       `${context}.offline_recursive_note_proof`,
     ),
-    offline_fountain_qr_v1: coerceBoolean(
-      record.offline_fountain_qr_v1,
-      `${context}.offline_fountain_qr_v1`,
+    offline_fountain_qr: coerceBoolean(
+      record.offline_fountain_qr,
+      `${context}.offline_fountain_qr`,
     ),
     offline_sync_optional: coerceBoolean(
       record.offline_sync_optional,

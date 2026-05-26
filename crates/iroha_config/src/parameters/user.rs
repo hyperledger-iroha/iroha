@@ -10039,10 +10039,10 @@ pub struct Repo {
     pub collateral_substitution_matrix: BTreeMap<AssetDefinitionId, Vec<AssetDefinitionId>>,
 }
 
-/// User-level configuration for Offline V2 note retention.
+/// User-level configuration for Offline note retention.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
-    /// Minimum number of blocks to keep Offline V2 note records in hot storage.
+    /// Minimum number of blocks to keep Offline note records in hot storage.
     #[config(default = "defaults::settlement::offline::HOT_RETENTION_BLOCKS")]
     pub hot_retention_blocks: u64,
     /// Maximum number of note records to archive per retention pass.
@@ -10054,7 +10054,7 @@ pub struct Offline {
     /// Maximum number of archived note records pruned per pass.
     #[config(default = "defaults::settlement::offline::PRUNE_BATCH_SIZE")]
     pub prune_batch_size: usize,
-    /// Require Offline V2 notes to be escrow-backed.
+    /// Require Offline notes to be escrow-backed.
     #[config(default = "false")]
     pub escrow_required: bool,
     /// Escrow account bindings keyed by asset definition id.
@@ -15666,7 +15666,7 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional faucet configuration for app API endpoints.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional Offline Notes V2 issuer configuration for app API endpoints.
+    /// Optional Offline Notes issuer configuration for app API endpoints.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
     pub ram_lfe: Option<ToriiRamLfe>,
@@ -17256,13 +17256,24 @@ impl ToriiFaucet {
     }
 }
 
-/// Offline Notes V2 issuer configuration for app-facing wallet load helpers.
+/// Per-asset offline send limits distributed by the Offline Notes issuer.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiOfflineAssetSendLimit {
+    /// Asset definition identifier the limits apply to.
+    pub asset_definition_id: String,
+    /// Maximum offline value that can be sent in a UTC day.
+    pub daily_send_limit: String,
+    /// Maximum offline value that can be sent in a UTC month.
+    pub monthly_send_limit: String,
+}
+
+/// Offline Notes issuer configuration for app-facing wallet load helpers.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiOfflineIssuer {
     /// Master enable switch (defaults to enabled when the section is present).
     #[config(default = "true")]
     pub enabled: bool,
-    /// Private key for the privileged Offline V2 issuer account.
+    /// Private key for the privileged Offline issuer account.
     #[config(env = "TORII_OFFLINE_ISSUER_PRIVATE_KEY")]
     pub private_key: Option<ExposedPrivateKey>,
     /// Public key for the trusted middleware that verifies platform attestations.
@@ -17288,6 +17299,15 @@ pub struct ToriiOfflineIssuer {
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::offline_issuer::AUTHORIZATION_TTL_MS))"
     )]
     pub authorization_ttl_ms: DurationMs,
+    /// Revoked authorization verdict identifiers distributed to offline wallets.
+    #[config(default = "Vec::new()")]
+    pub revoked_verdict_ids: Vec<String>,
+    /// Account identifiers blocked from offline value movement.
+    #[config(default = "Vec::new()")]
+    pub blacklisted_account_ids: Vec<String>,
+    /// Per-asset offline send limits distributed to offline wallets.
+    #[config(default = "Vec::new()")]
+    pub asset_send_limits: Vec<ToriiOfflineAssetSendLimit>,
 }
 
 impl ToriiOfflineIssuer {
@@ -17336,6 +17356,20 @@ impl ToriiOfflineIssuer {
             Self::parse_positive_amount("torii.offline_issuer.max_balance", &self.max_balance);
         let max_tx_value =
             Self::parse_positive_amount("torii.offline_issuer.max_tx_value", &self.max_tx_value);
+        let revoked_verdict_ids = Self::normalize_non_empty_list(
+            "torii.offline_issuer.revoked_verdict_ids",
+            self.revoked_verdict_ids,
+        );
+        let blacklisted_account_ids = Self::normalize_non_empty_list(
+            "torii.offline_issuer.blacklisted_account_ids",
+            self.blacklisted_account_ids,
+        );
+        let asset_send_limits = self
+            .asset_send_limits
+            .into_iter()
+            .enumerate()
+            .map(Self::parse_asset_send_limit)
+            .collect();
         Some(actual::ToriiOfflineIssuer {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
@@ -17345,7 +17379,47 @@ impl ToriiOfflineIssuer {
             certificate_ttl: self.certificate_ttl_ms.get().max(MIN_TIMER_INTERVAL),
             authorization_refresh: self.authorization_refresh_ms.get().max(MIN_TIMER_INTERVAL),
             authorization_ttl: self.authorization_ttl_ms.get().max(MIN_TIMER_INTERVAL),
+            revoked_verdict_ids,
+            blacklisted_account_ids,
+            asset_send_limits,
         })
+    }
+
+    fn normalize_non_empty_list(field: &'static str, values: Vec<String>) -> Vec<String> {
+        let mut seen = BTreeSet::new();
+        let mut normalized = Vec::new();
+        for (index, value) in values.into_iter().enumerate() {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                panic!("{field}[{index}] must not be empty");
+            }
+            if seen.insert(trimmed.to_string()) {
+                normalized.push(trimmed.to_string());
+            }
+        }
+        normalized
+    }
+
+    fn parse_asset_send_limit(
+        (index, limit): (usize, ToriiOfflineAssetSendLimit),
+    ) -> actual::ToriiOfflineAssetSendLimit {
+        let asset_definition_id = limit.asset_definition_id.trim().to_string();
+        if asset_definition_id.is_empty() {
+            panic!(
+                "torii.offline_issuer.asset_send_limits[{index}].asset_definition_id must not be empty"
+            );
+        }
+        actual::ToriiOfflineAssetSendLimit {
+            asset_definition_id,
+            daily_send_limit: Self::parse_positive_amount(
+                "torii.offline_issuer.asset_send_limits.daily_send_limit",
+                &limit.daily_send_limit,
+            ),
+            monthly_send_limit: Self::parse_positive_amount(
+                "torii.offline_issuer.asset_send_limits.monthly_send_limit",
+                &limit.monthly_send_limit,
+            ),
+        }
     }
 
     fn parse_positive_amount(field: &'static str, raw: &str) -> Numeric {
@@ -17384,6 +17458,9 @@ mod torii_offline_issuer_tests {
             authorization_ttl_ms: DurationMs(Duration::from_millis(
                 defaults::torii::offline_issuer::AUTHORIZATION_TTL_MS,
             )),
+            revoked_verdict_ids: Vec::new(),
+            blacklisted_account_ids: Vec::new(),
+            asset_send_limits: Vec::new(),
         }
     }
 
@@ -17424,6 +17501,32 @@ mod torii_offline_issuer_tests {
 
         let panic = std::panic::catch_unwind(|| issuer.parse());
         assert!(panic.is_err(), "expected ML-DSA verifier key to panic");
+    }
+
+    #[test]
+    fn torii_offline_issuer_parses_policy_bundle_inputs() {
+        let mut issuer = sample_offline_issuer(Algorithm::Ed25519);
+        issuer.revoked_verdict_ids = vec![" verdict-1 ".to_string(), "verdict-1".to_string()];
+        issuer.blacklisted_account_ids = vec!["alice".to_string()];
+        issuer.asset_send_limits = vec![ToriiOfflineAssetSendLimit {
+            asset_definition_id: "xor#sora".to_string(),
+            daily_send_limit: "10.00".to_string(),
+            monthly_send_limit: "25.00".to_string(),
+        }];
+
+        let parsed = issuer.parse().expect("offline issuer");
+
+        assert_eq!(parsed.revoked_verdict_ids, vec!["verdict-1"]);
+        assert_eq!(parsed.blacklisted_account_ids, vec!["alice"]);
+        assert_eq!(parsed.asset_send_limits[0].asset_definition_id, "xor#sora");
+        assert_eq!(
+            parsed.asset_send_limits[0].daily_send_limit.to_string(),
+            "10.00"
+        );
+        assert_eq!(
+            parsed.asset_send_limits[0].monthly_send_limit.to_string(),
+            "25.00"
+        );
     }
 }
 

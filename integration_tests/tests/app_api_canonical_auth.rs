@@ -41,7 +41,7 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         .peers()
         .first()
         .ok_or_else(|| eyre::eyre!("no peers available"))?;
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let account_literal = ALICE_ID.to_string();
     let timestamp_ms: u64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)?

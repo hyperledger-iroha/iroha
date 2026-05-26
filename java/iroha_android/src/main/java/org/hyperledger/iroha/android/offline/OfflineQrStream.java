@@ -9,14 +9,12 @@ import java.util.Set;
 import java.util.zip.CRC32;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 
-/** Fountain QR V1 framing helpers for Offline V2 payload transfer. */
+/** Fountain QR framing helpers for offline payload transfer. */
 public final class OfflineQrStream {
 
   private static final byte[] MAGIC = {(byte) 0x49, (byte) 0x51};
-  private static final byte FRAME_VERSION = 1;
-  private static final byte ENVELOPE_VERSION = 1;
   private static final byte ENCODING_BINARY = 0;
-  private static final int ENVELOPE_LENGTH = 48;
+  private static final int ENVELOPE_LENGTH = 47;
 
   private OfflineQrStream() {}
 
@@ -52,10 +50,9 @@ public final class OfflineQrStream {
 
   public enum PayloadKind {
     UNSPECIFIED(0),
-    OFFLINE_RECEIVE_REQUEST_V2(1),
-    OFFLINE_RECEIVE_CHALLENGE_V2(1),
-    OFFLINE_PAYMENT_TOKEN_V2(2),
-    OFFLINE_RECEIPT_ACK_V2(3);
+    OFFLINE_RECEIVE_REQUEST(1),
+    OFFLINE_PAYMENT_TOKEN(2),
+    OFFLINE_RECEIPT_ACK(3);
 
     private final int value;
 
@@ -78,7 +75,7 @@ public final class OfflineQrStream {
   }
 
   public static final class TextCodec {
-    private static final String PREFIX = "iroha:qr1:";
+    private static final String PREFIX = "iroha:qr:";
 
     private TextCodec() {}
 
@@ -241,7 +238,6 @@ public final class OfflineQrStream {
     public byte[] encode() {
       final byte[] out = new byte[ENVELOPE_LENGTH];
       int offset = 0;
-      out[offset++] = ENVELOPE_VERSION;
       out[offset++] = (byte) flags;
       out[offset++] = (byte) encoding;
       out[offset++] = (byte) parityGroup;
@@ -265,10 +261,6 @@ public final class OfflineQrStream {
         throw new IllegalArgumentException("Envelope length mismatch");
       }
       int offset = 0;
-      final int version = bytes[offset++] & 0xFF;
-      if (version != ENVELOPE_VERSION) {
-        throw new IllegalArgumentException("Unsupported envelope version: " + version);
-      }
       final int flags = bytes[offset++] & 0xFF;
       final int encoding = bytes[offset++] & 0xFF;
       final int parityGroup = bytes[offset++] & 0xFF;
@@ -349,12 +341,11 @@ public final class OfflineQrStream {
     }
 
     public byte[] encode() {
-      final int headerLength = 2 + 1 + 1 + 16 + 2 + 2 + 2;
+      final int headerLength = 2 + 1 + 16 + 2 + 2 + 2;
       final byte[] out = new byte[headerLength + payload.length + 4];
       int offset = 0;
       out[offset++] = MAGIC[0];
       out[offset++] = MAGIC[1];
-      out[offset++] = FRAME_VERSION;
       out[offset++] = (byte) kind.value();
       System.arraycopy(streamId, 0, out, offset, streamId.length);
       offset += streamId.length;
@@ -373,27 +364,23 @@ public final class OfflineQrStream {
 
     public static Frame decode(final byte[] bytes) {
       Objects.requireNonNull(bytes, "bytes");
-      final int headerLength = 2 + 1 + 1 + 16 + 2 + 2 + 2;
+      final int headerLength = 2 + 1 + 16 + 2 + 2 + 2;
       if (bytes.length < headerLength + 4) {
         throw new IllegalArgumentException("Frame is too short");
       }
       if (bytes[0] != MAGIC[0] || bytes[1] != MAGIC[1]) {
         throw new IllegalArgumentException("Frame magic mismatch");
       }
-      final int version = bytes[2] & 0xFF;
-      if (version != FRAME_VERSION) {
-        throw new IllegalArgumentException("Unsupported frame version: " + version);
-      }
-      final FrameKind kind = FrameKind.fromValue(bytes[3] & 0xFF);
-      final byte[] streamId = Arrays.copyOfRange(bytes, 4, 20);
-      final int index = readUInt16LE(bytes, 20);
-      final int total = readUInt16LE(bytes, 22);
-      final int payloadLength = readUInt16LE(bytes, 24);
-      final int payloadEnd = 26 + payloadLength;
+      final FrameKind kind = FrameKind.fromValue(bytes[2] & 0xFF);
+      final byte[] streamId = Arrays.copyOfRange(bytes, 3, 19);
+      final int index = readUInt16LE(bytes, 19);
+      final int total = readUInt16LE(bytes, 21);
+      final int payloadLength = readUInt16LE(bytes, 23);
+      final int payloadEnd = 25 + payloadLength;
       if (payloadEnd + 4 != bytes.length) {
         throw new IllegalArgumentException("Frame payload length mismatch");
       }
-      final byte[] payload = Arrays.copyOfRange(bytes, 26, payloadEnd);
+      final byte[] payload = Arrays.copyOfRange(bytes, 25, payloadEnd);
       final long expected = readUInt32LE(bytes, payloadEnd);
       final long computed = crc32(bytes, 2, payloadEnd - 2);
       if (expected != computed) {

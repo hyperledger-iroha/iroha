@@ -6,7 +6,7 @@ use iroha_data_model::{
         AddSignatory, BurnBox, CustomInstruction, GrantBox, MintBox, RegisterBox,
         RemoveAssetKeyValue, RemoveKeyValueBox, RemoveSignatory, RevokeBox, SetAccountQuorum,
         SetAssetKeyValue, SetKeyValueBox, TransferAssetBatch, TransferBox, UnregisterBox,
-        offline::{AuditOfflineNoteV2, IssueOfflineNoteV2, RedeemOfflineNoteV2},
+        offline::{AuditOfflineNote, IssueOfflineNote, RedeemOfflineNote},
         staking::RecordPublicLaneRewards,
     },
     prelude::InstructionBox,
@@ -213,7 +213,7 @@ fn collect_instruction_account_activities(
         );
         return;
     }
-    if let Some(issue) = any.downcast_ref::<IssueOfflineNoteV2>() {
+    if let Some(issue) = any.downcast_ref::<IssueOfflineNote>() {
         push_unique(
             out,
             issue.issue.asset.account(),
@@ -226,7 +226,7 @@ fn collect_instruction_account_activities(
         );
         return;
     }
-    if let Some(redeem) = any.downcast_ref::<RedeemOfflineNoteV2>() {
+    if let Some(redeem) = any.downcast_ref::<RedeemOfflineNote>() {
         push_unique(
             out,
             &redeem.redemption.recipient,
@@ -239,7 +239,7 @@ fn collect_instruction_account_activities(
         );
         return;
     }
-    if let Some(audit) = any.downcast_ref::<AuditOfflineNoteV2>() {
+    if let Some(audit) = any.downcast_ref::<AuditOfflineNote>() {
         push_unique(
             out,
             &audit.audit.sender_key_certificate.account_id,

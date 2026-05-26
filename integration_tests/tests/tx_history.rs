@@ -505,7 +505,7 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
         return Ok(());
     };
     let client = network.client();
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let starting_height = client.get_status()?.blocks;
     let reveal_after_height = starting_height + 2;
     let reveal_deadline_height = starting_height + 100;
@@ -608,7 +608,7 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         peer_clients.len() >= 4,
         "adversarial sealed reveal coverage requires at least 4 peers"
     );
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
 
     let asset_definition_id = AssetDefinitionId::new(
         DomainId::try_new("wonderland", "universal")?,

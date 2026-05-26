@@ -431,7 +431,7 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         next_seed = next_seed.saturating_add(1);
     }
 
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let metrics_url = client
         .torii_url
         .join("metrics")
@@ -845,7 +845,7 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
 
     let mut observed_saturation = queue_backpressure_rejects > 0;
     let mut observed_deferrals = 0.0;
@@ -1037,7 +1037,7 @@ async fn npos_pacemaker_jitter_within_band() -> Result<()> {
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
 
     let start = Instant::now();
     let mut observed_jitter = 0.0_f64;
@@ -1246,7 +1246,7 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
 
     let mut max_pressure: f64 = 0.0;
     let mut max_sessions: f64 = 0.0;
@@ -1429,7 +1429,7 @@ async fn npos_redundant_send_retries_update_metrics() -> Result<()> {
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
 
     let mut saw_collectors_metric = false;
     let mut saw_redundant_metric = false;
@@ -1573,7 +1573,7 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
     let submit_client = network.client();
     tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
 
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let probe_clients: Vec<_> = network.peers().iter().map(|peer| peer.client()).collect();
     let sessions_urls = probe_clients
         .iter()

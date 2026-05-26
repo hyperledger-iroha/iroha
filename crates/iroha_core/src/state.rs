@@ -538,7 +538,7 @@ macro_rules! build_world_block {
             repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.$method(),
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.$method(),
             settlement_ledgers: $state.settlement_ledgers.$method(),
-            offline_note_v2_replay_keys: $state.offline_note_v2_replay_keys.$method(),
+            offline_note_replay_keys: $state.offline_note_replay_keys.$method(),
             public_lane_validators: $state.public_lane_validators.$method(),
             public_lane_stake_shares: $state.public_lane_stake_shares.$method(),
             public_lane_rewards: $state.public_lane_rewards.$method(),
@@ -751,7 +751,7 @@ macro_rules! build_world_transaction {
             repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.transaction(),
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.transaction(),
             settlement_ledgers: $state.settlement_ledgers.transaction(),
-            offline_note_v2_replay_keys: $state.offline_note_v2_replay_keys.transaction(),
+            offline_note_replay_keys: $state.offline_note_replay_keys.transaction(),
             public_lane_validators: $state.public_lane_validators.transaction(),
             public_lane_stake_shares: $state.public_lane_stake_shares.transaction(),
             public_lane_rewards: $state.public_lane_rewards.transaction(),
@@ -2019,8 +2019,8 @@ pub struct World {
     pub(crate) repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
-    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_v2_replay_keys: Storage<Hash, ()>,
+    /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_replay_keys: Storage<Hash, ()>,
     /// Public-lane validators keyed by `(lane_id, validator account id)`.
     #[norito(skip)]
     pub(crate) public_lane_validators: Storage<(LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -2469,8 +2469,8 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
-    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_v2_replay_keys: StorageBlock<'world, Hash, ()>,
+    /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_replay_keys: StorageBlock<'world, Hash, ()>,
     /// Public lane validator registry.
     pub(crate) public_lane_validators:
         StorageBlock<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -2607,7 +2607,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.governance_slashes, GovernanceSlash);
         collect_reverts!(self.council, Council);
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
-        collect_reverts!(self.offline_note_v2_replay_keys, OfflineNoteV2ReplayKey);
+        collect_reverts!(self.offline_note_replay_keys, OfflineNoteReplayKey);
 
         diff
     }
@@ -2657,7 +2657,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.governance_slashes, GovernanceSlash);
         collect_payload!(self.council, Council);
         collect_payload!(self.parliament_bodies, ParliamentBodies);
-        collect_payload!(self.offline_note_v2_replay_keys, OfflineNoteV2ReplayKey);
+        collect_payload!(self.offline_note_replay_keys, OfflineNoteReplayKey);
 
         payload
     }
@@ -3134,8 +3134,8 @@ pub struct WorldTransaction<'block, 'world> {
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers:
         StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
-    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_v2_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
+    /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
     pub(crate) public_lane_validators:
         StorageTransaction<'block, 'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
@@ -4562,8 +4562,8 @@ pub struct WorldView<'world> {
         StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
-    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_v2_replay_keys: StorageView<'world, Hash, ()>,
+    /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_replay_keys: StorageView<'world, Hash, ()>,
     pub(crate) public_lane_validators:
         StorageView<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
@@ -13465,7 +13465,7 @@ impl World {
             repo_agreements_by_counterparty: self.repo_agreements_by_counterparty.view(),
             repo_agreements_by_custodian: self.repo_agreements_by_custodian.view(),
             settlement_ledgers: self.settlement_ledgers.view(),
-            offline_note_v2_replay_keys: self.offline_note_v2_replay_keys.view(),
+            offline_note_replay_keys: self.offline_note_replay_keys.view(),
             public_lane_validators: self.public_lane_validators.view(),
             public_lane_stake_shares: self.public_lane_stake_shares.view(),
             public_lane_rewards: self.public_lane_rewards.view(),
@@ -14051,8 +14051,8 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<AccountId, BTreeSet<RepoAgreementId>>;
     /// Settlement audit trails (read-only).
     fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
-    /// Offline V2 replay keys (read-only).
-    fn offline_note_v2_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
+    /// Offline replay keys (read-only).
+    fn offline_note_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
     /// Public lane validators keyed by `(lane_id, validator)` (read-only).
     fn public_lane_validators(
         &self,
@@ -15441,8 +15441,8 @@ macro_rules! impl_world_ro {
             fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger> {
                 &self.settlement_ledgers
             }
-            fn offline_note_v2_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
-                &self.offline_note_v2_replay_keys
+            fn offline_note_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
+                &self.offline_note_replay_keys
             }
             fn public_lane_validators(
                 &self,
@@ -15901,7 +15901,7 @@ impl<'world> WorldBlock<'world> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_ledgers,
-            offline_note_v2_replay_keys,
+            offline_note_replay_keys,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -16008,7 +16008,7 @@ impl<'world> WorldBlock<'world> {
         repo_agreements_by_counterparty.commit();
         repo_agreements_by_custodian.commit();
         settlement_ledgers.commit();
-        offline_note_v2_replay_keys.commit();
+        offline_note_replay_keys.commit();
         domain_committees.commit();
         domain_endorsement_policies.commit();
         domain_endorsements.commit();
@@ -17146,7 +17146,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             manifest_aliases,
             replication_orders,
             settlement_ledgers,
-            offline_note_v2_replay_keys,
+            offline_note_replay_keys,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -17254,7 +17254,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.soradns_last_publish_ms.apply();
         self.soradns_history_len.apply();
         settlement_ledgers.apply();
-        offline_note_v2_replay_keys.apply();
+        offline_note_replay_keys.apply();
         domain_committees.apply();
         domain_endorsement_policies.apply();
         domain_endorsements.apply();
@@ -34227,8 +34227,7 @@ pub(crate) mod deserialize {
         let vrf_epochs = take_optional_default(&mut map, "vrf_epochs")?;
         let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
         let settlement_ledgers = take_optional_default(&mut map, "settlement_ledgers")?;
-        let offline_note_v2_replay_keys =
-            take_optional_default(&mut map, "offline_note_v2_replay_keys")?;
+        let offline_note_replay_keys = take_optional_default(&mut map, "offline_note_replay_keys")?;
         let lane_relay_emergency_validators =
             take_optional_default(&mut map, "lane_relay_emergency_validators")?;
         let manifest_aliases = take_optional_default(&mut map, "manifest_aliases")?;
@@ -34393,7 +34392,7 @@ pub(crate) mod deserialize {
             repo_agreements_by_counterparty: Storage::default(),
             repo_agreements_by_custodian: Storage::default(),
             settlement_ledgers,
-            offline_note_v2_replay_keys,
+            offline_note_replay_keys,
             domain_committees: Storage::default(),
             domain_endorsement_policies: Storage::default(),
             domain_endorsements: Storage::default(),

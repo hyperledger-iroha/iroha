@@ -5796,7 +5796,7 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional app-facing faucet configuration.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional app-facing Offline Notes V2 issuer configuration.
+    /// Optional app-facing Offline Notes issuer configuration.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration.
     pub ram_lfe: Option<ToriiRamLfe>,
@@ -6429,12 +6429,12 @@ pub struct ToriiFaucet {
     pub pow_vrf_seed_enabled: bool,
 }
 
-/// Offline Notes V2 issuer configuration exposed to Torii.
+/// Offline Notes issuer configuration exposed to Torii.
 #[derive(Debug, Clone)]
 pub struct ToriiOfflineIssuer {
     /// Account derived from the issuer private key; must hold `CanManageOfflineEscrow`.
     pub authority: AccountId,
-    /// Key pair used to sign certificates and submit `IssueOfflineNoteV2`.
+    /// Key pair used to sign certificates and submit `IssueOfflineNote`.
     pub key_pair: KeyPair,
     /// Public key used to verify middleware attestation receipts.
     pub attestation_verifier_public_key: PublicKey,
@@ -6448,6 +6448,23 @@ pub struct ToriiOfflineIssuer {
     pub authorization_refresh: Duration,
     /// Authorization TTL.
     pub authorization_ttl: Duration,
+    /// Revoked authorization verdict identifiers distributed to offline wallets.
+    pub revoked_verdict_ids: Vec<String>,
+    /// Account identifiers blocked from offline value movement.
+    pub blacklisted_account_ids: Vec<String>,
+    /// Per-asset offline send limits distributed to offline wallets.
+    pub asset_send_limits: Vec<ToriiOfflineAssetSendLimit>,
+}
+
+/// Per-asset offline send limits exposed by the Torii Offline issuer.
+#[derive(Debug, Clone)]
+pub struct ToriiOfflineAssetSendLimit {
+    /// Asset definition identifier the limits apply to.
+    pub asset_definition_id: String,
+    /// Maximum offline value that can be sent in a UTC day.
+    pub daily_send_limit: Numeric,
+    /// Maximum offline value that can be sent in a UTC month.
+    pub monthly_send_limit: Numeric,
 }
 
 /// RAM-LFE runtime configuration exposed to Torii.
@@ -8047,7 +8064,7 @@ impl Default for Repo {
     }
 }
 
-/// Offline V2 note retention policy parameters.
+/// Offline note retention policy parameters.
 #[derive(Debug, Clone)]
 pub struct Offline {
     /// Minimum number of blocks to keep note records in hot storage.
@@ -8058,9 +8075,9 @@ pub struct Offline {
     pub cold_retention_blocks: u64,
     /// Maximum number of archived note records pruned per retention pass.
     pub prune_batch_size: usize,
-    /// Whether Offline V2 notes must be escrow-backed.
+    /// Whether Offline notes must be escrow-backed.
     pub escrow_required: bool,
-    /// Escrow accounts keyed by asset definition for Offline V2 notes.
+    /// Escrow accounts keyed by asset definition for Offline notes.
     pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
 }
 

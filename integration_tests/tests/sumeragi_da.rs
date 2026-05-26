@@ -154,6 +154,7 @@ fn http_client_with_client_auth(client: &Client) -> Result<reqwest::Client> {
         headers.insert(header_name, header_value);
     }
     reqwest::Client::builder()
+        .timeout(integration_tests::http::request_timeout())
         .default_headers(headers)
         .build()
         .wrap_err("build reqwest client for authenticated Sumeragi endpoint calls")
@@ -2206,13 +2207,13 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
             .wrap_err("compose status URL")?;
         let start = Instant::now();
         let elapsed =
-            wait_for_height(reqwest::Client::new(), status_url, target_height, start).await?;
+            wait_for_height(integration_tests::http::client(), status_url, target_height, start).await?;
         ensure!(
             elapsed <= view_change_deadline,
             "expected view change to recover within bound; elapsed={elapsed:?}"
         );
 
-        let http = reqwest::Client::new();
+        let http = integration_tests::http::client();
         for (idx, peer) in peers.iter().enumerate() {
             if !peer.is_running() {
                 continue;

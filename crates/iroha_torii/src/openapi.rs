@@ -88,7 +88,7 @@ fn tags_section() -> Value {
     offline.insert(
         "description".into(),
         Value::String(
-            "Offline V2 readiness and issuer endpoints. Issuer POSTs carry canonical auth in the JSON body instead of X-Iroha-* headers."
+            "Offline readiness and issuer endpoints. Issuer POSTs carry canonical auth in the JSON body instead of X-Iroha-* headers."
                 .to_owned(),
         ),
     );
@@ -660,35 +660,35 @@ fn da_paths() -> Map {
 fn offline_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/offline/v2/readiness".to_owned(),
+        "/v1/offline/readiness".to_owned(),
         Value::Object(json_get_operation(
             "Offline",
-            "Report Offline V2 feature readiness.",
-            "Returns V2 readiness signals for device-bound one-use notes and Fountain QR transport.",
+            "Report Offline feature readiness.",
+            "Returns readiness signals for device-bound one-use notes and Fountain QR transport.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     for (path, summary, description) in [
         (
-            "/v1/offline/v2/keys/refill",
-            "Refill Offline V2 issuer keys.",
+            "/v1/offline/keys/refill",
+            "Refill Offline issuer keys.",
             "POST issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
-            "/v1/offline/v2/notes/issue",
-            "Issue an Offline V2 note.",
-            "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "/v1/offline/notes/issue",
+            "Issue an Offline note.",
+            "POST an Offline note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
-            "/v1/offline/v2/notes/redeem",
-            "Redeem an Offline V2 note.",
-            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "/v1/offline/notes/redeem",
+            "Redeem an Offline note.",
+            "POST an Offline note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
-            "/v1/offline/v2/audit",
-            "Submit an Offline V2 audit request.",
-            "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "/v1/offline/audit",
+            "Submit an Offline audit request.",
+            "POST an Offline audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
     ] {
         paths.insert(
@@ -697,7 +697,7 @@ fn offline_paths() -> Map {
                 "Offline",
                 summary,
                 description,
-                "#/components/schemas/OfflineV2IssuerBodyAuthRequest",
+                "#/components/schemas/OfflineIssuerBodyAuthRequest",
                 "#/components/schemas/JsonValue",
                 Vec::new(),
             )),
@@ -7898,10 +7898,10 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "OfflineV2IssuerBodyAuthRequest".to_owned(),
+        "OfflineIssuerBodyAuthRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "Offline V2 issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
+            "description": "Offline issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
             "required": ["account_id", "timestamp_ms", "nonce"],
             "additionalProperties": true,
             "properties": {
@@ -11435,7 +11435,7 @@ mod tests {
         assert!(paths.contains_key("/v1/contracts/activity"));
         assert!(paths.contains_key("/v1/contracts/events"));
         assert!(paths.contains_key("/v1/contracts/events/sse"));
-        assert!(paths.contains_key("/v1/offline/v2/readiness"));
+        assert!(paths.contains_key("/v1/offline/readiness"));
         assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
         assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
         assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));
@@ -11448,12 +11448,12 @@ mod tests {
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
-        assert!(paths.contains_key("/v1/offline/v2/keys/refill"));
-        assert!(paths.contains_key("/v1/offline/v2/notes/issue"));
-        assert!(paths.contains_key("/v1/offline/v2/notes/redeem"));
-        assert!(paths.contains_key("/v1/offline/v2/audit"));
+        assert!(paths.contains_key("/v1/offline/keys/refill"));
+        assert!(paths.contains_key("/v1/offline/notes/issue"));
+        assert!(paths.contains_key("/v1/offline/notes/redeem"));
+        assert!(paths.contains_key("/v1/offline/audit"));
         let refill_post = paths
-            .get("/v1/offline/v2/keys/refill")
+            .get("/v1/offline/keys/refill")
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
@@ -11478,21 +11478,21 @@ mod tests {
             .expect("offline refill request schema");
         assert_eq!(
             refill_request_schema,
-            "#/components/schemas/OfflineV2IssuerBodyAuthRequest"
+            "#/components/schemas/OfflineIssuerBodyAuthRequest"
         );
     }
 
     #[test]
-    fn generated_spec_documents_offline_v2_body_auth_schema() {
+    fn generated_spec_documents_offline_body_auth_schema() {
         let doc = generate_spec();
         let schema = doc
             .get("components")
             .and_then(Value::as_object)
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
-            .and_then(|schemas| schemas.get("OfflineV2IssuerBodyAuthRequest"))
+            .and_then(|schemas| schemas.get("OfflineIssuerBodyAuthRequest"))
             .and_then(Value::as_object)
-            .expect("Offline V2 body auth schema");
+            .expect("Offline body auth schema");
         let required = schema
             .get("required")
             .and_then(Value::as_array)
@@ -12472,7 +12472,7 @@ mod tests {
             PathCase {
                 label: "offline",
                 builder: offline_paths,
-                expected: "/v1/offline/v2/readiness",
+                expected: "/v1/offline/readiness",
             },
             PathCase {
                 label: "system",

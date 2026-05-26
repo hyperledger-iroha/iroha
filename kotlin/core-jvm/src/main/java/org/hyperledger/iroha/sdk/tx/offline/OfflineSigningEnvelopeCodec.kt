@@ -3,7 +3,7 @@ package org.hyperledger.iroha.sdk.tx.offline
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.tx.norito.NoritoException
 
-private const val DEFAULT_SCHEMA = "iroha.android.offline.Envelope.v1"
+private const val DEFAULT_SCHEMA = "iroha.android.offline.Envelope"
 
 /** Encodes and decodes `OfflineSigningEnvelope` instances using the shared Norito codec. */
 class OfflineSigningEnvelopeCodec @JvmOverloads constructor(

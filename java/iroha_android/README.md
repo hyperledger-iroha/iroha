@@ -200,7 +200,7 @@ java/iroha_android
 │   │       │   ├── OfflineToriiClient.java
 │   │       │   ├── OfflineQrStream.java
 │   │       │   ├── OfflineJsonParser.java
-│   │       │   └── OfflineV2Readiness.java
+│   │       │   └── OfflineReadiness.java
 │   │       ├── subscriptions
 │   │       │   ├── SubscriptionPlanCreateRequest.java
 │   │       │   ├── SubscriptionCreateRequest.java
@@ -730,14 +730,14 @@ Map<String, String> headers =
 Signatures cover the canonical method/path/query/body layout plus freshness
 metadata, matching the Rust verifier Torii uses on app-facing endpoints.
 
-Offline V2 issuer POST endpoints (`/v1/offline/v2/keys/refill`,
-`/v1/offline/v2/notes/issue`, `/v1/offline/v2/notes/redeem`, and
-`/v1/offline/v2/audit`) carry auth in the JSON body instead of `X-Iroha-*`
+Offline issuer POST endpoints (`/v1/offline/keys/refill`,
+`/v1/offline/notes/issue`, `/v1/offline/notes/redeem`, and
+`/v1/offline/audit`) carry auth in the JSON body instead of `X-Iroha-*`
 headers. Use `CanonicalRequestSigner.withBodySignature(...)` to add
 `account_id`, `timestamp_ms`, `nonce`, and `signature_base64` to a request
 body. Multisig callers should build the canonical request witness separately
 and pass it as `witness_base64` with `withBodyWitness(...)`.
-`ToriiOfflineNoteV2IssuerClient` requires `ToriiCanonicalRequestAuth` for
+`ToriiOfflineNoteIssuerClient` requires `ToriiCanonicalRequestAuth` for
 issuer requests, including flows that also attach device-proof payloads.
 
 ### Sora VPN native lease flow
@@ -1094,16 +1094,16 @@ manifest together.
 
 Licensed under the Apache License, Version 2.0. See `LICENSE` for details.
 
-## Offline V2 readiness and auditing
+## Offline readiness and auditing
 
-The SDK exposes a lightweight `OfflineToriiClient` for the maintained Offline V2
+The SDK exposes a lightweight `OfflineToriiClient` for the maintained Offline
 readiness surface. Torii also keeps issuer POST endpoints for key refill and
-note issuance: wallets derive the Offline Note V2 commitment locally and pass
-the bare 64-character `note_commitment` hex to `/v1/offline/v2/notes/issue`.
+note issuance: wallets derive the Offline Note commitment locally and pass
+the bare 64-character `note_commitment` hex to `/v1/offline/notes/issue`.
 Torii issues that exact commitment and returns settlement lineage metadata;
 `settlement.entry_hash` is no longer used as the note commitment. Redemption
 and audit payloads are submitted as direct transaction instructions.
-`OfflineNoteV2Wallet` provides the Java Android one-call app flow for load,
+`OfflineNoteWallet` provides the Java Android one-call app flow for load,
 receive request preparation, P2P pay, accept, optional audit publication,
 redeem submission, and sync. Offline-to-offline pay/accept is local-final and
 irrevocable: the sender immediately records spent inputs and spendable change,
@@ -1116,21 +1116,32 @@ interfaces so Android apps can bind them to Torii, Android Keystore, and
 app-specific persistence; `sync()` additionally accepts a transaction-outcome
 resolver for finalizing redeem-pending note records after Torii observes the
 redeem transaction outcome.
-`OfflineNoteV2TransferHandoff` provides the app-facing payment-token transfer
+`OfflineBearerWallet` is the Java Android mirror of the v2 hardware-backed
+Offline Bearer purse model. Apps inject an `OfflineBearerWallet.SecureElement`
+whose capabilities must report hardware-backed and stateful purse support;
+`OfflineBearerWallet.UnsupportedSecureElement` fails closed. The secure element
+owns the mutable balance and sequence, so users can send partial amounts, such
+as 2 out of 50, and receivers can re-spend value without carrying an ever-growing
+transfer trail. Settlement export returns compact debit/credit receipt batches.
+`OfflineBearerWallet.PolicyBundleV2` makes correct apps reject stale policy
+material, stale certificates, stale handoff tokens, disallowed hardware classes,
+blacklisted accounts/devices/keys, transactions above the policy cap, and
+incoming credits that would exceed the offline-balance cap.
+`OfflineNoteTransferHandoff` provides the app-facing payment-token transfer
 surface: `qrStreamingFrameBytes(token)` for animated/binary QR,
 `nfcFrameBytes(token)` for APDU-sized NFC frame exchange, and
 `nearbyPayload(token)` / `nearbyFrameBytes(token)` for Nearby Connections,
 Bluetooth, Wi-Fi Direct, or any app-owned byte channel. The nested
-`OfflineNoteV2TransferStreamReceiver` reconstructs streamed frames and returns a
+`OfflineNoteTransferStreamReceiver` reconstructs streamed frames and returns a
 decoded payment token when complete. Android apps can use
-`AndroidOfflineNoteV2TransferCapabilities.current(context)` from the Android AAR
+`AndroidOfflineNoteTransferCapabilities.current(context)` from the Android AAR
 to include NFC only on devices that advertise HCE support. For png2-style NFC,
-bind `OfflineNoteV2NfcApduProtocol` to `HostApduService`/`IsoDep`: select the
+bind `OfflineNoteNfcApduProtocol` to `HostApduService`/`IsoDep`: select the
 Iroha AID, exchange metadata, transfer bounded chunks, commit, then poll/read a
 local receipt ACK. The default `nfcPaymentTokenWriteApdus(token)` uses
 240-byte chunks because Android APDU limits vary across devices; extended
 iOS-to-iOS chunks are available only through explicit opt-in helpers.
-`OfflineNoteV2NearbyEnvelope` provides the matching sorted-key Nearby JSON
+`OfflineNoteNearbyEnvelope` provides the matching sorted-key Nearby JSON
 envelope with unpadded base64url payloads and a pairing-image challenge for
 Google Nearby Connections, Bluetooth, Wi-Fi Direct, or another reliable byte
 channel.
@@ -1146,14 +1157,14 @@ lengths; no-offset APDUs also reject smuggled nonzero P1/P2 bytes. Nearby
 decoding rejects fractional versions, unknown fields inside legacy
 pairing-challenge objects, and challenge/receipt ACK content-type downgrades
 instead of ignoring smuggled JSON.
-`AndroidOfflineNoteV2SecureStore` rotates a non-exportable Android Keystore key
+`AndroidOfflineNoteSecureStore` rotates a non-exportable Android Keystore key
 on every committed wallet-state revision and rejects app-data rollback or
 cloned preference snapshots after the old revision key has been deleted. Legacy
 `SPEND_PENDING` records decode as `SPENT`, and legacy `CHANGE_PENDING` records
 decode as `SPENDABLE`.
 the core module includes an in-memory store,
-`IrohaOfflineNoteV2TransactionSubmitter`, and
-`ToriiOfflineNoteV2IssuerClient` for body-signed key-refill plus note-issue
+`IrohaOfflineNoteTransactionSubmitter`, and
+`ToriiOfflineNoteIssuerClient` for body-signed key-refill plus note-issue
 loads in tests and JVM tooling.
 
 The client reuses the existing `ClientConfig` headers/observers and can be
@@ -1162,14 +1173,14 @@ created from any `HttpClientTransport`:
 ```java
 transport
     .offlineToriiClient()
-    .getOfflineV2Readiness()
-    .thenAccept(readiness -> System.out.println(readiness.offlineNoteV2()));
+    .getOfflineReadiness()
+    .thenAccept(readiness -> System.out.println(readiness.offlineNote()));
 ```
 
-Non-V2 offline HTTP routes were removed from the public offline client surface
+Legacy offline HTTP routes were removed from the public offline client surface
 so callers cannot accidentally target Torii routes that now return 404.
 
-Use `OfflineToriiClient#getOfflineV2Readiness()` to check whether Torii exposes the V2 note
+Use `OfflineToriiClient#getOfflineReadiness()` to check whether Torii exposes the offline note
 capabilities before showing offline receive or payment-token UI.
 ```
 

@@ -142,25 +142,25 @@ I18NI000000061X, `/v1/assets/definitions`, NFTs, balues, རྒྱུ་དང�
 
 I18NF0000022X
 
-## Offline V2 readiness
+## Offline readiness
 
-JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
-Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
+Offline note issuance, redemption, and audit payloads are submitted as transaction instructions;
 legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```js
-const readiness = await torii.getOfflineV2Readiness();
-console.log("offline notes", readiness.offline_note_v2);
+const readiness = await torii.getOfflineReadiness();
+console.log("offline notes", readiness.offline_note);
 ```
-## Offline V2 readiness
+## Offline readiness
 
-JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
-Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
+Offline note issuance, redemption, and audit payloads are submitted as transaction instructions;
 legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const readiness = await torii.getOfflineV2Readiness();
-console.log("offline notes", readiness.offline_note_v2);
+const readiness = await torii.getOfflineReadiness();
+console.log("offline notes", readiness.offline_note);
 ```
 ## Torii འདྲི་དཔྱད་དང་རྒྱུན་སྤེལ་ (ཝེབ་སོ་ཀེཊི་ཚུ།)
 

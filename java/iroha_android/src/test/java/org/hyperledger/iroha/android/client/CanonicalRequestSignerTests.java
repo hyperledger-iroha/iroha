@@ -28,7 +28,7 @@ public final class CanonicalRequestSignerTests {
   }
 
   private static void callbackHeadersReceiveCanonicalMessage() throws Exception {
-    final URI uri = new URI("https://torii.example/v1/offline/v2/keys/refill?b=2&a=1");
+    final URI uri = new URI("https://torii.example/v1/offline/keys/refill?b=2&a=1");
     final byte[] body = "{\"operation_id\":\"operation-1\"}".getBytes(StandardCharsets.UTF_8);
     final long timestampMs = 1_717_171_717_001L;
     final String nonce = "callback-header-nonce";
@@ -85,7 +85,7 @@ public final class CanonicalRequestSignerTests {
   }
 
   private static void callbackBodySignatureReceivesCanonicalMessage() throws Exception {
-    final URI uri = new URI("https://torii.example/v1/offline/v2/notes/issue");
+    final URI uri = new URI("https://torii.example/v1/offline/notes/issue");
     final long timestampMs = 1_717_171_717_002L;
     final String nonce = "callback-body-nonce";
     final AtomicReference<byte[]> signedMessage = new AtomicReference<>();
