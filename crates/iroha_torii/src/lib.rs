@@ -288,6 +288,7 @@ use iroha_data_model::{
     events::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
+        trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
     musubi::{MusubiNamespace, MusubiPackageId, MusubiPackageRef},
     name::Name,
@@ -310,7 +311,8 @@ use iroha_primitives::addr::SocketAddr;
 use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
 use iroha_torii_shared::{
     AccountReadResponse, AxtErrorDetails, ErrorDetails, ErrorEnvelope, PipelineTransactionStatus,
-    PipelineTransactionStatusResponse, QueueErrorSnapshot, uri,
+    PipelineTransactionStatusResponse, QueueErrorSnapshot, TriggerCompletionListResponse,
+    TriggerCompletionRecord, TriggerCompletionSummary, uri,
 };
 use ivm::iso20022::{MsgError, parse_message};
 #[cfg(feature = "app_api")]
@@ -30878,6 +30880,340 @@ struct PipelineStatusQuery {
     scope: Option<String>,
 }
 
+#[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
+struct TriggerCompletionQuery {
+    #[norito(default)]
+    id: Option<String>,
+    #[norito(default)]
+    entrypoint_hash: Option<String>,
+    #[norito(default)]
+    outcome: Option<String>,
+    #[norito(default)]
+    from_height: Option<u64>,
+    #[norito(default)]
+    to_height: Option<u64>,
+    #[norito(default)]
+    limit: Option<u64>,
+    #[norito(default)]
+    scan_limit_blocks: Option<u64>,
+    #[norito(default)]
+    include_reconstructed: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TriggerCompletionOutcomeFilter {
+    All,
+    Success,
+    Failure,
+}
+
+impl TriggerCompletionOutcomeFilter {
+    fn parse(raw: Option<&str>) -> Result<Self, Error> {
+        let normalized = raw
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("all")
+            .to_ascii_lowercase();
+        match normalized.as_str() {
+            "all" | "*" => Ok(Self::All),
+            "success" | "ok" => Ok(Self::Success),
+            "failure" | "failed" | "error" => Ok(Self::Failure),
+            _ => Err(conversion_error(format!(
+                "invalid outcome query parameter \"{normalized}\" (expected all|success|failure)"
+            ))),
+        }
+    }
+
+    fn matches(self, outcome: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Success => matches!(outcome, "Success"),
+            Self::Failure => matches!(outcome, "Failure"),
+        }
+    }
+}
+
+const TRIGGER_COMPLETION_DEFAULT_LIMIT: u64 = 100;
+const TRIGGER_COMPLETION_MAX_LIMIT: u64 = 1_000;
+const TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS: u64 = 1_000;
+const TRIGGER_COMPLETION_MAX_SCAN_BLOCKS: u64 = 10_000;
+
+fn trigger_completion_outcome(outcome: &TriggerCompletedOutcome) -> (&'static str, Option<String>) {
+    match outcome {
+        TriggerCompletedOutcome::Success => ("Success", None),
+        TriggerCompletedOutcome::Failure(message) => ("Failure", Some(message.clone())),
+    }
+}
+
+fn trigger_completion_summary_from_event(
+    event: &TriggerCompletedEvent,
+) -> TriggerCompletionSummary {
+    let (outcome, message) = trigger_completion_outcome(event.outcome());
+    TriggerCompletionSummary {
+        trigger_id: event.trigger_id().to_string(),
+        trigger_execution_hash: event.trigger_execution_hash().to_string(),
+        step_index: *event.step_index(),
+        outcome: outcome.to_owned(),
+        message,
+    }
+}
+
+fn trigger_completion_record_from_event(
+    block: &iroha_data_model::block::SignedBlock,
+    block_height: u64,
+    event: &TriggerCompletedEvent,
+    source: &str,
+) -> TriggerCompletionRecord {
+    let entrypoint_index = block
+        .entrypoint_hashes()
+        .position(|hash| hash == *event.trigger_execution_hash())
+        .and_then(|index| u64::try_from(index).ok());
+    TriggerCompletionRecord {
+        block_height,
+        entrypoint_index,
+        completion: trigger_completion_summary_from_event(event),
+        source: source.to_owned(),
+    }
+}
+
+fn trigger_completion_record_from_parts(
+    block_height: u64,
+    entrypoint_index: usize,
+    trigger_id: String,
+    trigger_execution_hash: String,
+    step_index: u32,
+    outcome: &str,
+    message: Option<String>,
+    source: &str,
+) -> TriggerCompletionRecord {
+    TriggerCompletionRecord {
+        block_height,
+        entrypoint_index: u64::try_from(entrypoint_index).ok(),
+        completion: TriggerCompletionSummary {
+            trigger_id,
+            trigger_execution_hash,
+            step_index,
+            outcome: outcome.to_owned(),
+            message,
+        },
+        source: source.to_owned(),
+    }
+}
+
+fn reconstruct_trigger_completion_records(
+    block: &iroha_data_model::block::SignedBlock,
+    block_height: u64,
+) -> Vec<TriggerCompletionRecord> {
+    let mut records = Vec::new();
+    for (entrypoint_index, entrypoint, result) in block.entrypoint_results() {
+        let execution_hash = entrypoint.hash().to_string();
+        if let TransactionEntrypoint::Time(time_entrypoint) = &entrypoint {
+            match &result.0 {
+                Ok(_) => records.push(trigger_completion_record_from_parts(
+                    block_height,
+                    entrypoint_index,
+                    time_entrypoint.id.to_string(),
+                    execution_hash.clone(),
+                    0,
+                    "Success",
+                    None,
+                    "reconstructed_result",
+                )),
+                Err(reason) => records.push(trigger_completion_record_from_parts(
+                    block_height,
+                    entrypoint_index,
+                    time_entrypoint.id.to_string(),
+                    execution_hash.clone(),
+                    0,
+                    "Failure",
+                    Some(reason.to_string()),
+                    "reconstructed_result",
+                )),
+            }
+        }
+
+        let Ok(sequence) = &result.0 else {
+            continue;
+        };
+        let first_data_step = if matches!(entrypoint, TransactionEntrypoint::Time(_)) {
+            1_u32
+        } else {
+            0_u32
+        };
+        for (offset, step) in sequence.iter().enumerate() {
+            let step_index =
+                first_data_step.saturating_add(u32::try_from(offset).unwrap_or(u32::MAX));
+            records.push(trigger_completion_record_from_parts(
+                block_height,
+                entrypoint_index,
+                step.id.to_string(),
+                execution_hash.clone(),
+                step_index,
+                "Success",
+                None,
+                "reconstructed_result",
+            ));
+        }
+    }
+    records
+}
+
+fn trigger_completion_record_matches(
+    record: &TriggerCompletionRecord,
+    trigger_id: Option<&str>,
+    entrypoint_hash: Option<&str>,
+    outcome: TriggerCompletionOutcomeFilter,
+) -> bool {
+    if let Some(trigger_id) = trigger_id
+        && record.completion.trigger_id != trigger_id
+    {
+        return false;
+    }
+    if let Some(entrypoint_hash) = entrypoint_hash
+        && record.completion.trigger_execution_hash != entrypoint_hash
+    {
+        return false;
+    }
+    outcome.matches(&record.completion.outcome)
+}
+
+fn trigger_completion_records_for_block(
+    block: &iroha_data_model::block::SignedBlock,
+    block_height: u64,
+    include_reconstructed: bool,
+) -> Vec<TriggerCompletionRecord> {
+    let persisted = block
+        .trigger_completions()
+        .unwrap_or_default()
+        .iter()
+        .map(|event| {
+            trigger_completion_record_from_event(block, block_height, event, "block_result")
+        })
+        .collect::<Vec<_>>();
+    if !persisted.is_empty() || !include_reconstructed {
+        return persisted;
+    }
+    reconstruct_trigger_completion_records(block, block_height)
+}
+
+fn trigger_completion_query_response(
+    app: &SharedAppState,
+    query: &TriggerCompletionQuery,
+) -> Result<TriggerCompletionListResponse, Error> {
+    let latest_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    let limit = query
+        .limit
+        .unwrap_or(TRIGGER_COMPLETION_DEFAULT_LIMIT)
+        .clamp(1, TRIGGER_COMPLETION_MAX_LIMIT);
+    let scan_limit = query
+        .scan_limit_blocks
+        .unwrap_or(TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS)
+        .clamp(1, TRIGGER_COMPLETION_MAX_SCAN_BLOCKS);
+    let include_reconstructed = query.include_reconstructed.unwrap_or(true);
+    let outcome = TriggerCompletionOutcomeFilter::parse(query.outcome.as_deref())?;
+    let requested_to = query.to_height.unwrap_or(latest_height).min(latest_height);
+
+    if latest_height == 0 || requested_to == 0 {
+        return Ok(TriggerCompletionListResponse {
+            latest_height,
+            from_height: 0,
+            to_height: requested_to,
+            scanned_blocks: 0,
+            limit,
+            completions: Vec::new(),
+        });
+    }
+
+    let window_from = requested_to
+        .saturating_sub(scan_limit.saturating_sub(1))
+        .max(1);
+    let from_height = query
+        .from_height
+        .unwrap_or(window_from)
+        .max(window_from)
+        .max(1);
+    if from_height > requested_to {
+        return Ok(TriggerCompletionListResponse {
+            latest_height,
+            from_height,
+            to_height: requested_to,
+            scanned_blocks: 0,
+            limit,
+            completions: Vec::new(),
+        });
+    }
+
+    let mut completions = Vec::new();
+    let mut scanned_blocks = 0_u64;
+    for height in (from_height..=requested_to).rev() {
+        scanned_blocks = scanned_blocks.saturating_add(1);
+        let Some(height_usize) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
+            continue;
+        };
+        let Some(block) = app.kura.get_block(height_usize) else {
+            continue;
+        };
+        for record in
+            trigger_completion_records_for_block(block.as_ref(), height, include_reconstructed)
+        {
+            if !trigger_completion_record_matches(
+                &record,
+                query.id.as_deref(),
+                query.entrypoint_hash.as_deref(),
+                outcome,
+            ) {
+                continue;
+            }
+            completions.push(record);
+            if u64::try_from(completions.len()).unwrap_or(u64::MAX) >= limit {
+                return Ok(TriggerCompletionListResponse {
+                    latest_height,
+                    from_height,
+                    to_height: requested_to,
+                    scanned_blocks,
+                    limit,
+                    completions,
+                });
+            }
+        }
+    }
+
+    Ok(TriggerCompletionListResponse {
+        latest_height,
+        from_height,
+        to_height: requested_to,
+        scanned_blocks,
+        limit,
+        completions,
+    })
+}
+
+fn trigger_completion_summaries_for_entrypoint_hash(
+    app: &SharedAppState,
+    block_height: u64,
+    entrypoint_hash: &str,
+) -> Vec<TriggerCompletionSummary> {
+    let query = TriggerCompletionQuery {
+        id: None,
+        entrypoint_hash: Some(entrypoint_hash.to_owned()),
+        outcome: None,
+        from_height: Some(block_height),
+        to_height: Some(block_height),
+        limit: Some(TRIGGER_COMPLETION_MAX_LIMIT),
+        scan_limit_blocks: Some(1),
+        include_reconstructed: Some(true),
+    };
+    trigger_completion_query_response(app, &query)
+        .map(|response| {
+            response
+                .completions
+                .into_iter()
+                .map(|record| record.completion)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelineStatusReadScope {
     Local,
@@ -30915,12 +31251,13 @@ fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>,
 }
 
 fn pipeline_status_response(
+    app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
     entry: &PipelineStatusEntry,
     scope: PipelineStatusReadScope,
     resolved_from: &'static str,
 ) -> PipelineTransactionStatusResponse {
-    PipelineTransactionStatusResponse::new(
+    let mut response = PipelineTransactionStatusResponse::new(
         hash.to_string(),
         PipelineTransactionStatus {
             kind: entry.kind.as_str().to_owned(),
@@ -30929,7 +31266,12 @@ fn pipeline_status_response(
         },
         scope.as_str().to_owned(),
         resolved_from.to_owned(),
-    )
+    );
+    if let Some(block_height) = entry.block_height.map(NonZeroU64::get) {
+        response.trigger_completions =
+            trigger_completion_summaries_for_entrypoint_hash(app, block_height, &hash.to_string());
+    }
+    response
 }
 
 fn pipeline_status_from_state(
@@ -31003,6 +31345,7 @@ fn pipeline_status_local_entry(
 }
 
 fn pipeline_status_response_with_route(
+    app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
     entry: &PipelineStatusEntry,
     scope: PipelineStatusReadScope,
@@ -31011,7 +31354,7 @@ fn pipeline_status_response_with_route(
     route: Option<(RoutingDecision, &'static str)>,
 ) -> Response {
     let mut response = crate::utils::respond_with_format(
-        pipeline_status_response(hash, entry, scope, resolved_from),
+        pipeline_status_response(app, hash, entry, scope, resolved_from),
         format,
     );
     if let Some((routing_decision, routed_by)) = route {
@@ -31059,6 +31402,7 @@ fn execute_pipeline_status_local_read(
 
     if let Some((entry, resolved_from)) = local_entry {
         return Ok(pipeline_status_response_with_route(
+            app,
             &hash,
             &entry,
             read_scope,
@@ -31135,6 +31479,23 @@ async fn handler_pipeline_transaction_status(
         Vec::new(),
     )
     .await)
+}
+
+async fn handler_trigger_completions(
+    State(app): State<SharedAppState>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    AxQuery(query): AxQuery<TriggerCompletionQuery>,
+) -> Result<Response, Error> {
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(format) => format,
+            Err(resp) => return Ok(resp),
+        };
+    Ok(crate::utils::respond_with_format(
+        trigger_completion_query_response(&app, &query)?,
+        format,
+    ))
 }
 
 async fn handler_policy(
@@ -34688,6 +35049,7 @@ impl Torii {
                     "/v1/pipeline/transactions/status",
                     get(handler_pipeline_transaction_status),
                 )
+                .route(uri::TRIGGER_COMPLETIONS, get(handler_trigger_completions))
                 .route(
                     "/v1/pipeline/recovery/{height}",
                     get(handler_pipeline_recovery),

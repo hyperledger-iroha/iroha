@@ -326,6 +326,10 @@ impl SignedBlock {
             );
         }
 
+        let trigger_completions = self
+            .result
+            .as_ref()
+            .map_or_else(Vec::new, |result| result.trigger_completions.clone());
         let result_merkle: MerkleTree<TransactionResult> = result_hashes.collect();
         let transaction_results = results.into_iter().map(TransactionResult::from).collect();
         self.payload.header.result_merkle_root = result_merkle.root();
@@ -339,9 +343,21 @@ impl SignedBlock {
             transaction_results,
             fastpq_transcripts,
             axt_envelopes,
+            trigger_completions,
             axt_policy_snapshot,
         });
         Ok(())
+    }
+
+    /// Replace trigger completion events captured while executing this block.
+    #[cfg(feature = "transparent_api")]
+    pub fn set_trigger_completions(
+        &mut self,
+        trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
+    ) {
+        if let Some(result) = self.result.as_mut() {
+            result.trigger_completions = trigger_completions;
+        }
     }
 
     /// Incrementally update a single transaction result at `index`.
@@ -607,6 +623,7 @@ impl SignedBlock {
             transaction_results: Vec::new(),
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
+            trigger_completions: Vec::new(),
             axt_policy_snapshot: None,
         };
         let mut block = SignedBlock {
@@ -1703,6 +1720,7 @@ mod tests {
             )],
             fastpq_transcripts: std::collections::BTreeMap::new(),
             axt_envelopes: Vec::new(),
+            trigger_completions: Vec::new(),
             axt_policy_snapshot: None,
         };
 

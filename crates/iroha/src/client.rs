@@ -42,7 +42,8 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 use iroha_torii_shared::{
-    AccountReadResponse, ErrorEnvelope, PipelineTransactionStatusResponse, uri as torii_uri,
+    AccountReadResponse, ErrorEnvelope, PipelineTransactionStatusResponse,
+    TriggerCompletionListResponse, uri as torii_uri,
 };
 use iroha_version::codec::EncodeVersioned;
 use norito::{
@@ -8794,6 +8795,59 @@ impl Client {
         hash: HashOf<SignedTransaction>,
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
         self.get_transaction_status_response_with_scope(hash, Some("global"))
+    }
+
+    /// GET `/v1/triggers/completed` — list historical trigger completions from committed blocks.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response has an unexpected content type,
+    /// or the typed JSON payload cannot be decoded.
+    pub fn get_trigger_completions(
+        &self,
+        trigger_id: Option<&str>,
+        entrypoint_hash: Option<&str>,
+        outcome: Option<&str>,
+        from_height: Option<u64>,
+        to_height: Option<u64>,
+        limit: Option<u64>,
+        scan_limit_blocks: Option<u64>,
+    ) -> Result<TriggerCompletionListResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/triggers/completed");
+        let mut builder = self
+            .default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON);
+        if let Some(trigger_id) = trigger_id {
+            builder = builder.param("id", trigger_id);
+        }
+        if let Some(entrypoint_hash) = entrypoint_hash {
+            builder = builder.param("entrypoint_hash", entrypoint_hash);
+        }
+        if let Some(outcome) = outcome {
+            builder = builder.param("outcome", outcome);
+        }
+        if let Some(from_height) = from_height {
+            builder = builder.param("from_height", &from_height.to_string());
+        }
+        if let Some(to_height) = to_height {
+            builder = builder.param("to_height", &to_height.to_string());
+        }
+        if let Some(limit) = limit {
+            builder = builder.param("limit", &limit.to_string());
+        }
+        if let Some(scan_limit_blocks) = scan_limit_blocks {
+            builder = builder.param("scan_limit_blocks", &scan_limit_blocks.to_string());
+        }
+        let resp = self.send_builder(builder)?;
+        match resp.status() {
+            StatusCode::OK | StatusCode::ACCEPTED => {
+                Self::parse_typed_json_ok_response(&resp, "Failed to get trigger completions")
+            }
+            status => Err(eyre!(
+                "Failed to get trigger completions: {} {}",
+                status,
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            )),
+        }
     }
 
     /// GET `/v1/pipeline/transactions/status` — convenience status lookup mapped to [`TxConfirmationStatus`].
