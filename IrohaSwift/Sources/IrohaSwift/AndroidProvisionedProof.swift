@@ -3,7 +3,7 @@ import Foundation
 /// Swift representation of the Norito `AndroidProvisionedProof` payload
 /// emitted by `cargo xtask offline-provision`.
 public struct AndroidProvisionedProof: Codable, Sendable, Equatable {
-    /// Schema label (for example `offline_provisioning_v1`).
+    /// Schema label for the provisioning manifest.
     public let manifestSchema: String
     /// Optional schema version.
     public let manifestVersion: Int?

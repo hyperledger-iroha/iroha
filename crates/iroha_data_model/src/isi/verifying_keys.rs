@@ -74,7 +74,7 @@ mod tests {
     fn record(version: u32) -> VerifyingKeyRecord {
         VerifyingKeyRecord::new(
             version,
-            "offline-note-v2",
+            "offline-note",
             BackendTag::Halo2IpaPasta,
             "pasta",
             [0x11; 32],

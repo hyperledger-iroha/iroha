@@ -3808,15 +3808,15 @@ def test_trigger_registration_deletion_and_query() -> None:
     }
 
 
-def test_get_offline_v2_readiness_parses_payload() -> None:
+def test_get_offline_readiness_parses_payload() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "offline_note_v2": True,
+                "offline_note": True,
                 "offline_one_use_keys": True,
                 "offline_recursive_note_proof": False,
-                "offline_fountain_qr_v1": True,
+                "offline_fountain_qr": True,
                 "offline_sync_optional": True,
                 "offline_telemetry": True,
             }
@@ -3824,17 +3824,17 @@ def test_get_offline_v2_readiness_parses_payload() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    readiness = client.get_offline_v2_readiness()
+    readiness = client.get_offline_readiness()
 
-    assert readiness.offline_note_v2 is True
+    assert readiness.offline_note is True
     assert readiness.offline_one_use_keys is True
     assert readiness.offline_recursive_note_proof is False
-    assert readiness.offline_fountain_qr_v1 is True
+    assert readiness.offline_fountain_qr is True
     assert readiness.offline_sync_optional is True
     assert readiness.offline_telemetry is True
     call = session.calls[0]
     assert call["method"] == "GET"
-    assert call["url"].endswith("/v1/offline/v2/readiness")
+    assert call["url"].endswith("/v1/offline/readiness")
 
 
 def test_status_snapshot_parses_mode_and_consensus_caps() -> None:

@@ -11,6 +11,7 @@ public final class OfflineQrStreamTest {
     recoversMissingChunk();
     rejectsBadChecksum();
     textCodecRoundTrip();
+    textCodecRejectsLegacyVersionedPrefix();
     sakuraStormPlaybackSkinMatchesPreset();
     sakuraStormScanSessionPresetRecoversDroppedFrame();
     System.out.println("[IrohaAndroid] OfflineQrStreamTest passed.");
@@ -36,7 +37,7 @@ public final class OfflineQrStreamTest {
     final List<OfflineQrStream.Frame> frames =
         OfflineQrStream.Encoder.encodeFrames(
             payload,
-            OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2,
+            OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN,
             new OfflineQrStream.Options(180, 3));
     OfflineQrStream.Frame header = null;
     int droppedIndex = -1;
@@ -91,6 +92,19 @@ public final class OfflineQrStreamTest {
     assertArrayEquals(payload, decoded, "text codec payload mismatch");
   }
 
+  private static void textCodecRejectsLegacyVersionedPrefix() {
+    final byte[] payload = makePayload(128);
+    final String legacy =
+        "iroha:qr-old:" + java.util.Base64.getEncoder().encodeToString(payload);
+    boolean threw = false;
+    try {
+      OfflineQrStream.TextCodec.decode(legacy, OfflineQrStream.FrameEncoding.BASE64);
+    } catch (IllegalArgumentException error) {
+      threw = true;
+    }
+    assertTrue(threw, "unsupported QR prefix should be rejected");
+  }
+
   private static void sakuraStormPlaybackSkinMatchesPreset() {
     final OfflineQrStream.PlaybackSkin skin = OfflineQrStream.SAKURA_STORM_SKIN;
     assertTrue("sakura-storm".equals(skin.name), "storm skin name mismatch");
@@ -106,7 +120,7 @@ public final class OfflineQrStreamTest {
     final List<OfflineQrStream.Frame> frames =
         OfflineQrStream.Encoder.encodeFrames(
             payload,
-            OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2,
+            OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN,
             new OfflineQrStream.Options(336, 4));
 
     OfflineQrStream.Frame header = null;

@@ -6,7 +6,7 @@ class OfflineTransparentZkProof(
     val circuitId: String,
     val recursionDepth: Int,
     val publicInputsHex: String,
-    val envelope: OfflineStarkVerifyEnvelopeV1,
+    val envelope: OfflineStarkVerifyEnvelope,
 ) {
     internal fun toJsonMap(): Map<String, Any?> {
         val map = LinkedHashMap<String, Any?>()

@@ -2111,9 +2111,9 @@
         ],
         "type": "object"
       },
-      "OfflineV2IssuerBodyAuthRequest": {
+      "OfflineIssuerBodyAuthRequest": {
         "additionalProperties": true,
-        "description": "Offline V2 issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
+        "description": "Offline issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
         "oneOf": [
           {
             "not": {
@@ -10694,14 +10694,14 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/offline/v2/audit": {
+    "/v1/offline/audit": {
       "post": {
-        "description": "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "description": "POST an Offline audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OfflineV2IssuerBodyAuthRequest"
+                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
               }
             }
           },
@@ -10719,21 +10719,21 @@
             "description": "Successful response"
           }
         },
-        "summary": "Submit an Offline V2 audit request.",
+        "summary": "Submit an Offline audit request.",
         "tags": [
           "Offline"
         ],
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/offline/v2/keys/refill": {
+    "/v1/offline/keys/refill": {
       "post": {
         "description": "POST issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OfflineV2IssuerBodyAuthRequest"
+                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
               }
             }
           },
@@ -10751,21 +10751,21 @@
             "description": "Successful response"
           }
         },
-        "summary": "Refill Offline V2 issuer keys.",
+        "summary": "Refill Offline issuer keys.",
         "tags": [
           "Offline"
         ],
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/offline/v2/notes/issue": {
+    "/v1/offline/notes/issue": {
       "post": {
-        "description": "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "description": "POST an Offline note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OfflineV2IssuerBodyAuthRequest"
+                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
               }
             }
           },
@@ -10783,21 +10783,21 @@
             "description": "Successful response"
           }
         },
-        "summary": "Issue an Offline V2 note.",
+        "summary": "Issue an Offline note.",
         "tags": [
           "Offline"
         ],
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/offline/v2/notes/redeem": {
+    "/v1/offline/notes/redeem": {
       "post": {
-        "description": "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "description": "POST an Offline note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OfflineV2IssuerBodyAuthRequest"
+                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
               }
             }
           },
@@ -10815,16 +10815,16 @@
             "description": "Successful response"
           }
         },
-        "summary": "Redeem an Offline V2 note.",
+        "summary": "Redeem an Offline note.",
         "tags": [
           "Offline"
         ],
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/offline/v2/readiness": {
+    "/v1/offline/readiness": {
       "get": {
-        "description": "Returns V2 readiness signals for device-bound one-use notes and Fountain QR transport.",
+        "description": "Returns readiness signals for device-bound one-use notes and Fountain QR transport.",
         "responses": {
           "200": {
             "content": {
@@ -10837,7 +10837,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Report Offline V2 feature readiness.",
+        "summary": "Report Offline feature readiness.",
         "tags": [
           "Offline"
         ],
@@ -16061,7 +16061,7 @@
       "name": "Sumeragi"
     },
     {
-      "description": "Offline V2 readiness and issuer endpoints. Issuer POSTs carry canonical auth in the JSON body instead of X-Iroha-* headers.",
+      "description": "Offline readiness and issuer endpoints. Issuer POSTs carry canonical auth in the JSON body instead of X-Iroha-* headers.",
       "name": "Offline"
     },
     {

@@ -275,38 +275,38 @@ pub fn halo2_ipa_ivm_execution_vk_record(
     Ok(record)
 }
 
-/// Canonical circuit identifier for Offline V2 recursive note proofs.
-pub const OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID: &str = "offline-note-v2-recursive-v1";
-/// Halo2 IPA parameter degree used by the canonical Offline V2 recursive note circuit.
-pub const OFFLINE_NOTE_V2_RECURSIVE_V1_IPA_K: u32 = 7;
-/// Maximum encoded proof payload accepted for Offline V2 recursive note proofs.
-pub const OFFLINE_NOTE_V2_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
+/// Canonical circuit identifier for Offline recursive note proofs.
+pub const OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID: &str = "offline-note-recursive";
+/// Halo2 IPA parameter degree used by the canonical Offline recursive note circuit.
+pub const OFFLINE_NOTE_RECURSIVE_IPA_K: u32 = 7;
+/// Maximum encoded proof payload accepted for Offline recursive note proofs.
+pub const OFFLINE_NOTE_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
 
-const OFFLINE_NOTE_V2_MODE_REDEEM: u64 = 1;
-const OFFLINE_NOTE_V2_MODE_AUDIT: u64 = 2;
-/// Number of public instance columns exposed by Offline V2 recursive note proofs.
-pub const OFFLINE_NOTE_V2_INSTANCE_COLUMNS: usize = 16;
-/// Maximum number of input amount witness slots supported by Offline V2 proofs.
-pub const OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS: usize = 4;
-/// Maximum number of output amount witness slots supported by Offline V2 proofs.
-pub const OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS: usize = 2;
+const OFFLINE_NOTE_MODE_REDEEM: u64 = 1;
+const OFFLINE_NOTE_MODE_AUDIT: u64 = 2;
+/// Number of public instance columns exposed by Offline recursive note proofs.
+pub const OFFLINE_NOTE_INSTANCE_COLUMNS: usize = 16;
+/// Maximum number of input amount witness slots supported by Offline proofs.
+pub const OFFLINE_NOTE_MAX_INPUT_AMOUNTS: usize = 4;
+/// Maximum number of output amount witness slots supported by Offline proofs.
+pub const OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS: usize = 2;
 
-/// Public and private witness values for the canonical Offline V2 semantic circuit.
+/// Public and private witness values for the canonical Offline semantic circuit.
 ///
 /// The first sixteen values are public instance columns. The private amount slots
 /// let the circuit enforce bounded input/output counts and amount conservation
 /// without exposing each individual note amount as a public instance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct OfflineNoteV2InstanceValues {
+pub struct OfflineNoteInstanceValues {
     /// Public instance values encoded as single-row Pasta field columns.
-    pub public_values: [u64; OFFLINE_NOTE_V2_INSTANCE_COLUMNS],
+    pub public_values: [u64; OFFLINE_NOTE_INSTANCE_COLUMNS],
     /// Private input amount slots, normalized to a common decimal scale.
-    pub input_amounts: [u64; OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS],
+    pub input_amounts: [u64; OFFLINE_NOTE_MAX_INPUT_AMOUNTS],
     /// Private output amount slots, normalized to the same decimal scale.
-    pub output_amounts: [u64; OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS],
+    pub output_amounts: [u64; OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS],
 }
 
-impl OfflineNoteV2InstanceValues {
+impl OfflineNoteInstanceValues {
     /// Return public instances in the byte layout carried by Halo2/STARK proof envelopes.
     #[must_use]
     pub fn public_instance_columns(&self) -> Vec<Vec<[u8; 32]>> {
@@ -321,7 +321,7 @@ impl OfflineNoteV2InstanceValues {
     #[cfg(feature = "zk-halo2-ipa")]
     fn public_scalars(
         &self,
-    ) -> [halo2_proofs::halo2curves::pasta::Fp; OFFLINE_NOTE_V2_INSTANCE_COLUMNS] {
+    ) -> [halo2_proofs::halo2curves::pasta::Fp; OFFLINE_NOTE_INSTANCE_COLUMNS] {
         self.public_values
             .map(halo2_proofs::halo2curves::pasta::Fp::from)
     }
@@ -329,7 +329,7 @@ impl OfflineNoteV2InstanceValues {
     #[cfg(feature = "zk-halo2-ipa")]
     fn input_amount_scalars(
         &self,
-    ) -> [halo2_proofs::halo2curves::pasta::Fp; OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS] {
+    ) -> [halo2_proofs::halo2curves::pasta::Fp; OFFLINE_NOTE_MAX_INPUT_AMOUNTS] {
         self.input_amounts
             .map(halo2_proofs::halo2curves::pasta::Fp::from)
     }
@@ -337,88 +337,88 @@ impl OfflineNoteV2InstanceValues {
     #[cfg(feature = "zk-halo2-ipa")]
     fn output_amount_scalars(
         &self,
-    ) -> [halo2_proofs::halo2curves::pasta::Fp; OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS] {
+    ) -> [halo2_proofs::halo2curves::pasta::Fp; OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS] {
         self.output_amounts
             .map(halo2_proofs::halo2curves::pasta::Fp::from)
     }
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-fn is_offline_note_v2_recursive_circuit_id(circuit_id: &str) -> bool {
+fn is_offline_note_recursive_circuit_id(circuit_id: &str) -> bool {
     matches!(
         circuit_id,
-        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID
-            | "halo2/ipa:offline-note-v2-recursive-v1"
-            | "halo2/ipa/offline-note-v2-recursive-v1"
-            | "halo2/pasta/offline-note-v2-recursive-v1"
-            | "halo2/pasta/ipa/offline-note-v2-recursive-v1"
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID
+            | "halo2/ipa:offline-note-recursive"
+            | "halo2/ipa/offline-note-recursive"
+            | "halo2/pasta/offline-note-recursive"
+            | "halo2/pasta/ipa/offline-note-recursive"
     )
 }
 
-/// Build the canonical inline verifier key for Offline V2 recursive note proofs.
+/// Build the canonical inline verifier key for Offline recursive note proofs.
 ///
 /// The returned key is a real Halo2 IPA verifier key envelope (`IPAK` + `H2VK`)
-/// for `offline-note-v2-recursive-v1`; it is suitable for WSV registration.
+/// for `offline-note-recursive`; it is suitable for WSV registration.
 ///
 /// # Errors
 ///
 /// Returns an error if Halo2 verifier-key generation fails.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub fn offline_note_v2_recursive_vk_box() -> Result<VerifyingKeyBox, String> {
+pub fn offline_note_recursive_vk_box() -> Result<VerifyingKeyBox, String> {
     static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
 
     CACHE
         .get_or_init(|| {
-            build_offline_note_v2_recursive_vk_box().map_err(|err| {
-                format!("failed to generate offline-note-v2-recursive-v1 verifying key: {err}")
+            build_offline_note_recursive_vk_box().map_err(|err| {
+                format!("failed to generate offline-note-recursive verifying key: {err}")
             })
         })
         .clone()
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn build_offline_note_v2_recursive_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
+fn build_offline_note_recursive_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
     use halo2_proofs::plonk::keygen_vk;
 
-    let params = pasta_params_new(OFFLINE_NOTE_V2_RECURSIVE_V1_IPA_K);
-    let circuit = pasta_tiny::OfflineNoteV2SemanticV1::default();
+    let params = pasta_params_new(OFFLINE_NOTE_RECURSIVE_IPA_K);
+    let circuit = pasta_tiny::OfflineNoteSemantic::default();
     let vk = keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
-    zk1::wrap_append_ipa_k(&mut bytes, OFFLINE_NOTE_V2_RECURSIVE_V1_IPA_K);
+    zk1::wrap_append_ipa_k(&mut bytes, OFFLINE_NOTE_RECURSIVE_IPA_K);
     zk1::wrap_append_vk_pasta(&mut bytes, &vk);
     Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
 }
 
-/// Build a governance/WSV verifier-key record for Offline V2 recursive note proofs.
+/// Build a governance/WSV verifier-key record for Offline recursive note proofs.
 ///
 /// The record is active, embeds the real Halo2 IPA verifier key inline, and
-/// binds to the canonical Offline V2 public-input schema hash.
+/// binds to the canonical Offline public-input schema hash.
 ///
 /// # Errors
 ///
 /// Returns an error if verifier-key generation fails or the key length cannot be encoded.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub fn offline_note_v2_recursive_vk_record(
+pub fn offline_note_recursive_vk_record(
     namespace: impl Into<String>,
     version: u32,
 ) -> Result<iroha_data_model::proof::VerifyingKeyRecord, String> {
     use iroha_data_model::{
         confidential::ConfidentialStatus,
-        offline::offline_note_v2_recursive_public_inputs_schema_hash, zk::BackendTag,
+        offline::offline_note_recursive_public_inputs_schema_hash, zk::BackendTag,
     };
 
-    let vk_box = offline_note_v2_recursive_vk_box()?;
+    let vk_box = offline_note_recursive_vk_box()?;
     let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
         version,
-        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
         BackendTag::Halo2IpaPasta,
         "pallas",
-        offline_note_v2_recursive_public_inputs_schema_hash(),
+        offline_note_recursive_public_inputs_schema_hash(),
         hash_vk(&vk_box),
     );
     record.vk_len = u32::try_from(vk_box.bytes.len())
-        .map_err(|_| "offline V2 verifying key length overflowed u32".to_owned())?;
-    record.max_proof_bytes = OFFLINE_NOTE_V2_MAX_PROOF_BYTES;
+        .map_err(|_| "offline verifying key length overflowed u32".to_owned())?;
+    record.max_proof_bytes = OFFLINE_NOTE_MAX_PROOF_BYTES;
     record.gas_schedule_id = Some("halo2_default".to_owned());
     record.key = Some(vk_box);
     record.status = ConfidentialStatus::Active;
@@ -436,11 +436,11 @@ fn hash_limb0_sum(hashes: &[iroha_crypto::Hash]) -> u64 {
         .fold(0u64, |sum, hash| sum.wrapping_add(hash_limb0(hash)))
 }
 
-fn validate_offline_note_v2_count(count: usize, max: usize, label: &str) -> Result<u64, String> {
+fn validate_offline_note_count(count: usize, max: usize, label: &str) -> Result<u64, String> {
     if count == 0 || count > max {
-        return Err(format!("offline V2 {label} count must be in 1..={max}"));
+        return Err(format!("offline {label} count must be in 1..={max}"));
     }
-    Ok(u64::try_from(count).expect("bounded offline V2 count fits into u64"))
+    Ok(u64::try_from(count).expect("bounded offline count fits into u64"))
 }
 
 fn trimmed_numeric_scale(value: &iroha_primitives::Numeric) -> u32 {
@@ -471,7 +471,7 @@ fn normalized_amount_vec(amounts: &[&iroha_primitives::Numeric]) -> Result<Vec<u
         .copied()
         .map(|amount| {
             normalized_numeric_to_u64(amount, target_scale).ok_or_else(|| {
-                "offline V2 proof amount does not fit into u64 witness units".to_owned()
+                "offline proof amount does not fit into u64 witness units".to_owned()
             })
         })
         .collect()
@@ -480,11 +480,11 @@ fn normalized_amount_vec(amounts: &[&iroha_primitives::Numeric]) -> Result<Vec<u
 fn checked_u64_sum(values: &[u64], label: &str) -> Result<u64, String> {
     values.iter().try_fold(0u64, |sum, value| {
         sum.checked_add(*value)
-            .ok_or_else(|| format!("offline V2 {label} amount sum overflows u64 witness units"))
+            .ok_or_else(|| format!("offline {label} amount sum overflows u64 witness units"))
     })
 }
 
-fn offline_note_v2_public_values(
+fn offline_note_public_values(
     public_inputs_hash: &iroha_crypto::Hash,
     mode: u64,
     input_count: u64,
@@ -497,7 +497,7 @@ fn offline_note_v2_public_values(
     source_or_token: &iroha_crypto::Hash,
     input_claim_hash_sum: u64,
     output_claim_hash_sum: u64,
-) -> [u64; OFFLINE_NOTE_V2_INSTANCE_COLUMNS] {
+) -> [u64; OFFLINE_NOTE_INSTANCE_COLUMNS] {
     let hash_limbs = hash_to_u64_limbs_le(public_inputs_hash);
     [
         hash_limbs[0],
@@ -519,40 +519,40 @@ fn offline_note_v2_public_values(
     ]
 }
 
-/// Build the public/private instance values expected for an Offline V2 redemption proof.
+/// Build the public/private instance values expected for an Offline redemption proof.
 ///
 /// # Errors
 ///
 /// Returns an error if the redemption shape is outside the circuit corridor, if
 /// Norito hashing fails, or if normalized amounts do not fit in `u64` witness units.
-pub fn offline_note_v2_redeem_instance_values(
-    redemption: &iroha_data_model::offline::OfflineNoteRedeemV2,
-) -> Result<OfflineNoteV2InstanceValues, String> {
-    use iroha_data_model::offline::OfflineNoteIssuedClaimV2;
+pub fn offline_note_redeem_instance_values(
+    redemption: &iroha_data_model::offline::OfflineNoteRedeem,
+) -> Result<OfflineNoteInstanceValues, String> {
+    use iroha_data_model::offline::OfflineNoteIssuedClaim;
 
-    let input_count = validate_offline_note_v2_count(
+    let input_count = validate_offline_note_count(
         redemption.input_nullifiers.len(),
-        OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS,
+        OFFLINE_NOTE_MAX_INPUT_AMOUNTS,
         "redemption input",
     )?;
     let output_count = 1;
     let public_inputs_hash = redemption
         .public_inputs_hash()
-        .map_err(|err| format!("failed to encode Offline V2 redemption public inputs: {err}"))?;
+        .map_err(|err| format!("failed to encode Offline redemption public inputs: {err}"))?;
     let key_certificate_payload_hash = redemption
         .sender_key_certificate
         .payload_hash()
-        .map_err(|err| format!("failed to encode Offline V2 key certificate payload: {err}"))?;
-    let issued_claim_hash = OfflineNoteIssuedClaimV2::from_redemption(redemption)
+        .map_err(|err| format!("failed to encode Offline key certificate payload: {err}"))?;
+    let issued_claim_hash = OfflineNoteIssuedClaim::from_redemption(redemption)
         .and_then(|claim| claim.claim_hash())
-        .map_err(|err| format!("failed to encode Offline V2 redemption issued claim: {err}"))?;
+        .map_err(|err| format!("failed to encode Offline redemption issued claim: {err}"))?;
 
     let normalized_amounts = normalized_amount_vec(&[&redemption.amount, &redemption.amount])?;
     let input_sum = normalized_amounts[0];
     let output_sum = normalized_amounts[1];
-    let public_values = offline_note_v2_public_values(
+    let public_values = offline_note_public_values(
         &public_inputs_hash,
-        OFFLINE_NOTE_V2_MODE_REDEEM,
+        OFFLINE_NOTE_MODE_REDEEM,
         input_count,
         output_count,
         input_sum,
@@ -565,53 +565,51 @@ pub fn offline_note_v2_redeem_instance_values(
         0,
     );
 
-    let mut input_amounts = [0u64; OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS];
+    let mut input_amounts = [0u64; OFFLINE_NOTE_MAX_INPUT_AMOUNTS];
     input_amounts[0] = input_sum;
-    let mut output_amounts = [0u64; OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS];
+    let mut output_amounts = [0u64; OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS];
     output_amounts[0] = output_sum;
 
-    Ok(OfflineNoteV2InstanceValues {
+    Ok(OfflineNoteInstanceValues {
         public_values,
         input_amounts,
         output_amounts,
     })
 }
 
-/// Build the public/private instance values expected for an Offline V2 audit proof.
+/// Build the public/private instance values expected for an Offline audit proof.
 ///
 /// # Errors
 ///
 /// Returns an error if the audit shape is outside the circuit corridor, if Norito
 /// hashing fails, if amounts do not fit in witness units, or if audited input and
 /// output amounts are not conserved.
-pub fn offline_note_v2_audit_instance_values(
-    audit: &iroha_data_model::offline::OfflineNoteAuditBundleV2,
-) -> Result<OfflineNoteV2InstanceValues, String> {
-    use iroha_data_model::offline::OfflineNoteIssuedClaimV2;
+pub fn offline_note_audit_instance_values(
+    audit: &iroha_data_model::offline::OfflineNoteAuditBundle,
+) -> Result<OfflineNoteInstanceValues, String> {
+    use iroha_data_model::offline::OfflineNoteIssuedClaim;
 
-    let input_count = validate_offline_note_v2_count(
+    let input_count = validate_offline_note_count(
         audit.input_claims.len(),
-        OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS,
+        OFFLINE_NOTE_MAX_INPUT_AMOUNTS,
         "audit input",
     )?;
-    let output_count = validate_offline_note_v2_count(
+    let output_count = validate_offline_note_count(
         audit.output_claims.len(),
-        OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS,
+        OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS,
         "audit output",
     )?;
     if audit.input_nullifiers.len() != audit.input_claims.len() {
-        return Err(
-            "offline V2 audit input claim count must match input nullifier count".to_owned(),
-        );
+        return Err("offline audit input claim count must match input nullifier count".to_owned());
     }
 
     let public_inputs_hash = audit
         .public_inputs_hash()
-        .map_err(|err| format!("failed to encode Offline V2 audit public inputs: {err}"))?;
+        .map_err(|err| format!("failed to encode Offline audit public inputs: {err}"))?;
     let key_certificate_payload_hash = audit
         .sender_key_certificate
         .payload_hash()
-        .map_err(|err| format!("failed to encode Offline V2 key certificate payload: {err}"))?;
+        .map_err(|err| format!("failed to encode Offline key certificate payload: {err}"))?;
 
     let input_claim_hashes = audit
         .input_claims
@@ -619,16 +617,16 @@ pub fn offline_note_v2_audit_instance_values(
         .map(|claim| {
             claim
                 .claim_hash()
-                .map_err(|err| format!("failed to encode Offline V2 audit input claim: {err}"))
+                .map_err(|err| format!("failed to encode Offline audit input claim: {err}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
     let output_claim_hashes = audit
         .output_claims
         .iter()
         .map(|claim| {
-            OfflineNoteIssuedClaimV2::from_audit_output(claim)
+            OfflineNoteIssuedClaim::from_audit_output(claim)
                 .and_then(|claim| claim.claim_hash())
-                .map_err(|err| format!("failed to encode Offline V2 audit output claim: {err}"))
+                .map_err(|err| format!("failed to encode Offline audit output claim: {err}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -645,21 +643,21 @@ pub fn offline_note_v2_audit_instance_values(
     let input_sum = checked_u64_sum(input_units, "input")?;
     let output_sum = checked_u64_sum(output_units, "output")?;
     if input_sum != output_sum {
-        return Err("offline V2 audit proof amounts are not conserved".to_owned());
+        return Err("offline audit proof amounts are not conserved".to_owned());
     }
 
-    let mut input_amounts = [0u64; OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS];
+    let mut input_amounts = [0u64; OFFLINE_NOTE_MAX_INPUT_AMOUNTS];
     for (slot, amount) in input_amounts.iter_mut().zip(input_units.iter().copied()) {
         *slot = amount;
     }
-    let mut output_amounts = [0u64; OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS];
+    let mut output_amounts = [0u64; OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS];
     for (slot, amount) in output_amounts.iter_mut().zip(output_units.iter().copied()) {
         *slot = amount;
     }
 
-    let public_values = offline_note_v2_public_values(
+    let public_values = offline_note_public_values(
         &public_inputs_hash,
-        OFFLINE_NOTE_V2_MODE_AUDIT,
+        OFFLINE_NOTE_MODE_AUDIT,
         input_count,
         output_count,
         input_sum,
@@ -672,7 +670,7 @@ pub fn offline_note_v2_audit_instance_values(
         hash_limb0_sum(&output_claim_hashes),
     );
 
-    Ok(OfflineNoteV2InstanceValues {
+    Ok(OfflineNoteInstanceValues {
         public_values,
         input_amounts,
         output_amounts,
@@ -959,10 +957,10 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-fn prove_halo2_ipa_offline_note_v2_envelope(
+fn prove_halo2_ipa_offline_note_envelope(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
-    instance_values: OfflineNoteV2InstanceValues,
+    instance_values: OfflineNoteInstanceValues,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<ProofBox, String> {
     use std::io::Cursor;
@@ -975,28 +973,27 @@ fn prove_halo2_ipa_offline_note_v2_envelope(
         transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
     };
     use iroha_data_model::{
-        offline::OFFLINE_NOTE_V2_RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1,
+        offline::OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA,
         zk::{BackendTag, OpenVerifyEnvelope},
     };
     use rand_core_06::OsRng;
 
-    if !is_offline_note_v2_recursive_circuit_id(circuit_id) {
+    if !is_offline_note_recursive_circuit_id(circuit_id) {
         return Err(format!(
-            "unsupported Offline V2 recursive circuit id `{circuit_id}`"
+            "unsupported Offline recursive circuit id `{circuit_id}`"
         ));
     }
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
-        return Err("offline V2 proving requires halo2/ipa verifying key backend".to_owned());
+        return Err("offline proving requires halo2/ipa verifying key backend".to_owned());
     }
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
-        pasta_tiny::OfflineNoteV2SemanticV1,
-    >(vk_box.bytes.as_slice(), &params)
-    .ok_or_else(|| {
-        "missing/invalid H2VK payload for offline-note-v2-recursive-v1 verifying key".to_owned()
-    })?;
+    let parsed_vk: VerifyingKey<Curve> =
+        zkparse::vk_from_bytes::<pasta_tiny::OfflineNoteSemantic>(vk_box.bytes.as_slice(), &params)
+            .ok_or_else(|| {
+                "missing/invalid H2VK payload for offline-note-recursive verifying key".to_owned()
+            })?;
 
     let public_values = instance_values.public_scalars();
     let instance_columns_owned: Vec<Vec<Scalar>> =
@@ -1007,7 +1004,7 @@ fn prove_halo2_ipa_offline_note_v2_envelope(
 
     let proving_key: ProvingKey<Curve> = if let Some(bytes) = proving_key_bytes {
         let mut cursor = Cursor::new(bytes);
-        let pk = read_proving_key::<pasta_tiny::OfflineNoteV2SemanticV1, _>(&mut cursor)
+        let pk = read_proving_key::<pasta_tiny::OfflineNoteSemantic, _>(&mut cursor)
             .map_err(|err| format!("failed to decode proving key: {err}"))?;
         let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
         if consumed != bytes.len() {
@@ -1026,12 +1023,12 @@ fn prove_halo2_ipa_offline_note_v2_envelope(
         keygen_pk(
             &params,
             parsed_vk.clone(),
-            &pasta_tiny::OfflineNoteV2SemanticV1::default(),
+            &pasta_tiny::OfflineNoteSemantic::default(),
         )
         .map_err(|err| format!("failed to derive proving key: {err}"))?
     };
 
-    let circuit = pasta_tiny::OfflineNoteV2SemanticV1 {
+    let circuit = pasta_tiny::OfflineNoteSemantic {
         public_values,
         input_amounts: instance_values.input_amount_scalars(),
         output_amounts: instance_values.output_amount_scalars(),
@@ -1045,7 +1042,7 @@ fn prove_halo2_ipa_offline_note_v2_envelope(
         OsRng,
         &mut transcript,
     )
-    .map_err(|err| format!("failed to create offline-note-v2-recursive-v1 proof: {err}"))?;
+    .map_err(|err| format!("failed to create offline-note-recursive proof: {err}"))?;
     let proof_raw = transcript.finalize();
 
     let mut proof_payload = zk1::wrap_start();
@@ -1056,7 +1053,7 @@ fn prove_halo2_ipa_offline_note_v2_envelope(
         backend: BackendTag::Halo2IpaPasta,
         circuit_id: circuit_id.to_owned(),
         vk_hash: hash_vk(vk_box),
-        public_inputs: OFFLINE_NOTE_V2_RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+        public_inputs: OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA.to_vec(),
         proof_bytes: proof_payload,
         aux: Vec::new(),
     };
@@ -1065,13 +1062,13 @@ fn prove_halo2_ipa_offline_note_v2_envelope(
     Ok(ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded))
 }
 
-/// Derive Halo2 IPA proving-key bytes for the canonical Offline V2 recursive note circuit.
+/// Derive Halo2 IPA proving-key bytes for the canonical Offline recursive note circuit.
 ///
 /// The returned bytes are the Halo2 `ProvingKey` serialization using
 /// `SerdeFormat::Processed`. They are intended to be generated offline and
 /// supplied to the real prover path; no mock or debug prover is used.
 #[cfg(feature = "zk-halo2-ipa")]
-pub fn derive_halo2_ipa_offline_note_v2_proving_key_bytes(
+pub fn derive_halo2_ipa_offline_note_proving_key_bytes(
     vk_box: &VerifyingKeyBox,
 ) -> Result<Vec<u8>, String> {
     use halo2_proofs::{
@@ -1082,60 +1079,59 @@ pub fn derive_halo2_ipa_offline_note_v2_proving_key_bytes(
 
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
         return Err(
-            "offline V2 proving key derivation requires halo2/ipa verifying key backend".to_owned(),
+            "offline proving key derivation requires halo2/ipa verifying key backend".to_owned(),
         );
     }
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
-        pasta_tiny::OfflineNoteV2SemanticV1,
-    >(vk_box.bytes.as_slice(), &params)
-    .ok_or_else(|| {
-        "missing/invalid H2VK payload for offline-note-v2-recursive-v1 verifying key".to_owned()
-    })?;
+    let parsed_vk: VerifyingKey<Curve> =
+        zkparse::vk_from_bytes::<pasta_tiny::OfflineNoteSemantic>(vk_box.bytes.as_slice(), &params)
+            .ok_or_else(|| {
+                "missing/invalid H2VK payload for offline-note-recursive verifying key".to_owned()
+            })?;
 
     let pk = keygen_pk(
         &params,
         parsed_vk,
-        &pasta_tiny::OfflineNoteV2SemanticV1::default(),
+        &pasta_tiny::OfflineNoteSemantic::default(),
     )
     .map_err(|err| format!("failed to derive proving key: {err}"))?;
     Ok(pk.to_bytes(SerdeFormat::Processed))
 }
 
-/// Prove an Offline V2 redemption with the real Halo2 IPA recursive-note circuit.
+/// Prove an Offline redemption with the real Halo2 IPA recursive-note circuit.
 ///
 /// # Errors
 ///
 /// Returns an error if the verifier/proving key is incompatible, the redemption
 /// cannot be converted to the semantic instance layout, or proof generation fails.
 #[cfg(feature = "zk-halo2-ipa")]
-pub fn prove_offline_note_v2_redeem(
+pub fn prove_offline_note_redeem(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
-    redemption: &iroha_data_model::offline::OfflineNoteRedeemV2,
+    redemption: &iroha_data_model::offline::OfflineNoteRedeem,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<ProofBox, String> {
-    let instance_values = offline_note_v2_redeem_instance_values(redemption)?;
-    prove_halo2_ipa_offline_note_v2_envelope(circuit_id, vk_box, instance_values, proving_key_bytes)
+    let instance_values = offline_note_redeem_instance_values(redemption)?;
+    prove_halo2_ipa_offline_note_envelope(circuit_id, vk_box, instance_values, proving_key_bytes)
 }
 
-/// Prove an Offline V2 audit with the real Halo2 IPA recursive-note circuit.
+/// Prove an Offline audit with the real Halo2 IPA recursive-note circuit.
 ///
 /// # Errors
 ///
 /// Returns an error if the verifier/proving key is incompatible, the audit cannot
 /// be converted to the semantic instance layout, or proof generation fails.
 #[cfg(feature = "zk-halo2-ipa")]
-pub fn prove_offline_note_v2_audit(
+pub fn prove_offline_note_audit(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
-    audit: &iroha_data_model::offline::OfflineNoteAuditBundleV2,
+    audit: &iroha_data_model::offline::OfflineNoteAuditBundle,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<ProofBox, String> {
-    let instance_values = offline_note_v2_audit_instance_values(audit)?;
-    prove_halo2_ipa_offline_note_v2_envelope(circuit_id, vk_box, instance_values, proving_key_bytes)
+    let instance_values = offline_note_audit_instance_values(audit)?;
+    prove_halo2_ipa_offline_note_envelope(circuit_id, vk_box, instance_values, proving_key_bytes)
 }
 
 #[cfg(feature = "zk-stark")]
@@ -6187,7 +6183,7 @@ mod halo2_ipa_alias_tests {
 }
 
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
-mod offline_note_v2_real_prover_tests {
+mod offline_note_real_prover_tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
@@ -6195,17 +6191,17 @@ mod offline_note_v2_real_prover_tests {
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
         offline::{
-            OfflineNoteAuditBundleV2, OfflineNoteAuditOutputClaimV2, OfflineNoteIssueV2,
-            OfflineNoteIssuedClaimV2, OfflineNoteKeyCertificateV2, OfflineNoteRecursiveProofV2,
-            OfflineNoteRedeemV2,
+            OfflineNoteAuditBundle, OfflineNoteAuditOutputClaim, OfflineNoteIssue,
+            OfflineNoteIssuedClaim, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
+            OfflineNoteRedeem,
         },
         proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId},
         zk::OpenVerifyEnvelope,
     };
     use iroha_primitives::numeric::Numeric;
 
-    fn offline_note_v2_vk_box() -> VerifyingKeyBox {
-        offline_note_v2_recursive_vk_box().expect("offline note v2 verifying key")
+    fn offline_note_vk_box() -> VerifyingKeyBox {
+        offline_note_recursive_vk_box().expect("offline note verifying key")
     }
 
     fn sample_signature(seed: u8) -> Signature {
@@ -6229,17 +6225,17 @@ mod offline_note_v2_real_prover_tests {
         AssetId::new(definition, account)
     }
 
-    fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificateV2 {
+    fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
         let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
-        OfflineNoteKeyCertificateV2 {
+        OfflineNoteKeyCertificate {
             version: 2,
             platform: "ios-appattest".to_owned(),
             key_id: format!("one-use-key-{seed}"),
             device_id: "device-1".to_owned(),
             account_id: account.clone(),
             public_key: public_key.to_vec(),
-            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_scheme: "apple-appattest-counter".to_owned(),
             assertion_key_algorithm: "app-attest-p256".to_owned(),
             assertion_public_key: vec![0x04; 65],
             assertion_usage_count_limit: None,
@@ -6248,23 +6244,23 @@ mod offline_note_v2_real_prover_tests {
         }
     }
 
-    fn placeholder_recursive_proof() -> OfflineNoteRecursiveProofV2 {
-        OfflineNoteRecursiveProofV2 {
+    fn placeholder_recursive_proof() -> OfflineNoteRecursiveProof {
+        OfflineNoteRecursiveProof {
             verifier_key_id: VerifyingKeyId::new(
                 ZK_BACKEND_HALO2_IPA,
-                OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+                OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
             ),
-            public_inputs_hash: Hash::new(b"placeholder-offline-note-v2-public-inputs"),
+            public_inputs_hash: Hash::new(b"placeholder-offline-note-public-inputs"),
             proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new()),
         }
     }
 
-    fn sample_redemption() -> OfflineNoteRedeemV2 {
+    fn sample_redemption() -> OfflineNoteRedeem {
         let account = sample_account(0xA1);
         let asset = sample_asset(account.clone());
-        OfflineNoteRedeemV2 {
-            source_note_commitment: Hash::new(b"offline-note-v2-source-note"),
-            input_nullifiers: vec![Hash::new(b"offline-note-v2-redeem-nullifier")],
+        OfflineNoteRedeem {
+            source_note_commitment: Hash::new(b"offline-note-source-note"),
+            input_nullifiers: vec![Hash::new(b"offline-note-redeem-nullifier")],
             sender_key_certificate: sample_certificate(&account, 0xB1),
             recipient: account,
             asset,
@@ -6273,24 +6269,24 @@ mod offline_note_v2_real_prover_tests {
         }
     }
 
-    fn sample_audit() -> OfflineNoteAuditBundleV2 {
+    fn sample_audit() -> OfflineNoteAuditBundle {
         let account = sample_account(0xC1);
         let asset = sample_asset(account.clone());
         let certificate = sample_certificate(&account, 0xD1);
-        let issue = OfflineNoteIssueV2 {
-            note_commitment: Hash::new(b"offline-note-v2-audit-input-note"),
+        let issue = OfflineNoteIssue {
+            note_commitment: Hash::new(b"offline-note-audit-input-note"),
             key_certificate: certificate.clone(),
             asset: asset.clone(),
             amount: Numeric::new(10, 0),
         };
-        OfflineNoteAuditBundleV2 {
-            token_id: Hash::new(b"offline-note-v2-audit-token"),
+        OfflineNoteAuditBundle {
+            token_id: Hash::new(b"offline-note-audit-token"),
             sender_key_certificate: certificate.clone(),
-            input_nullifiers: vec![Hash::new(b"offline-note-v2-audit-nullifier")],
-            input_claims: vec![OfflineNoteIssuedClaimV2::from_issue(&issue).expect("input claim")],
-            output_commitments: vec![Hash::new(b"offline-note-v2-audit-output-note")],
-            output_claims: vec![OfflineNoteAuditOutputClaimV2 {
-                note_commitment: Hash::new(b"offline-note-v2-audit-output-note"),
+            input_nullifiers: vec![Hash::new(b"offline-note-audit-nullifier")],
+            input_claims: vec![OfflineNoteIssuedClaim::from_issue(&issue).expect("input claim")],
+            output_commitments: vec![Hash::new(b"offline-note-audit-output-note")],
+            output_claims: vec![OfflineNoteAuditOutputClaim {
+                note_commitment: Hash::new(b"offline-note-audit-output-note"),
                 key_certificate: certificate,
                 asset,
                 amount: Numeric::new(10, 0),
@@ -6306,71 +6302,67 @@ mod offline_note_v2_real_prover_tests {
     }
 
     #[test]
-    fn swift_native_offline_note_v2_proof_verifies_against_rust() {
-        let Some(path) = std::env::var_os("SWIFT_OFFLINE_V2_PROOF") else {
+    fn swift_native_offline_note_proof_verifies_against_rust() {
+        let Some(path) = std::env::var_os("SWIFT_OFFLINE_PROOF") else {
             return;
         };
         let bytes = std::fs::read(path).expect("swift proof artifact");
         let proof = ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes);
-        let vk_box = offline_note_v2_vk_box();
+        let vk_box = offline_note_vk_box();
         assert!(verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&vk_box)));
     }
 
     #[test]
-    fn prove_offline_note_v2_redeem_emits_real_halo2_ipa_proof() {
-        let vk_box = offline_note_v2_vk_box();
-        let proving_key = derive_halo2_ipa_offline_note_v2_proving_key_bytes(&vk_box)
-            .expect("offline note v2 proving key");
+    fn prove_offline_note_redeem_emits_real_halo2_ipa_proof() {
+        let vk_box = offline_note_vk_box();
+        let proving_key = derive_halo2_ipa_offline_note_proving_key_bytes(&vk_box)
+            .expect("offline note proving key");
         let redemption = sample_redemption();
-        let proof = prove_offline_note_v2_redeem(
-            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        let proof = prove_offline_note_redeem(
+            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
             &vk_box,
             &redemption,
             Some(&proving_key),
         )
-        .expect("real offline note v2 redemption proof");
+        .expect("real offline note redemption proof");
 
         assert!(verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&vk_box)));
         assert_eq!(
             envelope_instances(&proof),
-            offline_note_v2_redeem_instance_values(&redemption)
+            offline_note_redeem_instance_values(&redemption)
                 .expect("redemption instance values")
                 .public_instance_columns()
         );
     }
 
     #[test]
-    fn prove_offline_note_v2_audit_emits_real_halo2_ipa_proof() {
-        let vk_box = offline_note_v2_vk_box();
+    fn prove_offline_note_audit_emits_real_halo2_ipa_proof() {
+        let vk_box = offline_note_vk_box();
         let audit = sample_audit();
-        let proof = prove_offline_note_v2_audit(
-            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
-            &vk_box,
-            &audit,
-            None,
-        )
-        .expect("real offline note v2 audit proof");
+        let proof =
+            prove_offline_note_audit(OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, &vk_box, &audit, None)
+                .expect("real offline note audit proof");
 
         assert!(verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&vk_box)));
         assert_eq!(
             envelope_instances(&proof),
-            offline_note_v2_audit_instance_values(&audit)
+            offline_note_audit_instance_values(&audit)
                 .expect("audit instance values")
                 .public_instance_columns()
         );
     }
 
     #[test]
-    fn offline_note_v2_real_proof_rejects_tampered_bytes() {
-        let vk_box = offline_note_v2_vk_box();
+    fn offline_note_real_proof_rejects_tampered_bytes() {
+        let vk_box = offline_note_vk_box();
         let redemption = sample_redemption();
-        let mut proof = prove_offline_note_v2_redeem(
-            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        let mut proof = prove_offline_note_redeem(
+            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
             &vk_box,
             &redemption,
             None,
         )
-        .expect("real offline note v2 redemption proof");
+        .expect("real offline note redemption proof");
         let last = proof.bytes.last_mut().expect("proof bytes");
         *last ^= 0x01;
 
@@ -6378,21 +6370,21 @@ mod offline_note_v2_real_prover_tests {
     }
 
     #[test]
-    fn offline_note_v2_vk_record_embeds_real_active_verifier_key() {
-        let record = offline_note_v2_recursive_vk_record("offline_note_v2", 7).expect("vk record");
+    fn offline_note_vk_record_embeds_real_active_verifier_key() {
+        let record = offline_note_recursive_vk_record("offline_note", 7).expect("vk record");
         let vk_box = record.key.as_ref().expect("inline verifier key");
 
         assert_eq!(record.version, 7);
-        assert_eq!(record.circuit_id, OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID);
-        assert_eq!(record.namespace, "offline_note_v2");
+        assert_eq!(record.circuit_id, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID);
+        assert_eq!(record.namespace, "offline_note");
         assert!(record.is_active());
-        assert_eq!(record.max_proof_bytes, OFFLINE_NOTE_V2_MAX_PROOF_BYTES);
+        assert_eq!(record.max_proof_bytes, OFFLINE_NOTE_MAX_PROOF_BYTES);
         assert_eq!(record.vk_len as usize, vk_box.bytes.len());
         assert_eq!(record.commitment, hash_vk(vk_box));
         assert_eq!(vk_box.backend, ZK_BACKEND_HALO2_IPA);
 
         let redemption = sample_redemption();
-        let proof = prove_offline_note_v2_redeem(&record.circuit_id, vk_box, &redemption, None)
+        let proof = prove_offline_note_redeem(&record.circuit_id, vk_box, &redemption, None)
             .expect("real redeem proof");
         assert!(verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(vk_box)));
     }
@@ -7391,42 +7383,42 @@ mod pasta_tiny {
         }
     }
 
-    /// Real semantic circuit for Offline V2 recursive note proofs.
+    /// Real semantic circuit for Offline recursive note proofs.
     ///
     /// The circuit binds all public instance columns and proves the bounded
     /// note-transfer corridor used by the runtime: mode is redeem/audit,
     /// input/output counts are in range, unused amount slots are zero, and
     /// normalized input/output amount sums are conserved.
     #[derive(Clone)]
-    pub struct OfflineNoteV2SemanticV1 {
+    pub struct OfflineNoteSemantic {
         /// Public instance values constrained to equal the proof envelope.
-        pub public_values: [Scalar; super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS],
+        pub public_values: [Scalar; super::OFFLINE_NOTE_INSTANCE_COLUMNS],
         /// Private normalized input amount slots.
-        pub input_amounts: [Scalar; super::OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS],
+        pub input_amounts: [Scalar; super::OFFLINE_NOTE_MAX_INPUT_AMOUNTS],
         /// Private normalized output amount slots.
-        pub output_amounts: [Scalar; super::OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS],
+        pub output_amounts: [Scalar; super::OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS],
     }
 
-    impl Default for OfflineNoteV2SemanticV1 {
+    impl Default for OfflineNoteSemantic {
         fn default() -> Self {
             Self {
-                public_values: [Scalar::from(0); super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS],
-                input_amounts: [Scalar::from(0); super::OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS],
-                output_amounts: [Scalar::from(0); super::OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS],
+                public_values: [Scalar::from(0); super::OFFLINE_NOTE_INSTANCE_COLUMNS],
+                input_amounts: [Scalar::from(0); super::OFFLINE_NOTE_MAX_INPUT_AMOUNTS],
+                output_amounts: [Scalar::from(0); super::OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS],
             }
         }
     }
 
-    impl Circuit<Scalar> for OfflineNoteV2SemanticV1 {
+    impl Circuit<Scalar> for OfflineNoteSemantic {
         type Config = (
             [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
-                super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS],
+                super::OFFLINE_NOTE_INSTANCE_COLUMNS],
             [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
-                super::OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS],
+                super::OFFLINE_NOTE_MAX_INPUT_AMOUNTS],
             [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
-                super::OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS],
+                super::OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS],
             [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
-                super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS],
+                super::OFFLINE_NOTE_INSTANCE_COLUMNS],
             Selector,
         );
         type FloorPlanner = SimpleFloorPlanner;
@@ -7442,18 +7434,18 @@ mod pasta_tiny {
             let output_adv = std::array::from_fn(|_| meta.advice_column());
             let inst = std::array::from_fn(|_| meta.instance_column());
             let s = meta.selector();
-            meta.create_gate("offline_note_v2_semantic_v1", |meta| {
+            meta.create_gate("offline_note_semantic", |meta| {
                 let s = meta.query_selector(s);
                 let constant = |value: u64| Expression::Constant(Scalar::from(value));
-                let mut public = Vec::with_capacity(super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS);
+                let mut public = Vec::with_capacity(super::OFFLINE_NOTE_INSTANCE_COLUMNS);
                 for column in &public_adv {
                     public.push(meta.query_advice(*column, Rotation::cur()));
                 }
-                let mut inputs = Vec::with_capacity(super::OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS);
+                let mut inputs = Vec::with_capacity(super::OFFLINE_NOTE_MAX_INPUT_AMOUNTS);
                 for column in &input_adv {
                     inputs.push(meta.query_advice(*column, Rotation::cur()));
                 }
-                let mut outputs = Vec::with_capacity(super::OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS);
+                let mut outputs = Vec::with_capacity(super::OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS);
                 for column in &output_adv {
                     outputs.push(meta.query_advice(*column, Rotation::cur()));
                 }
@@ -7465,15 +7457,15 @@ mod pasta_tiny {
                 let output_sum_public = public[8].clone();
 
                 let mut cons = Vec::with_capacity(30);
-                for i in 0..super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS {
+                for i in 0..super::OFFLINE_NOTE_INSTANCE_COLUMNS {
                     let instance = meta.query_instance(inst[i], Rotation::cur());
                     cons.push(s.clone() * (public[i].clone() - instance));
                 }
 
                 cons.push(
                     s.clone()
-                        * (mode.clone() - constant(super::OFFLINE_NOTE_V2_MODE_REDEEM))
-                        * (mode - constant(super::OFFLINE_NOTE_V2_MODE_AUDIT)),
+                        * (mode.clone() - constant(super::OFFLINE_NOTE_MODE_REDEEM))
+                        * (mode - constant(super::OFFLINE_NOTE_MODE_AUDIT)),
                 );
                 cons.push(
                     s.clone()
@@ -7489,7 +7481,7 @@ mod pasta_tiny {
                 );
                 cons.push(
                     s.clone()
-                        * (public[4].clone() - constant(super::OFFLINE_NOTE_V2_MODE_AUDIT))
+                        * (public[4].clone() - constant(super::OFFLINE_NOTE_MODE_AUDIT))
                         * (output_count.clone() - constant(1)),
                 );
 
@@ -7528,7 +7520,7 @@ mod pasta_tiny {
             let input_amounts = self.input_amounts;
             let output_amounts = self.output_amounts;
             layouter.assign_region(
-                || "offline_note_v2_semantic_v1",
+                || "offline_note_semantic",
                 |mut region| {
                     s.enable(&mut region, 0)?;
                     for (i, column) in public_adv.iter().enumerate() {
@@ -10683,8 +10675,8 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/offline-note-v2-recursive-v1" => {
-            if col_refs.len() != OFFLINE_NOTE_V2_INSTANCE_COLUMNS
+        "halo2/pasta/offline-note-recursive" => {
+            if col_refs.len() != OFFLINE_NOTE_INSTANCE_COLUMNS
                 || col_refs.iter().any(|col| col.len() != 1)
             {
                 return false;
@@ -10693,7 +10685,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 &params,
                 normalized.as_str(),
                 vk_box,
-                pasta_tiny::OfflineNoteV2SemanticV1::default(),
+                pasta_tiny::OfflineNoteSemantic::default(),
                 |vk| {
                     let mut transcript =
                         Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));

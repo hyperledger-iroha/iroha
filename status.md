@@ -29,6 +29,65 @@ Last updated: 2026-05-26
 - Full `cargo test` was not run because this work specifically avoids invoking
   the known multi-hour/hang-prone workspace run.
 
+## 2026-05-25 single offline handoff protocol cleanup
+
+- Removed offline handoff wire-version branches from Swift, Kotlin, Java,
+  JavaScript, and Rust QR stream fixtures. Payment tokens, receive requests,
+  receipt ACKs, Nearby envelopes, NFC APDUs, and QR stream frames now use the
+  single first-release format without v2/v3 transport negotiation.
+- Payment tokens now always carry the bearer audit trail; wallets validate the
+  full trail before accepting notes, and P2P defund submission happens before a
+  note is marked redeem-pending.
+- Regenerated shared offline/QR fixtures and updated Swift/Kotlin/Java golden
+  transport assertions for the versionless QR/NFC/Nearby layouts.
+- Standardized the public fountain-QR readiness capability as
+  `offline_fountain_qr` across Torii, MCP, Python, Swift/Kotlin/Java SDK
+  parsers, and the JavaScript client.
+- Focused validation passed:
+  - `cargo test -p iroha_data_model --features test-fixtures qr_stream --lib -- --nocapture`
+  - `cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures -- --check`
+  - `cargo test -p iroha_torii --test offline_readiness_smoke -- --nocapture`
+  - `swift test --filter Offline`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineQrStreamTest,org.hyperledger.iroha.android.offline.OfflineNoteTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks`
+  - `cd javascript/iroha_js && node --test test/offlineQrStream.test.js`
+  - `/tmp/iroha-pytest-venv/bin/python -m pytest python/iroha_torii_client/tests/test_client.py -k offline_readiness -q`
+  - `cd ../bpng/png2-android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:testDebugUnitTest --tests pg.bpng.digitalkina.core.offline.OfflinePayloadCodecTest --tests pg.bpng.digitalkina.core.offline.OfflineQrStreamCodecTest --console=plain`
+  - `cd ../bpng/png2-android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :app:testDebugUnitTest --tests pg.bpng.digitalkina.nfc.OfflineNfcApduProtocolTest --tests pg.bpng.digitalkina.nearby.OfflineNearbyEnvelopeTest --tests pg.bpng.digitalkina.ui.OfflineQrStreamAnalyzerTest --tests pg.bpng.digitalkina.nfc.OfflineNfcDatastreamInteropTest --console=plain`
+  - `cd ../bpng/png2-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/NFC/OfflineNfcApduProtocolTests -only-testing:RetailWalletIOSTests/FixtureDecodingTests CODE_SIGNING_ALLOWED=NO`
+  - `cd ../bpng/png2-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' -only-testing:RetailWalletIOSTests/OfflineNfcApduProtocolTests CODE_SIGNING_ALLOWED=NO`
+  - `cd ../pk-retail-wallet-android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core:testDebugUnitTest --tests com.pk.retailwallet.core.offline.OfflineQrStreamCodecTest --tests com.pk.retailwallet.core.api.WalletRepositoryOfflineCapabilityGateTest --console=plain`
+  - `cd ../pk-retail-wallet-android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :app:testDebugUnitTest --tests com.pk.retailwallet.ui.OfflineQrStreamAnalyzerTest --tests com.pk.retailwallet.AppRootOfflineCapabilityGateTest --console=plain`
+  - `cd ../pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/FixtureDecodingTests -only-testing:RetailWalletIOSTests/OfflineViewModelTests CODE_SIGNING_ALLOWED=NO`
+  - `cd ../pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests CODE_SIGNING_ALLOWED=NO`
+  - `cd ../pk-deploy && /tmp/pkdeploy-pytest-venv/bin/python -m pytest tests/test_pk_cli.py::MobileConfigVerifyTests::test_mobile_verify_config_accepts_expected_cross_repo_shape tests/test_pk_cli.py::MobileConfigVerifyTests::test_mobile_verify_config_runs_live_runtime_checks_by_default tests/test_pk_cli.py::MobileConfigVerifyTests::test_mobile_verify_config_reports_fixed_signer_reserve_shortfall tests/test_pk_cli.py::SurfaceTests::test_canonical_use_case_scripts_normalize_runtime_fi_ids_before_mobile_runs -q`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+- Broad `pk-deploy` pytest was attempted, but local login-shell RVM setup fails
+  before the deploy code in `bash -lc` tests
+  (`rvm_bash_nounset: unbound variable`), and an all-sibling reporter test also
+  requires an unavailable `../pk-fi-wallet-web/public/config.json`.
+
+## 2026-05-25 FASTPQ recovery inspection and JS Torii helpers
+
+- `fastpq_json` now exposes `inspect-transfers`, which decodes a committed
+  FASTPQ batch and returns transfer transcript rows with account ids, asset
+  definition ids, amounts, normalized scales, and before/after balances.
+- The JavaScript Torii client now exposes
+  `getPipelineRecoveryFastpqProofs()` and
+  `getPipelineRecoveryFastpqProofsTyped()` for
+  `/v1/pipeline/recovery/{height}/fastpq-proofs`, including typed normalization
+  for committed proof snapshots and reconstructed batch metadata.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `npm run build:dist`
+  - `cd javascript/iroha_js && npm run lint`
+  - `cd javascript/iroha_js && node --test test/toriiClient.test.js`
+  - `cargo test -p fastpq_prover --bin fastpq_json inspect_transfers -- --nocapture`
+  - `cargo test -p fastpq_prover --bin fastpq_json trimmed_filter -- --nocapture`
+  - `git diff --check -- crates/fastpq_prover/src/bin/fastpq_json.rs javascript/iroha_js/src/toriiClient.js javascript/iroha_js/dist/toriiClient.js javascript/iroha_js/index.d.ts javascript/iroha_js/test/toriiClient.test.js`
+
 ## 2026-05-25 cargo test hang audit and timeout guards
 
 - `norito` no longer runs the Python/Java/Kotlin binding sync guard during
@@ -422,16 +481,16 @@ Last updated: 2026-05-26
   - `cargo test -p iroha_cli --bin iroha soracloud -- --nocapture`
   - `node --test javascript/iroha_js/test/soracloud.test.js javascript/iroha_js/test/toriiClient.test.js`
 
-## 2026-05-21 Swift Offline V2 transport validation hardening
+## 2026-05-21 Swift Offline transport validation hardening
 
-- Swift Offline Note V2 compact certificate conversion now rejects missing,
+- Swift Offline Note compact certificate conversion now rejects missing,
   malformed, and non-64-byte `issuer_signature_base64` values instead of
   fabricating a zero signature.
 - Text Nearby envelopes now validate decoded receive-request, payment-token,
   and receipt-ACK contents through the existing native and compatibility
   decoders before accepting the envelope.
 - Focused validation passed:
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift`
   - `swift test --filter OfflineQrStreamTests` from `IrohaSwift`
 - Broader `swift test` from `IrohaSwift` was attempted and remains blocked by
   unrelated existing fixture/native-bridge parity failures in
@@ -2483,9 +2542,9 @@ Last updated: 2026-05-26
 - CAR range responses now stream chunk files through `CarStreamingWriter`
   instead of buffering the full range response in memory.
 
-## 2026-05-17 Offline Note V2 local-final SDK semantics
+## 2026-05-17 Offline Note local-final SDK semantics
 
-- Swift, Kotlin/JVM, and Java Android Offline Note V2 wallets now treat
+- Swift, Kotlin/JVM, and Java Android Offline Note wallets now treat
   offline-to-offline `pay`/`accept` as the immediate, irrevocable value
   transfer. Sender inputs become `SPENT`, sender change is immediately
   `SPENDABLE`, and the recipient's matched receive-pending note becomes
@@ -2535,7 +2594,7 @@ Last updated: 2026-05-26
   token-id substitution, and stale recursive-proof public-input bindings.
   Receive-request tampering coverage now includes asset-owner substitution and
   amount substitution before the payer creates an otherwise coherent token.
-  The shared Offline V2 fixture now also carries a canonical SDK interop payment
+  The shared Offline fixture now also carries a canonical SDK interop payment
   token handoff, and Swift, Kotlin/JVM, and Java Android assert identical Norito
   bytes, text payloads, QR frames, and local recipient acceptance from that
   artifact. Swift asset-definition address decoding now has a bridge-free
@@ -2543,8 +2602,8 @@ Last updated: 2026-05-26
   address semantics when the native bridge is unavailable on SwiftPM or iOS
   simulator test hosts.
 - Swift, Kotlin/JVM, and Java Android now expose an app-facing
-  `OfflineNoteV2TransferHandoff` layer for QR streaming, NFC, and nearby
-  payment-token transfer modalities. QR uses the canonical `iroha:qr1:`
+  `OfflineNoteTransferHandoff` layer for QR streaming, NFC, and nearby
+  payment-token transfer modalities. QR uses the canonical `iroha:qr:`
   streaming frames, NFC includes a png2-style APDU datastream
   (`select`/`get_info`/`read_chunk`/`write_meta`/`write_chunk`/`commit`) with a
   64 KiB advertised-payload cap, SHA-256 metadata, Android-safe 240-byte default
@@ -2578,38 +2637,38 @@ Last updated: 2026-05-26
   - `cargo fmt --all`
   - `swift test --filter OfflineQrStreamTests` from `IrohaSwift` (`8` tests)
   - `swift test --filter OfflineQrStreamTests/testQrStreamRejectsAdversarialEnvelopeAndChunkShapes` from `IrohaSwift`
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift` (`53` tests)
-  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2TransferHandoffRejectsAdversarialStreamsAndMetadata` from `IrohaSwift`
-  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2NfcApduProtocolSupportsAndroidSafeAndIOSFastChunks --filter OfflineNoteV2Tests/testOfflineNoteV2NearbyEnvelopeRoundTripsPairingPaymentAndAck` from `IrohaSwift`
-  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2TransportWireFormatMatchesSharedFixture --filter OfflineNoteV2Tests/testOfflineNoteV2NearbyEnvelopeRejectsAdversarialMessages` from `IrohaSwift`
-  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2NfcApduProtocolRejectsMalformedCommandsAndBounds --filter OfflineNoteV2Tests/testOfflineNoteV2NearbyEnvelopeRejectsAdversarialMessages` from `IrohaSwift`
-  - `swift test --filter OfflineNoteV2Tests/testOfflineNoteV2TransferHandoffSupportsQrNfcAndNearbyPayloads` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift` (`53` tests)
+  - `swift test --filter OfflineNoteTests/testOfflineNoteTransferHandoffRejectsAdversarialStreamsAndMetadata` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests/testOfflineNoteNfcApduProtocolSupportsAndroidSafeAndIOSFastChunks --filter OfflineNoteTests/testOfflineNoteNearbyEnvelopeRoundTripsPairingPaymentAndAck` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests/testOfflineNoteTransportWireFormatMatchesSharedFixture --filter OfflineNoteTests/testOfflineNoteNearbyEnvelopeRejectsAdversarialMessages` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests/testOfflineNoteNfcApduProtocolRejectsMalformedCommandsAndBounds --filter OfflineNoteTests/testOfflineNoteNearbyEnvelopeRejectsAdversarialMessages` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests/testOfflineNoteTransferHandoffSupportsQrNfcAndNearbyPayloads` from `IrohaSwift`
   - `swift test --filter ToriiClientTests/testCanonical` from `IrohaSwift`
-  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineQrStreamTests -only-testing:IrohaSwiftTests/OfflineNoteV2Tests` from `IrohaSwift` on the iPhone 17 iOS 26.4 simulator (`61` tests)
-  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineNoteV2Tests` from `IrohaSwift` on the booted iPhone 17 iOS 26.5 simulator (`53` tests)
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.qrStreamRejectsAdversarialEnvelopesAndChunkShapes --console=plain --rerun-tasks` from `kotlin`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.transferHandoffRejectsAdversarialStreamsAndMetadata --console=plain --rerun-tasks` from `kotlin`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nfcApduProtocolRejectsMalformedCommandsAndBounds --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nearbyEnvelopeRejectsAdversarialMessages --console=plain --rerun-tasks` from `kotlin`
+  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineQrStreamTests -only-testing:IrohaSwiftTests/OfflineNoteTests` from `IrohaSwift` on the iPhone 17 iOS 26.4 simulator (`61` tests)
+  - `xcodebuild test -scheme IrohaSwift -destination 'id=7A8B8CC0-617D-49EA-BA33-3976C3E15517' -only-testing:IrohaSwiftTests/OfflineNoteTests` from `IrohaSwift` on the booted iPhone 17 iOS 26.5 simulator (`53` tests)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.qrStreamRejectsAdversarialEnvelopesAndChunkShapes --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.transferHandoffRejectsAdversarialStreamsAndMetadata --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.nfcApduProtocolRejectsMalformedCommandsAndBounds --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.nearbyEnvelopeRejectsAdversarialMessages --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :offline-wallet-android:compileDebugAndroidTestJavaWithJavac :offline-wallet-android:compileReleaseKotlin --console=plain` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :client-android:assembleRelease :offline-wallet-android:assembleRelease --quiet` from `kotlin`
   - Installed Android emulator tooling and an API 35 Google APIs ARM64 system
     image with `sdkmanager`, created the `iroha_offline_api35` AVD, and booted
     it headless for connected tests.
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_SERIAL=emulator-5554 ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools PATH=/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/share/android-commandlinetools/platform-tools:/opt/homebrew/share/android-commandlinetools/emulator:$PATH ./gradlew :offline-wallet-android:connectedDebugAndroidTest --console=plain` from `kotlin`
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugAndroidTestJavaWithJavac :android:compileDebugJavaWithJavac --console=plain` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugJavaWithJavac --console=plain --rerun-tasks` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:assembleDebug --console=plain --quiet` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_SERIAL=emulator-5554 ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools PATH=/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/share/android-commandlinetools/platform-tools:/opt/homebrew/share/android-commandlinetools/emulator:$PATH ./gradlew :android:connectedDebugAndroidTest --console=plain` from `java/iroha_android`
-  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --nocapture`
-  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures -- --check`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-v2-fixtures cargo test -p iroha_data_model --features test-fixtures,transparent_api offline_note_v2_wallet_derivations -- --nocapture`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --nocapture`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-fixtures cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-fixtures cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-fixtures cargo test -p iroha_data_model --features test-fixtures,transparent_api offline_note_wallet_derivations -- --nocapture`
   - `git diff --check`
   - `git diff --check`
-- Device validation now includes Swift Offline Note V2 tests on an iOS
+- Device validation now includes Swift Offline Note tests on an iOS
   simulator plus Kotlin and Java Android Keystore rollback drills on a real
   booted emulator. The Android tests restore a stale preferences snapshot after
   a committed revision and verify that the deleted revision key makes the old
@@ -4098,37 +4157,37 @@ Last updated: 2026-05-26
   - `cargo fmt --all --check`
   - `git diff --check`
 
-## 2026-05-09 Offline Note V2 explorer outcome sync adapters
+## 2026-05-09 Offline Note explorer outcome sync adapters
 
-- Kotlin/JVM, Java Android, and Swift now decode Offline Note V2 explorer
+- Kotlin/JVM, Java Android, and Swift now decode Offline Note explorer
   instruction envelopes for issue, audit, and redeem payloads. The public SDK
   decoders accept both framed instruction payloads and the raw instruction
   pair shape returned by explorer rows.
-- The SDKs now expose an `OfflineNoteV2OutcomeIndex` plus resolver/provider
+- The SDKs now expose an `OfflineNoteOutcomeIndex` plus resolver/provider
   adapters that turn committed or rejected audit/redeem explorer outcomes into
   wallet sync resolutions. Committed audits spend input nullifiers and release
   outputs, rejected audits restore inputs and cancel outputs, committed
   redeems mark notes redeemed, and rejected redeems return notes to spendable.
-- Production Torii providers fetch `AuditOfflineNoteV2` and
-  `RedeemOfflineNoteV2` rows from `/v1/explorer/instructions`, extract
+- Production Torii providers fetch `AuditOfflineNote` and
+  `RedeemOfflineNote` rows from `/v1/explorer/instructions`, extract
   `r#box.encoded` instruction bytes, and feed the resolver-backed
-  `OfflineNoteV2Wallet.sync()` path.
+  `OfflineNoteWallet.sync()` path.
 - Cross-SDK fixture tests cover explorer instruction decoding and committed /
   rejected outcome reconciliation for pending spend, change, receive, and
   redeem wallet notes.
 - Validation:
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugJavaWithJavac --console=plain --rerun-tasks` from `java/iroha_android`
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift`
   - `swift test` from `IrohaSwift`
 
-## 2026-05-09 Offline Note V2 Swift Keychain wallet-note store
+## 2026-05-09 Offline Note Swift Keychain wallet-note store
 
-- Swift now has a public `OfflineNoteV2WalletNoteJsonCodec` matching the
+- Swift now has a public `OfflineNoteWalletNoteJsonCodec` matching the
   Android persisted wallet-note shape, including Norito key certificates,
   commitment origins, canonical amounts, state, and timestamps.
-- `OfflineNoteV2KeychainStore` implements `OfflineNoteV2Store` with a
+- `OfflineNoteKeychainStore` implements `OfflineNoteStore` with a
   Keychain-backed encrypted collection. The store supports app groups,
   optional user-presence access control, sorted note listing, upsert, delete,
   and clear operations.
@@ -4136,17 +4195,17 @@ Last updated: 2026-05-26
   failures propagate through wallet load/pay/accept/redeem/sync flows instead
   of being hidden behind a non-throwing store API.
 - Validation:
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift`
   - `swift test` from `IrohaSwift`
 
-## 2026-05-09 Offline Note V2 Android secure wallet-note store
+## 2026-05-09 Offline Note Android secure wallet-note store
 
-- Java Android now has a structured `OfflineNoteV2WalletNoteJsonCodec` for
+- Java Android now has a structured `OfflineNoteWalletNoteJsonCodec` for
   persisted wallet notes. The codec preserves the note chain/account/asset,
   canonical amount, Norito key certificate, commitment, note secret, origin,
   state, and timestamps so platform stores do not invent an ad hoc shape.
-- The Android platform module now exposes `AndroidOfflineNoteV2SecureStore`,
-  an `OfflineNoteV2Store` implementation that encrypts wallet-note JSON with
+- The Android platform module now exposes `AndroidOfflineNoteSecureStore`,
+  an `OfflineNoteStore` implementation that encrypts wallet-note JSON with
   Android Keystore AES-GCM and stores the encrypted envelopes plus commitment
   index in private `SharedPreferences`.
 - Validation:
@@ -4191,26 +4250,26 @@ Last updated: 2026-05-26
   - `cargo fmt --all --check`
   - `git diff --check`
 
-## 2026-05-09 Offline Note V2 payment-token QR/JSON codec
+## 2026-05-09 Offline Note payment-token QR/JSON codec
 
 - Kotlin/JVM, Java Android, and Swift now expose payment-token handoff codecs
-  for Offline Note V2 wallet QR flows. The compact JSON payload carries the
+  for Offline Note wallet QR flows. The compact JSON payload carries the
   v2 type/version, invoice/payment-request id, token id, creation timestamp,
   and the canonical Norito audit bundle as `audit_norito_base64`.
 - The codecs roundtrip through the public Norito audit decoder, reject token
   ids that do not match the embedded audit bundle, support the
-  `wallet-offline-payment-v2:` text prefix, and produce Fountain QR frames
-  tagged as `OFFLINE_PAYMENT_TOKEN_V2`.
+  `wallet-offline-payment:` text prefix, and produce Fountain QR frames
+  tagged as `offline_payment_token`.
 - Cross-SDK tests now cover JSON bytes, prefixed text, and QR frame
-  encode/decode roundtrips for the shared Offline Note V2 fixture token.
+  encode/decode roundtrips for the shared Offline Note fixture token.
 - Validation:
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
   - `swift test` from `IrohaSwift`
 
-## 2026-05-09 Offline Note V2 public SDK Norito decoders
+## 2026-05-09 Offline Note public SDK Norito decoders
 
-- Kotlin/JVM, Java Android, and Swift now expose public Offline Note V2 Norito
+- Kotlin/JVM, Java Android, and Swift now expose public Offline Note Norito
   decoders for key certificate payloads/certificates, issue payloads, issued
   claims, redeem payloads/public inputs, audit bundles/public inputs, and the
   wallet-derived commitment/nullifier/payment-token-id preimages.
@@ -4219,10 +4278,10 @@ Last updated: 2026-05-26
   proof boxes, commitment origins, numeric amounts, hash vectors, and optional
   certificate usage limits. Swift also handles bridge-unavailable asset address
   roundtrips in tests with a checked fallback literal.
-- Cross-SDK fixture tests roundtrip the shared Offline Note V2 vectors through
+- Cross-SDK fixture tests roundtrip the shared Offline Note vectors through
   the new public decoders and re-encode them back to the canonical bytes.
 - Validation:
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
   - `swift test` from `IrohaSwift`
 
@@ -4302,12 +4361,12 @@ Last updated: 2026-05-26
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --test norito_ingress norito_transaction_rejects_invalid_signature_without_decode_panic -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-confirmation cargo test -p iroha_torii --test norito_ingress -- --nocapture`
 
-## 2026-05-09 Offline V2 issuer OpenAPI body auth
+## 2026-05-09 Offline issuer OpenAPI body auth
 
-- Torii OpenAPI now documents all Offline V2 issuer POST endpoints:
-  `/v1/offline/v2/keys/refill`, `/v1/offline/v2/notes/issue`,
-  `/v1/offline/v2/notes/redeem`, and `/v1/offline/v2/audit`.
-- The shared `OfflineV2IssuerBodyAuthRequest` schema records the required
+- Torii OpenAPI now documents all Offline issuer POST endpoints:
+  `/v1/offline/keys/refill`, `/v1/offline/notes/issue`,
+  `/v1/offline/notes/redeem`, and `/v1/offline/audit`.
+- The shared `OfflineIssuerBodyAuthRequest` schema records the required
   top-level `account_id`, `timestamp_ms`, and `nonce` fields plus exactly one
   proof field, `signature_base64` or `witness_base64`, and calls out that
   nested fields with those names remain signed business data. The OpenAPI info
@@ -4315,16 +4374,16 @@ Last updated: 2026-05-26
   `X-Iroha-*` app-auth headers.
 - Focused cleanup also removed current strict-clippy blockers in the Sumeragi
   vNext validation diff and FASTPQ Poseidon helper visibility without changing
-  the public Offline V2 behavior.
+  the public Offline behavior.
 - Validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-openapi cargo test -p iroha_torii --lib generated_spec_includes_documented_paths -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-openapi cargo test -p iroha_torii --lib generated_spec_documents_offline_v2_body_auth_schema -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-openapi cargo test -p iroha_torii --lib generated_spec_documents_offline_body_auth_schema -- --nocapture`
   - `cargo fmt --all --check`
   - `git diff --check`
 
-## 2026-05-09 Offline Note V2 wallet regression hardening
+## 2026-05-09 Offline Note wallet regression hardening
 
-- Kotlin/JVM, Java Android, and Swift Offline Note V2 wallet tests now cover
+- Kotlin/JVM, Java Android, and Swift Offline Note wallet tests now cover
   duplicate P2P payment-token acceptance, already-pending input rejection, and
   failed audit/redeem submission reconciliation through the resolver-backed
   `sync()` path.
@@ -4337,9 +4396,9 @@ Last updated: 2026-05-26
   the later 2026-05-09 explorer outcome sync adapters close that gap by
   deriving wallet note resolutions from explorer instruction payloads.
 - Validation:
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift`
 
 ## 2026-05-09 Iroha config minimal snapshot refresh
 
@@ -4773,9 +4832,9 @@ Last updated: 2026-05-26
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-fastpq-poseidon-fix cargo check -p irohad --features fastpq-gpu`
   - `git diff --check`
 
-## 2026-05-08 Offline Note V2 wallet sync resolver
+## 2026-05-08 Offline Note wallet sync resolver
 
-- Kotlin/JVM, Java Android, and Swift `OfflineNoteV2Wallet.sync()` now reconcile
+- Kotlin/JVM, Java Android, and Swift `OfflineNoteWallet.sync()` now reconcile
   pending wallet notes through an injected transaction-outcome resolver instead
   of returning the store snapshot unchanged. The resolver can finalize
   `SPEND_PENDING` notes as `SPENT`, promote accepted `CHANGE_PENDING` outputs
@@ -4786,9 +4845,9 @@ Last updated: 2026-05-26
   regressions that drive P2P pay, sync spent/change state, redeem the synced
   change note, and sync redemption finality.
 - Validation:
-  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --rerun-tasks` from `kotlin`
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` from `java/iroha_android`
-  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift`
+  - `swift test --filter OfflineNoteTests` from `IrohaSwift`
   - `git diff --check`
 
 ## 2026-05-08 Sumeragi idle RBC tick throttling
@@ -5493,7 +5552,7 @@ Last updated: 2026-05-26
 - Domain-endorsement committee/policy/submission instructions now use narrow
   ordinary-AoS slice decoders while preserving the `nexus::...` registry lookup
   strings.
-- Verifying-key register/update instructions and Offline V2 issue/redeem/audit
+- Verifying-key register/update instructions and Offline issue/redeem/audit
   instructions now use narrow ordinary-AoS slice decoders on their type-name
   wire IDs.
 - Verified Nexus lane-relay and public fee-budget registration instructions now
@@ -5568,7 +5627,7 @@ Last updated: 2026-05-26
   alias binding/lease dispatch, contract-alias dispatch, and account-recovery
   dispatch, plus RAM-LFE, identifier, consensus-key, domain-endorsement,
   verified Nexus relay/budget/emergency-validator override, RWA/repo/
-  settlement stable boxes, asset escrow, verifying-key, Offline V2, Musubi, and
+  settlement stable boxes, asset escrow, verifying-key, Offline, Musubi, and
   smart-contract-code, Space Directory, SoraFS, oracle, bridge/SCCP, ministry,
   social, registered public-lane staking, invalid-instruction, SoraNet VPN
   lease, ZK, Kaigi, governance, and Soracloud dispatch. No default registry
@@ -5622,7 +5681,7 @@ Last updated: 2026-05-26
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model consensus_key -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model endorsement -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model verifying_key -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model offline_note_v2 -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model offline_note -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model register -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model nexus_verified -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-asset-control-slice cargo test -p iroha_data_model nexus -- --nocapture`
@@ -6118,39 +6177,39 @@ Last updated: 2026-05-26
   integration as the final VRF persistence gate. Formatting and whitespace were
   rerun after these edits.
 
-## 2026-05-05 Offline Note V2 wallet-derived commitments
+## 2026-05-05 Offline Note wallet-derived commitments
 
-- Offline Note V2 commitment derivation now starts in the wallet instead of
+- Offline Note commitment derivation now starts in the wallet instead of
   Torii settlement metadata. `iroha_data_model::offline` exposes canonical
   Norito preimages and domain tags for note commitments, input nullifiers, and
   payment token ids, with 32-byte `note_secret` and `token_nonce` material
   enforced by the derivation helpers.
-- Torii `/v1/offline/v2/notes/issue` now requires a wallet-supplied bare
+- Torii `/v1/offline/notes/issue` now requires a wallet-supplied bare
   64-character hex `note_commitment`, issues that exact commitment, and keeps
   `settlement.entry_hash` as lineage/settlement metadata rather than deriving
   the note commitment from it.
-- Kotlin/JVM, Java Android, and Swift Offline Note V2 model helpers now match
+- Kotlin/JVM, Java Android, and Swift Offline Note model helpers now match
   the Rust derivation vectors for source notes, P2P output notes, input
-  nullifiers, payment token ids, and redeem nullifiers. The shared Offline V2
+  nullifiers, payment token ids, and redeem nullifiers. The shared Offline
   fixture was regenerated with the derivation preimages, and transaction
   fixtures were refreshed after aligning SDK account-controller encoding on
   compact public-key payload bytes.
-- Kotlin/JVM, Java Android, and Swift now expose `OfflineNoteV2Wallet` facades
+- Kotlin/JVM, Java Android, and Swift now expose `OfflineNoteWallet` facades
   for `load`, `prepareReceive`, `pay`, `accept`, `redeem`, and `sync`, with
   structured in-memory stores, injectable attestation/random/proof/issuer
   boundaries, direct audit/redeem transaction submitters, and mock lifecycle
   tests covering load, P2P pay, accept/audit, redeem, and spent/change-pending
   state transitions.
 - Kotlin/JVM, Java Android, and Swift now include Torii-backed
-  `OfflineNoteV2IssuerClient` adapters for `/v1/offline/v2/keys/refill` and
-  `/v1/offline/v2/notes/issue`. The adapters body-sign issuer JSON with the
+  `OfflineNoteIssuerClient` adapters for `/v1/offline/keys/refill` and
+  `/v1/offline/notes/issue`. The adapters body-sign issuer JSON with the
   canonical request signer, cache signed lineage state between refill and
   issue, derive wallet commitments against the post-issue revision, and submit
   the wallet-supplied `note_commitment` unchanged.
-- Validation passed with the focused Rust Offline V2 data-model, Torii issuer,
+- Validation passed with the focused Rust Offline data-model, Torii issuer,
   and core tests; full Kotlin `:core-jvm:test`; Java Android core harness; and
-  Swift `OfflineNoteV2Tests`. The 2026-05-06 rerun of
-  `cd IrohaSwift && swift test --filter OfflineNoteV2Tests` is green
+  Swift `OfflineNoteTests`. The 2026-05-06 rerun of
+  `cd IrohaSwift && swift test --filter OfflineNoteTests` is green
   (`19` tests, `0` failures). Earlier derivation work in this slice also had
   focused Java fixture/Norito parity coverage and full `swift test` in
   `IrohaSwift` green. Formatting and whitespace checks are green with
@@ -6212,9 +6271,9 @@ Last updated: 2026-05-26
   `trigger_candidate_ids_are_intersected`, and
   `role_candidate_ids_are_intersected` in the default target.
 
-## 2026-05-05 Offline V2 issuer body auth
+## 2026-05-05 Offline issuer body auth
 
-- Offline V2 issuer POSTs now reject legacy `X-Iroha-*` app-auth headers and
+- Offline issuer POSTs now reject legacy `X-Iroha-*` app-auth headers and
   verify `account_id`, `timestamp_ms`, `nonce`, plus exactly one of
   `signature_base64` or `witness_base64` from the JSON body. The signed body
   hash uses Norito JSON canonical bytes with only top-level proof fields
@@ -6224,11 +6283,11 @@ Last updated: 2026-05-26
   prebuilt `witness_base64`.
 - Focused Torii validation passed with
   `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_torii body_auth --lib`.
-  The broader Offline V2 issuer filter also passed with
-  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_torii offline_v2`
+  The broader Offline issuer filter also passed with
+  `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo test -p iroha_torii offline`
   (the lib slice reported `13` passed and `1749` filtered out, plus the package
-  filter covered `offline_v2_readiness_is_mounted_and_legacy_routes_are_absent`).
-  `rustfmt --edition 2024 --check crates/iroha_torii/src/app_auth.rs crates/iroha_torii/src/offline_v2_issuer.rs`
+  filter covered `offline_readiness_is_mounted_and_legacy_routes_are_absent`).
+  `rustfmt --edition 2024 --check crates/iroha_torii/src/app_auth.rs crates/iroha_torii/src/offline_issuer.rs`
   and full `cargo fmt --all -- --check` are green.
 - The focused strict lint gate
   `CARGO_TARGET_DIR=target/codex-offline-body-auth cargo clippy -p iroha_torii --lib -- -D warnings`
@@ -8085,7 +8144,7 @@ Last updated: 2026-05-26
   `norito_codegen_exporter` now renders `Metadata::Float`, the Python receipt
   test fixture uses the current `TransactionSubmissionReceiptPayload` fields,
   and Mochi's chaos/event/state helpers match the current Izanami fault,
-  Offline V2 note-event, and query-batch surfaces.
+  Offline note-event, and query-batch surfaces.
 - Cleaned up the remaining Rust warning sources surfaced by the workspace
   check: removed the unused `ivm_corehost_axt` model-proof helper and the
   unused proof imports from `queries_and_proofs`.
@@ -8140,7 +8199,7 @@ Last updated: 2026-05-26
   payload form; current signed-receipt positives are still covered by generated
   verifier fixtures.
 - Additional validation passed on 2026-05-02:
-  `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`,
+  `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --check`,
   `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`,
   `cd IrohaSwift && swift test` (774 tests, 101 skipped, 0 failures), the
   focused Swift regression filter for Ed25519 seed, bridge pinning, BFV vectors,
@@ -9777,9 +9836,9 @@ Last updated: 2026-05-26
 - Focused validation for this slice:
   - `jq -e . configs/soranexus/taira/genesis.json`
 
-## 2026-05-01 Offline V2 native SDK prover speedups
+## 2026-05-01 Offline native SDK prover speedups
 
-- Swift Offline Note V2 pure Halo2 proving now reuses a cached IPA/domain
+- Swift Offline Note pure Halo2 proving now reuses a cached IPA/domain
   context, verifier-key transcript scalar, and fixed selector polynomial instead
   of regenerating them on every proof. The hot commitment path now uses sparse
   Lagrange commitments for single-row instance/advice columns, a 4-bit
@@ -9789,11 +9848,11 @@ Last updated: 2026-05-26
   intermediate instead of squaring it twice, and the Swift group formulas
   replace fixed `2x`/`8x` field multiplications with additions.
 - Added Swift convenience APIs for direct native proof generation from
-  `OfflineNoteRedeemV2` / `OfflineNoteAuditBundleV2`, plus proof replacement
-  helpers and a `Halo2OfflineNoteV2Prover.prewarm()` hook so callers can keep
+  `OfflineNoteRedeem` / `OfflineNoteAuditBundle`, plus proof replacement
+  helpers and a `Halo2OfflineNoteProver.prewarm()` hook so callers can keep
   the native model, initialize the proof cache before the button path, and swap
   in the newly generated recursive proof before binding validation.
-- Added Kotlin/JVM and Java Android Offline V2 instance-value builders,
+- Added Kotlin/JVM and Java Android Offline instance-value builders,
   scalar-column encoders, proof replacement helpers, and pure Java Halo2/IPA
   provers. The Java-family path now builds the same `OpenVerifyEnvelope`
   recursive proof payloads without routing production calls through Rust JNI,
@@ -9814,24 +9873,24 @@ Last updated: 2026-05-26
   Java Android harness redeem `0.823s`, p95 `0.825s`, max `0.825s`.
 - Focused validation for this slice:
   - `swift test -c release --filter Halo2PastaTests/testPastaUniformBytesAndVestaGroupArithmetic`
-  - `swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofEnvelopeFitsQrBudget`
-  - `IROHA_SWIFT_OFFLINE_V2_BENCH=1 IROHA_SWIFT_OFFLINE_V2_BENCH_ITERATIONS=20 swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofPerformanceWhenRequested`
-  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain` from `kotlin`
-  - `IROHA_JVM_OFFLINE_V2_PROVER_TEST=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nativeHalo2ProverProducesVerifyingPayloadWhenRequested --console=plain` from `kotlin`
-  - `IROHA_JVM_OFFLINE_V2_BENCH=1 IROHA_JVM_OFFLINE_V2_BENCH_ITERATIONS=5 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nativeHalo2ProverPerformanceWhenRequested --console=plain --info --rerun-tasks` from `kotlin`
-  - `IROHA_SWIFT_OFFLINE_V2_VERIFY_PAYLOAD_IN=/tmp/iroha-jvm-offline-v2-audit.zk1 swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofEnvelopeFitsQrBudget`
-  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
-  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_V2_PROVER_TEST=1 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
-  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_V2_BENCH=1 IROHA_JAVA_OFFLINE_V2_BENCH_ITERATIONS=5 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --info --rerun-tasks` from `java/iroha_android`
+  - `swift test -c release --filter Halo2PastaTests/testOfflineNoteNativeHalo2ProofEnvelopeFitsQrBudget`
+  - `IROHA_SWIFT_OFFLINE_BENCH=1 IROHA_SWIFT_OFFLINE_BENCH_ITERATIONS=20 swift test -c release --filter Halo2PastaTests/testOfflineNoteNativeHalo2ProofPerformanceWhenRequested`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain` from `kotlin`
+  - `IROHA_JVM_OFFLINE_PROVER_TEST=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.nativeHalo2ProverProducesVerifyingPayloadWhenRequested --console=plain` from `kotlin`
+  - `IROHA_JVM_OFFLINE_BENCH=1 IROHA_JVM_OFFLINE_BENCH_ITERATIONS=5 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.nativeHalo2ProverPerformanceWhenRequested --console=plain --info --rerun-tasks` from `kotlin`
+  - `IROHA_SWIFT_OFFLINE_VERIFY_PAYLOAD_IN=/tmp/iroha-jvm-offline-audit.zk1 swift test -c release --filter Halo2PastaTests/testOfflineNoteNativeHalo2ProofEnvelopeFitsQrBudget`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_PROVER_TEST=1 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_BENCH=1 IROHA_JAVA_OFFLINE_BENCH_ITERATIONS=5 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --info --rerun-tasks` from `java/iroha_android`
   - `git diff --check`
 
-## 2026-05-01 Torii Offline V2 issuer hardening
+## 2026-05-01 Torii Offline issuer hardening
 
-- Torii Offline V2 issuer certificate minting now requires a signed middleware
+- Torii Offline issuer certificate minting now requires a signed middleware
   attestation receipt before certifying hardware one-use keys. Certificate JSON
   echoes canonical base64 key bytes from the verified receipt instead of
   client-supplied hex/base64 spellings.
-- Offline V2 note issuance now derives balances from Torii-signed lineage
+- Offline note issuance now derives balances from Torii-signed lineage
   state, treats client `local_balance` / `local_revision` as consistency
   checks, preserves trusted balance during existing-lineage key refills, and
   returns the same chain note commitment that is submitted on-chain.
@@ -9843,7 +9902,7 @@ Last updated: 2026-05-26
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_config -p iroha_torii --features app_api`
-  - `cargo test -p iroha_torii offline_v2_issuer`
+  - `cargo test -p iroha_torii offline_issuer`
   - `cargo test -p iroha_config torii_offline_issuer`
   - `cargo test -p iroha_config --test fixtures`
 
@@ -11088,26 +11147,26 @@ Last updated: 2026-05-26
   - `cargo build -p izanami --bin izanami -p irohad --bin iroha3d`
   - Real 20k NPoS packet-loss row with diagnostics enabled, then report-only rebuild for the new overload-admission evidence label.
 
-## 2026-04-30 Offline V2 native bridge prover FFI
+## 2026-04-30 Offline native bridge prover FFI
 
 - Rebased PR #5578 onto the current `i23-features` branch and narrowed it to
   the shared `connect_norito_bridge` C-FFI prover surface. Swift keeps using
-  its native `Halo2OfflineNoteV2Prover` path, while the bridge now exposes
+  its native `Halo2OfflineNoteProver` path, while the bridge now exposes
   Rust-backed redeem/audit proof generation for other native consumers.
-- Added `connect_norito_offline_prove_note_v2_redeem` and
-  `connect_norito_offline_prove_note_v2_audit`, returning Norito-archive
-  `OfflineNoteRecursiveProofV2` payloads with canonical verifier-key id,
+- Added `connect_norito_offline_prove_note_redeem` and
+  `connect_norito_offline_prove_note_audit`, returning Norito-archive
+  `OfflineNoteRecursiveProof` payloads with canonical verifier-key id,
   public-input hash, and Halo2/IPA proof bytes.
 - Added bridge tests that decode the FFI output, check the proof binding, and
-  verify the returned proof against the canonical Offline V2 verifier. Invalid
-  archives now fail through `CONNECT_NORITO_ERR_OFFLINE_NOTE_V2_PROVE`.
+  verify the returned proof against the canonical Offline verifier. Invalid
+  archives now fail through `CONNECT_NORITO_ERR_OFFLINE_NOTE_PROVE`.
 - Fixed three current `iroha_data_model` clippy findings surfaced by the
   bridge clippy pass: two `NPoS` doc-markdown warnings and one collapsible
   schema-map branch.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo fmt --all --check`
-  - `cargo test -p connect_norito_bridge offline_note_v2_ -- --nocapture`
+  - `cargo test -p connect_norito_bridge offline_note_ -- --nocapture`
   - `cargo test -p connect_norito_bridge`
   - `cargo clippy -p connect_norito_bridge --all-targets -- -D warnings`
 
@@ -11394,36 +11453,36 @@ Last updated: 2026-05-26
 
 ## 2026-04-28 Retired sample identifier cleanup
 
-- Replaced retired bank/sample identifiers in localnet alias catalog defaults, Offline V2 vector generation, SDK tests, and status command examples with neutral PayNet/demo placeholders.
-- Regenerated `fixtures/offline/interop_contract_v2.json` from the updated vector generator.
+- Replaced retired bank/sample identifiers in localnet alias catalog defaults, Offline vector generation, SDK tests, and status command examples with neutral PayNet/demo placeholders.
+- Regenerated `fixtures/offline/interop_contract.json` from the updated vector generator.
 - Focused validation for this slice:
   - `cargo fmt --all`
-  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
-  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --check`
   - `cargo test -p iroha_core selector_matches_authority_domain --lib -- --nocapture`
   - `git diff --check`
   - `cargo fmt --all --check`
   - Boundary-aware tracked and hidden-file scans for the retired identifiers now return no matches.
 - `cargo test -p iroha_kagami nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators -- --nocapture` is blocked by the existing `crates/iroha_kagami/src/genesis/generate.rs` `manifest.parse()` private-method compile error.
 
-## 2026-04-28 Offline Note V2 focused validation gap closure
+## 2026-04-28 Offline Note focused validation gap closure
 
-- Added focused core rejection coverage for Offline Note V2 redeem/audit proof validation: non-`OpenVerifyEnvelope` proof bytes, wrong verifier key id/backend, inactive verifier keys, and public-input hash mismatches now have explicit tests.
-- Tightened Torii Offline V2 readiness smoke coverage so the exposed verifier id and public-input schema hash match the canonical fixture contract.
-- Test-network genesis generation now computes and injects the confidential verifier-registry root from appended verifier-key registration instructions, so Offline V2 real-verifier localnets no longer start with a stale `vk_set_hash`.
-- Added four-peer `network_functional` coverage that registers the real Offline V2 Halo2 IPA verifier, issues a note, audits it into a new note, redeems it, validates balances, and rejects replay/nullifier reuse under consensus.
-- Added native app validation coverage for the shared `interop_contract_v2.json`, synthetic Android counter rejection, transcript-like recursive proof rejection, and old QR prefix rejection. Android PK and the companion app now also have physical-only KeyMint runner scripts that require a selected API 31+ non-emulator device and capture public attestation artifacts under untracked `artifacts/offline/keymint/`.
+- Added focused core rejection coverage for Offline Note redeem/audit proof validation: non-`OpenVerifyEnvelope` proof bytes, wrong verifier key id/backend, inactive verifier keys, and public-input hash mismatches now have explicit tests.
+- Tightened Torii Offline readiness smoke coverage so the exposed verifier id and public-input schema hash match the canonical fixture contract.
+- Test-network genesis generation now computes and injects the confidential verifier-registry root from appended verifier-key registration instructions, so Offline real-verifier localnets no longer start with a stale `vk_set_hash`.
+- Added four-peer `network_functional` coverage that registers the real Offline Halo2 IPA verifier, issues a note, audits it into a new note, redeems it, validates balances, and rejects replay/nullifier reuse under consensus.
+- Added native app validation coverage for the shared `interop_contract.json`, synthetic Android counter rejection, transcript-like recursive proof rejection, and old QR prefix rejection. Android PK and the companion app now also have physical-only KeyMint runner scripts that require a selected API 31+ non-emulator device and capture public attestation artifacts under untracked `artifacts/offline/keymint/`.
 - Focused validation for this slice:
   - `cargo fmt --all`
-  - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
-  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --nocapture`
-  - `cargo test -p iroha_core offline_note_v2 --lib -- --nocapture`
+  - `cargo test -p iroha_data_model offline_note --lib -- --nocapture`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --nocapture`
+  - `cargo test -p iroha_core offline_note --lib -- --nocapture`
   - `cargo test -p iroha_test_network config::tests::genesis_confidential_digest_tracks_registered_verifying_keys -- --nocapture`
-  - `cargo test -p integration_tests --test network_functional offline_note_v2_issue_audit_redeem_real_proofs_on_four_peers -- --nocapture`
-  - `cargo test -p iroha_torii --test offline_v2_readiness_smoke -- --nocapture`
-  - `cd IrohaSwift && swift test --filter OfflineNoteV2`
-  - `cd kotlin && ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test' --console=plain`
-  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --console=plain`
+  - `cargo test -p integration_tests --test network_functional offline_note_issue_audit_redeem_real_proofs_on_four_peers -- --nocapture`
+  - `cargo test -p iroha_torii --test offline_readiness_smoke -- --nocapture`
+  - `cd IrohaSwift && swift test --filter OfflineNote`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteTest' --console=plain`
+  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-android && ANDROID_SERIAL=19181FDF600918 E2E_DEVICE_SERIAL=19181FDF600918 scripts/run_offline_keymint_physical.sh`
@@ -11433,7 +11492,7 @@ Last updated: 2026-05-26
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'generic/platform=iOS Simulator'`
   - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'generic/platform=iOS Simulator'`
   - `git diff --check` in the Iroha root and all four touched app repositories.
-  - `shasum -a 256` confirmed every copied `fixtures/offline/interop_contract_v2.json` has hash `2660dd41e3b8c1f4b8337d14febbc88e3febe45428c08e4d083197ef01d4e0f6`.
+  - `shasum -a 256` confirmed every copied `fixtures/offline/interop_contract.json` has hash `2660dd41e3b8c1f4b8337d14febbc88e3febe45428c08e4d083197ef01d4e0f6`.
   - Targeted changed-file scans found no temporary-work markers, exact retired proof-domain identifiers, or retired fountain QR v1 identifiers.
 - The physical KeyMint gate ran on Pixel 6 serial `19181FDF600918`. PK artifacts were captured under `/Users/takemiyamakoto/dev/pk-retail-wallet-android/artifacts/offline/keymint/20260428T081251Z-19181FDF600918`; companion app artifacts were captured under `/Users/takemiyamakoto/dev/partner-retail-wallet-android/artifacts/offline/keymint/20260428T081331Z-19181FDF600918`.
 
@@ -11479,29 +11538,29 @@ Last updated: 2026-05-26
   - `cargo test -p iroha_core smartcontracts::ivm::host::tests::subscription_bill_account_alias_auto_renew_queues_renewal_and_reschedules -- --nocapture`
   - `git diff --check`
 
-## 2026-04-27 Native Offline Note V2 SDK/mobile alignment
+## 2026-04-27 Native Offline Note SDK/mobile alignment
 
-- Standardized the first-release mobile offline contract on the Iroha Offline Note V2 fixture (`fixtures/offline/interop_contract_v2.json`) with canonical Norito-backed public-input hashes, opaque recursive proof bytes, `iroha:qr1:` QR stream frames, and `parity_group=3`.
-- Added native Kotlin/JVM and Java Android Offline Note V2 model/codec surfaces that mirror the Swift SDK without Rust FFI/JNI. The parity tests validate key-certificate signing bytes, issue/redeem/audit Norito payloads, public-input hashes, proof binding rejection, and the shared fixture.
-- Updated the PK and companion iOS/Android app offline flows to call the native SDK-backed Offline Note V2 helpers for certificate payloads, issued/output claims, payment-token public inputs, QR framing, and validation instead of app-local text transcripts.
+- Standardized the first-release mobile offline contract on the Iroha Offline Note fixture (`fixtures/offline/interop_contract.json`) with canonical Norito-backed public-input hashes, opaque recursive proof bytes, `iroha:qr:` QR stream frames, and `parity_group=3`.
+- Added native Kotlin/JVM and Java Android Offline Note model/codec surfaces that mirror the Swift SDK without Rust FFI/JNI. The parity tests validate key-certificate signing bytes, issue/redeem/audit Norito payloads, public-input hashes, proof binding rejection, and the shared fixture.
+- Updated the PK and companion iOS/Android app offline flows to call the native SDK-backed Offline Note helpers for certificate payloads, issued/output claims, payment-token public inputs, QR framing, and validation instead of app-local text transcripts.
 - Focused validation for this slice:
-  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
-  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
-  - `cd IrohaSwift && swift test --filter OfflineNoteV2`
-  - `cd kotlin && ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test' --rerun-tasks --console=plain`
-  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --rerun-tasks --console=plain`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors`
+  - `cd IrohaSwift && swift test --filter OfflineNote`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteTest' --rerun-tasks --console=plain`
+  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --rerun-tasks --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
   - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=A7E7B24D-46DE-4D6D-B23B-622C5AD9A464' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests`
   - `cd /Users/takemiyamakoto/dev/partner-retail-wallet-ios && xcodebuild -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=A7E7B24D-46DE-4D6D-B23B-622C5AD9A464' build`
 
-## 2026-04-27 Swift Offline V2 transaction builders
+## 2026-04-27 Swift Offline transaction builders
 
-- Added Swift Offline V2 note models for key certificates, issued claims, redeem public inputs, audit public inputs, recursive proofs, and issue/redeem/audit instruction payloads.
-- Added `IrohaSDK` builders and submit helpers for `IssueOfflineNoteV2`, `RedeemOfflineNoteV2`, and `AuditOfflineNoteV2` transactions. Redeem and audit builders validate the recursive proof's public-input hash against the canonical Swift/Rust Norito payload before signing.
-- Added fixture parity coverage against `fixtures/offline/interop_contract_v2.json` for key-certificate signing bytes, issue/redeem/audit Norito payloads, public-input hashes, proof binding rejection, and signed envelope construction.
+- Added Swift Offline note models for key certificates, issued claims, redeem public inputs, audit public inputs, recursive proofs, and issue/redeem/audit instruction payloads.
+- Added `IrohaSDK` builders and submit helpers for `IssueOfflineNote`, `RedeemOfflineNote`, and `AuditOfflineNote` transactions. Redeem and audit builders validate the recursive proof's public-input hash against the canonical Swift/Rust Norito payload before signing.
+- Added fixture parity coverage against `fixtures/offline/interop_contract.json` for key-certificate signing bytes, issue/redeem/audit Norito payloads, public-input hashes, proof binding rejection, and signed envelope construction.
 - Focused validation for this slice:
-  - `swift test --filter OfflineNoteV2Tests`
+  - `swift test --filter OfflineNoteTests`
   - `swift test`
 
 ## 2026-04-27 Iroha config minimal snapshot refresh
@@ -11519,31 +11578,31 @@ Last updated: 2026-05-26
   - `sha256sum -c docs/examples/sns/suffix_catalog_v1.sha256`
   - `cargo test -p iroha_cli catalog_detects_price_mismatch -- --nocapture`
 
-## 2026-04-27 Offline V2 real Halo2 IPA prover slice
+## 2026-04-27 Offline real Halo2 IPA prover slice
 
-- Added the real `offline-note-v2-recursive-v1` Halo2 IPA semantic circuit. The circuit binds the Offline V2 public-instance schema, constrains redeem/audit mode, bounded input/output counts, unused amount slots, and normalized input/output amount conservation.
-- Added `prove_offline_note_v2_redeem`, `prove_offline_note_v2_audit`, and `derive_halo2_ipa_offline_note_v2_proving_key_bytes`. These paths generate real Halo2 IPA proofs against registered verifier-key material; no debug or mock prover backend is used.
-- Offline V2 ISI verification now compares proof-exposed public instances against the same semantic instance layout used by the prover instead of the old hash-only reserved-sentinel layout.
-- Added active WSV verifier-key registration for `offline-note-v2-recursive-v1` to Kagami-generated localnet genesis using the real inline Halo2 IPA verifier key and Offline V2 schema hash.
-- Torii Offline V2 readiness now advertises the canonical recursive-proof backend, circuit id, schema hash, instance-column count, and verifier key id. The Swift SDK has a typed `getOfflineV2Readiness` accessor for that metadata.
+- Added the real `offline-note-recursive` Halo2 IPA semantic circuit. The circuit binds the Offline public-instance schema, constrains redeem/audit mode, bounded input/output counts, unused amount slots, and normalized input/output amount conservation.
+- Added `prove_offline_note_redeem`, `prove_offline_note_audit`, and `derive_halo2_ipa_offline_note_proving_key_bytes`. These paths generate real Halo2 IPA proofs against registered verifier-key material; no debug or mock prover backend is used.
+- Offline ISI verification now compares proof-exposed public instances against the same semantic instance layout used by the prover instead of the old hash-only reserved-sentinel layout.
+- Added active WSV verifier-key registration for `offline-note-recursive` to Kagami-generated localnet genesis using the real inline Halo2 IPA verifier key and Offline schema hash.
+- Torii Offline readiness now advertises the canonical recursive-proof backend, circuit id, schema hash, instance-column count, and verifier key id. The Swift SDK has a typed `getOfflineReadiness` accessor for that metadata.
 - Focused validation for this slice:
   - `cargo fmt --all`
-  - `cargo test -p iroha_core offline_note_v2_real --lib -- --nocapture`
+  - `cargo test -p iroha_core offline_note_real --lib -- --nocapture`
   - `cargo test -p iroha_kagami generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets -- --nocapture`
-  - `cargo test -p iroha_torii --test offline_v2_readiness_smoke -- --nocapture`
-  - `swift test --filter ToriiClientTests/testGetOfflineV2ReadinessParsesRecursiveVerifierMetadata`
+  - `cargo test -p iroha_torii --test offline_readiness_smoke -- --nocapture`
+  - `swift test --filter ToriiClientTests/testGetOfflineReadinessParsesRecursiveVerifierMetadata`
   - `cargo test -p iroha_core expected_public_instances_encode_semantic_columns --lib -- --nocapture`
-  - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
+  - `cargo test -p iroha_data_model offline_note --lib -- --nocapture`
 
 ## 2026-04-27 Offline audit replay and router ambiguity fix
 
-- Offline V2 audit bundles now carry issued input claims in their canonical public inputs. Core verifies those source claims were issued and unspent, consumes their normal spent-claim keys, and consumes normal redemption nullifier keys before publishing audited output claims as redeemable.
+- Offline audit bundles now carry issued input claims in their canonical public inputs. Core verifies those source claims were issued and unspent, consumes their normal spent-claim keys, and consumes normal redemption nullifier keys before publishing audited output claims as redeemable.
 - Nexus account-scoped routing no longer trusts the legacy single-binding `dataspace_for_account` shortcut. Account targets route to a non-universal dataspace only when the full account-scope hierarchy has exactly one dataspace; universal-plus-private and multi-private scopes fall back to the default route.
 - Focused validation for this slice:
   - `cargo fmt --all`
-  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
-  - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
-  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --nocapture`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors`
+  - `cargo test -p iroha_data_model offline_note --lib -- --nocapture`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors -- --nocapture`
   - `cargo test -p iroha_core audit_replay_keys_cover_input_spend_and_output_issue_domains --lib -- --nocapture`
   - `cargo test -p iroha_core opaque_asset_transfer --lib -- --nocapture`
   - `cargo test -p iroha_core untargeted_universal_authority_transaction_uses_default_lane_with_state --lib -- --nocapture`
@@ -11582,7 +11641,7 @@ Last updated: 2026-05-26
 
 ## 2026-04-26 Offline escrow self-account guard and localnet note seed fix
 
-- `crates/iroha_core/src/smartcontracts/isi/offline.rs` now rejects non-zero Offline V2 note escrow movements when the resolved escrow account is the same account being debited or credited. The new `escrow_self_reference` invariant is checked before balance mutation on issue/reserve and redeem/credit paths.
+- `crates/iroha_core/src/smartcontracts/isi/offline.rs` now rejects non-zero Offline note escrow movements when the resolved escrow account is the same account being debited or credited. The new `escrow_self_reference` invariant is checked before balance mutation on issue/reserve and redeem/credit paths.
 - `crates/iroha_kagami/src/localnet.rs` no longer writes the built-in offline-note asset escrow account as the localnet app authority. Generated peer configs record the deterministic escrow account for the built-in offline-note asset, and core also derives metadata-enabled escrows at enforcement points so stale or missing config bindings cannot bypass the vault protections.
 - Focused validation for this fix:
   - `cargo fmt --all`
@@ -11666,26 +11725,26 @@ Last updated: 2026-05-26
   - `cargo fmt --all`
   - `git diff --check`
 
-## 2026-04-26 Offline V2 first-release replacement
+## 2026-04-26 Offline first-release replacement
 
-- Hardened Offline V2 note issuance so only `CanManageOfflineEscrow` operators can issue notes, and key certificates must verify against the issuing operator over the canonical certificate payload before escrow is reserved.
-- Hardened Offline V2 note redemption so the recursive proof public-input hash must bind the source note commitment, consumed nullifiers, certified key payload, recipient, asset, and amount, and escrow is released only for a ledger-recorded issued-note claim that has not already been redeemed.
-- Hardened Offline V2 optional audit so the proof public-input hash binds the token id, observed nullifiers, output commitments, and certified key payload; audit now requires a previously issued key certificate and detects token/public-input conflicts plus duplicate output commitments.
+- Hardened Offline note issuance so only `CanManageOfflineEscrow` operators can issue notes, and key certificates must verify against the issuing operator over the canonical certificate payload before escrow is reserved.
+- Hardened Offline note redemption so the recursive proof public-input hash must bind the source note commitment, consumed nullifiers, certified key payload, recipient, asset, and amount, and escrow is released only for a ledger-recorded issued-note claim that has not already been redeemed.
+- Hardened Offline optional audit so the proof public-input hash binds the token id, observed nullifiers, output commitments, and certified key payload; audit now requires a previously issued key certificate and detects token/public-input conflicts plus duplicate output commitments.
 - Ordered cheap issued-claim, token, and nullifier replay checks before expensive recursive proof verification while still verifying proofs before escrow release or new audit state.
-- Replaced the local transcript-style recursive proof placeholder with verifier-key-backed validation: the proof must name an active `offline_note_v2` WSV verifier, decode as an `OpenVerifyEnvelope`, match the Offline V2 public-input schema hash, expose the expected public instance columns, and pass the configured ZK backend verifier.
+- Replaced the local transcript-style recursive proof placeholder with verifier-key-backed validation: the proof must name an active `offline_note` WSV verifier, decode as an `OpenVerifyEnvelope`, match the Offline public-input schema hash, expose the expected public instance columns, and pass the configured ZK backend verifier.
 - Added data-model helper payloads for canonical key-certificate signing bytes, issued-note claims, redemption public inputs, and audit public inputs.
 - Removed legacy allowance, lineage, transfer, revocation, balance-proof, petal-stream, and settlement helper surfaces across Rust, Torii, mobile SDKs, examples, fixtures, and stale docs.
-- Torii now exposes only `/v1/offline/v2/readiness` for offline discovery; issuance, redemption, and audit use V2 transaction instructions.
-- Torii MCP keeps structured compatibility aliases for legacy offline transfer/revocation tool names so agent clients get Offline V2 guidance instead of JSON-RPC tool-not-found errors; this does not re-publish the removed HTTP routes.
-- Localnet, telemetry, QR payload kinds, and mobile parser surfaces now use Offline V2 note naming instead of legacy cash/transfer terminology.
+- Torii now exposes only `/v1/offline/readiness` for offline discovery; issuance, redemption, and audit use V2 transaction instructions.
+- Torii MCP keeps structured compatibility aliases for legacy offline transfer/revocation tool names so agent clients get Offline guidance instead of JSON-RPC tool-not-found errors; this does not re-publish the removed HTTP routes.
+- Localnet, telemetry, QR payload kinds, and mobile parser surfaces now use Offline note naming instead of legacy cash/transfer terminology.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo test -p iroha_torii --test mcp_endpoints`
   - `CARGO_TARGET_DIR=target/codex-workspace-test cargo check -p iroha_data_model -p iroha_core -p iroha_torii -p iroha_config -p iroha_kagami -p iroha_telemetry -p connect_norito_bridge -p fastpq_prover -p fastpq_isi --lib`
-  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
-  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_torii --test offline_v2_readiness_smoke -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_data_model offline_note --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_torii --test offline_readiness_smoke -- --nocapture`
   - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p connect_norito_bridge --lib -- --nocapture`
-  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_core offline_note_v2 --lib -- --nocapture` (ok; no Core-local tests matched after the model tests moved to `iroha_data_model`)
+  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_core offline_note --lib -- --nocapture` (ok; no Core-local tests matched after the model tests moved to `iroha_data_model`)
   - `swift test`
   - `./gradlew :core-jvm:test --console=plain`
   - `./gradlew :offline-wallet-android:assembleRelease --console=plain`
@@ -12592,8 +12651,8 @@ Last updated: 2026-05-26
 ## 2026-04-21 Follow-up: Kotlin SDK typed offline-cash redeem support
 - Added typed cash models and a redeem-proof builder under
   `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/`.
-  After rebasing onto the Offline V2 Torii surface, `OfflineToriiClient`
-  remains scoped to `/v1/offline/v2/readiness`; the older cash-route client
+  After rebasing onto the Offline Torii surface, `OfflineToriiClient`
+  remains scoped to `/v1/offline/readiness`; the older cash-route client
   overloads and route tests are not retained because Torii no longer exposes
   those HTTP endpoints.
 - `OfflineStarkEnvelopeProver.kt` +

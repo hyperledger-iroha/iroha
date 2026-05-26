@@ -110,14 +110,14 @@ class OfflineCashCodecTest {
 
         val envelopeProof = OfflineRedeemRequestProof(
             backend = "stark/fri/sha256-goldilocks",
-            circuitId = "offline-bearer-redeem-request-v1",
+            circuitId = "offline-bearer-redeem-request",
             recursionDepth = 1,
             publicInputsHex = "",
-            envelope = OfflineStarkVerifyEnvelopeV1(
-                params = OfflineStarkFriParamsV1(1, 4, 3, 2, 8, 2, 1, ""),
-                proof = OfflineStarkProofV1(
+            envelope = OfflineStarkVerifyEnvelope(
+                params = OfflineStarkFriParams(1, 4, 3, 2, 8, 2, 1, ""),
+                proof = OfflineStarkProof(
                     version = 1,
-                    commits = OfflineStarkCommitmentsV1(1, emptyList(), null),
+                    commits = OfflineStarkCommitments(1, emptyList(), null),
                     queries = emptyList(),
                     compValues = null,
                     air = null,

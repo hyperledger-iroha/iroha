@@ -8,7 +8,7 @@ import org.hyperledger.iroha.norito.NoritoCodec;
  */
 public final class OfflineSigningEnvelopeCodec {
 
-  private static final String DEFAULT_SCHEMA = "iroha.android.offline.Envelope.v1";
+  private static final String DEFAULT_SCHEMA = "iroha.android.offline.Envelope";
   private final String schemaName;
   private final OfflineSigningEnvelopeAdapter adapter = new OfflineSigningEnvelopeAdapter();
 

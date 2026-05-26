@@ -379,13 +379,13 @@ main().catch((error) => {
 完整性、HMS 安全檢測、已配置），無需解析原始元數據：
 
 ```bash
-# Check Offline V2 readiness
+# Check Offline readiness
 TORII_URL=https://torii.nexus.example \
 node -e '
   import { ToriiClient } from "@iroha/iroha-js";
   const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineV2Readiness();
-  console.log(readiness.offline_note_v2, readiness.offline_recursive_note_proof);
+  const readiness = await client.getOfflineReadiness();
+  console.log(readiness.offline_note, readiness.offline_recursive_note_proof);
 '
 ```
 

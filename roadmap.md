@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-05-23
+Last updated: 2026-05-26
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -16,6 +16,11 @@ and completed history lives in [`status.md`](./status.md).
 - Keep focused validation green for the core transaction pipeline, Torii query
   APIs, Norito wire formats, and SDK fixtures before broader workspace test
   runs.
+- Finish the remaining server-side settlement integration for the v2 Offline
+  Bearer purse model. The Kotlin, Swift, and Java Android SDKs now expose
+  hardware-backed stateful purse contracts, and Torii signs config-driven
+  revocation, blacklist, and per-asset offline-limit bundles for app policy
+  refresh.
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 

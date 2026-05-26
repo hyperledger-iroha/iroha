@@ -6738,28 +6738,28 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineV2ReadinessParsesRecursiveVerifierMetadata() async throws {
+    func testGetOfflineReadinessParsesRecursiveVerifierMetadata() async throws {
         let payload = """
         {
-          "offline_note_v2": true,
+          "offline_note": true,
           "offline_one_use_keys": true,
           "offline_recursive_note_proof": true,
           "offline_recursive_note_proof_backend": "halo2/ipa",
-          "offline_recursive_note_proof_circuit_id": "offline-note-v2-recursive-v1",
+          "offline_recursive_note_proof_circuit_id": "offline-note-recursive",
           "offline_recursive_note_proof_public_inputs_schema_hash": "\(String(repeating: "a", count: 64))",
           "offline_recursive_note_proof_public_instance_columns": 16,
           "offline_recursive_note_proof_verifier_key_id": {
             "backend": "halo2/ipa",
-            "name": "offline-note-v2-recursive-v1"
+            "name": "offline-note-recursive"
           },
-          "offline_fountain_qr_v1": true,
+          "offline_fountain_qr": true,
           "offline_sync_optional": true,
           "offline_telemetry": true
         }
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/offline/v2/readiness")
+            XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -6768,12 +6768,13 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let readiness = try await makeClient().getOfflineV2Readiness()
-        XCTAssertTrue(readiness.offlineNoteV2)
+        let readiness = try await makeClient().getOfflineReadiness()
+        XCTAssertTrue(readiness.offlineNote)
         XCTAssertTrue(readiness.offlineRecursiveNoteProof)
+        XCTAssertTrue(readiness.offlineFountainQr)
         XCTAssertTrue(readiness.hasCanonicalRecursiveVerifierMetadata)
         XCTAssertEqual(readiness.offlineRecursiveNoteProofVerifierKeyId?.backend, "halo2/ipa")
-        XCTAssertEqual(readiness.offlineRecursiveNoteProofVerifierKeyId?.name, "offline-note-v2-recursive-v1")
+        XCTAssertEqual(readiness.offlineRecursiveNoteProofVerifierKeyId?.name, OfflineNoteConstants.recursiveVerifierName)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

@@ -7672,8 +7672,8 @@ public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
     public let record: ToriiVerifyingKeyRecord
 }
 
-public struct ToriiOfflineV2Readiness: Decodable, Sendable, Equatable {
-    public let offlineNoteV2: Bool
+public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
+    public let offlineNote: Bool
     public let offlineOneUseKeys: Bool
     public let offlineRecursiveNoteProof: Bool
     public let offlineRecursiveNoteProofBackend: String?
@@ -7681,7 +7681,7 @@ public struct ToriiOfflineV2Readiness: Decodable, Sendable, Equatable {
     public let offlineRecursiveNoteProofPublicInputsSchemaHash: String?
     public let offlineRecursiveNoteProofPublicInstanceColumns: UInt64?
     public let offlineRecursiveNoteProofVerifierKeyId: ToriiVerifyingKeyId?
-    public let offlineFountainQrV1: Bool
+    public let offlineFountainQr: Bool
     public let offlineSyncOptional: Bool
     public let offlineTelemetry: Bool
 
@@ -7693,15 +7693,15 @@ public struct ToriiOfflineV2Readiness: Decodable, Sendable, Equatable {
             return false
         }
         return offlineRecursiveNoteProof
-            && offlineRecursiveNoteProofBackend == "halo2/ipa"
-            && offlineRecursiveNoteProofCircuitId == "offline-note-v2-recursive-v1"
+            && offlineRecursiveNoteProofBackend == OfflineNoteConstants.recursiveBackend
+            && offlineRecursiveNoteProofCircuitId == OfflineNoteConstants.recursiveVerifierName
             && offlineRecursiveNoteProofPublicInstanceColumns == 16
-            && offlineRecursiveNoteProofVerifierKeyId?.backend == "halo2/ipa"
-            && offlineRecursiveNoteProofVerifierKeyId?.name == "offline-note-v2-recursive-v1"
+            && offlineRecursiveNoteProofVerifierKeyId?.backend == OfflineNoteConstants.recursiveBackend
+            && offlineRecursiveNoteProofVerifierKeyId?.name == OfflineNoteConstants.recursiveVerifierName
     }
 
     private enum CodingKeys: String, CodingKey {
-        case offlineNoteV2 = "offline_note_v2"
+        case offlineNote = "offline_note"
         case offlineOneUseKeys = "offline_one_use_keys"
         case offlineRecursiveNoteProof = "offline_recursive_note_proof"
         case offlineRecursiveNoteProofBackend = "offline_recursive_note_proof_backend"
@@ -7709,7 +7709,7 @@ public struct ToriiOfflineV2Readiness: Decodable, Sendable, Equatable {
         case offlineRecursiveNoteProofPublicInputsSchemaHash = "offline_recursive_note_proof_public_inputs_schema_hash"
         case offlineRecursiveNoteProofPublicInstanceColumns = "offline_recursive_note_proof_public_instance_columns"
         case offlineRecursiveNoteProofVerifierKeyId = "offline_recursive_note_proof_verifier_key_id"
-        case offlineFountainQrV1 = "offline_fountain_qr_v1"
+        case offlineFountainQr = "offline_fountain_qr"
         case offlineSyncOptional = "offline_sync_optional"
         case offlineTelemetry = "offline_telemetry"
     }
@@ -12481,8 +12481,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getOfflineV2Readiness(completion: @escaping (Result<ToriiOfflineV2Readiness, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineV2Readiness() }
+    public func getOfflineReadiness(completion: @escaping (Result<ToriiOfflineReadiness, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getOfflineReadiness() }
     }
 
     @discardableResult
@@ -14497,11 +14497,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeUTF8String(from: data, context: "health")
     }
 
-    public func getOfflineV2Readiness() async throws -> ToriiOfflineV2Readiness {
-        let request = try makeRequest(path: "/v1/offline/v2/readiness",
+    public func getOfflineReadiness() async throws -> ToriiOfflineReadiness {
+        let request = try makeRequest(path: "/v1/offline/readiness",
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineV2Readiness.self, from: data)
+        return try decodeJSON(ToriiOfflineReadiness.self, from: data)
     }
 
     public func getMetrics(asText: Bool = false) async throws -> ToriiMetricsResponse {

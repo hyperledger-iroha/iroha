@@ -10,6 +10,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand};
+use fastpq_prover::gadgets::transfer::decode_transcripts;
 use fastpq_prover::{
     AXT_DEFAULT_PARAMETER, OperationKind, Proof, Prover, PublicInputs, StateTransition,
     TransitionBatch, batch_manifest_sha256 as axt_batch_manifest_sha256, bind_axt_batch,
@@ -19,7 +20,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
     block::{BlockHeader, consensus::LaneBlockCommitment},
-    fastpq::{FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY},
+    fastpq::{FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, normalized_numeric_to_u64},
     nexus::{
         AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, AxtTouchSpec,
         LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope,
@@ -51,6 +52,10 @@ enum Command {
         input: PathBuf,
     },
     Verify {
+        #[arg(long)]
+        input: PathBuf,
+    },
+    InspectTransfers {
         #[arg(long)]
         input: PathBuf,
     },
@@ -192,6 +197,45 @@ struct VerifyResponse {
     batch_manifest_sha256: String,
 }
 
+#[derive(Debug, Clone, JsonDeserialize)]
+struct InspectTransfersInput {
+    batch_base64: String,
+    #[norito(default)]
+    source_account_id: Option<String>,
+    #[norito(default)]
+    destination_account_id: Option<String>,
+    #[norito(default)]
+    asset_definition_id: Option<String>,
+}
+
+#[derive(Debug, Clone, JsonSerialize)]
+struct InspectTransfersOutput {
+    transcripts_present: bool,
+    transfer_count: usize,
+    transfers: Vec<TransferInspectionRecord>,
+}
+
+#[derive(Debug, Clone, JsonSerialize)]
+struct TransferInspectionRecord {
+    transcript_index: usize,
+    delta_index: usize,
+    batch_hash: String,
+    from_account_id: String,
+    to_account_id: String,
+    asset_definition_id: String,
+    normalized_scale: u32,
+    amount: String,
+    amount_units: Option<u64>,
+    from_balance_before: String,
+    from_balance_before_units: Option<u64>,
+    from_balance_after: String,
+    from_balance_after_units: Option<u64>,
+    to_balance_before: String,
+    to_balance_before_units: Option<u64>,
+    to_balance_after: String,
+    to_balance_after_units: Option<u64>,
+}
+
 fn default_relay_block_height() -> u64 {
     1
 }
@@ -212,6 +256,11 @@ fn main() -> Result<(), String> {
         Command::Verify { input } => {
             let request: VerifyInput = read_json(&input)?;
             let response = handle_verify(request)?;
+            print_json(&response)
+        }
+        Command::InspectTransfers { input } => {
+            let request: InspectTransfersInput = read_json(&input)?;
+            let response = handle_inspect_transfers(request)?;
             print_json(&response)
         }
     }
@@ -365,6 +414,92 @@ fn handle_verify(input: VerifyInput) -> Result<VerifyResponse, String> {
         trace_commitment: proof.commitment().to_string(),
         batch_manifest_sha256: batch_manifest_sha256(&request),
     })
+}
+
+fn handle_inspect_transfers(
+    input: InspectTransfersInput,
+) -> Result<InspectTransfersOutput, String> {
+    let batch = decode_request_batch(&input.batch_base64)?;
+    let transcripts = decode_transcripts(&batch.metadata)
+        .map_err(|err| format!("failed to decode transfer transcripts: {err}"))?;
+    let Some(transcripts) = transcripts else {
+        return Ok(InspectTransfersOutput {
+            transcripts_present: false,
+            transfer_count: 0,
+            transfers: Vec::new(),
+        });
+    };
+
+    let source_filter = trimmed_filter(input.source_account_id);
+    let destination_filter = trimmed_filter(input.destination_account_id);
+    let asset_filter = trimmed_filter(input.asset_definition_id);
+    let mut transfers = Vec::new();
+    for (transcript_index, transcript) in transcripts.iter().enumerate() {
+        for (delta_index, delta) in transcript.deltas.iter().enumerate() {
+            let from_account_id = delta.from_account.to_string();
+            let to_account_id = delta.to_account.to_string();
+            let asset_definition_id = delta.asset_definition.to_string();
+            if let Some(expected) = &source_filter
+                && &from_account_id != expected
+            {
+                continue;
+            }
+            if let Some(expected) = &destination_filter
+                && &to_account_id != expected
+            {
+                continue;
+            }
+            if let Some(expected) = &asset_filter
+                && &asset_definition_id != expected
+            {
+                continue;
+            }
+            let normalized_scale = delta.normalized_scale();
+            transfers.push(TransferInspectionRecord {
+                transcript_index,
+                delta_index,
+                batch_hash: transcript.batch_hash.to_string(),
+                from_account_id,
+                to_account_id,
+                asset_definition_id,
+                normalized_scale,
+                amount: delta.amount.to_string(),
+                amount_units: normalized_numeric_to_u64(&delta.amount, normalized_scale),
+                from_balance_before: delta.from_balance_before.to_string(),
+                from_balance_before_units: normalized_numeric_to_u64(
+                    &delta.from_balance_before,
+                    normalized_scale,
+                ),
+                from_balance_after: delta.from_balance_after.to_string(),
+                from_balance_after_units: normalized_numeric_to_u64(
+                    &delta.from_balance_after,
+                    normalized_scale,
+                ),
+                to_balance_before: delta.to_balance_before.to_string(),
+                to_balance_before_units: normalized_numeric_to_u64(
+                    &delta.to_balance_before,
+                    normalized_scale,
+                ),
+                to_balance_after: delta.to_balance_after.to_string(),
+                to_balance_after_units: normalized_numeric_to_u64(
+                    &delta.to_balance_after,
+                    normalized_scale,
+                ),
+            });
+        }
+    }
+
+    Ok(InspectTransfersOutput {
+        transcripts_present: true,
+        transfer_count: transfers.len(),
+        transfers,
+    })
+}
+
+fn trimmed_filter(value: Option<String>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
 }
 
 fn prove_request(
@@ -914,4 +1049,49 @@ fn percentile_index(len: usize, numerator: usize, denominator: usize) -> usize {
 
 fn duration_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_batch_base64() -> String {
+        let batch = TransitionBatch::new(
+            AXT_DEFAULT_PARAMETER.to_string(),
+            PublicInputs {
+                dsid: [0; 16],
+                slot: 1,
+                old_root: [1; 32],
+                new_root: [2; 32],
+                perm_root: [3; 32],
+                tx_set_hash: [4; 32],
+            },
+        );
+        BASE64_STANDARD.encode(to_bytes(&batch).expect("encode transition batch"))
+    }
+
+    #[test]
+    fn inspect_transfers_reports_absent_metadata() {
+        let output = handle_inspect_transfers(InspectTransfersInput {
+            batch_base64: empty_batch_base64(),
+            source_account_id: None,
+            destination_account_id: None,
+            asset_definition_id: None,
+        })
+        .expect("inspect transfers");
+
+        assert!(!output.transcripts_present);
+        assert_eq!(output.transfer_count, 0);
+        assert!(output.transfers.is_empty());
+    }
+
+    #[test]
+    fn trimmed_filter_drops_empty_values() {
+        assert_eq!(trimmed_filter(Some("  ".into())), None);
+        assert_eq!(
+            trimmed_filter(Some("  alice  ".into())),
+            Some("alice".into())
+        );
+        assert_eq!(trimmed_filter(None), None);
+    }
 }

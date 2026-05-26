@@ -1,4 +1,4 @@
-//! Offline V2 note instruction execution.
+//! Offline note instruction execution.
 
 use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
@@ -14,12 +14,12 @@ use iroha_data_model::{
     },
     isi::{
         error::{InstructionExecutionError, MathError},
-        offline::{AuditOfflineNoteV2, IssueOfflineNoteV2, RedeemOfflineNoteV2},
+        offline::{AuditOfflineNote, IssueOfflineNote, RedeemOfflineNote},
     },
     offline::{
-        OFFLINE_NOTE_V2_RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1, OFFLINE_REJECTION_REASON_PREFIX,
-        OfflineNoteAuditOutputClaimV2, OfflineNoteIssuedClaimV2, OfflineNoteKeyCertificateV2,
-        OfflineNoteRecursiveProofV2, offline_note_v2_recursive_public_inputs_schema_hash,
+        OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA, OFFLINE_REJECTION_REASON_PREFIX,
+        OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim, OfflineNoteKeyCertificate,
+        OfflineNoteRecursiveProof, offline_note_recursive_public_inputs_schema_hash,
     },
     proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
@@ -208,48 +208,48 @@ fn credit_from_offline_note_escrow(
     Ok(())
 }
 
-/// Execution logic for Offline V2 note instructions.
+/// Execution logic for Offline note instructions.
 pub mod isi {
     use super::*;
 
-    const OFFLINE_NOTE_V2_VERIFIER_NAMESPACE: &str = "offline_note_v2";
-    const OFFLINE_NOTE_V2_REPLAY_ISSUE_DOMAIN: &str = "offline-note-v2-issued-note-v1";
-    const OFFLINE_NOTE_V2_REPLAY_KEY_CERTIFICATE_DOMAIN: &str =
-        "offline-note-v2-issued-key-certificate-v1";
-    const OFFLINE_NOTE_V2_REPLAY_ISSUED_CLAIM_DOMAIN: &str = "offline-note-v2-issued-claim-v1";
-    const OFFLINE_NOTE_V2_REPLAY_SPENT_CLAIM_DOMAIN: &str = "offline-note-v2-spent-claim-v1";
-    const OFFLINE_NOTE_V2_REPLAY_NULLIFIER_DOMAIN: &str = "offline-note-v2-spent-nullifier-v1";
-    const OFFLINE_NOTE_V2_REPLAY_AUDIT_TOKEN_DOMAIN: &str = "offline-note-v2-audit-token-v1";
-    const OFFLINE_NOTE_V2_REPLAY_AUDIT_RECORD_DOMAIN: &str = "offline-note-v2-audit-record-v1";
-    const OFFLINE_NOTE_V2_REPLAY_AUDIT_NULLIFIER_DOMAIN: &str =
-        "offline-note-v2-audit-nullifier-v1";
-    const OFFLINE_NOTE_V2_REPLAY_AUDIT_OUTPUT_DOMAIN: &str = "offline-note-v2-audit-output-v1";
+    const OFFLINE_NOTE_VERIFIER_NAMESPACE: &str = "offline_note";
+    const OFFLINE_NOTE_REPLAY_ISSUE_DOMAIN: &str = "offline-note-issued-note";
+    const OFFLINE_NOTE_REPLAY_KEY_CERTIFICATE_DOMAIN: &str = "offline-note-issued-key-certificate";
+    const OFFLINE_NOTE_REPLAY_ISSUED_CLAIM_DOMAIN: &str = "offline-note-issued-claim";
+    const OFFLINE_NOTE_REPLAY_SPENT_CLAIM_DOMAIN: &str = "offline-note-spent-claim";
+    const OFFLINE_NOTE_REPLAY_NULLIFIER_DOMAIN: &str = "offline-note-spent-nullifier";
+    const OFFLINE_NOTE_REPLAY_AUDIT_TOKEN_DOMAIN: &str = "offline-note-audit-token";
+    const OFFLINE_NOTE_REPLAY_AUDIT_RECORD_DOMAIN: &str = "offline-note-audit-record";
+    const OFFLINE_NOTE_REPLAY_AUDIT_NULLIFIER_DOMAIN: &str = "offline-note-audit-nullifier";
+    const OFFLINE_NOTE_REPLAY_AUDIT_OUTPUT_DOMAIN: &str = "offline-note-audit-output";
 
-    fn validate_offline_note_v2_key_certificate(
-        certificate: &OfflineNoteKeyCertificateV2,
+    fn validate_offline_note_key_certificate(
+        certificate: &OfflineNoteKeyCertificate,
     ) -> Result<(), InstructionExecutionError> {
-        if certificate.version != 2 || !certificate.one_use {
+        if certificate.version != iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION
+            || !certificate.one_use
+        {
             return Err(labeled_invariant(
                 "invalid_issuer_cert",
-                "offline V2 note operation requires a compact one-use key certificate",
+                "offline note operation requires a compact one-use key certificate",
             ));
         }
         if certificate.public_key.is_empty() {
             return Err(labeled_invariant(
                 "invalid_issuer_cert",
-                "offline V2 note certificate public key must be non-empty",
+                "offline note certificate public key must be non-empty",
             ));
         }
         PublicKey::from_bytes(Algorithm::Ed25519, &certificate.public_key).map_err(|_| {
             labeled_invariant(
                 "invalid_issuer_cert",
-                "offline V2 note certificate public key must be an Ed25519 public key",
+                "offline note certificate public key must be an Ed25519 public key",
             )
         })?;
         Ok(())
     }
 
-    fn offline_note_v2_public_instances_from_envelope(
+    fn offline_note_public_instances_from_envelope(
         proof: &ProofBox,
         envelope: &OpenVerifyEnvelope,
     ) -> Result<Vec<Vec<[u8; 32]>>, Error> {
@@ -260,7 +260,7 @@ pub mod isi {
             .ok_or_else(|| {
                 labeled_invariant(
                     "invalid_proof",
-                    "offline V2 recursive proof does not expose Halo2 public instances",
+                    "offline recursive proof does not expose Halo2 public instances",
                 )
                 .into()
             }),
@@ -268,7 +268,7 @@ pub mod isi {
                 if !crate::zk::is_stark_fri_v1_backend(proof.backend.as_str()) {
                     return Err(labeled_invariant(
                         "invalid_proof",
-                        "offline V2 recursive proof Stark backend is unsupported",
+                        "offline recursive proof Stark backend is unsupported",
                     )
                     .into());
                 }
@@ -276,28 +276,28 @@ pub mod isi {
                     .map_err(|_| {
                         labeled_invariant(
                             "invalid_proof",
-                            "offline V2 recursive proof has invalid STARK public inputs",
+                            "offline recursive proof has invalid STARK public inputs",
                         )
                     })?;
                 Ok(open.public_inputs)
             }
             _ => Err(labeled_invariant(
                 "invalid_proof",
-                "offline V2 recursive proof backend is unsupported",
+                "offline recursive proof backend is unsupported",
             )
             .into()),
         }
     }
 
-    fn offline_note_v2_resolve_verifier(
-        proof: &OfflineNoteRecursiveProofV2,
+    fn offline_note_resolve_verifier(
+        proof: &OfflineNoteRecursiveProof,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(VerifyingKeyRecord, VerifyingKeyBox, OpenVerifyEnvelope), Error> {
         let verifier_id: &VerifyingKeyId = &proof.verifier_key_id;
         if proof.proof.backend != verifier_id.backend {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "offline V2 recursive proof backend does not match verifier key id",
+                "offline recursive proof backend does not match verifier key id",
             )
             .into());
         }
@@ -305,14 +305,14 @@ pub mod isi {
         if backend.starts_with("debug/") {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "offline V2 recursive proofs may not use debug proof backends",
+                "offline recursive proofs may not use debug proof backends",
             )
             .into());
         }
         if proof.proof.bytes.is_empty() {
             return Err(labeled_invariant(
                 "invalid_proof",
-                "offline V2 recursive proof must not be empty",
+                "offline recursive proof must not be empty",
             )
             .into());
         }
@@ -325,42 +325,41 @@ pub mod isi {
             .ok_or_else(|| {
                 labeled_invariant(
                     "verifier_key_invalid",
-                    "offline V2 recursive verifier key is not registered",
+                    "offline recursive verifier key is not registered",
                 )
             })?;
         if record.status != ConfidentialStatus::Active {
             return Err(labeled_invariant(
                 "verifier_key_inactive",
-                "offline V2 recursive verifier key is not active",
+                "offline recursive verifier key is not active",
             )
             .into());
         }
-        if record.namespace != OFFLINE_NOTE_V2_VERIFIER_NAMESPACE {
+        if record.namespace != OFFLINE_NOTE_VERIFIER_NAMESPACE {
             return Err(labeled_invariant(
                 "verifier_schema_mismatch",
-                "offline V2 recursive verifier key is not in the Offline V2 namespace",
+                "offline recursive verifier key is not in the Offline namespace",
             )
             .into());
         }
-        if record.public_inputs_schema_hash != offline_note_v2_recursive_public_inputs_schema_hash()
-        {
+        if record.public_inputs_schema_hash != offline_note_recursive_public_inputs_schema_hash() {
             return Err(labeled_invariant(
                 "verifier_schema_mismatch",
-                "offline V2 recursive verifier key uses an unexpected public-input schema",
+                "offline recursive verifier key uses an unexpected public-input schema",
             )
             .into());
         }
         if record.max_proof_bytes == 0 {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "offline V2 recursive verifier key must set max_proof_bytes",
+                "offline recursive verifier key must set max_proof_bytes",
             )
             .into());
         }
         if proof.proof.bytes.len() > record.max_proof_bytes as usize {
             return Err(labeled_invariant(
                 "invalid_proof",
-                "offline V2 recursive proof exceeds verifier max_proof_bytes",
+                "offline recursive proof exceeds verifier max_proof_bytes",
             )
             .into());
         }
@@ -374,7 +373,7 @@ pub mod isi {
             _ => {
                 return Err(labeled_invariant(
                     "verifier_key_inactive",
-                    "offline V2 recursive verifier circuit/version is not active",
+                    "offline recursive verifier circuit/version is not active",
                 )
                 .into());
             }
@@ -383,20 +382,20 @@ pub mod isi {
         let vk_box = record.key.clone().ok_or_else(|| {
             labeled_invariant(
                 "verifier_key_invalid",
-                "offline V2 recursive verifier key bytes are not available inline",
+                "offline recursive verifier key bytes are not available inline",
             )
         })?;
         if vk_box.backend != verifier_id.backend || vk_box.backend != proof.proof.backend {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "offline V2 recursive verifier backend mismatch",
+                "offline recursive verifier backend mismatch",
             )
             .into());
         }
         if crate::zk::hash_vk(&vk_box) != record.commitment {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "offline V2 recursive verifier commitment mismatch",
+                "offline recursive verifier commitment mismatch",
             )
             .into());
         }
@@ -405,34 +404,34 @@ pub mod isi {
             norito::decode_from_bytes(&proof.proof.bytes).map_err(|_| {
                 labeled_invariant(
                     "invalid_proof",
-                    "offline V2 recursive proof must be an OpenVerifyEnvelope",
+                    "offline recursive proof must be an OpenVerifyEnvelope",
                 )
             })?;
         if envelope.backend != record.backend {
             return Err(labeled_invariant(
                 "invalid_proof",
-                "offline V2 recursive proof envelope backend mismatch",
+                "offline recursive proof envelope backend mismatch",
             )
             .into());
         }
         if envelope.circuit_id != record.circuit_id {
             return Err(labeled_invariant(
                 "invalid_proof",
-                "offline V2 recursive proof circuit id mismatch",
+                "offline recursive proof circuit id mismatch",
             )
             .into());
         }
         if envelope.vk_hash != [0u8; 32] && envelope.vk_hash != record.commitment {
             return Err(labeled_invariant(
                 "invalid_proof",
-                "offline V2 recursive proof verifier commitment mismatch",
+                "offline recursive proof verifier commitment mismatch",
             )
             .into());
         }
-        if envelope.public_inputs != OFFLINE_NOTE_V2_RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1 {
+        if envelope.public_inputs != OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA {
             return Err(labeled_invariant(
                 "verifier_schema_mismatch",
-                "offline V2 recursive proof public-input schema mismatch",
+                "offline recursive proof public-input schema mismatch",
             )
             .into());
         }
@@ -440,8 +439,8 @@ pub mod isi {
         Ok((record, vk_box, envelope))
     }
 
-    fn verify_offline_note_v2_recursive_proof(
-        proof: &OfflineNoteRecursiveProofV2,
+    fn verify_offline_note_recursive_proof(
+        proof: &OfflineNoteRecursiveProof,
         expected_public_inputs_hash: &Hash,
         expected_public_instances: Vec<Vec<[u8; 32]>>,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -449,19 +448,18 @@ pub mod isi {
         if &proof.public_inputs_hash != expected_public_inputs_hash {
             return Err(labeled_invariant(
                 "proof_binding",
-                "offline V2 recursive proof is not bound to expected public inputs",
+                "offline recursive proof is not bound to expected public inputs",
             )
             .into());
         }
 
-        let (_record, vk_box, envelope) =
-            offline_note_v2_resolve_verifier(proof, state_transaction)?;
+        let (_record, vk_box, envelope) = offline_note_resolve_verifier(proof, state_transaction)?;
         let actual_instances =
-            offline_note_v2_public_instances_from_envelope(&proof.proof, &envelope)?;
+            offline_note_public_instances_from_envelope(&proof.proof, &envelope)?;
         if actual_instances != expected_public_instances {
             return Err(labeled_invariant(
                 "proof_binding",
-                "offline V2 recursive proof public instances do not match expected public inputs",
+                "offline recursive proof public instances do not match expected public inputs",
             )
             .into());
         }
@@ -476,14 +474,14 @@ pub mod isi {
         if !report.ok {
             return Err(labeled_invariant(
                 "invalid_proof",
-                "offline V2 recursive proof verification failed",
+                "offline recursive proof verification failed",
             )
             .into());
         }
         Ok(())
     }
 
-    fn offline_note_v2_replay_key(domain: &str, value: &Hash) -> Hash {
+    fn offline_note_replay_key(domain: &str, value: &Hash) -> Hash {
         let mut preimage = Vec::with_capacity(domain.len() + Hash::LENGTH + 1);
         preimage.extend_from_slice(domain.as_bytes());
         preimage.push(b':');
@@ -491,49 +489,43 @@ pub mod isi {
         Hash::new(&preimage)
     }
 
-    fn offline_note_v2_issue_key(note_commitment: &Hash) -> Hash {
-        offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_ISSUE_DOMAIN, note_commitment)
+    fn offline_note_issue_key(note_commitment: &Hash) -> Hash {
+        offline_note_replay_key(OFFLINE_NOTE_REPLAY_ISSUE_DOMAIN, note_commitment)
     }
 
-    fn offline_note_v2_key_certificate_key(certificate_payload_hash: &Hash) -> Hash {
-        offline_note_v2_replay_key(
-            OFFLINE_NOTE_V2_REPLAY_KEY_CERTIFICATE_DOMAIN,
+    fn offline_note_key_certificate_key(certificate_payload_hash: &Hash) -> Hash {
+        offline_note_replay_key(
+            OFFLINE_NOTE_REPLAY_KEY_CERTIFICATE_DOMAIN,
             certificate_payload_hash,
         )
     }
 
-    fn offline_note_v2_issued_claim_key(claim_hash: &Hash) -> Hash {
-        offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_ISSUED_CLAIM_DOMAIN, claim_hash)
+    fn offline_note_issued_claim_key(claim_hash: &Hash) -> Hash {
+        offline_note_replay_key(OFFLINE_NOTE_REPLAY_ISSUED_CLAIM_DOMAIN, claim_hash)
     }
 
-    fn offline_note_v2_spent_claim_key(claim_hash: &Hash) -> Hash {
-        offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_SPENT_CLAIM_DOMAIN, claim_hash)
+    fn offline_note_spent_claim_key(claim_hash: &Hash) -> Hash {
+        offline_note_replay_key(OFFLINE_NOTE_REPLAY_SPENT_CLAIM_DOMAIN, claim_hash)
     }
 
-    fn offline_note_v2_nullifier_key(nullifier: &Hash) -> Hash {
-        offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_NULLIFIER_DOMAIN, nullifier)
+    fn offline_note_nullifier_key(nullifier: &Hash) -> Hash {
+        offline_note_replay_key(OFFLINE_NOTE_REPLAY_NULLIFIER_DOMAIN, nullifier)
     }
 
-    fn offline_note_v2_audit_token_key(token_id: &Hash) -> Hash {
-        offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_AUDIT_TOKEN_DOMAIN, token_id)
+    fn offline_note_audit_token_key(token_id: &Hash) -> Hash {
+        offline_note_replay_key(OFFLINE_NOTE_REPLAY_AUDIT_TOKEN_DOMAIN, token_id)
     }
 
-    fn offline_note_v2_audit_record_key(public_inputs_hash: &Hash) -> Hash {
-        offline_note_v2_replay_key(
-            OFFLINE_NOTE_V2_REPLAY_AUDIT_RECORD_DOMAIN,
-            public_inputs_hash,
-        )
+    fn offline_note_audit_record_key(public_inputs_hash: &Hash) -> Hash {
+        offline_note_replay_key(OFFLINE_NOTE_REPLAY_AUDIT_RECORD_DOMAIN, public_inputs_hash)
     }
 
-    fn offline_note_v2_audit_nullifier_key(nullifier: &Hash) -> Hash {
-        offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_AUDIT_NULLIFIER_DOMAIN, nullifier)
+    fn offline_note_audit_nullifier_key(nullifier: &Hash) -> Hash {
+        offline_note_replay_key(OFFLINE_NOTE_REPLAY_AUDIT_NULLIFIER_DOMAIN, nullifier)
     }
 
-    fn offline_note_v2_audit_output_key(output_commitment: &Hash) -> Hash {
-        offline_note_v2_replay_key(
-            OFFLINE_NOTE_V2_REPLAY_AUDIT_OUTPUT_DOMAIN,
-            output_commitment,
-        )
+    fn offline_note_audit_output_key(output_commitment: &Hash) -> Hash {
+        offline_note_replay_key(OFFLINE_NOTE_REPLAY_AUDIT_OUTPUT_DOMAIN, output_commitment)
     }
 
     fn ensure_unique_hashes(
@@ -575,13 +567,13 @@ pub mod isi {
         } else {
             Err(labeled_invariant(
                 "unauthorized_controller",
-                "only the note account or an offline escrow manager may submit Offline V2 notes",
+                "only the note account or an offline escrow manager may submit Offline notes",
             )
             .into())
         }
     }
 
-    fn ensure_can_issue_offline_note_v2(
+    fn ensure_can_issue_offline_note(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
@@ -590,26 +582,26 @@ pub mod isi {
         } else {
             Err(labeled_invariant(
                 "unauthorized_controller",
-                "only an offline escrow manager may issue Offline V2 notes",
+                "only an offline escrow manager may issue Offline notes",
             )
             .into())
         }
     }
 
-    fn ensure_offline_note_v2_certificate_signature(
-        certificate: &OfflineNoteKeyCertificateV2,
+    fn ensure_offline_note_certificate_signature(
+        certificate: &OfflineNoteKeyCertificate,
         issuer: &AccountId,
     ) -> Result<(), Error> {
         let payload = certificate.signing_bytes().map_err(|err| {
             labeled_invariant(
                 "invalid_issuer_cert",
-                format!("failed to encode Offline V2 key certificate payload: {err}"),
+                format!("failed to encode Offline key certificate payload: {err}"),
             )
         })?;
         let issuer_key = issuer.try_signatory().ok_or_else(|| {
             labeled_invariant(
                 "invalid_issuer_cert",
-                "offline V2 note issuer account must be single-signature",
+                "offline note issuer account must be single-signature",
             )
         })?;
         certificate
@@ -618,101 +610,101 @@ pub mod isi {
             .map_err(|_| {
                 labeled_invariant(
                     "invalid_issuer_cert",
-                    "offline V2 key certificate signature does not match issuer account",
+                    "offline key certificate signature does not match issuer account",
                 )
                 .into()
             })
     }
 
-    fn offline_note_v2_issued_claim_hash(claim: OfflineNoteIssuedClaimV2) -> Result<Hash, Error> {
+    fn offline_note_issued_claim_hash(claim: OfflineNoteIssuedClaim) -> Result<Hash, Error> {
         claim.claim_hash().map_err(|err| {
             labeled_invariant(
                 "invalid_proof",
-                format!("failed to encode Offline V2 issued-note claim: {err}"),
+                format!("failed to encode Offline issued-note claim: {err}"),
             )
             .into()
         })
     }
 
-    impl Execute for IssueOfflineNoteV2 {
+    impl Execute for IssueOfflineNote {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let issue = self.issue;
-            validate_offline_note_v2_key_certificate(&issue.key_certificate)?;
+            validate_offline_note_key_certificate(&issue.key_certificate)?;
             if issue.amount <= Numeric::zero() {
                 return Err(labeled_invariant(
                     "invalid_amount",
-                    "offline V2 note issue amount must be positive",
+                    "offline note issue amount must be positive",
                 )
                 .into());
             }
             if issue.key_certificate.account_id != *issue.asset.account() {
                 return Err(labeled_invariant(
                     "invalid_issuer_cert",
-                    "offline V2 note issue certificate account must match the debited asset owner",
+                    "offline note issue certificate account must match the debited asset owner",
                 )
                 .into());
             }
-            ensure_can_issue_offline_note_v2(authority, state_transaction)?;
-            ensure_offline_note_v2_certificate_signature(&issue.key_certificate, authority)?;
+            ensure_can_issue_offline_note(authority, state_transaction)?;
+            ensure_offline_note_certificate_signature(&issue.key_certificate, authority)?;
             let spec = state_transaction.numeric_spec_for(issue.asset.definition())?;
             assert_numeric_spec_with(&issue.amount, spec)?;
             let certificate_payload_hash = issue.key_certificate.payload_hash().map_err(|err| {
                 labeled_invariant(
                     "invalid_issuer_cert",
-                    format!("failed to encode Offline V2 key certificate payload: {err}"),
+                    format!("failed to encode Offline key certificate payload: {err}"),
                 )
             })?;
-            let issue_key = offline_note_v2_issue_key(&issue.note_commitment);
-            let certificate_key = offline_note_v2_key_certificate_key(&certificate_payload_hash);
-            let issued_claim_hash = offline_note_v2_issued_claim_hash(
-                OfflineNoteIssuedClaimV2::from_issue(&issue).map_err(|err| {
+            let issue_key = offline_note_issue_key(&issue.note_commitment);
+            let certificate_key = offline_note_key_certificate_key(&certificate_payload_hash);
+            let issued_claim_hash = offline_note_issued_claim_hash(
+                OfflineNoteIssuedClaim::from_issue(&issue).map_err(|err| {
                     labeled_invariant(
                         "invalid_proof",
-                        format!("failed to encode Offline V2 issued-note claim: {err}"),
+                        format!("failed to encode Offline issued-note claim: {err}"),
                     )
                 })?,
             )?;
-            let issued_claim_key = offline_note_v2_issued_claim_key(&issued_claim_hash);
+            let issued_claim_key = offline_note_issued_claim_key(&issued_claim_hash);
             if state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .get(&issue_key)
                 .is_some()
             {
                 return Err(labeled_invariant(
                     "duplicate_issue",
-                    "offline V2 note commitment is already issued",
+                    "offline note commitment is already issued",
                 )
                 .into());
             }
             if state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .get(&certificate_key)
                 .is_some()
             {
                 return Err(labeled_invariant(
                     "duplicate_key_certificate",
-                    "offline V2 key certificate is already issued",
+                    "offline key certificate is already issued",
                 )
                 .into());
             }
             reserve_offline_note_escrow(state_transaction, &issue.asset, &issue.amount)?;
             state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .insert(issue_key, ());
             state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .insert(certificate_key, ());
             state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .insert(issued_claim_key, ());
             let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
             state_transaction
@@ -728,7 +720,7 @@ pub mod isi {
         }
     }
 
-    impl Execute for RedeemOfflineNoteV2 {
+    impl Execute for RedeemOfflineNote {
         fn execute(
             self,
             authority: &AccountId,
@@ -738,30 +730,30 @@ pub mod isi {
             if redemption.input_nullifiers.is_empty() || redemption.input_nullifiers.len() > 4 {
                 return Err(labeled_invariant(
                     "invalid_proof",
-                    "offline V2 redemption requires 1 to 4 input nullifiers",
+                    "offline redemption requires 1 to 4 input nullifiers",
                 )
                 .into());
             }
             if redemption.amount <= Numeric::zero() {
                 return Err(labeled_invariant(
                     "invalid_amount",
-                    "offline V2 redemption amount must be positive",
+                    "offline redemption amount must be positive",
                 )
                 .into());
             }
             if redemption.asset.account() != &redemption.recipient {
                 return Err(labeled_invariant(
                     "proof_binding",
-                    "offline V2 redemption asset owner must match recipient",
+                    "offline redemption asset owner must match recipient",
                 )
                 .into());
             }
             ensure_unique_hashes(
                 &redemption.input_nullifiers,
                 "duplicate_nullifier",
-                "offline V2 redemption input nullifiers must be unique",
+                "offline redemption input nullifiers must be unique",
             )?;
-            validate_offline_note_v2_key_certificate(&redemption.sender_key_certificate)?;
+            validate_offline_note_key_certificate(&redemption.sender_key_certificate)?;
             ensure_can_submit_offline_note_for_account(
                 &redemption.recipient,
                 authority,
@@ -772,74 +764,74 @@ pub mod isi {
             let expected_public_inputs_hash = redemption.public_inputs_hash().map_err(|err| {
                 labeled_invariant(
                     "invalid_proof",
-                    format!("failed to encode Offline V2 redemption public inputs: {err}"),
+                    format!("failed to encode Offline redemption public inputs: {err}"),
                 )
             })?;
             if redemption.recursive_proof.public_inputs_hash != expected_public_inputs_hash {
                 return Err(labeled_invariant(
                     "proof_binding",
-                    "offline V2 recursive proof is not bound to redemption public inputs",
+                    "offline recursive proof is not bound to redemption public inputs",
                 )
                 .into());
             }
             let expected_public_instances =
-                crate::zk::offline_note_v2_redeem_instance_values(&redemption)
+                crate::zk::offline_note_redeem_instance_values(&redemption)
                     .map_err(|err| labeled_invariant("invalid_proof", err))?
                     .public_instance_columns();
-            let issued_claim_hash = offline_note_v2_issued_claim_hash(
-                OfflineNoteIssuedClaimV2::from_redemption(&redemption).map_err(|err| {
+            let issued_claim_hash = offline_note_issued_claim_hash(
+                OfflineNoteIssuedClaim::from_redemption(&redemption).map_err(|err| {
                     labeled_invariant(
                         "invalid_proof",
-                        format!("failed to encode Offline V2 issued-note claim: {err}"),
+                        format!("failed to encode Offline issued-note claim: {err}"),
                     )
                 })?,
             )?;
-            let issued_claim_key = offline_note_v2_issued_claim_key(&issued_claim_hash);
-            let spent_claim_key = offline_note_v2_spent_claim_key(&issued_claim_hash);
+            let issued_claim_key = offline_note_issued_claim_key(&issued_claim_hash);
+            let spent_claim_key = offline_note_spent_claim_key(&issued_claim_hash);
             if state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .get(&issued_claim_key)
                 .is_none()
             {
                 return Err(labeled_invariant(
                     "note_not_issued",
-                    "offline V2 note was not issued for this source commitment, recipient, asset, and amount",
+                    "offline note was not issued for this source commitment, recipient, asset, and amount",
                 )
                 .into());
             }
             if state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .get(&spent_claim_key)
                 .is_some()
             {
                 return Err(labeled_invariant(
                     "duplicate_redeem",
-                    "offline V2 issued note is already redeemed",
+                    "offline issued note is already redeemed",
                 )
                 .into());
             }
             let consumed_keys = redemption
                 .input_nullifiers
                 .iter()
-                .map(offline_note_v2_nullifier_key)
+                .map(offline_note_nullifier_key)
                 .collect::<Vec<_>>();
             for consumed_key in &consumed_keys {
                 if state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .get(consumed_key)
                     .is_some()
                 {
                     return Err(labeled_invariant(
                         "duplicate_nullifier",
-                        "offline V2 nullifier is already redeemed",
+                        "offline nullifier is already redeemed",
                     )
                     .into());
                 }
             }
-            verify_offline_note_v2_recursive_proof(
+            verify_offline_note_recursive_proof(
                 &redemption.recursive_proof,
                 &expected_public_inputs_hash,
                 expected_public_instances,
@@ -854,12 +846,12 @@ pub mod isi {
             for consumed_key in consumed_keys {
                 state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .insert(consumed_key, ());
             }
             state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .insert(spent_claim_key, ());
             let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
             state_transaction
@@ -875,7 +867,7 @@ pub mod isi {
         }
     }
 
-    impl Execute for AuditOfflineNoteV2 {
+    impl Execute for AuditOfflineNote {
         fn execute(
             self,
             authority: &AccountId,
@@ -885,7 +877,7 @@ pub mod isi {
             if audit.input_nullifiers.is_empty() || audit.input_nullifiers.len() > 4 {
                 return Err(labeled_invariant(
                     "invalid_proof",
-                    "offline V2 audit requires 1 to 4 input nullifiers",
+                    "offline audit requires 1 to 4 input nullifiers",
                 )
                 .into());
             }
@@ -895,14 +887,14 @@ pub mod isi {
             {
                 return Err(labeled_invariant(
                     "invalid_proof",
-                    "offline V2 audit requires 1 to 4 input claims matching input nullifiers",
+                    "offline audit requires 1 to 4 input claims matching input nullifiers",
                 )
                 .into());
             }
             if audit.output_commitments.is_empty() || audit.output_commitments.len() > 2 {
                 return Err(labeled_invariant(
                     "invalid_proof",
-                    "offline V2 audit requires 1 to 2 output commitments",
+                    "offline audit requires 1 to 2 output commitments",
                 )
                 .into());
             }
@@ -911,19 +903,19 @@ pub mod isi {
             {
                 return Err(labeled_invariant(
                     "invalid_proof",
-                    "offline V2 audit requires 1 to 2 output claims bound to output commitments",
+                    "offline audit requires 1 to 2 output claims bound to output commitments",
                 )
                 .into());
             }
             ensure_unique_hashes(
                 &audit.input_nullifiers,
                 "audit_duplicate_nullifier",
-                "offline V2 audit input nullifiers must be unique",
+                "offline audit input nullifiers must be unique",
             )?;
             ensure_unique_hashes(
                 &audit.output_commitments,
                 "audit_duplicate_output",
-                "offline V2 audit output commitments must be unique",
+                "offline audit output commitments must be unique",
             )?;
             let output_commitment_set = audit
                 .output_commitments
@@ -935,40 +927,40 @@ pub mod isi {
                 if !output_commitment_set.contains(&output_claim.note_commitment) {
                     return Err(labeled_invariant(
                         "proof_binding",
-                        "offline V2 audit output claim is not bound to an output commitment",
+                        "offline audit output claim is not bound to an output commitment",
                     )
                     .into());
                 }
                 if !output_claim_commitments.insert(output_claim.note_commitment) {
                     return Err(labeled_invariant(
                         "audit_duplicate_output",
-                        "offline V2 audit output claims must be unique",
+                        "offline audit output claims must be unique",
                     )
                     .into());
                 }
-                validate_offline_note_v2_key_certificate(&output_claim.key_certificate)?;
-                ensure_offline_note_v2_certificate_signature(
+                validate_offline_note_key_certificate(&output_claim.key_certificate)?;
+                ensure_offline_note_certificate_signature(
                     &output_claim.key_certificate,
                     authority,
                 )?;
                 if output_claim.amount <= Numeric::zero() {
                     return Err(labeled_invariant(
                         "invalid_amount",
-                        "offline V2 audit output claim amount must be positive",
+                        "offline audit output claim amount must be positive",
                     )
                     .into());
                 }
                 if output_claim.key_certificate.account_id != *output_claim.asset.account() {
                     return Err(labeled_invariant(
                         "invalid_issuer_cert",
-                        "offline V2 audit output claim certificate account must match the note asset owner",
+                        "offline audit output claim certificate account must match the note asset owner",
                     )
                     .into());
                 }
                 let spec = state_transaction.numeric_spec_for(output_claim.asset.definition())?;
                 assert_numeric_spec_with(&output_claim.amount, spec)?;
             }
-            validate_offline_note_v2_key_certificate(&audit.sender_key_certificate)?;
+            validate_offline_note_key_certificate(&audit.sender_key_certificate)?;
             ensure_can_submit_offline_note_for_account(
                 &audit.sender_key_certificate.account_id,
                 authority,
@@ -978,55 +970,53 @@ pub mod isi {
                 audit.sender_key_certificate.payload_hash().map_err(|err| {
                     labeled_invariant(
                         "invalid_issuer_cert",
-                        format!("failed to encode Offline V2 key certificate payload: {err}"),
+                        format!("failed to encode Offline key certificate payload: {err}"),
                     )
                 })?;
-            let certificate_key = offline_note_v2_key_certificate_key(&certificate_payload_hash);
+            let certificate_key = offline_note_key_certificate_key(&certificate_payload_hash);
             if state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .get(&certificate_key)
                 .is_none()
             {
                 return Err(labeled_invariant(
                     "invalid_issuer_cert",
-                    "offline V2 audit key certificate was not issued",
+                    "offline audit key certificate was not issued",
                 )
                 .into());
             }
             let expected_public_inputs_hash = audit.public_inputs_hash().map_err(|err| {
                 labeled_invariant(
                     "invalid_proof",
-                    format!("failed to encode Offline V2 audit public inputs: {err}"),
+                    format!("failed to encode Offline audit public inputs: {err}"),
                 )
             })?;
             if audit.recursive_proof.public_inputs_hash != expected_public_inputs_hash {
                 return Err(labeled_invariant(
                     "proof_binding",
-                    "offline V2 recursive proof is not bound to audit public inputs",
+                    "offline recursive proof is not bound to audit public inputs",
                 )
                 .into());
             }
-            let expected_public_instances =
-                crate::zk::offline_note_v2_audit_instance_values(&audit)
-                    .map_err(|err| labeled_invariant("invalid_proof", err))?
-                    .public_instance_columns();
-            let audit_token_key = offline_note_v2_audit_token_key(&audit.token_id);
-            let audit_record_key = offline_note_v2_audit_record_key(&expected_public_inputs_hash);
+            let expected_public_instances = crate::zk::offline_note_audit_instance_values(&audit)
+                .map_err(|err| labeled_invariant("invalid_proof", err))?
+                .public_instance_columns();
+            let audit_token_key = offline_note_audit_token_key(&audit.token_id);
+            let audit_record_key = offline_note_audit_record_key(&expected_public_inputs_hash);
             let issued_output_claim_keys = audit
                 .output_claims
                 .iter()
-                .map(|output_claim: &OfflineNoteAuditOutputClaimV2| {
-                    let claim = OfflineNoteIssuedClaimV2::from_audit_output(output_claim).map_err(
-                        |err| {
+                .map(|output_claim: &OfflineNoteAuditOutputClaim| {
+                    let claim =
+                        OfflineNoteIssuedClaim::from_audit_output(output_claim).map_err(|err| {
                             labeled_invariant(
                                 "invalid_proof",
-                                format!("failed to encode Offline V2 audited output claim: {err}"),
+                                format!("failed to encode Offline audited output claim: {err}"),
                             )
-                        },
-                    )?;
-                    Ok(offline_note_v2_issued_claim_key(
-                        &offline_note_v2_issued_claim_hash(claim)?,
+                        })?;
+                    Ok(offline_note_issued_claim_key(
+                        &offline_note_issued_claim_hash(claim)?,
                     ))
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
@@ -1034,30 +1024,30 @@ pub mod isi {
                 .input_claims
                 .iter()
                 .cloned()
-                .map(offline_note_v2_issued_claim_hash)
+                .map(offline_note_issued_claim_hash)
                 .collect::<Result<Vec<_>, Error>>()?;
             ensure_unique_hashes(
                 &input_claim_hashes,
                 "duplicate_redeem",
-                "offline V2 audit input claims must be unique",
+                "offline audit input claims must be unique",
             )?;
             let issued_input_claim_keys = input_claim_hashes
                 .iter()
-                .map(offline_note_v2_issued_claim_key)
+                .map(offline_note_issued_claim_key)
                 .collect::<Vec<_>>();
             let spent_input_claim_keys = input_claim_hashes
                 .iter()
-                .map(offline_note_v2_spent_claim_key)
+                .map(offline_note_spent_claim_key)
                 .collect::<Vec<_>>();
             if state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .get(&audit_token_key)
                 .is_some()
             {
                 if state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .get(&audit_record_key)
                     .is_some()
                 {
@@ -1065,35 +1055,35 @@ pub mod isi {
                 }
                 return Err(labeled_invariant(
                     "audit_conflict",
-                    "offline V2 audit token already records different public inputs",
+                    "offline audit token already records different public inputs",
                 )
                 .into());
             }
             let consumed_nullifier_keys = audit
                 .input_nullifiers
                 .iter()
-                .map(offline_note_v2_nullifier_key)
+                .map(offline_note_nullifier_key)
                 .collect::<Vec<_>>();
             let observed_nullifier_keys = audit
                 .input_nullifiers
                 .iter()
-                .map(offline_note_v2_audit_nullifier_key)
+                .map(offline_note_audit_nullifier_key)
                 .collect::<Vec<_>>();
             let observed_output_keys = audit
                 .output_commitments
                 .iter()
-                .map(offline_note_v2_audit_output_key)
+                .map(offline_note_audit_output_key)
                 .collect::<Vec<_>>();
             for issued_claim_key in &issued_input_claim_keys {
                 if state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .get(issued_claim_key)
                     .is_none()
                 {
                     return Err(labeled_invariant(
                         "note_not_issued",
-                        "offline V2 audit input claim was not issued",
+                        "offline audit input claim was not issued",
                     )
                     .into());
                 }
@@ -1101,13 +1091,13 @@ pub mod isi {
             for spent_claim_key in &spent_input_claim_keys {
                 if state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .get(spent_claim_key)
                     .is_some()
                 {
                     return Err(labeled_invariant(
                         "duplicate_redeem",
-                        "offline V2 audit input claim is already redeemed",
+                        "offline audit input claim is already redeemed",
                     )
                     .into());
                 }
@@ -1115,13 +1105,13 @@ pub mod isi {
             for consumed_key in &consumed_nullifier_keys {
                 if state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .get(consumed_key)
                     .is_some()
                 {
                     return Err(labeled_invariant(
                         "duplicate_nullifier",
-                        "offline V2 audit nullifier is already redeemed",
+                        "offline audit nullifier is already redeemed",
                     )
                     .into());
                 }
@@ -1129,13 +1119,13 @@ pub mod isi {
             for observed_key in &observed_nullifier_keys {
                 if state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .get(observed_key)
                     .is_some()
                 {
                     return Err(labeled_invariant(
                         "audit_duplicate_nullifier",
-                        "offline V2 audit observed a duplicate nullifier",
+                        "offline audit observed a duplicate nullifier",
                     )
                     .into());
                 }
@@ -1143,13 +1133,13 @@ pub mod isi {
             for observed_key in &observed_output_keys {
                 if state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .get(observed_key)
                     .is_some()
                 {
                     return Err(labeled_invariant(
                         "audit_duplicate_output",
-                        "offline V2 audit observed a duplicate output commitment",
+                        "offline audit observed a duplicate output commitment",
                     )
                     .into());
                 }
@@ -1157,18 +1147,18 @@ pub mod isi {
             for issued_claim_key in &issued_output_claim_keys {
                 if state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .get(issued_claim_key)
                     .is_some()
                 {
                     return Err(labeled_invariant(
                         "duplicate_issue",
-                        "offline V2 audit output claim is already issued",
+                        "offline audit output claim is already issued",
                     )
                     .into());
                 }
             }
-            verify_offline_note_v2_recursive_proof(
+            verify_offline_note_recursive_proof(
                 &audit.recursive_proof,
                 &expected_public_inputs_hash,
                 expected_public_instances,
@@ -1176,40 +1166,40 @@ pub mod isi {
             )?;
             state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .insert(audit_token_key, ());
             state_transaction
                 .world
-                .offline_note_v2_replay_keys
+                .offline_note_replay_keys
                 .insert(audit_record_key, ());
             for consumed_key in consumed_nullifier_keys {
                 state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .insert(consumed_key, ());
             }
             for spent_claim_key in spent_input_claim_keys {
                 state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .insert(spent_claim_key, ());
             }
             for observed_key in observed_nullifier_keys {
                 state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .insert(observed_key, ());
             }
             for observed_key in observed_output_keys {
                 state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .insert(observed_key, ());
             }
             for issued_claim_key in issued_output_claim_keys {
                 state_transaction
                     .world
-                    .offline_note_v2_replay_keys
+                    .offline_note_replay_keys
                     .insert(issued_claim_key, ());
             }
             let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
@@ -1262,17 +1252,17 @@ pub mod isi {
             Signature::from_bytes(&payload)
         }
 
-        fn sample_certificate() -> OfflineNoteKeyCertificateV2 {
+        fn sample_certificate() -> OfflineNoteKeyCertificate {
             let keypair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
             let (_algorithm, public_key) = keypair.public_key().to_bytes();
-            OfflineNoteKeyCertificateV2 {
-                version: 2,
+            OfflineNoteKeyCertificate {
+                version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
                 platform: "ios-appattest".to_owned(),
                 key_id: "one-use-key".to_owned(),
                 device_id: "device-1".to_owned(),
                 account_id: sample_account(0x01),
                 public_key: public_key.to_vec(),
-                assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+                assertion_scheme: "apple-appattest-counter".to_owned(),
                 assertion_key_algorithm: "app-attest-p256".to_owned(),
                 assertion_public_key: vec![0x04; 65],
                 assertion_usage_count_limit: None,
@@ -1281,19 +1271,19 @@ pub mod isi {
             }
         }
 
-        fn sample_issued_claim() -> OfflineNoteIssuedClaimV2 {
+        fn sample_issued_claim() -> OfflineNoteIssuedClaim {
             let account_id = sample_account(0x01);
             let definition_id = AssetDefinitionId::new(
                 DomainId::try_new("offline", "universal").expect("domain id"),
                 "xor".parse().expect("asset definition name"),
             );
-            let issue = iroha_data_model::offline::OfflineNoteIssueV2 {
-                note_commitment: Hash::new(b"offline-note-v2-source-note"),
+            let issue = iroha_data_model::offline::OfflineNoteIssue {
+                note_commitment: Hash::new(b"offline-note-source-note"),
                 key_certificate: sample_certificate(),
                 asset: AssetId::new(definition_id, account_id),
                 amount: Numeric::new(10, 0),
             };
-            OfflineNoteIssuedClaimV2::from_issue(&issue).expect("issued claim")
+            OfflineNoteIssuedClaim::from_issue(&issue).expect("issued claim")
         }
 
         fn self_escrow_test_state(
@@ -1327,42 +1317,42 @@ pub mod isi {
             (state, asset_id, account_id, definition_id)
         }
 
-        fn offline_note_v2_verifier_test_state(
+        fn offline_note_verifier_test_state(
             status: ConfidentialStatus,
-        ) -> (State, OfflineNoteRecursiveProofV2, Hash) {
+        ) -> (State, OfflineNoteRecursiveProof, Hash) {
             let verifier_id = VerifyingKeyId::new(
                 crate::zk::ZK_BACKEND_HALO2_IPA,
-                crate::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+                crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
             );
             let vk_box = VerifyingKeyBox::new(
                 crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
-                b"offline-note-v2-test-verifying-key".to_vec(),
+                b"offline-note-test-verifying-key".to_vec(),
             );
             let commitment = crate::zk::hash_vk(&vk_box);
             let mut record = VerifyingKeyRecord::new_with_owner(
                 1,
-                crate::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+                crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
                 None,
-                OFFLINE_NOTE_V2_VERIFIER_NAMESPACE,
+                OFFLINE_NOTE_VERIFIER_NAMESPACE,
                 BackendTag::Halo2IpaPasta,
                 "pasta",
-                offline_note_v2_recursive_public_inputs_schema_hash(),
+                offline_note_recursive_public_inputs_schema_hash(),
                 commitment,
             );
             record.key = Some(vk_box);
             record.status = status;
             record.max_proof_bytes = 4096;
-            record.vk_len = b"offline-note-v2-test-verifying-key".len() as u32;
+            record.vk_len = b"offline-note-test-verifying-key".len() as u32;
 
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                crate::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+                crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
                 commitment,
-                OFFLINE_NOTE_V2_RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-                b"offline-note-v2-test-proof".to_vec(),
+                OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA.to_vec(),
+                b"offline-note-test-proof".to_vec(),
             );
             let proof_bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
-            let public_inputs_hash = Hash::new(b"offline-note-v2-public-inputs");
+            let public_inputs_hash = Hash::new(b"offline-note-public-inputs");
 
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -1372,14 +1362,11 @@ pub mod isi {
                 .verifying_keys
                 .insert(verifier_id.clone(), record);
             state.world.verifying_keys_by_circuit.insert(
-                (
-                    crate::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID.to_owned(),
-                    1,
-                ),
+                (crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID.to_owned(), 1),
                 verifier_id.clone(),
             );
 
-            let proof = OfflineNoteRecursiveProofV2 {
+            let proof = OfflineNoteRecursiveProof {
                 verifier_key_id: verifier_id,
                 public_inputs_hash: public_inputs_hash.clone(),
                 proof: ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), proof_bytes),
@@ -1456,14 +1443,14 @@ pub mod isi {
 
         #[test]
         fn expected_public_instances_encode_semantic_columns() {
-            let values = crate::zk::OfflineNoteV2InstanceValues {
+            let values = crate::zk::OfflineNoteInstanceValues {
                 public_values: [11, 22, 33, 44, 1, 1, 1, 10, 10, 55, 0, 66, 77, 88, 0, 0],
                 input_amounts: [10, 0, 0, 0],
                 output_amounts: [10, 0],
             };
             let instances = values.public_instance_columns();
 
-            assert_eq!(instances.len(), crate::zk::OFFLINE_NOTE_V2_INSTANCE_COLUMNS);
+            assert_eq!(instances.len(), crate::zk::OFFLINE_NOTE_INSTANCE_COLUMNS);
             for (index, value) in values.public_values.iter().copied().enumerate() {
                 let mut expected = [0u8; 32];
                 expected[..8].copy_from_slice(&value.to_le_bytes());
@@ -1472,16 +1459,16 @@ pub mod isi {
         }
 
         #[test]
-        fn key_certificate_requires_v2_one_use_ed25519_key() {
+        fn key_certificate_requires_one_use_ed25519_key() {
             let mut certificate = sample_certificate();
-            assert!(validate_offline_note_v2_key_certificate(&certificate).is_ok());
+            assert!(validate_offline_note_key_certificate(&certificate).is_ok());
 
             certificate.one_use = false;
-            assert!(validate_offline_note_v2_key_certificate(&certificate).is_err());
+            assert!(validate_offline_note_key_certificate(&certificate).is_err());
 
             certificate.one_use = true;
             certificate.public_key.clear();
-            assert!(validate_offline_note_v2_key_certificate(&certificate).is_err());
+            assert!(validate_offline_note_key_certificate(&certificate).is_err());
         }
 
         #[test]
@@ -1496,69 +1483,67 @@ pub mod isi {
         }
 
         #[test]
-        fn offline_note_v2_rejects_non_open_verify_envelope_proof_bytes() {
+        fn offline_note_rejects_non_open_verify_envelope_proof_bytes() {
             let (state, mut proof, _public_inputs_hash) =
-                offline_note_v2_verifier_test_state(ConfidentialStatus::Active);
+                offline_note_verifier_test_state(ConfidentialStatus::Active);
             proof.proof.bytes = b"legacy transcript payload".to_vec();
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let transaction = block.transaction();
 
-            let err = offline_note_v2_resolve_verifier(&proof, &transaction)
+            let err = offline_note_resolve_verifier(&proof, &transaction)
                 .expect_err("legacy transcript bytes must not decode as OpenVerifyEnvelope");
             assert_offline_rejection(err, "invalid_proof", "OpenVerifyEnvelope");
         }
 
         #[test]
-        fn offline_note_v2_rejects_wrong_verifier_key_id_backend() {
+        fn offline_note_rejects_wrong_verifier_key_id_backend() {
             let (state, mut proof, _public_inputs_hash) =
-                offline_note_v2_verifier_test_state(ConfidentialStatus::Active);
-            proof.verifier_key_id = VerifyingKeyId::new(
-                "stark/fri",
-                crate::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
-            );
+                offline_note_verifier_test_state(ConfidentialStatus::Active);
+            proof.verifier_key_id =
+                VerifyingKeyId::new("stark/fri", crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let transaction = block.transaction();
 
-            let err = offline_note_v2_resolve_verifier(&proof, &transaction)
+            let err = offline_note_resolve_verifier(&proof, &transaction)
                 .expect_err("proof backend must match the selected verifier key id");
             assert_offline_rejection(err, "verifier_key_invalid", "backend");
         }
 
         #[test]
-        fn offline_note_v2_rejects_inactive_verifier_key() {
+        fn offline_note_rejects_inactive_verifier_key() {
             let (state, proof, _public_inputs_hash) =
-                offline_note_v2_verifier_test_state(ConfidentialStatus::Proposed);
+                offline_note_verifier_test_state(ConfidentialStatus::Proposed);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let transaction = block.transaction();
 
-            let err = offline_note_v2_resolve_verifier(&proof, &transaction)
-                .expect_err("inactive Offline V2 verifier keys must reject proofs");
+            let err = offline_note_resolve_verifier(&proof, &transaction)
+                .expect_err("inactive Offline verifier keys must reject proofs");
             assert_offline_rejection(err, "verifier_key_inactive", "not active");
         }
 
         #[test]
-        fn offline_note_v2_redeem_and_audit_reject_public_input_hash_mismatch() {
+        fn offline_note_redeem_and_audit_reject_public_input_hash_mismatch() {
             let (state, proof, _public_inputs_hash) =
-                offline_note_v2_verifier_test_state(ConfidentialStatus::Active);
+                offline_note_verifier_test_state(ConfidentialStatus::Active);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut transaction = block.transaction();
 
-            let redeem_err = verify_offline_note_v2_recursive_proof(
+            let redeem_err = verify_offline_note_recursive_proof(
                 &proof,
-                &Hash::new(b"offline-note-v2-wrong-redeem-inputs"),
+                &Hash::new(b"offline-note-wrong-redeem-inputs"),
                 Vec::new(),
                 &mut transaction,
             )
             .expect_err("redeem proof must be bound to the expected public inputs");
             assert_offline_rejection(redeem_err, "proof_binding", "expected public inputs");
 
-            let audit_err = verify_offline_note_v2_recursive_proof(
+            let audit_err = verify_offline_note_recursive_proof(
                 &proof,
-                &Hash::new(b"offline-note-v2-wrong-audit-inputs"),
+                &Hash::new(b"offline-note-wrong-audit-inputs"),
                 Vec::new(),
                 &mut transaction,
             )
@@ -1569,32 +1554,32 @@ pub mod isi {
         #[test]
         fn audit_replay_keys_cover_input_spend_and_output_issue_domains() {
             let claim_hash =
-                offline_note_v2_issued_claim_hash(sample_issued_claim()).expect("claim hash");
-            let nullifier = Hash::new(b"offline-note-v2-input-nullifier");
-            let output_commitment = Hash::new(b"offline-note-v2-output-commitment");
+                offline_note_issued_claim_hash(sample_issued_claim()).expect("claim hash");
+            let nullifier = Hash::new(b"offline-note-input-nullifier");
+            let output_commitment = Hash::new(b"offline-note-output-commitment");
 
-            let issued_claim_key = offline_note_v2_issued_claim_key(&claim_hash);
-            let spent_claim_key = offline_note_v2_spent_claim_key(&claim_hash);
-            let nullifier_key = offline_note_v2_nullifier_key(&nullifier);
-            let audit_nullifier_key = offline_note_v2_audit_nullifier_key(&nullifier);
-            let audit_output_key = offline_note_v2_audit_output_key(&output_commitment);
+            let issued_claim_key = offline_note_issued_claim_key(&claim_hash);
+            let spent_claim_key = offline_note_spent_claim_key(&claim_hash);
+            let nullifier_key = offline_note_nullifier_key(&nullifier);
+            let audit_nullifier_key = offline_note_audit_nullifier_key(&nullifier);
+            let audit_output_key = offline_note_audit_output_key(&output_commitment);
 
             assert_eq!(
                 issued_claim_key,
-                offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_ISSUED_CLAIM_DOMAIN, &claim_hash)
+                offline_note_replay_key(OFFLINE_NOTE_REPLAY_ISSUED_CLAIM_DOMAIN, &claim_hash)
             );
             assert_eq!(
                 spent_claim_key,
-                offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_SPENT_CLAIM_DOMAIN, &claim_hash)
+                offline_note_replay_key(OFFLINE_NOTE_REPLAY_SPENT_CLAIM_DOMAIN, &claim_hash)
             );
             assert_eq!(
                 nullifier_key,
-                offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_NULLIFIER_DOMAIN, &nullifier)
+                offline_note_replay_key(OFFLINE_NOTE_REPLAY_NULLIFIER_DOMAIN, &nullifier)
             );
             assert_eq!(
                 audit_output_key,
-                offline_note_v2_replay_key(
-                    OFFLINE_NOTE_V2_REPLAY_AUDIT_OUTPUT_DOMAIN,
+                offline_note_replay_key(
+                    OFFLINE_NOTE_REPLAY_AUDIT_OUTPUT_DOMAIN,
                     &output_commitment,
                 )
             );

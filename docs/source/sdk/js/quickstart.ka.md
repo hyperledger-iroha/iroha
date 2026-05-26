@@ -446,15 +446,15 @@ for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
 // env-driven pagination/filters so you can smoke-test permissions against a live Torii.
 ```
 
-## Offline V2 readiness
+## Offline readiness
 
-JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
-Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
-non-V2 offline HTTP routes are no longer published by Torii.
+JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
+Offline note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline HTTP routes are no longer published by Torii.
 
 ```js
-const readiness = await torii.getOfflineV2Readiness();
-console.log("offline notes", readiness.offline_note_v2);
+const readiness = await torii.getOfflineReadiness();
+console.log("offline notes", readiness.offline_note);
 ```
 ## Torii Queries & Streaming
 

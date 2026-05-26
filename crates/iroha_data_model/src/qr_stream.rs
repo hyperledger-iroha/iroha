@@ -15,10 +15,6 @@ use thiserror::Error;
 
 /// Magic bytes that start every QR stream frame (`IQ`).
 pub const QR_STREAM_MAGIC: [u8; 2] = [0x49, 0x51];
-/// Frame format version.
-pub const QR_STREAM_VERSION: u8 = 1;
-/// Envelope format version.
-pub const QR_STREAM_ENVELOPE_VERSION: u8 = 1;
 /// Binary encoding flag for payloads.
 pub const QR_STREAM_ENCODING_BINARY: u8 = 0;
 /// Default chunk size (bytes).
@@ -62,20 +58,20 @@ impl QrStreamFrameKind {
 pub enum QrPayloadKind {
     /// No specific payload kind.
     Unspecified = 0,
-    /// Offline V2 receive request payload.
-    OfflineReceiveRequestV2 = 1,
-    /// Offline V2 payment token payload.
-    OfflinePaymentTokenV2 = 2,
-    /// Offline V2 optional receipt acknowledgement payload.
-    OfflineReceiptAckV2 = 3,
+    /// Offline receive request payload.
+    OfflineReceiveRequest = 1,
+    /// Offline payment token payload.
+    OfflinePaymentToken = 2,
+    /// Offline optional receipt acknowledgement payload.
+    OfflineReceiptAck = 3,
 }
 
 impl QrPayloadKind {
     fn from_u16(value: u16) -> Self {
         match value {
-            1 => Self::OfflineReceiveRequestV2,
-            2 => Self::OfflinePaymentTokenV2,
-            3 => Self::OfflineReceiptAckV2,
+            1 => Self::OfflineReceiveRequest,
+            2 => Self::OfflinePaymentToken,
+            3 => Self::OfflineReceiptAck,
             _ => Self::Unspecified,
         }
     }
@@ -138,9 +134,6 @@ pub enum QrStreamError {
     /// Frame magic bytes did not match.
     #[error("qr stream magic mismatch")]
     InvalidMagic,
-    /// Unsupported format version.
-    #[error("unsupported qr stream version {0}")]
-    UnsupportedVersion(u8),
     /// Payload or frame length is invalid.
     #[error("invalid qr stream length for {0}")]
     InvalidLength(&'static str),
@@ -228,8 +221,7 @@ impl QrStreamEnvelope {
     /// Encode the envelope into canonical bytes.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(46);
-        out.push(QR_STREAM_ENVELOPE_VERSION);
+        let mut out = Vec::with_capacity(47);
         out.push(self.flags);
         out.push(self.encoding);
         out.push(self.parity_group);
@@ -245,18 +237,13 @@ impl QrStreamEnvelope {
     /// Decode envelope bytes.
     ///
     /// # Errors
-    /// Returns an error when the envelope is truncated or contains an
-    /// unsupported version.
+    /// Returns an error when the envelope is truncated.
     pub fn decode(bytes: &[u8]) -> Result<Self, QrStreamError> {
-        let min_len = 1 + 1 + 1 + 1 + 2 + 2 + 2 + 2 + 4 + 32;
+        let min_len = 1 + 1 + 1 + 2 + 2 + 2 + 2 + 4 + 32;
         if bytes.len() < min_len {
             return Err(QrStreamError::InvalidLength("envelope"));
         }
-        let version = bytes[0];
-        if version != QR_STREAM_ENVELOPE_VERSION {
-            return Err(QrStreamError::UnsupportedVersion(version));
-        }
-        let mut offset = 1;
+        let mut offset = 0;
         let flags = bytes[offset];
         offset += 1;
         let encoding = bytes[offset];
@@ -314,9 +301,8 @@ impl QrStreamFrame {
     pub fn encode(&self) -> Vec<u8> {
         let payload_len =
             u16::try_from(self.payload.len()).expect("qr stream payload length fits u16");
-        let mut out = Vec::with_capacity(2 + 1 + 1 + 16 + 2 + 2 + 2 + self.payload.len() + 4);
+        let mut out = Vec::with_capacity(2 + 1 + 16 + 2 + 2 + 2 + self.payload.len() + 4);
         out.extend_from_slice(&QR_STREAM_MAGIC);
-        out.push(QR_STREAM_VERSION);
         out.push(self.kind as u8);
         out.extend_from_slice(&self.stream_id);
         out.extend_from_slice(&self.index.to_le_bytes());
@@ -334,24 +320,20 @@ impl QrStreamFrame {
     /// Returns an error when frame headers are malformed, payload boundaries
     /// are invalid, or CRC validation fails.
     pub fn decode(bytes: &[u8]) -> Result<Self, QrStreamError> {
-        let header_len = 2 + 1 + 1 + 16 + 2 + 2 + 2;
+        let header_len = 2 + 1 + 16 + 2 + 2 + 2;
         if bytes.len() < header_len + 4 {
             return Err(QrStreamError::InvalidLength("frame"));
         }
         if bytes[0] != QR_STREAM_MAGIC[0] || bytes[1] != QR_STREAM_MAGIC[1] {
             return Err(QrStreamError::InvalidMagic);
         }
-        let version = bytes[2];
-        if version != QR_STREAM_VERSION {
-            return Err(QrStreamError::UnsupportedVersion(version));
-        }
-        let kind = QrStreamFrameKind::from_u8(bytes[3])?;
+        let kind = QrStreamFrameKind::from_u8(bytes[2])?;
         let mut stream_id = [0u8; 16];
-        stream_id.copy_from_slice(&bytes[4..20]);
-        let index = read_u16_le(bytes, 20)?;
-        let total = read_u16_le(bytes, 22)?;
-        let payload_len = read_u16_le(bytes, 24)? as usize;
-        let payload_start = 26;
+        stream_id.copy_from_slice(&bytes[3..19]);
+        let index = read_u16_le(bytes, 19)?;
+        let total = read_u16_le(bytes, 21)?;
+        let payload_len = read_u16_le(bytes, 23)? as usize;
+        let payload_start = 25;
         let payload_end = payload_start + payload_len;
         if payload_end + 4 > bytes.len() {
             return Err(QrStreamError::InvalidLength("payload"));
@@ -890,9 +872,9 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("unspecified");
         let payload_kind = match payload_kind {
-            "offline_receive_request_v2" => QrPayloadKind::OfflineReceiveRequestV2,
-            "offline_payment_token_v2" => QrPayloadKind::OfflinePaymentTokenV2,
-            "offline_receipt_ack_v2" => QrPayloadKind::OfflineReceiptAckV2,
+            "offline_receive_request" => QrPayloadKind::OfflineReceiveRequest,
+            "offline_payment_token" => QrPayloadKind::OfflinePaymentToken,
+            "offline_receipt_ack" => QrPayloadKind::OfflineReceiptAck,
             _ => QrPayloadKind::Unspecified,
         };
         let envelope_hex = value

@@ -2913,15 +2913,15 @@ They are normalised via the same unsigned-integer validators before any request 
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
 
-The supported first-release offline HTTP surface is Offline V2 readiness. Offline V2 note
+The supported first-release offline HTTP surface is Offline readiness. Offline note
 issuance, redemption, and audit payloads are submitted as transaction instructions; legacy
-non-V2 offline HTTP
+legacy offline HTTP
 helpers are no longer exposed by this SDK because Torii now returns 404 for those routes.
 
 ```js
-const readiness = await torii.getOfflineV2Readiness();
-console.log("one-use notes ready", readiness.offline_note_v2);
-console.log("Fountain QR ready", readiness.offline_fountain_qr_v1);
+const readiness = await torii.getOfflineReadiness();
+console.log("one-use notes ready", readiness.offline_note);
+console.log("Fountain QR ready", readiness.offline_fountain_qr);
 ```
 
 for await (const assetDef of torii.iterateAssetDefinitions({

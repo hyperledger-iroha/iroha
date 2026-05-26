@@ -4273,6 +4273,154 @@ pub mod query {
         }
 
         #[test]
+        fn mint_global_asset_rejects_explicit_dataspace_scope_on_universal_route() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            .build(&ALICE_ID);
+
+            let world = World::with([domain], [account], [asset_def]);
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let scoped_id = AssetId::with_scope(
+                asset_def_id,
+                ALICE_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+            );
+            let err = Mint::asset_numeric(5_u32, scoped_id)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("global assets must reject explicit dataspace-scoped ids");
+
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => {
+                    assert!(
+                        message.contains("global assets cannot be addressed with dataspace scope"),
+                        "unexpected invariant message: {message}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn burn_global_asset_rejects_explicit_dataspace_scope_on_universal_route() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            .build(&ALICE_ID);
+
+            let world = World::with([domain], [account], [asset_def]);
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let scoped_id = AssetId::with_scope(
+                asset_def_id,
+                ALICE_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+            );
+            let err = Burn::asset_numeric(5_u32, scoped_id)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("global assets must reject explicit dataspace-scoped ids");
+
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => {
+                    assert!(
+                        message.contains("global assets cannot be addressed with dataspace scope"),
+                        "unexpected invariant message: {message}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn transfer_global_asset_rejects_explicit_dataspace_scope_on_universal_route() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            .build(&ALICE_ID);
+
+            let world = World::with([domain], [alice_account, bob_account], [asset_def]);
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let scoped_source_id = AssetId::with_scope(
+                asset_def_id,
+                ALICE_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+            );
+            let err = Transfer::asset_numeric(scoped_source_id, 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("global assets must reject explicit dataspace-scoped ids");
+
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => {
+                    assert!(
+                        message.contains("global assets cannot be addressed with dataspace scope"),
+                        "unexpected invariant message: {message}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+
+        #[test]
         fn mint_global_asset_allows_universal_amx_route_for_non_universal_home() {
             let home_dataspace = DataSpaceId::new(7);
             let domain_id: DomainId =

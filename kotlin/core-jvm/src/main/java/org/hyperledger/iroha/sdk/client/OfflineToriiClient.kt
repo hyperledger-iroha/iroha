@@ -9,13 +9,13 @@ import java.util.concurrent.CompletionException
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.offline.OfflineJsonParser
 import org.hyperledger.iroha.sdk.offline.OfflineToriiException
-import org.hyperledger.iroha.sdk.offline.OfflineV2Readiness
+import org.hyperledger.iroha.sdk.offline.OfflineReadiness
 
 /**
- * Lightweight HTTP client for the maintained Torii Offline V2 endpoint.
+ * Lightweight HTTP client for the maintained Torii Offline endpoint.
  *
- * The non-V2 offline HTTP routes have been removed
- * from Torii. This client exposes only `/v1/offline/v2/readiness`.
+ * The legacy offline HTTP routes have been removed
+ * from Torii. This client exposes only `/v1/offline/readiness`.
  */
 class OfflineToriiClient private constructor(builder: Builder) {
 
@@ -25,8 +25,8 @@ class OfflineToriiClient private constructor(builder: Builder) {
     private val defaultHeaders: Map<String, String> = Collections.unmodifiableMap(LinkedHashMap(builder.defaultHeaders))
     private val observers: List<ClientObserver> = builder.observers.toList()
 
-    fun getOfflineV2Readiness(): CompletableFuture<OfflineV2Readiness> =
-        executeGet(OFFLINE_V2_READINESS_PATH, OfflineJsonParser::parseOfflineV2Readiness)
+    fun getOfflineReadiness(): CompletableFuture<OfflineReadiness> =
+        executeGet(OFFLINE_READINESS_PATH, OfflineJsonParser::parseOfflineReadiness)
 
     fun executor(): HttpTransportExecutor = executor
 
@@ -122,7 +122,7 @@ class OfflineToriiClient private constructor(builder: Builder) {
     }
 
     companion object {
-        private const val OFFLINE_V2_READINESS_PATH = "/v1/offline/v2/readiness"
+        private const val OFFLINE_READINESS_PATH = "/v1/offline/readiness"
 
         @JvmStatic fun builder(): Builder = Builder()
         private fun extractRejectCode(headers: Map<String, List<String>>, body: ByteArray?): String? =

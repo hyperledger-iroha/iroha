@@ -327,7 +327,7 @@ __all__ = [
     "KaigiRelayDetail",
     "KaigiRelayHealthSnapshot",
     "SumeragiQcEntry",
-    "OfflineV2Readiness",
+    "OfflineReadiness",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
     "SubscriptionPlanListPage",
@@ -1948,27 +1948,27 @@ class RbcSample:
 
 
 @dataclass(frozen=True)
-class OfflineV2Readiness:
-    """Offline V2 readiness advertised by Torii."""
+class OfflineReadiness:
+    """Offline readiness advertised by Torii."""
 
-    offline_note_v2: bool
+    offline_note: bool
     offline_one_use_keys: bool
     offline_recursive_note_proof: bool
-    offline_fountain_qr_v1: bool
+    offline_fountain_qr: bool
     offline_sync_optional: bool
     offline_telemetry: bool
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineV2Readiness":
+    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineReadiness":
         if not isinstance(payload, Mapping):
-            raise RuntimeError("offline v2 readiness response must be an object")
+            raise RuntimeError("offline readiness response must be an object")
         return cls(
-            offline_note_v2=ToriiClient._coerce_bool(payload.get("offline_note_v2"), "offline v2 readiness.offline_note_v2"),
-            offline_one_use_keys=ToriiClient._coerce_bool(payload.get("offline_one_use_keys"), "offline v2 readiness.offline_one_use_keys"),
-            offline_recursive_note_proof=ToriiClient._coerce_bool(payload.get("offline_recursive_note_proof"), "offline v2 readiness.offline_recursive_note_proof"),
-            offline_fountain_qr_v1=ToriiClient._coerce_bool(payload.get("offline_fountain_qr_v1"), "offline v2 readiness.offline_fountain_qr_v1"),
-            offline_sync_optional=ToriiClient._coerce_bool(payload.get("offline_sync_optional"), "offline v2 readiness.offline_sync_optional"),
-            offline_telemetry=ToriiClient._coerce_bool(payload.get("offline_telemetry"), "offline v2 readiness.offline_telemetry"),
+            offline_note=ToriiClient._coerce_bool(payload.get("offline_note"), "offline readiness.offline_note"),
+            offline_one_use_keys=ToriiClient._coerce_bool(payload.get("offline_one_use_keys"), "offline readiness.offline_one_use_keys"),
+            offline_recursive_note_proof=ToriiClient._coerce_bool(payload.get("offline_recursive_note_proof"), "offline readiness.offline_recursive_note_proof"),
+            offline_fountain_qr=ToriiClient._coerce_bool(payload.get("offline_fountain_qr"), "offline readiness.offline_fountain_qr"),
+            offline_sync_optional=ToriiClient._coerce_bool(payload.get("offline_sync_optional"), "offline readiness.offline_sync_optional"),
+            offline_telemetry=ToriiClient._coerce_bool(payload.get("offline_telemetry"), "offline readiness.offline_telemetry"),
         )
 
 
@@ -4345,16 +4345,16 @@ class ToriiClient:
         return self._ensure_mapping(ack, "space directory manifest revoke response")
 
     # ------------------------------------------------------------------
-    # Offline V2 readiness
+    # Offline readiness
     # ------------------------------------------------------------------
-    def get_offline_v2_readiness(self) -> OfflineV2Readiness:
-        """Fetch Offline V2 feature readiness."""
+    def get_offline_readiness(self) -> OfflineReadiness:
+        """Fetch Offline feature readiness."""
 
         payload = self._get_json_object(
-            "/v1/offline/v2/readiness",
-            context="offline v2 readiness response",
+            "/v1/offline/readiness",
+            context="offline readiness response",
         )
-        return OfflineV2Readiness.from_payload(payload)
+        return OfflineReadiness.from_payload(payload)
 
     # ------------------------------------------------------------------
     # Sumeragi telemetry & RBC helpers
