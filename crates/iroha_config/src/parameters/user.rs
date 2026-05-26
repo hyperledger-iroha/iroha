@@ -10039,10 +10039,10 @@ pub struct Repo {
     pub collateral_substitution_matrix: BTreeMap<AssetDefinitionId, Vec<AssetDefinitionId>>,
 }
 
-/// User-level configuration for Offline V2 note retention.
+/// User-level configuration for Offline note retention.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
-    /// Minimum number of blocks to keep Offline V2 note records in hot storage.
+    /// Minimum number of blocks to keep Offline note records in hot storage.
     #[config(default = "defaults::settlement::offline::HOT_RETENTION_BLOCKS")]
     pub hot_retention_blocks: u64,
     /// Maximum number of note records to archive per retention pass.
@@ -10054,7 +10054,7 @@ pub struct Offline {
     /// Maximum number of archived note records pruned per pass.
     #[config(default = "defaults::settlement::offline::PRUNE_BATCH_SIZE")]
     pub prune_batch_size: usize,
-    /// Require Offline V2 notes to be escrow-backed.
+    /// Require Offline notes to be escrow-backed.
     #[config(default = "false")]
     pub escrow_required: bool,
     /// Escrow account bindings keyed by asset definition id.
@@ -15666,7 +15666,7 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional faucet configuration for app API endpoints.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional Offline Notes V2 issuer configuration for app API endpoints.
+    /// Optional Offline Notes issuer configuration for app API endpoints.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
     pub ram_lfe: Option<ToriiRamLfe>,
@@ -17256,13 +17256,13 @@ impl ToriiFaucet {
     }
 }
 
-/// Offline Notes V2 issuer configuration for app-facing wallet load helpers.
+/// Offline Notes issuer configuration for app-facing wallet load helpers.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiOfflineIssuer {
     /// Master enable switch (defaults to enabled when the section is present).
     #[config(default = "true")]
     pub enabled: bool,
-    /// Private key for the privileged Offline V2 issuer account.
+    /// Private key for the privileged Offline issuer account.
     #[config(env = "TORII_OFFLINE_ISSUER_PRIVATE_KEY")]
     pub private_key: Option<ExposedPrivateKey>,
     /// Public key for the trusted middleware that verifies platform attestations.

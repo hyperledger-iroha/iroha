@@ -941,9 +941,9 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         let trigger = &register.object;
         return is_time_sensitive_executable(trigger.action().executable());
     }
-    any.is::<iroha_data_model::isi::offline::IssueOfflineNoteV2>()
-        || any.is::<iroha_data_model::isi::offline::RedeemOfflineNoteV2>()
-        || any.is::<iroha_data_model::isi::offline::AuditOfflineNoteV2>()
+    any.is::<iroha_data_model::isi::offline::IssueOfflineNote>()
+        || any.is::<iroha_data_model::isi::offline::RedeemOfflineNote>()
+        || any.is::<iroha_data_model::isi::offline::AuditOfflineNote>()
         || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
         || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
         || any.is::<iroha_data_model::isi::social::SendToTwitter>()

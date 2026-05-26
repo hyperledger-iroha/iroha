@@ -35,17 +35,16 @@ use crate::{
     tui,
 };
 
-const OFFLINE_NOTE_V2_VK_NAMESPACE: &str = "offline_note_v2";
+const OFFLINE_NOTE_VK_NAMESPACE: &str = "offline_note";
 
-fn offline_note_v2_verifier_registration()
+fn offline_note_verifier_registration()
 -> color_eyre::Result<(VerifyingKeyId, iroha_data_model::proof::VerifyingKeyRecord)> {
     let id = VerifyingKeyId::new(
         iroha_core::zk::ZK_BACKEND_HALO2_IPA,
-        iroha_core::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
     );
-    let record =
-        iroha_core::zk::offline_note_v2_recursive_vk_record(OFFLINE_NOTE_V2_VK_NAMESPACE, 1)
-            .map_err(|error| color_eyre::eyre::eyre!(error))?;
+    let record = iroha_core::zk::offline_note_recursive_vk_record(OFFLINE_NOTE_VK_NAMESPACE, 1)
+        .map_err(|error| color_eyre::eyre::eyre!(error))?;
     Ok((id, record))
 }
 
@@ -738,15 +737,14 @@ pub fn generate_default(
             SumeragiParameter::ModeActivationHeight(height),
         ));
     }
-    let (offline_note_v2_vk_id, offline_note_v2_vk_record) =
-        offline_note_v2_verifier_registration()?;
+    let (offline_note_vk_id, offline_note_vk_record) = offline_note_verifier_registration()?;
     builder = builder
         .next_transaction()
         .append_instruction(grant_permission_to_manage_verifying_keys)
         .next_transaction()
         .append_instruction(verifying_keys::RegisterVerifyingKey {
-            id: offline_note_v2_vk_id,
-            record: offline_note_v2_vk_record,
+            id: offline_note_vk_id,
+            record: offline_note_vk_record,
         });
 
     // Use transaction-oriented API: separate initial registrations from
@@ -844,9 +842,9 @@ mod da_tests {
     }
 
     #[test]
-    fn default_genesis_registers_offline_note_v2_verifier() -> color_eyre::Result<()> {
+    fn default_genesis_registers_offline_note_verifier() -> color_eyre::Result<()> {
         let builder = GenesisBuilder::new_without_executor(
-            ChainId::from("offline-note-v2-genesis"),
+            ChainId::from("offline-note-genesis"),
             PathBuf::from("."),
         );
         let manifest = generate_default(
@@ -863,7 +861,7 @@ mod da_tests {
 
         let offline_vk_id = VerifyingKeyId::new(
             iroha_core::zk::ZK_BACKEND_HALO2_IPA,
-            iroha_core::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
         );
         let register = manifest
             .instructions()
@@ -873,12 +871,12 @@ mod da_tests {
                     .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
             })
             .find(|register| register.id == offline_vk_id)
-            .expect("default genesis must register the Offline V2 verifier");
+            .expect("default genesis must register the Offline verifier");
         assert!(register.record.is_active());
-        assert_eq!(register.record.namespace, OFFLINE_NOTE_V2_VK_NAMESPACE);
+        assert_eq!(register.record.namespace, OFFLINE_NOTE_VK_NAMESPACE);
         assert_eq!(
             register.record.public_inputs_schema_hash,
-            iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash()
+            iroha_data_model::offline::offline_note_recursive_public_inputs_schema_hash()
         );
         assert_eq!(
             register.record.key.as_ref().map(|key| key.backend.as_str()),
@@ -922,7 +920,7 @@ mod da_tests {
     fn default_genesis_grants_verifying_key_permission_before_registration()
     -> color_eyre::Result<()> {
         let builder = GenesisBuilder::new_without_executor(
-            ChainId::from("offline-note-v2-permission-order"),
+            ChainId::from("offline-note-permission-order"),
             PathBuf::from("."),
         );
         let manifest = generate_default(

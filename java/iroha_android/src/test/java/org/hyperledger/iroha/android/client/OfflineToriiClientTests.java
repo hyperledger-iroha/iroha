@@ -10,7 +10,7 @@ import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
-import org.hyperledger.iroha.android.offline.OfflineV2Readiness;
+import org.hyperledger.iroha.android.offline.OfflineReadiness;
 
 public final class OfflineToriiClientTests {
 
@@ -30,10 +30,10 @@ public final class OfflineToriiClientTests {
             200,
             """
             {
-              "offline_note_v2": true,
+              "offline_note": true,
               "offline_one_use_keys": true,
               "offline_recursive_note_proof": false,
-              "offline_fountain_qr_v1": true,
+              "offline_fountain_qr": true,
               "offline_sync_optional": true,
               "offline_telemetry": true
             }
@@ -46,17 +46,17 @@ public final class OfflineToriiClientTests {
             .addHeader("X-Test", "1")
             .build();
 
-    final OfflineV2Readiness readiness = client.getOfflineV2Readiness().join();
+    final OfflineReadiness readiness = client.getOfflineReadiness().join();
 
     assert "GET".equals(executor.lastRequest.method()) : "readiness must use GET";
-    assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/v2/readiness")
+    assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/readiness")
         : "readiness path mismatch";
     assert "application/json".equals(firstHeader(executor.lastRequest, "Accept"))
         : "accept header mismatch";
-    assert readiness.offlineNoteV2() : "offline_note_v2 mismatch";
+    assert readiness.offlineNote() : "offline_note mismatch";
     assert readiness.offlineOneUseKeys() : "offline_one_use_keys mismatch";
     assert !readiness.offlineRecursiveNoteProof() : "offline_recursive_note_proof mismatch";
-    assert readiness.offlineFountainQrV1() : "offline_fountain_qr_v1 mismatch";
+    assert readiness.offlineFountainQr() : "offline_fountain_qr mismatch";
     assert readiness.offlineSyncOptional() : "offline_sync_optional mismatch";
     assert readiness.offlineTelemetry() : "offline_telemetry mismatch";
   }
@@ -69,7 +69,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     try {
-      client.getOfflineV2Readiness().join();
+      client.getOfflineReadiness().join();
     } catch (final CompletionException ex) {
       assert ex.getCause() instanceof OfflineToriiException : "expected OfflineToriiException";
       assert ex.getCause().getMessage().contains("500") : "status missing from message";
@@ -91,22 +91,22 @@ public final class OfflineToriiClientTests {
             400,
             "{\"error\":\"not ready\"}",
             "Bad Request",
-            Map.of("X-IrOhA-ReJeCt-CoDe", List.of("offline_v2_unavailable")));
+            Map.of("X-IrOhA-ReJeCt-CoDe", List.of("offline_unavailable")));
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
             .build();
     try {
-      client.getOfflineV2Readiness().join();
+      client.getOfflineReadiness().join();
     } catch (final CompletionException ex) {
       assert ex.getCause() instanceof OfflineToriiException : "expected OfflineToriiException";
       final OfflineToriiException error = (OfflineToriiException) ex.getCause();
       assert Integer.valueOf(400).equals(error.statusCode().orElse(null))
           : "status code not surfaced";
-      assert "offline_v2_unavailable".equals(error.rejectCode().orElse(null))
+      assert "offline_unavailable".equals(error.rejectCode().orElse(null))
           : "reject code not surfaced";
-      assert error.getMessage().contains("reject_code=offline_v2_unavailable")
+      assert error.getMessage().contains("reject_code=offline_unavailable")
           : "reject code missing from message";
       return;
     }
@@ -121,7 +121,7 @@ public final class OfflineToriiClientTests {
             .addHeader("Authorization", "Bearer secret")
             .build();
     try {
-      client.getOfflineV2Readiness();
+      client.getOfflineReadiness();
     } catch (final IllegalArgumentException ex) {
       assert ex.getMessage().contains("insecure transport over http")
           : "security message mismatch";

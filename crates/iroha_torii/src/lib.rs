@@ -64,7 +64,7 @@ mod app_api;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 #[cfg(feature = "app_api")]
-mod offline_v2_issuer;
+mod offline_issuer;
 mod operator_auth;
 mod operator_signatures;
 #[doc(hidden)]
@@ -1597,7 +1597,7 @@ struct AppState {
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
-    offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
+    offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
@@ -5912,19 +5912,15 @@ async fn handler_repo_agreements_query(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_note_v2_readiness() -> Result<impl IntoResponse, Error> {
+async fn handler_offline_note_readiness() -> Result<impl IntoResponse, Error> {
     let verifier_key_id = json_object([
         json_entry("backend", iroha_core::zk::ZK_BACKEND_HALO2_IPA),
-        json_entry(
-            "name",
-            iroha_core::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
-        ),
+        json_entry("name", iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID),
     ]);
-    let schema_hash = hex::encode(
-        iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash(),
-    );
+    let schema_hash =
+        hex::encode(iroha_data_model::offline::offline_note_recursive_public_inputs_schema_hash());
     json_ok(json_object([
-        json_entry("offline_note_v2", true),
+        json_entry("offline_note", true),
         json_entry("offline_one_use_keys", true),
         json_entry("offline_recursive_note_proof", true),
         json_entry(
@@ -5933,7 +5929,7 @@ async fn handler_offline_note_v2_readiness() -> Result<impl IntoResponse, Error>
         ),
         json_entry(
             "offline_recursive_note_proof_circuit_id",
-            iroha_core::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
         ),
         json_entry(
             "offline_recursive_note_proof_public_inputs_schema_hash",
@@ -5941,13 +5937,13 @@ async fn handler_offline_note_v2_readiness() -> Result<impl IntoResponse, Error>
         ),
         json_entry(
             "offline_recursive_note_proof_public_instance_columns",
-            iroha_core::zk::OFFLINE_NOTE_V2_INSTANCE_COLUMNS as u64,
+            iroha_core::zk::OFFLINE_NOTE_INSTANCE_COLUMNS as u64,
         ),
         json_entry(
             "offline_recursive_note_proof_verifier_key_id",
             verifier_key_id,
         ),
-        json_entry("offline_fountain_qr_v1", true),
+        json_entry("offline_fountain_qr", true),
         json_entry("offline_sync_optional", true),
         json_entry("offline_telemetry", true),
     ]))
@@ -5955,7 +5951,7 @@ async fn handler_offline_note_v2_readiness() -> Result<impl IntoResponse, Error>
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_note_v2_keys_refill(
+async fn handler_offline_note_keys_refill(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
     uri: axum::http::Uri,
@@ -5963,19 +5959,13 @@ async fn handler_offline_note_v2_keys_refill(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/offline/v2/keys/refill",
-    )
-    .await?;
-    offline_v2_issuer::handle_key_refill(app, &method, &uri, &headers, body).await
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/keys/refill").await?;
+    offline_issuer::handle_key_refill(app, &method, &uri, &headers, body).await
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_note_v2_notes_issue(
+async fn handler_offline_note_notes_issue(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
     uri: axum::http::Uri,
@@ -5983,19 +5973,13 @@ async fn handler_offline_note_v2_notes_issue(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/offline/v2/notes/issue",
-    )
-    .await?;
-    offline_v2_issuer::handle_notes_issue(app, &method, &uri, &headers, body).await
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/notes/issue").await?;
+    offline_issuer::handle_notes_issue(app, &method, &uri, &headers, body).await
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_note_v2_notes_redeem(
+async fn handler_offline_note_notes_redeem(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
     uri: axum::http::Uri,
@@ -6003,19 +5987,13 @@ async fn handler_offline_note_v2_notes_redeem(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/offline/v2/notes/redeem",
-    )
-    .await?;
-    offline_v2_issuer::handle_notes_redeem(app, &method, &uri, &headers, body).await
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/notes/redeem").await?;
+    offline_issuer::handle_notes_redeem(app, &method, &uri, &headers, body).await
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_note_v2_audit(
+async fn handler_offline_note_audit(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
     uri: axum::http::Uri,
@@ -6023,8 +6001,8 @@ async fn handler_offline_note_v2_audit(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/v2/audit").await?;
-    offline_v2_issuer::handle_audit(app, &method, &uri, &headers, body).await
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/audit").await?;
+    offline_issuer::handle_audit(app, &method, &uri, &headers, body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -30901,9 +30879,9 @@ fn parse_pipeline_status_scope(raw: Option<&str>) -> Result<PipelineStatusReadSc
         .to_ascii_lowercase();
     match normalized.as_str() {
         "local" => Ok(PipelineStatusReadScope::Local),
-        "global" => Ok(PipelineStatusReadScope::Global),
+        "global" | "auto" => Ok(PipelineStatusReadScope::Global),
         _ => Err(conversion_error(format!(
-            "invalid scope query parameter \"{normalized}\" (expected local|global)"
+            "invalid scope query parameter \"{normalized}\" (expected local|global|auto)"
         ))),
     }
 }
@@ -33707,7 +33685,7 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
-    offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
+    offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
@@ -34973,22 +34951,22 @@ impl Torii {
                     post(handler_repo_agreements_query),
                 )
                 .route(
-                    "/v1/offline/v2/readiness",
-                    get(handler_offline_note_v2_readiness),
+                    "/v1/offline/readiness",
+                    get(handler_offline_note_readiness),
                 )
                 .route(
-                    "/v1/offline/v2/keys/refill",
-                    post(handler_offline_note_v2_keys_refill),
+                    "/v1/offline/keys/refill",
+                    post(handler_offline_note_keys_refill),
                 )
                 .route(
-                    "/v1/offline/v2/notes/issue",
-                    post(handler_offline_note_v2_notes_issue),
+                    "/v1/offline/notes/issue",
+                    post(handler_offline_note_notes_issue),
                 )
                 .route(
-                    "/v1/offline/v2/notes/redeem",
-                    post(handler_offline_note_v2_notes_redeem),
+                    "/v1/offline/notes/redeem",
+                    post(handler_offline_note_notes_redeem),
                 )
-                .route("/v1/offline/v2/audit", post(handler_offline_note_v2_audit));
+                .route("/v1/offline/audit", post(handler_offline_note_audit));
             #[cfg(feature = "push")]
             let router = router.route(
                 "/v1/notify/devices",
@@ -36441,10 +36419,10 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let account_faucet = config.faucet.clone();
         #[cfg(feature = "app_api")]
-        let offline_v2_issuer = config
+        let offline_issuer = config
             .offline_issuer
             .clone()
-            .map(offline_v2_issuer::OfflineV2IssuerRuntime::from_config)
+            .map(offline_issuer::OfflineIssuerRuntime::from_config)
             .map(Arc::new);
         #[cfg(feature = "app_api")]
         let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
@@ -36625,7 +36603,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             account_faucet,
             #[cfg(feature = "app_api")]
-            offline_v2_issuer,
+            offline_issuer,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
             vpn_helper_ticket_secret,
@@ -37069,7 +37047,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             account_faucet: self.account_faucet.clone(),
             #[cfg(feature = "app_api")]
-            offline_v2_issuer: self.offline_v2_issuer.clone(),
+            offline_issuer: self.offline_issuer.clone(),
             #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
             vpn_helper_ticket_secret: self.vpn_helper_ticket_secret,
@@ -40883,7 +40861,7 @@ pub(crate) mod tests_runtime_handlers {
             #[cfg(feature = "app_api")]
             account_faucet: None,
             #[cfg(feature = "app_api")]
-            offline_v2_issuer: None,
+            offline_issuer: None,
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
             vpn_helper_ticket_secret: None,
@@ -56768,12 +56746,16 @@ mod tests {
             parse_pipeline_status_scope(Some(" local ")).expect("case-insensitive local"),
             PipelineStatusReadScope::Local
         );
+        assert_eq!(
+            parse_pipeline_status_scope(Some(" AUTO ")).expect("auto scope compatibility"),
+            PipelineStatusReadScope::Global
+        );
     }
 
     #[test]
-    fn parse_pipeline_status_scope_rejects_auto_and_injected_values() {
+    fn parse_pipeline_status_scope_rejects_injected_values() {
         for raw in [
-            "auto",
+            "auto&scope=local",
             "global&scope=local",
             "local,global",
             "../global",
@@ -56781,7 +56763,7 @@ mod tests {
         ] {
             let err = parse_pipeline_status_scope(Some(raw)).expect_err("invalid scope");
             assert!(
-                format!("{err:?}").contains("expected local|global"),
+                format!("{err:?}").contains("expected local|global|auto"),
                 "unexpected error for {raw:?}: {err:?}"
             );
         }

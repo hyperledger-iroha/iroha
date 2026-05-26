@@ -27,7 +27,7 @@ final class OfflineQrStreamTests: XCTestCase {
         let payload = makePayload(length: 900)
         let frames = try OfflineQrStreamEncoder.encodeFrames(
             payload: payload,
-            payloadKind: .offlinePaymentTokenV2,
+            payloadKind: .offlinePaymentToken,
             options: OfflineQrStreamOptions(chunkSize: 180, parityGroup: 3)
         )
         let header = frames.first(where: { $0.kind == .header })
@@ -67,42 +67,51 @@ final class OfflineQrStreamTests: XCTestCase {
         }
     }
 
+    func testQrStreamTextCodecRejectsLegacyVersionedPrefix() throws {
+        let payload = makePayload(length: 64)
+        let legacy = "iroha:qr-old:" + payload.base64EncodedString()
+
+        XCTAssertThrowsError(
+            try OfflineQrStreamTextCodec.decode(legacy, encoding: .base64)
+        )
+    }
+
     func testTransferTextPayloadCodecRoundTripsKindsAndMapsQrPayloadKind() throws {
         let payload = Data(#"{"version":2}"#.utf8)
-        let challenge = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .receiveRequest)
-        let payment = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .paymentToken)
-        let ack = try OfflineNoteV2TransferTextPayloadCodec.encode(payload, kind: .receiptAck)
+        let challenge = try OfflineNoteTransferTextPayloadCodec.encode(payload, kind: .receiveRequest)
+        let payment = try OfflineNoteTransferTextPayloadCodec.encode(payload, kind: .paymentToken)
+        let ack = try OfflineNoteTransferTextPayloadCodec.encode(payload, kind: .receiptAck)
 
-        XCTAssertTrue(challenge.hasPrefix(OfflineNoteV2TransferTextPayloadCodec.receiveRequestPrefix))
-        XCTAssertTrue(payment.hasPrefix(OfflineNoteV2TransferTextPayloadCodec.paymentTokenPrefix))
-        XCTAssertTrue(ack.hasPrefix(OfflineNoteV2TransferTextPayloadCodec.receiptAckPrefix))
+        XCTAssertTrue(challenge.hasPrefix(OfflineNoteTransferTextPayloadCodec.receiveRequestPrefix))
+        XCTAssertTrue(payment.hasPrefix(OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix))
+        XCTAssertTrue(ack.hasPrefix(OfflineNoteTransferTextPayloadCodec.receiptAckPrefix))
         XCTAssertEqual(
-            OfflineNoteV2TransferTextPayloadCodec.payloadKind(for: challenge),
-            .offlineReceiveRequestV2
+            OfflineNoteTransferTextPayloadCodec.payloadKind(for: challenge),
+            .offlineReceiveRequest
         )
         XCTAssertEqual(
-            OfflineNoteV2TransferTextPayloadCodec.payloadKind(for: payment),
-            .offlinePaymentTokenV2
+            OfflineNoteTransferTextPayloadCodec.payloadKind(for: payment),
+            .offlinePaymentToken
         )
         XCTAssertEqual(
-            OfflineNoteV2TransferTextPayloadCodec.payloadKind(for: ack),
-            .offlineReceiptAckV2
+            OfflineNoteTransferTextPayloadCodec.payloadKind(for: ack),
+            .offlineReceiptAck
         )
         XCTAssertEqual(
-            try OfflineNoteV2TransferTextPayloadCodec.decode(challenge, expectedKind: .receiveRequest).payload,
+            try OfflineNoteTransferTextPayloadCodec.decode(challenge, expectedKind: .receiveRequest).payload,
             payload
         )
-        XCTAssertThrowsError(try OfflineNoteV2TransferTextPayloadCodec.decode(payment, expectedKind: .receiveRequest))
+        XCTAssertThrowsError(try OfflineNoteTransferTextPayloadCodec.decode(payment, expectedKind: .receiveRequest))
     }
 
     func testTransferTextNearbyEnvelopeRoundTripsKinds() throws {
         let payment = try Self.fixturePaymentTokenText()
-        let token = try OfflineNoteV2PaymentTokenCodec.decodeText(payment)
+        let token = try OfflineNotePaymentTokenCodec.decodeText(payment)
         let receiveOutput = try XCTUnwrap(token.audit.outputClaims.first)
         let assetDefinitionId = try XCTUnwrap(
             receiveOutput.assetId.split(separator: "#", maxSplits: 1).first
         ).description
-        let receiveRequest = try OfflineNoteV2ReceiveRequest(
+        let receiveRequest = try OfflineNoteReceiveRequest(
             chainId: token.chainId,
             paymentRequestId: token.paymentRequestId,
             accountId: receiveOutput.keyCertificate.accountId,
@@ -112,38 +121,38 @@ final class OfflineQrStreamTests: XCTestCase {
             keyCertificate: receiveOutput.keyCertificate,
             outputCommitment: receiveOutput.noteCommitment
         )
-        let receiptAck = try OfflineNoteV2ReceiptAck.fromPaymentToken(
+        let receiptAck = try OfflineNoteReceiptAck.fromPaymentToken(
             token,
             recipientAccountId: receiveOutput.keyCertificate.accountId,
             acceptedAtMs: 1_706_000_000_444
         )
-        let challenge = try OfflineNoteV2ReceiveRequestCodec.encodeText(receiveRequest)
-        let ack = try OfflineNoteV2ReceiptAckCodec.encodeText(receiptAck)
-        let pairing = try OfflineNoteV2NearbyPairingChallenge(assetName: "nearby_pairing_stars")
+        let challenge = try OfflineNoteReceiveRequestCodec.encodeText(receiveRequest)
+        let ack = try OfflineNoteReceiptAckCodec.encodeText(receiptAck)
+        let pairing = try OfflineNoteNearbyPairingChallenge(assetName: "nearby_pairing_stars")
 
-        let challengeBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+        let challengeBytes = try OfflineNoteTransferHandoff.nearbyTextEnvelopeBytes(
             payload: challenge,
             kind: .receiveRequest,
             pairingChallenge: pairing
         )
-        let paymentBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+        let paymentBytes = try OfflineNoteTransferHandoff.nearbyTextEnvelopeBytes(
             payload: payment,
             kind: .paymentToken
         )
-        let ackBytes = try OfflineNoteV2TransferHandoff.nearbyTextEnvelopeBytes(
+        let ackBytes = try OfflineNoteTransferHandoff.nearbyTextEnvelopeBytes(
             payload: ack,
             kind: .receiptAck
         )
 
-        let decodedChallenge = try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+        let decodedChallenge = try OfflineNoteTransferHandoff.decodeNearbyTextPayload(
             from: challengeBytes,
             expectedKind: .receiveRequest
         )
-        let decodedPayment = try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+        let decodedPayment = try OfflineNoteTransferHandoff.decodeNearbyTextPayload(
             from: paymentBytes,
             expectedKind: .paymentToken
         )
-        let decodedAck = try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(
+        let decodedAck = try OfflineNoteTransferHandoff.decodeNearbyTextPayload(
             from: ackBytes,
             expectedKind: .receiptAck
         )
@@ -155,14 +164,14 @@ final class OfflineQrStreamTests: XCTestCase {
         XCTAssertEqual(decodedPayment.payload, payment)
         XCTAssertEqual(decodedAck.kind, .receiptAck)
         XCTAssertEqual(decodedAck.payload, ack)
-        XCTAssertThrowsError(try OfflineNoteV2TransferHandoff.decodeNearbyTextPayload(from: paymentBytes, expectedKind: .receiptAck))
+        XCTAssertThrowsError(try OfflineNoteTransferHandoff.decodeNearbyTextPayload(from: paymentBytes, expectedKind: .receiptAck))
     }
 
     func testQrStreamRejectsAdversarialEnvelopeAndChunkShapes() throws {
         let payload = makePayload(length: 300)
         let frames = try OfflineQrStreamEncoder.encodeFrames(
             payload: payload,
-            payloadKind: .offlinePaymentTokenV2,
+            payloadKind: .offlinePaymentToken,
             options: OfflineQrStreamOptions(chunkSize: 100, parityGroup: 2)
         )
         let header = try XCTUnwrap(frames.first(where: { $0.kind == .header }))
@@ -185,12 +194,8 @@ final class OfflineQrStreamTests: XCTestCase {
         trailingFrame.append(0x00)
         XCTAssertThrowsError(try OfflineQrStreamFrame.decode(trailingFrame))
 
-        var unsupportedFrameVersion = header.encode()
-        unsupportedFrameVersion[unsupportedFrameVersion.startIndex + 2] = 0x7f
-        XCTAssertThrowsError(try OfflineQrStreamFrame.decode(unsupportedFrameVersion))
-
         var unknownFrameKind = header.encode()
-        unknownFrameKind[unknownFrameKind.startIndex + 3] = 0x7f
+        unknownFrameKind[unknownFrameKind.startIndex + 2] = 0x7f
         XCTAssertThrowsError(try OfflineQrStreamFrame.decode(unknownFrameKind))
 
         XCTAssertThrowsError(
@@ -224,32 +229,27 @@ final class OfflineQrStreamTests: XCTestCase {
         )
         XCTAssertThrowsError(
             try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
-                envelope[envelope.startIndex + 2] = 0x7f
+                envelope[envelope.startIndex + 1] = 0x7f
             })
         )
         XCTAssertThrowsError(
             try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
-                setUInt16LE(&envelope, offset: 4, value: 0)
+                setUInt16LE(&envelope, offset: 3, value: 0)
             })
         )
         XCTAssertThrowsError(
             try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
-                setUInt16LE(&envelope, offset: 6, value: 1)
+                setUInt16LE(&envelope, offset: 5, value: 1)
             })
         )
         XCTAssertThrowsError(
             try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
-                setUInt16LE(&envelope, offset: 8, value: 0)
+                setUInt16LE(&envelope, offset: 7, value: 0)
             })
         )
         XCTAssertThrowsError(
             try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
-                envelope[envelope.startIndex + 1] = 0x01
-            })
-        )
-        XCTAssertThrowsError(
-            try OfflineQrStreamDecoder().ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
-                envelope[envelope.startIndex] = 0x7f
+                envelope[envelope.startIndex] = 0x01
             })
         )
 
@@ -258,7 +258,7 @@ final class OfflineQrStreamTests: XCTestCase {
         XCTAssertNoThrow(try repeatedHeaderDecoder.ingest(frameBytes: header.encode()))
         XCTAssertThrowsError(
             try repeatedHeaderDecoder.ingest(frameBytes: mutatedHeaderFrame(header) { envelope in
-                setUInt16LE(&envelope, offset: 10, value: OfflineQrPayloadKind.offlineReceiveRequestV2.rawValue)
+                setUInt16LE(&envelope, offset: 9, value: OfflineQrPayloadKind.offlineReceiveRequest.rawValue)
             })
         )
 
@@ -419,7 +419,7 @@ final class OfflineQrStreamTests: XCTestCase {
         let payload = makePayload(length: 6 * 1024)
         let frames = try OfflineQrStreamEncoder.encodeFrames(
             payload: payload,
-            payloadKind: .offlinePaymentTokenV2,
+            payloadKind: .offlinePaymentToken,
             options: OfflineQrStreamOptions(chunkSize: 336, parityGroup: 4)
         )
         let header = try XCTUnwrap(frames.first(where: { $0.kind == .header }))
@@ -460,7 +460,7 @@ final class OfflineQrStreamTests: XCTestCase {
         let options = OfflineQrStreamOptions(chunkSize: 100, parityGroup: 0)
         let frameBytesList = try OfflineQrStreamEncoder.encodeFrameBytes(
             payload: payload,
-            payloadKind: .offlinePaymentTokenV2,
+            payloadKind: .offlinePaymentToken,
             options: options
         )
         XCTAssertFalse(frameBytesList.isEmpty, "Should produce at least 1 frame")
@@ -627,7 +627,7 @@ final class OfflineQrStreamTests: XCTestCase {
         let testFile = URL(fileURLWithPath: #filePath)
         let fixtureURL = testFile
             .deletingLastPathComponent()
-            .appendingPathComponent("../../../fixtures/offline/interop_contract_v2.json")
+            .appendingPathComponent("../../../fixtures/offline/interop_contract.json")
             .standardizedFileURL
         let data = try Data(contentsOf: fixtureURL)
         return try JSONDecoder().decode(TextNearbyInteropFixture.self, from: data).sdkInterop.paymentTokenText

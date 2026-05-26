@@ -1,4 +1,4 @@
-//! Offline V2 note lifecycle events for the data event stream.
+//! Offline note lifecycle events for the data event stream.
 
 use iroha_data_model_derive::model;
 
@@ -9,7 +9,7 @@ use super::*;
 mod model {
     use super::*;
 
-    /// Offline V2 note lifecycle events emitted by validators.
+    /// Offline note lifecycle events emitted by validators.
     #[derive(
         Debug,
         Clone,
@@ -24,15 +24,15 @@ mod model {
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub enum OfflineNoteEvent {
-        /// An Offline V2 note was issued and escrow was reserved.
+        /// An Offline note was issued and escrow was reserved.
         NoteIssued(OfflineNoteIssued),
-        /// An Offline V2 note was redeemed and escrow was credited to the recipient.
+        /// An Offline note was redeemed and escrow was credited to the recipient.
         NoteRedeemed(OfflineNoteRedeemed),
-        /// An optional Offline V2 audit token was recorded.
+        /// An optional Offline audit token was recorded.
         AuditRecorded(OfflineNoteAuditRecorded),
     }
 
-    /// Payload emitted when an Offline V2 note is issued.
+    /// Payload emitted when an Offline note is issued.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
@@ -50,7 +50,7 @@ mod model {
         pub recorded_at_ms: u64,
     }
 
-    /// Payload emitted when an Offline V2 note is redeemed.
+    /// Payload emitted when an Offline note is redeemed.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
@@ -68,7 +68,7 @@ mod model {
         pub recorded_at_ms: u64,
     }
 
-    /// Payload emitted when an optional Offline V2 audit token is recorded.
+    /// Payload emitted when an optional Offline audit token is recorded.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
@@ -93,7 +93,7 @@ impl_json_via_norito_bytes!(
     OfflineNoteAuditRecorded
 );
 
-/// Prelude exports for Offline V2 note events.
+/// Prelude exports for Offline note events.
 pub mod prelude {
     pub use super::{
         OfflineNoteAuditRecorded, OfflineNoteEvent, OfflineNoteIssued, OfflineNoteRedeemed,

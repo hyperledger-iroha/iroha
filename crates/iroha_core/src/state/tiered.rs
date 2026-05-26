@@ -1914,9 +1914,9 @@ impl TieredStateBackend {
             world.parliament_bodies
         );
         collect_map!(
-            TieredSegment::OfflineNoteV2ReplayKeys,
-            OfflineNoteV2ReplayKey,
-            world.offline_note_v2_replay_keys
+            TieredSegment::OfflineNoteReplayKeys,
+            OfflineNoteReplayKey,
+            world.offline_note_replay_keys
         );
 
         Ok(())
@@ -3835,7 +3835,7 @@ enum TieredSegment {
     GovernanceSlashes,
     Council,
     ParliamentBodies,
-    OfflineNoteV2ReplayKeys,
+    OfflineNoteReplayKeys,
 }
 
 impl TieredSegment {
@@ -3874,7 +3874,7 @@ impl TieredSegment {
             TieredSegment::GovernanceSlashes => "governance_slashes",
             TieredSegment::Council => "council",
             TieredSegment::ParliamentBodies => "parliament_bodies",
-            TieredSegment::OfflineNoteV2ReplayKeys => "offline_note_v2_replay_keys",
+            TieredSegment::OfflineNoteReplayKeys => "offline_note_replay_keys",
         }
     }
 }
@@ -3924,7 +3924,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "governance_slashes" => TieredSegment::GovernanceSlashes,
             "council" => TieredSegment::Council,
             "parliament_bodies" => TieredSegment::ParliamentBodies,
-            "offline_note_v2_replay_keys" => TieredSegment::OfflineNoteV2ReplayKeys,
+            "offline_note_replay_keys" => TieredSegment::OfflineNoteReplayKeys,
             other => {
                 return Err(norito::json::Error::InvalidField {
                     field: "segment".into(),
@@ -4117,7 +4117,7 @@ pub(crate) enum TieredKeyHandle {
     GovernanceSlash(String),
     Council(u64),
     ParliamentBodies(u64),
-    OfflineNoteV2ReplayKey(iroha_crypto::Hash),
+    OfflineNoteReplayKey(iroha_crypto::Hash),
 }
 
 impl TieredKeyHandle {
@@ -4156,7 +4156,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(_) => TieredSegment::GovernanceSlashes,
             TieredKeyHandle::Council(_) => TieredSegment::Council,
             TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
-            TieredKeyHandle::OfflineNoteV2ReplayKey(_) => TieredSegment::OfflineNoteV2ReplayKeys,
+            TieredKeyHandle::OfflineNoteReplayKey(_) => TieredSegment::OfflineNoteReplayKeys,
         }
     }
 
@@ -4195,7 +4195,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Council(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::OfflineNoteV2ReplayKey(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::OfflineNoteReplayKey(key) => Ok(norito::codec::Encode::encode(key)),
         }
     }
 
@@ -4260,8 +4260,8 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
             TieredKeyHandle::Council(id) => fetch!(world.council, id),
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
-            TieredKeyHandle::OfflineNoteV2ReplayKey(id) => {
-                fetch!(world.offline_note_v2_replay_keys, id)
+            TieredKeyHandle::OfflineNoteReplayKey(id) => {
+                fetch!(world.offline_note_replay_keys, id)
             }
         }
     }
@@ -4320,8 +4320,8 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
             TieredKeyHandle::Council(id) => fetch!(world.council, id),
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
-            TieredKeyHandle::OfflineNoteV2ReplayKey(id) => {
-                fetch!(world.offline_note_v2_replay_keys, id)
+            TieredKeyHandle::OfflineNoteReplayKey(id) => {
+                fetch!(world.offline_note_replay_keys, id)
             }
         }
     }
@@ -4369,8 +4369,8 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(id) => write!(f, "gov_slash:{id}"),
             TieredKeyHandle::Council(id) => write!(f, "council:{id}"),
             TieredKeyHandle::ParliamentBodies(id) => write!(f, "parliament_bodies:{id}"),
-            TieredKeyHandle::OfflineNoteV2ReplayKey(id) => {
-                write!(f, "offline_note_v2_replay_key:{id}")
+            TieredKeyHandle::OfflineNoteReplayKey(id) => {
+                write!(f, "offline_note_replay_key:{id}")
             }
         }
     }

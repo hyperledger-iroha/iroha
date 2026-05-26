@@ -137,6 +137,6 @@ path = "src/bin/qr_stream_fixtures.rs"
 required-features = ["test-fixtures"]
 
 [[bin]]
-name = "offline_v2_vectors"
-path = "src/bin/offline_v2_vectors.rs"
+name = "offline_vectors"
+path = "src/bin/offline_vectors.rs"
 required-features = ["test-fixtures", "transparent_api"]

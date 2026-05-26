@@ -170,10 +170,10 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Offline V2 readiness
+## Offline readiness
 
-JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
-Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
+Offline note issuance, redemption, and audit payloads are submitted as transaction instructions;
 the legacy offline reserve, revocation, and transfer-history HTTP routes are no longer published by
 Torii.
 

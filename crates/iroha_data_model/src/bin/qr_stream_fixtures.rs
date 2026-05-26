@@ -20,21 +20,11 @@ const PARITY_FIXTURE_PATH: &str = concat!(
 
 fn main() -> Result<(), Box<dyn Error>> {
     let check_only = env::args().any(|arg| arg == "--check");
-    let basic_payload = b"iroha-qr-stream-basic-v1".to_vec();
-    let parity_payload = b"Iroha QR stream parity fixture payload v1. ".repeat(6);
+    let basic_payload = b"iroha-qr-stream-basic".to_vec();
+    let parity_payload = b"Iroha QR stream parity fixture payload. ".repeat(6);
 
-    let basic = build_fixture(
-        &basic_payload,
-        200,
-        0,
-        QrPayloadKind::OfflineReceiveRequestV2,
-    )?;
-    let parity = build_fixture(
-        &parity_payload,
-        180,
-        3,
-        QrPayloadKind::OfflinePaymentTokenV2,
-    )?;
+    let basic = build_fixture(&basic_payload, 200, 0, QrPayloadKind::OfflineReceiveRequest)?;
+    let parity = build_fixture(&parity_payload, 180, 3, QrPayloadKind::OfflinePaymentToken)?;
 
     write_fixture(BASIC_FIXTURE_PATH, &basic, check_only)?;
     write_fixture(PARITY_FIXTURE_PATH, &parity, check_only)?;
@@ -70,9 +60,9 @@ fn build_fixture(
         .collect::<Vec<_>>();
 
     let payload_kind_label = match payload_kind {
-        QrPayloadKind::OfflineReceiveRequestV2 => "offline_receive_request_v2",
-        QrPayloadKind::OfflinePaymentTokenV2 => "offline_payment_token_v2",
-        QrPayloadKind::OfflineReceiptAckV2 => "offline_receipt_ack_v2",
+        QrPayloadKind::OfflineReceiveRequest => "offline_receive_request",
+        QrPayloadKind::OfflinePaymentToken => "offline_payment_token",
+        QrPayloadKind::OfflineReceiptAck => "offline_receipt_ack",
         QrPayloadKind::Unspecified => "unspecified",
     };
 

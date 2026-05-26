@@ -27,8 +27,8 @@ internal object OfflineStarkEnvelopeProver {
     private val OFFLINE_STARK_BINDING_Z_COEFF: BigInteger = BigInteger.valueOf(29)
     private const val STARK_AIR_TRACE_WIDTH: Int = 6
 
-    fun buildEnvelope(domainTag: String, transcriptLabel: String): OfflineStarkVerifyEnvelopeV1 {
-        val params = OfflineStarkFriParamsV1(
+    fun buildEnvelope(domainTag: String, transcriptLabel: String): OfflineStarkVerifyEnvelope {
+        val params = OfflineStarkFriParams(
             version = 1,
             nLog2 = OFFLINE_STARK_DOMAIN_LOG2,
             blowupLog2 = OFFLINE_STARK_BLOWUP_LOG2,
@@ -51,10 +51,10 @@ internal object OfflineStarkEnvelopeProver {
     private fun offlineStarkBindingTerms(
         domainTag: String,
         transcriptLabel: String,
-    ): List<OfflineStarkCompositionTermV1> {
+    ): List<OfflineStarkCompositionTerm> {
         val dtBytes = domainTag.toByteArray(StandardCharsets.UTF_8)
         val tlBytes = transcriptLabel.toByteArray(StandardCharsets.UTF_8)
-        val preamble = "iroha:offline:stark-binding-air:v1".toByteArray(StandardCharsets.US_ASCII)
+        val preamble = "iroha:offline:stark-binding-air".toByteArray(StandardCharsets.US_ASCII)
         val preimage = ByteArray(preamble.size + 8 + dtBytes.size + 8 + tlBytes.size)
         var p = 0
         System.arraycopy(preamble, 0, preimage, p, preamble.size); p += preamble.size
@@ -63,22 +63,22 @@ internal object OfflineStarkEnvelopeProver {
         writeLeU64(preimage, p, tlBytes.size.toLong()); p += 8
         System.arraycopy(tlBytes, 0, preimage, p, tlBytes.size)
         val digest = sha256(preimage)
-        val terms = ArrayList<OfflineStarkCompositionTermV1>(4)
+        val terms = ArrayList<OfflineStarkCompositionTerm>(4)
         for (i in 0..3) {
             val word = readLeU64(digest, i * 8)
             val value = word.mod(MOD_P)
-            terms.add(OfflineStarkCompositionTermV1(i.toLong(), value, BigInteger.valueOf(31L + i.toLong())))
+            terms.add(OfflineStarkCompositionTerm(i.toLong(), value, BigInteger.valueOf(31L + i.toLong())))
         }
         return terms
     }
 
     private fun proveCompositionEnvelope(
-        params: OfflineStarkFriParamsV1,
+        params: OfflineStarkFriParams,
         transcriptLabel: String,
         constant: BigInteger,
         zCoeff: BigInteger,
-        auxTerms: List<OfflineStarkCompositionTermV1>,
-    ): OfflineStarkVerifyEnvelopeV1 {
+        auxTerms: List<OfflineStarkCompositionTerm>,
+    ): OfflineStarkVerifyEnvelope {
         validateCompositionTerms(constant, zCoeff, auxTerms)
         val publicDigest = starkAirPublicDigestFromComposition(constant, zCoeff, auxTerms)
         val envelope = proveAirEnvelope(params, transcriptLabel, "composition-v1", publicDigest)
@@ -95,7 +95,7 @@ internal object OfflineStarkEnvelopeProver {
             ?: error("failed to derive STARK composition root")
         val compPath = merklePathFromLevels(0, compLevels)
             ?: error("failed to derive STARK composition path")
-        val compValue = OfflineStarkCompositionValueV1(
+        val compValue = OfflineStarkCompositionValue(
             leaf = expected,
             constant = constant,
             zCoeff = zCoeff,
@@ -104,27 +104,27 @@ internal object OfflineStarkEnvelopeProver {
         )
         val compValues = List(envelope.proof.queries.size) { compValue }
 
-        val newCommits = OfflineStarkCommitmentsV1(
+        val newCommits = OfflineStarkCommitments(
             version = envelope.proof.commits.version,
             roots = envelope.proof.commits.roots,
             compRoot = compRoot,
         )
-        val newProof = OfflineStarkProofV1(
+        val newProof = OfflineStarkProof(
             version = envelope.proof.version,
             commits = newCommits,
             queries = envelope.proof.queries,
             compValues = compValues,
             air = envelope.proof.air,
         )
-        return OfflineStarkVerifyEnvelopeV1(envelope.params, newProof, envelope.transcriptLabel)
+        return OfflineStarkVerifyEnvelope(envelope.params, newProof, envelope.transcriptLabel)
     }
 
     private fun proveAirEnvelope(
-        params: OfflineStarkFriParamsV1,
+        params: OfflineStarkFriParams,
         transcriptLabel: String,
         circuitId: String,
         publicDigest: ByteArray,
-    ): OfflineStarkVerifyEnvelopeV1 {
+    ): OfflineStarkVerifyEnvelope {
         require(circuitId.isNotEmpty()) { "invalid STARK AIR circuit_id" }
         val domain = 1 shl params.nLog2
         val rows = List(domain) { starkAirRow(it, publicDigest) }
@@ -154,7 +154,7 @@ internal object OfflineStarkEnvelopeProver {
         }
 
         val queryRoots = envelope.proof.commits.roots + extraQueryRoots
-        val openings = ArrayList<OfflineStarkAirOpeningV1>(envelope.proof.queries.size)
+        val openings = ArrayList<OfflineStarkAirOpening>(envelope.proof.queries.size)
         for (qi in envelope.proof.queries.indices) {
             val index = deriveQueryIndex(envelope.transcriptLabel, envelope.params, queryRoots, qi)
                 ?: error("failed to derive STARK AIR query index")
@@ -169,7 +169,7 @@ internal object OfflineStarkEnvelopeProver {
                 index, domain, publicDigest, rows[index], rows[nextIndex],
             )
             openings.add(
-                OfflineStarkAirOpeningV1(
+                OfflineStarkAirOpening(
                     index = index.toLong(),
                     row = rows[index],
                     nextRow = rows[nextIndex],
@@ -181,7 +181,7 @@ internal object OfflineStarkEnvelopeProver {
             )
         }
 
-        val airProof = OfflineStarkAirProofV1(
+        val airProof = OfflineStarkAirProof(
             version = 1,
             circuitId = circuitId,
             publicDigest = publicDigest,
@@ -190,22 +190,22 @@ internal object OfflineStarkEnvelopeProver {
             traceWidth = STARK_AIR_TRACE_WIDTH,
             openings = openings,
         )
-        val newProof = OfflineStarkProofV1(
+        val newProof = OfflineStarkProof(
             version = envelope.proof.version,
             commits = envelope.proof.commits,
             queries = envelope.proof.queries,
             compValues = envelope.proof.compValues,
             air = airProof,
         )
-        return OfflineStarkVerifyEnvelopeV1(envelope.params, newProof, envelope.transcriptLabel)
+        return OfflineStarkVerifyEnvelope(envelope.params, newProof, envelope.transcriptLabel)
     }
 
     private fun synthesizeFriEnvelopeFromValues(
-        params: OfflineStarkFriParamsV1,
+        params: OfflineStarkFriParams,
         transcriptLabel: String,
         baseValues: List<BigInteger>,
         extraQueryRoots: List<ByteArray>,
-    ): OfflineStarkVerifyEnvelopeV1 {
+    ): OfflineStarkVerifyEnvelope {
         val requiredLayers = layersRequired(params)
             ?: error("invalid STARK folding parameters")
         val totalDomain = 1 shl params.nLog2
@@ -252,11 +252,11 @@ internal object OfflineStarkEnvelopeProver {
 
         val queryRoots = roots + extraQueryRoots
         val queryCount = params.queries
-        val queries = ArrayList<List<OfflineFoldDecommitV1>>(queryCount)
+        val queries = ArrayList<List<OfflineFoldDecommit>>(queryCount)
         for (qi in 0 until queryCount) {
             var idxLayer = deriveQueryIndex(transcriptLabel, params, queryRoots, qi)
                 ?: error("failed to derive STARK query index")
-            val chain = ArrayList<OfflineFoldDecommitV1>(requiredLayers)
+            val chain = ArrayList<OfflineFoldDecommit>(requiredLayers)
             for (k in 0 until requiredLayers) {
                 val j = idxLayer / 2
                 val y0Idx = j * 2
@@ -271,7 +271,7 @@ internal object OfflineStarkEnvelopeProver {
                 val y1 = layerValues[k][y1Idx]
                 val z = layerValues[k + 1][j]
                 chain.add(
-                    OfflineFoldDecommitV1(
+                    OfflineFoldDecommit(
                         j = j.toLong(),
                         y0 = y0,
                         y1 = y1,
@@ -287,18 +287,18 @@ internal object OfflineStarkEnvelopeProver {
             queries.add(chain)
         }
 
-        val commits = OfflineStarkCommitmentsV1(version = 1, roots = roots, compRoot = null)
-        val proof = OfflineStarkProofV1(
+        val commits = OfflineStarkCommitments(version = 1, roots = roots, compRoot = null)
+        val proof = OfflineStarkProof(
             version = 1,
             commits = commits,
             queries = queries,
             compValues = null,
             air = null,
         )
-        return OfflineStarkVerifyEnvelopeV1(params, proof, transcriptLabel)
+        return OfflineStarkVerifyEnvelope(params, proof, transcriptLabel)
     }
 
-    private fun layersRequired(params: OfflineStarkFriParamsV1): Int? {
+    private fun layersRequired(params: OfflineStarkFriParams): Int? {
         if (params.foldArity < 2) return null
         var domain = 1 shl params.nLog2
         val fold = params.foldArity
@@ -315,7 +315,7 @@ internal object OfflineStarkEnvelopeProver {
     private fun validateCompositionTerms(
         constant: BigInteger,
         zCoeff: BigInteger,
-        auxTerms: List<OfflineStarkCompositionTermV1>,
+        auxTerms: List<OfflineStarkCompositionTerm>,
     ) {
         require(fromCanonical(constant) != null) { "invalid STARK constant" }
         require(fromCanonical(zCoeff) != null) { "invalid STARK z coefficient" }
@@ -335,7 +335,7 @@ internal object OfflineStarkEnvelopeProver {
     private fun starkAirPublicDigestFromComposition(
         constant: BigInteger,
         zCoeff: BigInteger,
-        auxTerms: List<OfflineStarkCompositionTermV1>,
+        auxTerms: List<OfflineStarkCompositionTerm>,
     ): ByteArray {
         val md = MessageDigest.getInstance("SHA-256")
         md.update("iroha:zk:stark:air-public-digest:v1".toByteArray(StandardCharsets.US_ASCII))
@@ -366,7 +366,7 @@ internal object OfflineStarkEnvelopeProver {
         )
     }
 
-    private fun starkAirTraceLeafHash(params: OfflineStarkFriParamsV1, row: List<BigInteger>): ByteArray {
+    private fun starkAirTraceLeafHash(params: OfflineStarkFriParams, row: List<BigInteger>): ByteArray {
         require(params.hashFn == STARK_HASH_SHA256_V1) { "only SHA-256 STARK backend is supported" }
         val md = MessageDigest.getInstance("SHA-256")
         md.update("STARK:AIR:TRACE:ROW:V1".toByteArray(StandardCharsets.US_ASCII))
@@ -405,7 +405,7 @@ internal object OfflineStarkEnvelopeProver {
     }
 
     private fun friRoundChallenge(
-        params: OfflineStarkFriParamsV1,
+        params: OfflineStarkFriParams,
         transcriptLabel: String,
         root: ByteArray,
     ): BigInteger? {
@@ -429,7 +429,7 @@ internal object OfflineStarkEnvelopeProver {
     }
 
     private fun challenge(
-        params: OfflineStarkFriParamsV1,
+        params: OfflineStarkFriParams,
         label: String,
         bytes: ByteArray,
     ): BigInteger? {
@@ -444,7 +444,7 @@ internal object OfflineStarkEnvelopeProver {
 
     private fun deriveQueryIndex(
         label: String,
-        params: OfflineStarkFriParamsV1,
+        params: OfflineStarkFriParams,
         roots: List<ByteArray>,
         queryIdx: Int,
     ): Int? {
@@ -497,7 +497,7 @@ internal object OfflineStarkEnvelopeProver {
     }
 
     private fun merkleLevelsFromValues(
-        params: OfflineStarkFriParamsV1,
+        params: OfflineStarkFriParams,
         values: List<BigInteger>,
     ): List<List<ByteArray>>? {
         if (values.isEmpty()) return null
@@ -519,7 +519,7 @@ internal object OfflineStarkEnvelopeProver {
     }
 
     private fun merkleLevelsFromHashes(
-        params: OfflineStarkFriParamsV1,
+        params: OfflineStarkFriParams,
         leaves: List<ByteArray>,
     ): List<List<ByteArray>>? {
         if (leaves.isEmpty()) return null

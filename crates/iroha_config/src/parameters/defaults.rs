@@ -1697,7 +1697,7 @@ pub mod torii {
         /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
         pub const POW_VRF_SEED_ENABLED: bool = false;
     }
-    /// Offline Notes V2 issuer defaults.
+    /// Offline Notes issuer defaults.
     pub mod offline_issuer {
         /// Maximum authorized offline balance per lineage.
         pub fn max_balance() -> String {
@@ -3791,7 +3791,7 @@ pub mod settlement {
     }
     /// Offline settlement defaults.
     pub mod offline {
-        /// Minimum number of blocks to retain Offline V2 note records in hot storage.
+        /// Minimum number of blocks to retain Offline note records in hot storage.
         pub const HOT_RETENTION_BLOCKS: u64 = 86_400;
         /// Maximum number of note records to archive in a single retention pass.
         pub const ARCHIVE_BATCH_SIZE: usize = 128;
