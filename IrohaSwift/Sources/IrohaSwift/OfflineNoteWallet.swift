@@ -1752,16 +1752,34 @@ public final class OfflineNoteWallet {
         guard try proofVerifier.verifyRedeem(redemption) else {
             throw OfflineNoteWalletError.proofVerificationFailed
         }
-        try await transactionSubmitter.submitDefund(redemption, bearerAuditTrail: bearerAuditTrail)
         let pending = try store.mutateNotes { notes in
-            guard (notes[current.noteCommitmentHex] ?? current).state == .spendable else {
+            let latest = notes[current.noteCommitmentHex] ?? current
+            guard latest.state == .spendable else {
                 throw OfflineNoteWalletError.invalidState
             }
-            let pending = try current.withState(.redeemPending, updatedAtMs: clock())
-            notes[current.noteCommitmentHex] = pending
+            let pending = try latest.withState(.redeemPending, updatedAtMs: clock())
+            notes[latest.noteCommitmentHex] = pending
             return pending
         }
+        do {
+            try await transactionSubmitter.submitDefund(redemption, bearerAuditTrail: bearerAuditTrail)
+        } catch {
+            try? rollbackRedeemReservation(pending)
+            throw error
+        }
         return pending
+    }
+
+    private func rollbackRedeemReservation(_ reserved: OfflineNoteWalletNote) throws {
+        try store.mutateNotes { notes in
+            guard let latest = notes[reserved.noteCommitmentHex],
+                  latest == reserved,
+                  latest.state == .redeemPending
+            else {
+                return
+            }
+            notes[reserved.noteCommitmentHex] = try latest.withState(.spendable, updatedAtMs: clock())
+        }
     }
 
     public func sync() async throws -> [OfflineNoteWalletNote] {

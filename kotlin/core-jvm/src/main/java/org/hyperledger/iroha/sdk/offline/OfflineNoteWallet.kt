@@ -670,7 +670,7 @@ class OfflineNoteReceiptAck(
         require(paymentRequestId.isNotBlank()) { "paymentRequestId must not be blank" }
         require(_tokenId.size == 32) { "tokenId must be 32 bytes" }
         require(recipientAccountId.isNotBlank()) { "recipientAccountId must not be blank" }
-        require(acceptedAtMs >= 0L) { "acceptedAtMs must be non-negative" }
+        require(acceptedAtMs > 0L) { "acceptedAtMs must be positive" }
     }
 
     fun tokenId(): ByteArray = _tokenId.copyOf()
@@ -1577,21 +1577,44 @@ class OfflineNoteWallet @JvmOverloads constructor(
         require(proofVerifier.verifyRedeem(redemption)) {
             "Offline Note recursive redeem proof verification failed"
         }
+        val pending = store.mutateNotes { notes ->
+            val latest = notes[current.noteCommitmentHex()] ?: current
+            require(latest.state == OfflineNoteWalletNoteState.SPENDABLE) {
+                "only spendable Offline Note notes can be redeemed"
+            }
+            val updated = latest.withState(
+                OfflineNoteWalletNoteState.REDEEM_PENDING,
+                clock.getAsLong(),
+            )
+            notes[latest.noteCommitmentHex()] = updated
+            updated
+        }
         val submitted = try {
             submitter.submitDefund(redemption, bearerAuditTrail)
         } catch (error: Throwable) {
+            rollbackRedeemReservation(pending)
             return failedFuture(error)
         }
         return submitted.thenApply { response ->
-            ensureSuccess(response)
-            store.mutateNotes { notes ->
-                val latest = notes[current.noteCommitmentHex()] ?: current
-                require(latest.state == OfflineNoteWalletNoteState.SPENDABLE) {
-                    "only spendable Offline Note notes can be redeemed"
-                }
-                val updated = latest.withState(OfflineNoteWalletNoteState.REDEEM_PENDING, clock.getAsLong())
-                notes[latest.noteCommitmentHex()] = updated
-                updated
+            try {
+                ensureSuccess(response)
+            } catch (error: RuntimeException) {
+                rollbackRedeemReservation(pending)
+                throw error
+            }
+            pending
+        }
+    }
+
+    private fun rollbackRedeemReservation(reserved: OfflineNoteWalletNote) {
+        store.mutateNotes { notes ->
+            val latest = notes[reserved.noteCommitmentHex()] ?: return@mutateNotes
+            if (
+                latest.state == OfflineNoteWalletNoteState.REDEEM_PENDING &&
+                latest.updatedAtMs == reserved.updatedAtMs
+            ) {
+                notes[latest.noteCommitmentHex()] =
+                    latest.withState(OfflineNoteWalletNoteState.SPENDABLE, clock.getAsLong())
             }
         }
     }

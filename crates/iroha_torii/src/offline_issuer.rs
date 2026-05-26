@@ -29,6 +29,7 @@ const ENDPOINT_KEYS_REFILL: &str = "v1/offline/keys/refill";
 const ENDPOINT_NOTES_ISSUE: &str = "v1/offline/notes/issue";
 const ENDPOINT_NOTES_REDEEM: &str = "v1/offline/notes/redeem";
 const ENDPOINT_AUDIT: &str = "v1/offline/audit";
+const ENDPOINT_BEARER_SETTLEMENTS: &str = "v1/offline/bearer/settlements";
 const PATH_KEYS_REFILL: &str = "/v1/offline/keys/refill";
 const PATH_NOTES_ISSUE: &str = "/v1/offline/notes/issue";
 const PATH_NOTES_REDEEM: &str = "/v1/offline/notes/redeem";
@@ -44,6 +45,9 @@ pub(crate) struct OfflineIssuerRuntime {
     certificate_ttl: Duration,
     authorization_refresh: Duration,
     authorization_ttl: Duration,
+    revoked_verdict_ids: Vec<String>,
+    blacklisted_account_ids: Vec<String>,
+    asset_send_limits: Vec<actual::ToriiOfflineAssetSendLimit>,
 }
 
 impl OfflineIssuerRuntime {
@@ -57,6 +61,9 @@ impl OfflineIssuerRuntime {
             certificate_ttl: config.certificate_ttl,
             authorization_refresh: config.authorization_refresh,
             authorization_ttl: config.authorization_ttl,
+            revoked_verdict_ids: config.revoked_verdict_ids,
+            blacklisted_account_ids: config.blacklisted_account_ids,
+            asset_send_limits: config.asset_send_limits,
         }
     }
 
@@ -402,6 +409,296 @@ pub(crate) async fn handle_audit(
         ("operation_id", string_value(parsed.operation_id)),
         ("accepted_receipt_ids", Value::Array(accepted_receipt_ids)),
     ]))
+}
+
+pub(crate) async fn handle_revocations_bundle(app: SharedAppState) -> Result<AxResponse, Error> {
+    let issuer = require_issuer(&app)?;
+    let now_ms = now_ms();
+    let unsigned = revocation_bundle_unsigned_payload(&issuer, now_ms);
+    let signature = issuer.sign_json_base64(&unsigned, "offline_revocation_bundle")?;
+    let mut bundle = value_object(unsigned)?;
+    bundle.insert(
+        "issuer_signature_base64".to_string(),
+        string_value(signature),
+    );
+    json_ok(Value::Object(bundle))
+}
+
+pub(crate) async fn handle_bearer_settlement(
+    app: SharedAppState,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Result<AxResponse, Error> {
+    reject_legacy_auth_headers(headers)?;
+    let issuer = require_issuer(&app)?;
+    let value: Value = json::from_slice(body.as_ref()).map_err(|err| {
+        validation_owned(
+            "OFFLINE_BEARER_INVALID_JSON",
+            format!("Offline Bearer settlement body is not valid JSON: {err}"),
+        )
+    })?;
+    let (body_auth, unsigned_body) = extract_body_auth(&value)?;
+    let account_literal = required_string(&value, "account_id")
+        .or_else(|_| {
+            let debit = value
+                .get("debit_receipts")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|receipt| receipt.get("sender_certificate"))
+                .and_then(|certificate| optional_string(certificate, "account_id"));
+            debit.ok_or_else(|| {
+                validation(
+                    "OFFLINE_BEARER_ACCOUNT_REQUIRED",
+                    "Offline Bearer settlement requires account_id or a sender certificate.",
+                )
+            })
+        })?
+        .to_string();
+    let (account_id, _) = routing::parse_account_literal_with_state(
+        &app.state,
+        &account_literal,
+        &app.telemetry,
+        ENDPOINT_BEARER_SETTLEMENTS,
+    )
+    .map_err(|err| {
+        validation_owned(
+            "OFFLINE_BEARER_INVALID_ACCOUNT",
+            format!("Invalid Offline Bearer account_id: {}", err.reason()),
+        )
+    })?;
+    app_auth::verify_canonical_body_request(
+        &app.state,
+        body_auth,
+        method,
+        uri,
+        &unsigned_body,
+        Some(&account_id),
+    )
+    .map_err(|err| Error::AppForbidden {
+        code: "OFFLINE_BEARER_SIGNATURE_INVALID",
+        message: app_auth_error_message(err),
+    })?;
+
+    let accepted = validate_bearer_settlement_batch(&issuer, &value)?;
+    json_ok(json_object(vec![
+        ("version", number_value(2)),
+        ("account_id", string_value(account_literal)),
+        ("accepted_transfer_ids", Value::Array(accepted.accepted)),
+        ("duplicate_transfer_ids", Value::Array(accepted.duplicates)),
+        ("rejected_transfer_ids", Value::Array(accepted.rejected)),
+    ]))
+}
+
+struct BearerSettlementValidation {
+    accepted: Vec<Value>,
+    duplicates: Vec<Value>,
+    rejected: Vec<Value>,
+}
+
+fn validate_bearer_settlement_batch(
+    issuer: &OfflineIssuerRuntime,
+    value: &Value,
+) -> Result<BearerSettlementValidation, Error> {
+    let version = value
+        .get("version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            validation(
+                "OFFLINE_BEARER_VERSION_REQUIRED",
+                "Offline Bearer settlement version is required.",
+            )
+        })?;
+    if version != 2 {
+        return Err(validation(
+            "OFFLINE_BEARER_UNSUPPORTED_VERSION",
+            "Only Offline Bearer settlement batch version 2 is supported.",
+        ));
+    }
+    required_string(value, "chain_id")?;
+    required_string(value, "purse_id")?;
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut accepted = Vec::new();
+    let mut duplicates = Vec::new();
+    let mut rejected = Vec::new();
+
+    for receipt in value
+        .get("debit_receipts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let transfer_id = required_string(receipt, "transfer_id")?.to_string();
+        if !seen.insert(transfer_id.clone()) {
+            duplicates.push(string_value(transfer_id));
+            continue;
+        }
+        match validate_bearer_debit_receipt(issuer, receipt) {
+            Ok(()) => accepted.push(string_value(transfer_id)),
+            Err(reason) => rejected.push(rejected_transfer(&transfer_id, reason)),
+        }
+    }
+
+    for receipt in value
+        .get("credit_receipts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let transfer_id = required_string(receipt, "transfer_id")?.to_string();
+        if !seen.insert(transfer_id.clone()) {
+            duplicates.push(string_value(transfer_id));
+            continue;
+        }
+        match validate_bearer_credit_receipt(issuer, receipt) {
+            Ok(()) => accepted.push(string_value(transfer_id)),
+            Err(reason) => rejected.push(rejected_transfer(&transfer_id, reason)),
+        }
+    }
+
+    Ok(BearerSettlementValidation {
+        accepted,
+        duplicates,
+        rejected,
+    })
+}
+
+fn validate_bearer_debit_receipt(
+    issuer: &OfflineIssuerRuntime,
+    receipt: &Value,
+) -> Result<(), &'static str> {
+    let amount = optional_string(receipt, "amount").ok_or("amount_required")?;
+    parse_positive_amount(amount, "amount").map_err(|_| "amount_invalid")?;
+    require_non_empty_receipt_bytes(receipt, "debit_signature")?;
+    require_non_empty_receipt_bytes(receipt, "receive_challenge_signature")?;
+    let sender = receipt
+        .get("sender_certificate")
+        .ok_or("sender_certificate_required")?;
+    let recipient = receipt
+        .get("recipient_certificate")
+        .ok_or("recipient_certificate_required")?;
+    validate_bearer_certificate(issuer, sender)?;
+    validate_bearer_certificate(issuer, recipient)?;
+    Ok(())
+}
+
+fn validate_bearer_credit_receipt(
+    issuer: &OfflineIssuerRuntime,
+    receipt: &Value,
+) -> Result<(), &'static str> {
+    let amount = optional_string(receipt, "amount").ok_or("amount_required")?;
+    parse_positive_amount(amount, "amount").map_err(|_| "amount_invalid")?;
+    require_non_empty_receipt_bytes(receipt, "credit_signature")?;
+    let certificate = receipt
+        .get("recipient_certificate")
+        .ok_or("recipient_certificate_required")?;
+    validate_bearer_certificate(issuer, certificate)?;
+    Ok(())
+}
+
+fn validate_bearer_certificate(
+    issuer: &OfflineIssuerRuntime,
+    certificate: &Value,
+) -> Result<(), &'static str> {
+    let account_id = optional_string(certificate, "account_id").ok_or("account_required")?;
+    let device_id = optional_string(certificate, "device_id").ok_or("device_required")?;
+    let key_id = optional_string(certificate, "key_id").ok_or("key_required")?;
+    if issuer
+        .blacklisted_account_ids
+        .iter()
+        .any(|candidate| candidate == account_id)
+    {
+        return Err("account_blacklisted");
+    }
+    if issuer
+        .revoked_verdict_ids
+        .iter()
+        .any(|candidate| candidate == device_id || candidate == key_id)
+    {
+        return Err("certificate_revoked");
+    }
+    require_non_empty_receipt_bytes(certificate, "issuer_signature_base64")
+        .or_else(|_| require_non_empty_receipt_bytes(certificate, "issuer_signature"))?;
+    Ok(())
+}
+
+fn require_non_empty_receipt_bytes(value: &Value, field: &str) -> Result<(), &'static str> {
+    if optional_string(value, field).is_some_and(|text| !text.trim().is_empty()) {
+        return Ok(());
+    }
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .filter(|bytes| !bytes.is_empty())
+        .map(|_| ())
+        .ok_or("signature_required")
+}
+
+fn rejected_transfer(transfer_id: &str, reason: &'static str) -> Value {
+    json_object(vec![
+        ("transfer_id", string_value(transfer_id)),
+        ("reason", string_value(reason)),
+    ])
+}
+
+fn revocation_bundle_unsigned_payload(issuer: &OfflineIssuerRuntime, now_ms: u64) -> Value {
+    json_object(vec![
+        ("issued_at_ms", number_value(now_ms)),
+        (
+            "expires_at_ms",
+            number_value(now_ms.saturating_add(duration_ms(issuer.authorization_refresh))),
+        ),
+        (
+            "verdict_ids",
+            Value::Array(
+                issuer
+                    .revoked_verdict_ids
+                    .iter()
+                    .cloned()
+                    .map(string_value)
+                    .collect(),
+            ),
+        ),
+        (
+            "blacklisted_account_ids",
+            Value::Array(
+                issuer
+                    .blacklisted_account_ids
+                    .iter()
+                    .cloned()
+                    .map(string_value)
+                    .collect(),
+            ),
+        ),
+        ("asset_send_limits", revocation_asset_send_limits(issuer)),
+    ])
+}
+
+fn revocation_asset_send_limits(issuer: &OfflineIssuerRuntime) -> Value {
+    Value::Array(
+        issuer
+            .asset_send_limits
+            .iter()
+            .map(|limit| {
+                json_object(vec![
+                    (
+                        "asset_definition_id",
+                        string_value(limit.asset_definition_id.clone()),
+                    ),
+                    (
+                        "daily_send_limit",
+                        string_value(limit.daily_send_limit.to_string()),
+                    ),
+                    (
+                        "monthly_send_limit",
+                        string_value(limit.monthly_send_limit.to_string()),
+                    ),
+                ])
+            })
+            .collect(),
+    )
 }
 
 fn require_issuer(app: &AppState) -> Result<Arc<OfflineIssuerRuntime>, Error> {
@@ -1646,9 +1943,87 @@ mod tests {
                 certificate_ttl: Duration::from_secs(300),
                 authorization_refresh: Duration::from_secs(60),
                 authorization_ttl: Duration::from_secs(600),
+                revoked_verdict_ids: Vec::new(),
+                blacklisted_account_ids: Vec::new(),
+                asset_send_limits: Vec::new(),
             },
             verifier_key_pair,
         )
+    }
+
+    #[test]
+    fn revocation_bundle_payload_is_signed_and_time_bounded() {
+        let (issuer, _) = sample_issuer();
+        let unsigned = revocation_bundle_unsigned_payload(&issuer, NOW_MS);
+        assert_eq!(
+            unsigned.get("issued_at_ms").and_then(Value::as_u64),
+            Some(NOW_MS)
+        );
+        assert_eq!(
+            unsigned.get("expires_at_ms").and_then(Value::as_u64),
+            Some(NOW_MS + 60_000)
+        );
+        assert_eq!(
+            unsigned
+                .get("blacklisted_account_ids")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+
+        let payload = json::to_vec(&unsigned).expect("revocation payload json");
+        let signature = issuer.sign_bytes(&payload);
+        signature
+            .verify(issuer.key_pair.public_key(), &payload)
+            .expect("revocation bundle signature verifies");
+    }
+
+    #[test]
+    fn revocation_bundle_payload_includes_configured_policy_controls() {
+        let (mut issuer, _) = sample_issuer();
+        issuer.revoked_verdict_ids = vec!["verdict-a".to_string()];
+        issuer.blacklisted_account_ids = vec!["alice".to_string()];
+        issuer.asset_send_limits = vec![actual::ToriiOfflineAssetSendLimit {
+            asset_definition_id: "xor#sora".to_string(),
+            daily_send_limit: Numeric::from_str("10.00").expect("amount"),
+            monthly_send_limit: Numeric::from_str("25.00").expect("amount"),
+        }];
+
+        let unsigned = revocation_bundle_unsigned_payload(&issuer, NOW_MS);
+
+        assert_eq!(
+            unsigned
+                .get("verdict_ids")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_str),
+            Some("verdict-a")
+        );
+        assert_eq!(
+            unsigned
+                .get("blacklisted_account_ids")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_str),
+            Some("alice")
+        );
+        let limit = unsigned
+            .get("asset_send_limits")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .expect("limit");
+        assert_eq!(
+            limit.get("asset_definition_id").and_then(Value::as_str),
+            Some("xor#sora")
+        );
+        assert_eq!(
+            limit.get("daily_send_limit").and_then(Value::as_str),
+            Some("10.00")
+        );
+        assert_eq!(
+            limit.get("monthly_send_limit").and_then(Value::as_str),
+            Some("25.00")
+        );
     }
 
     fn sample_request(

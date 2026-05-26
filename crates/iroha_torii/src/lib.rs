@@ -5946,6 +5946,9 @@ async fn handler_offline_note_readiness() -> Result<impl IntoResponse, Error> {
         json_entry("offline_fountain_qr", true),
         json_entry("offline_sync_optional", true),
         json_entry("offline_telemetry", true),
+        json_entry("offline_bearer_v2", true),
+        json_entry("offline_bearer_settlement", true),
+        json_entry("offline_revocation_bundle", true),
     ]))
 }
 
@@ -6003,6 +6006,43 @@ async fn handler_offline_note_audit(
 ) -> Result<AxResponse, Error> {
     check_access(&app, &headers, Some(remote.ip()), "v1/offline/audit").await?;
     offline_issuer::handle_audit(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_bearer_settlements(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/bearer/settlements",
+    )
+    .await?;
+    offline_issuer::handle_bearer_settlement(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_revocations_bundle(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/revocations/bundle",
+    )
+    .await?;
+    offline_issuer::handle_revocations_bundle(app).await
 }
 
 #[cfg(feature = "app_api")]
@@ -34966,7 +35006,15 @@ impl Torii {
                     "/v1/offline/notes/redeem",
                     post(handler_offline_note_notes_redeem),
                 )
-                .route("/v1/offline/audit", post(handler_offline_note_audit));
+                .route("/v1/offline/audit", post(handler_offline_note_audit))
+                .route(
+                    "/v1/offline/bearer/settlements",
+                    post(handler_offline_bearer_settlements),
+                )
+                .route(
+                    "/v1/offline/revocations/bundle",
+                    get(handler_offline_revocations_bundle),
+                );
             #[cfg(feature = "push")]
             let router = router.route(
                 "/v1/notify/devices",

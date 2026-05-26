@@ -58,6 +58,10 @@ public final class OfflineNoteHalo2Prover {
         new OfflineNote.ProofBox(OfflineNote.RECURSIVE_BACKEND, envelope));
   }
 
+  public static byte[] proveOpenVerifyEnvelope(final OfflineNote.InstanceValues values) {
+    return prove(values).getProof().bytes();
+  }
+
   public static byte[] proveZk1Payload(final OfflineNote.InstanceValues values) {
     final Context context = CONTEXT.requireReady();
     final Params params = context.params;
@@ -279,6 +283,20 @@ public final class OfflineNoteHalo2Prover {
     final F pValue = quotientEval.mul(x4).add(qAtX3);
     return IPA.verifyInTranscript(params, pCommitment, x3, pValue, transcript)
         && transcript.remainingBytes() == 0;
+  }
+
+  public static boolean verifyOpenVerifyEnvelope(final byte[] envelope, final long[] publicValues) {
+    return verifyZk1Payload(proofPayloadFromOpenVerifyEnvelope(envelope), publicValues);
+  }
+
+  public static boolean verifyOpenVerifyEnvelope(
+      final byte[] envelope, final String publicInputsHashHex) {
+    final byte[] payload = proofPayloadFromOpenVerifyEnvelope(envelope);
+    final DecodedPayload decoded = decodeZk1ProofPayload(payload);
+    if (!hexLower(publicInputsHash(decoded.publicValues)).equals(publicInputsHashHex.trim().toLowerCase(java.util.Locale.ROOT))) {
+      return false;
+    }
+    return verifyZk1Payload(payload, decoded.publicValues);
   }
 
   public static boolean verifyAudit(final OfflineNote.AuditBundle audit) {
@@ -846,6 +864,17 @@ public final class OfflineNoteHalo2Prover {
       out[i / 2] = (byte) Integer.parseInt(value.substring(i, i + 2), 16);
     }
     return out;
+  }
+
+  private static String hexLower(final byte[] bytes) {
+    final char[] out = new char[bytes.length * 2];
+    final char[] digits = "0123456789abcdef".toCharArray();
+    for (int i = 0; i < bytes.length; i++) {
+      final int value = bytes[i] & 0xFF;
+      out[i * 2] = digits[value >>> 4];
+      out[i * 2 + 1] = digits[value & 0x0F];
+    }
+    return new String(out);
   }
 
   private static BigInteger limbs(final String... littleEndianHex) {

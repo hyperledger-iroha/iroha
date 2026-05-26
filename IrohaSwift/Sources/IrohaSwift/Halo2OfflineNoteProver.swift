@@ -59,6 +59,10 @@ public enum Halo2OfflineNoteProver {
         )
     }
 
+    public static func proveOpenVerifyEnvelope(instanceValues: OfflineNoteInstanceValues) throws -> Data {
+        try prove(instanceValues: instanceValues).proof.bytes
+    }
+
     public static func proveRedeem(_ redemption: OfflineNoteRedeem) throws -> OfflineNoteRecursiveProof {
         try prove(instanceValues: OfflineNoteInstanceBuilder.redeemInstanceValues(for: redemption))
     }
@@ -331,6 +335,19 @@ public enum Halo2OfflineNoteProver {
             proofPayload(fromOpenVerifyEnvelope: envelope),
             publicValues: publicValues
         )
+    }
+
+    public static func verifyOpenVerifyEnvelope(_ envelope: Data, publicInputsHashHex: String) throws -> Bool {
+        let normalized = publicInputsHashHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalized.count == 64, let expectedPublicInputsHash = Data(hexString: normalized) else {
+            return false
+        }
+        let proofPayload = try proofPayload(fromOpenVerifyEnvelope: envelope)
+        let (_, publicValues) = try decodeZK1ProofPayload(proofPayload)
+        guard try publicInputsHash(fromPublicValues: publicValues) == expectedPublicInputsHash else {
+            return false
+        }
+        return try verifyZK1Payload(proofPayload, publicValues: publicValues)
     }
 
     public static func publicValues(fromOpenVerifyEnvelope envelope: Data) throws -> [UInt64] {
@@ -762,6 +779,24 @@ public enum Halo2OfflineNoteProver {
             values.removeLast()
         }
         return values
+    }
+
+    private static func publicInputsHash(fromPublicValues publicValues: [UInt64]) throws -> Data {
+        guard publicValues.count >= 4 else {
+            throw Halo2OfflineNoteProverError.invalidInstanceValues
+        }
+        var hash = Data()
+        for value in publicValues.prefix(4) {
+            var word = value
+            for _ in 0..<8 {
+                hash.append(UInt8(word & 0xff))
+                word >>= 8
+            }
+        }
+        guard hash.count == 32 else {
+            throw Halo2OfflineNoteProverError.invalidInstanceValues
+        }
+        return hash
     }
 }
 

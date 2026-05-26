@@ -6448,6 +6448,23 @@ pub struct ToriiOfflineIssuer {
     pub authorization_refresh: Duration,
     /// Authorization TTL.
     pub authorization_ttl: Duration,
+    /// Revoked authorization verdict identifiers distributed to offline wallets.
+    pub revoked_verdict_ids: Vec<String>,
+    /// Account identifiers blocked from offline value movement.
+    pub blacklisted_account_ids: Vec<String>,
+    /// Per-asset offline send limits distributed to offline wallets.
+    pub asset_send_limits: Vec<ToriiOfflineAssetSendLimit>,
+}
+
+/// Per-asset offline send limits exposed by the Torii Offline issuer.
+#[derive(Debug, Clone)]
+pub struct ToriiOfflineAssetSendLimit {
+    /// Asset definition identifier the limits apply to.
+    pub asset_definition_id: String,
+    /// Maximum offline value that can be sent in a UTC day.
+    pub daily_send_limit: Numeric,
+    /// Maximum offline value that can be sent in a UTC month.
+    pub monthly_send_limit: Numeric,
 }
 
 /// RAM-LFE runtime configuration exposed to Torii.

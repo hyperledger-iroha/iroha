@@ -1377,9 +1377,21 @@ final class Halo2PastaTests: XCTestCase {
             try Halo2OfflineNoteProver.publicValues(fromOpenVerifyEnvelope: proof.proof.bytes),
             auditValues.publicValues
         )
+        XCTAssertEqual(
+            try Halo2OfflineNoteProver.proveOpenVerifyEnvelope(instanceValues: auditValues).count > 0,
+            true
+        )
         XCTAssertTrue(try Halo2OfflineNoteProver.verifyOpenVerifyEnvelope(
             proof.proof.bytes,
             publicValues: auditValues.publicValues
+        ))
+        XCTAssertTrue(try Halo2OfflineNoteProver.verifyOpenVerifyEnvelope(
+            proof.proof.bytes,
+            publicInputsHashHex: fixture.chainVectors.audit.publicInputsHash
+        ))
+        XCTAssertFalse(try Halo2OfflineNoteProver.verifyOpenVerifyEnvelope(
+            proof.proof.bytes,
+            publicInputsHashHex: String(repeating: "0", count: 64)
         ))
         XCTAssertEqual(proof.publicInputsHash, Data(hexString: fixture.chainVectors.audit.publicInputsHash))
         try audit.replacingRecursiveProof(proof).validateProofBinding()

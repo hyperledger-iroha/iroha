@@ -221,13 +221,17 @@ public enum OfflineNoteTransferTextPayloadCodec {
 
     public static func decodeReceiptAck(_ value: String) throws -> OfflineReceiptAck {
         if let ack = try? OfflineNoteReceiptAckCodec.decodeText(value) {
-            return OfflineReceiptAck(ack: ack)
+            let receiptAck = OfflineReceiptAck(ack: ack)
+            try validateReceiptAckFields(receiptAck)
+            return receiptAck
         }
-        return try OfflineNoteCompatibilityTextEncoding.decodeJsonText(
+        let receiptAck = try OfflineNoteCompatibilityTextEncoding.decodeJsonText(
             OfflineReceiptAck.self,
             from: value,
             prefix: receiptAckPrefix
         )
+        try validateReceiptAckFields(receiptAck)
+        return receiptAck
     }
 
     public static func decode(
@@ -300,6 +304,16 @@ public enum OfflineNoteTransferTextPayloadCodec {
 
     private static func validateReceiptAck(_ value: String) throws {
         _ = try decodeReceiptAck(value)
+    }
+
+    private static func validateReceiptAckFields(_ ack: OfflineReceiptAck) throws {
+        guard !ack.tokenId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !ack.recipientAccountId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              ack.acceptedAtMs > 0,
+              ack.chainId.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? true,
+              ack.paymentRequestId.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? true else {
+            throw OfflineNoteTransferTextPayloadCodecError.invalidPayload
+        }
     }
 
     private static func base64UrlEncode(_ data: Data) -> String {

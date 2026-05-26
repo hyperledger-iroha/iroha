@@ -416,6 +416,16 @@ class OfflineNoteTest {
         val proof = OfflineNoteHalo2Prover.proveAudit(audit)
         audit.replacingRecursiveProof(proof).validateProofBinding()
         assertTrue(proof.proof.bytes().size <= OfflineNoteHalo2Prover.MAX_ENVELOPE_BYTES)
+        val envelope = OfflineNoteHalo2Prover.proveOpenVerifyEnvelope(values)
+        assertTrue(envelope.isNotEmpty())
+        assertTrue(OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), values.publicValues()))
+        assertTrue(OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), hex(proof.publicInputsHash())))
+        assertFalse(
+            OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
+                proof.proof.bytes(),
+                "00".repeat(32),
+            ),
+        )
     }
 
     @Test
@@ -602,6 +612,39 @@ class OfflineNoteTest {
             ack.tokenIdHex(),
             OfflineNoteReceiptAckCodec.decodeQrPayload(assertNotNull(payload)).tokenIdHex(),
         )
+    }
+
+    @Test
+    fun receiptAckCodecRejectsNonPositiveAcceptedAtDecode() {
+        val fixture = loadFixture()
+        val payment = obj(fixture, "payment_token")
+        val token = OfflineNotePaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiptAck.fromPaymentToken(
+                token = token,
+                recipientAccountId = string(payment, "recipient_account_id"),
+                acceptedAtMs = 0L,
+            )
+        }
+
+        val ack = OfflineNoteReceiptAck.fromPaymentToken(
+            token = token,
+            recipientAccountId = string(payment, "recipient_account_id"),
+            acceptedAtMs = long(obj(fixture, "receipt_ack"), "accepted_at_ms"),
+        )
+        val malformed = OfflineNoteReceiptAckCodec.encodeNorito(ack).copyOf()
+        malformed.fill(0, malformed.size - java.lang.Long.BYTES, malformed.size)
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiptAckCodec.decodeNorito(malformed)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiptAckCodec.decodeText(
+                OfflineNoteReceiptAckCodec.TEXT_PREFIX +
+                    Base64.getUrlEncoder().withoutPadding().encodeToString(malformed),
+            )
+        }
     }
 
     private fun receiveRequestFixture(fixture: Map<String, Any?>): OfflineNoteReceiveRequest {
@@ -1938,6 +1981,47 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun walletRedeemReservesNoteBeforeSubmitCompletes() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val payment = obj(fixture, "payment_token")
+        val senderCertificate = certificate(obj(payment, "sender_key_certificate"))
+        val store = InMemoryOfflineNoteStore()
+        val note = sourceWalletNote(fixture, senderCertificate)
+        store.upsert(note)
+        val submitter = PendingDefundTransactionSubmitter()
+        val wallet = OfflineNoteWallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountFromAssetId(string(chainIssue, "asset_id")),
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            store = store,
+            transactionSubmitter = submitter,
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(emptyList()),
+            clock = { 1_700_000_004_000L },
+        )
+
+        val redeeming = wallet.redeem(note)
+        assertFalse(redeeming.isDone)
+        assertEquals(1, submitter.defunds.size)
+        assertEquals(
+            OfflineNoteWalletNoteState.REDEEM_PENDING,
+            store.findNote(note.noteCommitment())?.state,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            wallet.redeem(note)
+        }
+        assertEquals(1, submitter.defunds.size)
+
+        submitter.completeAccepted()
+        assertEquals(OfflineNoteWalletNoteState.REDEEM_PENDING, redeeming.get(1, TimeUnit.SECONDS).state)
+    }
+
+    @Test
     fun walletRejectsAdversarialCertificateBindings() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -3254,6 +3338,29 @@ class OfflineNoteTest {
             bearerAuditTrail: List<OfflineNote.AuditBundle>,
         ): CompletableFuture<ClientResponse> =
             CompletableFuture.completedFuture(ClientResponse(409, byteArrayOf(), "rejected"))
+    }
+
+    private class PendingDefundTransactionSubmitter : OfflineNoteTransactionSubmitter {
+        val defunds = ArrayList<Pair<OfflineNote.Redeem, List<OfflineNote.AuditBundle>>>()
+        private val pending = CompletableFuture<ClientResponse>()
+
+        override fun submitAudit(audit: OfflineNote.AuditBundle): CompletableFuture<ClientResponse> =
+            CompletableFuture.completedFuture(ClientResponse(202, byteArrayOf(), "accepted"))
+
+        override fun submitRedeem(redemption: OfflineNote.Redeem): CompletableFuture<ClientResponse> =
+            CompletableFuture.completedFuture(ClientResponse(202, byteArrayOf(), "accepted"))
+
+        override fun submitDefund(
+            redemption: OfflineNote.Redeem,
+            bearerAuditTrail: List<OfflineNote.AuditBundle>,
+        ): CompletableFuture<ClientResponse> {
+            defunds.add(redemption to bearerAuditTrail)
+            return pending
+        }
+
+        fun completeAccepted() {
+            pending.complete(ClientResponse(202, byteArrayOf(), "accepted"))
+        }
     }
 
     private class RecordingSyncResolver(

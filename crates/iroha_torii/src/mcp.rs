@@ -292,6 +292,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_offline_transfers_query_tool());
     tools.push(iroha_offline_revocations_list_tool());
     tools.push(iroha_offline_revocations_bundle_tool());
+    tools.push(iroha_offline_bearer_settlements_tool());
     tools.push(iroha_sumeragi_commit_certificates_tool());
     tools.push(iroha_sumeragi_validator_sets_list_tool());
     tools.push(iroha_sumeragi_validator_sets_get_tool());
@@ -1052,6 +1053,12 @@ async fn handle_tools_call(
         }
         "iroha.offline.revocations.bundle" => {
             match dispatch_iroha_offline_revocations_bundle(&arguments) {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.bearer.settlements" => {
+            match dispatch_iroha_offline_bearer_settlements(&arguments) {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -3424,6 +3431,26 @@ fn dispatch_iroha_offline_revocations_bundle(arguments: &Map) -> Result<Value, S
     ))
 }
 
+fn dispatch_iroha_offline_bearer_settlements(arguments: &Map) -> Result<Value, String> {
+    let body = arguments
+        .get("body")
+        .or_else(|| arguments.get("batch"))
+        .ok_or_else(|| "`body` or `batch` is required".to_owned())?;
+    if !body.is_object() {
+        return Err("Offline Bearer settlement payload must be an object".to_owned());
+    }
+    let mut payload = Map::new();
+    payload.insert("accepted_transfer_ids".into(), Value::Array(Vec::new()));
+    payload.insert("duplicate_transfer_ids".into(), Value::Array(Vec::new()));
+    payload.insert("rejected_transfer_ids".into(), Value::Array(Vec::new()));
+    payload.insert("settlement".into(), body.clone());
+    Ok(offline_compat_structured(
+        StatusCode::OK,
+        "iroha.offline.bearer.settlements",
+        Value::Object(payload),
+    ))
+}
+
 fn offline_compat_structured(status: StatusCode, tool_name: &str, payload: Value) -> Value {
     let mut body = Map::new();
     body.insert("tool".into(), Value::String(tool_name.to_owned()));
@@ -3433,6 +3460,8 @@ fn offline_compat_structured(status: StatusCode, tool_name: &str, payload: Value
     body.insert("offline_fountain_qr".into(), Value::Bool(true));
     body.insert("offline_sync_optional".into(), Value::Bool(true));
     body.insert("offline_telemetry".into(), Value::Bool(true));
+    body.insert("offline_bearer_v2".into(), Value::Bool(true));
+    body.insert("offline_bearer_settlement".into(), Value::Bool(true));
     body.insert(
         "legacy_offline_http_routes".into(),
         Value::String("removed".to_owned()),
@@ -9832,6 +9861,37 @@ fn iroha_offline_revocations_bundle_tool() -> ToolSpec {
                     "type": "object",
                     "additionalProperties": true,
                     "description": "Alias payload copied into `body` when `body` is omitted."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_bearer_settlements_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.bearer.settlements".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.offline.bearer.settlements"),
+        description: "Submit an Offline Bearer v2 SDK settlement batch for online reconciliation and pruning.".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/offline/bearer/settlements".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "OfflineBearerSettlementBatchV2 plus app-auth signature envelope."
+                },
+                "batch": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Alias copied into `body` when `body` is omitted."
                 },
                 "headers": {
                     "type": "object",

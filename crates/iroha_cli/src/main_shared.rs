@@ -257,6 +257,9 @@ enum Command {
     /// Ledger data and transaction helpers
     #[command(subcommand)]
     Ledger(ledger::Command),
+    /// Read, write, and execute triggers
+    #[command(subcommand)]
+    Trigger(crate::trigger::Command),
     /// Node and operator helpers
     #[command(subcommand)]
     Ops(ops::Command),
@@ -536,6 +539,7 @@ impl Run for Command {
             Account(variant) => Run::run(variant, context),
             Tx(variant) => Run::run(variant, context),
             Ledger(variant) => Run::run(variant, context),
+            Trigger(variant) => Run::run(variant, context),
             Ops(variant) => Run::run(variant, context),
             App(variant) => Run::run(variant, context),
             Contract(variant) => Run::run(variant, context),
@@ -554,6 +558,7 @@ impl Command {
             Self::Account(_)
             | Self::Tx(_)
             | Self::Ledger(_)
+            | Self::Trigger(_)
             | Self::Ops(_)
             | Self::Contract(_)
             | Self::Taira(_) => false,
@@ -5201,6 +5206,8 @@ mod trigger {
         Mint(IdInt),
         /// Decrease the number of trigger executions
         Burn(IdInt),
+        /// Execute a by-call trigger with optional JSON arguments
+        Execute(Execute),
         /// Read and write metadata
         #[command(subcommand)]
         Meta(metadata::trigger::Command),
@@ -5245,6 +5252,7 @@ mod trigger {
                         .finish([instruction])
                         .wrap_err("Failed to burn trigger repetitions")
                 }
+                Execute(args) => args.run(context),
                 Meta(cmd) => cmd.run(context),
             }
         }
@@ -5309,6 +5317,26 @@ mod trigger {
         /// Amount of change (integer)
         #[arg(short, long)]
         pub repetitions: u32,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Execute {
+        /// Trigger name
+        pub id: TriggerId,
+        /// JSON object passed as trigger execution arguments
+        #[arg(long, default_value = "{}")]
+        pub args_json: String,
+    }
+
+    impl Execute {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let args: norito::json::Value = crate::parse_json(&self.args_json)
+                .wrap_err("Failed to parse --args-json as JSON")?;
+            let instruction = iroha::data_model::isi::ExecuteTrigger::new(self.id).with_args(args);
+            context
+                .finish([instruction])
+                .wrap_err("Failed to execute trigger")
+        }
     }
 
     #[derive(clap::Args, Debug)]

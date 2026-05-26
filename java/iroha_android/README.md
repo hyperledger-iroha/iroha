@@ -1116,6 +1116,17 @@ interfaces so Android apps can bind them to Torii, Android Keystore, and
 app-specific persistence; `sync()` additionally accepts a transaction-outcome
 resolver for finalizing redeem-pending note records after Torii observes the
 redeem transaction outcome.
+`OfflineBearerWallet` is the Java Android mirror of the v2 hardware-backed
+Offline Bearer purse model. Apps inject an `OfflineBearerWallet.SecureElement`
+whose capabilities must report hardware-backed and stateful purse support;
+`OfflineBearerWallet.UnsupportedSecureElement` fails closed. The secure element
+owns the mutable balance and sequence, so users can send partial amounts, such
+as 2 out of 50, and receivers can re-spend value without carrying an ever-growing
+transfer trail. Settlement export returns compact debit/credit receipt batches.
+`OfflineBearerWallet.PolicyBundleV2` makes correct apps reject stale policy
+material, stale certificates, stale handoff tokens, disallowed hardware classes,
+blacklisted accounts/devices/keys, transactions above the policy cap, and
+incoming credits that would exceed the offline-balance cap.
 `OfflineNoteTransferHandoff` provides the app-facing payment-token transfer
 surface: `qrStreamingFrameBytes(token)` for animated/binary QR,
 `nfcFrameBytes(token)` for APDU-sized NFC frame exchange, and

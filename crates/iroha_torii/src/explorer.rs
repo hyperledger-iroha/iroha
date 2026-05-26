@@ -736,9 +736,9 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "shield" => Ok(Self::Shield),
             "zktransfer" | "zk_transfer" => Ok(Self::ZkTransfer),
             "unshield" => Ok(Self::Unshield),
-            "issue_offline_note" => Ok(Self::IssueOfflineNote),
-            "redeem_offline_note" => Ok(Self::RedeemOfflineNote),
-            "audit_offline_note" => Ok(Self::AuditOfflineNote),
+            "issueofflinenote" | "issue_offline_note" => Ok(Self::IssueOfflineNote),
+            "redeemofflinenote" | "redeem_offline_note" => Ok(Self::RedeemOfflineNote),
+            "auditofflinenote" | "audit_offline_note" => Ok(Self::AuditOfflineNote),
             "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
@@ -1967,6 +1967,46 @@ mod tests {
     use nonzero_ext::nonzero;
 
     use super::*;
+
+    #[test]
+    fn instruction_kind_filter_accepts_offline_camelcase_and_snake_case() {
+        assert_eq!(
+            "IssueOfflineNote"
+                .parse::<ExplorerInstructionKind>()
+                .expect("issue offline kind"),
+            ExplorerInstructionKind::IssueOfflineNote
+        );
+        assert_eq!(
+            "issue_offline_note"
+                .parse::<ExplorerInstructionKind>()
+                .expect("issue offline kind"),
+            ExplorerInstructionKind::IssueOfflineNote
+        );
+        assert_eq!(
+            "RedeemOfflineNote"
+                .parse::<ExplorerInstructionKind>()
+                .expect("redeem offline kind"),
+            ExplorerInstructionKind::RedeemOfflineNote
+        );
+        assert_eq!(
+            "redeem_offline_note"
+                .parse::<ExplorerInstructionKind>()
+                .expect("redeem offline kind"),
+            ExplorerInstructionKind::RedeemOfflineNote
+        );
+        assert_eq!(
+            "AuditOfflineNote"
+                .parse::<ExplorerInstructionKind>()
+                .expect("audit offline kind"),
+            ExplorerInstructionKind::AuditOfflineNote
+        );
+        assert_eq!(
+            "audit_offline_note"
+                .parse::<ExplorerInstructionKind>()
+                .expect("audit offline kind"),
+            ExplorerInstructionKind::AuditOfflineNote
+        );
+    }
 
     #[test]
     fn paginate_truncates_correctly() {

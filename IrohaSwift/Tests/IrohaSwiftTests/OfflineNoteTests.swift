@@ -2258,6 +2258,58 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertThrowsError(try recipientWallet.accept(token))
     }
 
+    func testOfflineNoteWalletReservesRedeemBeforeSubmitCompletes() async throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let store = InMemoryOfflineNoteStore()
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        try store.upsert(note)
+        let submitter = PendingDefundTransactionSubmitter()
+        let wallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: store,
+            transactionSubmitter: submitter,
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: try Self.certificateVerifier(fixture),
+            randomSource: QueueRandomSource(values: []),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_004_000 }
+        )
+
+        let redeeming = Task {
+            try await wallet.redeem(note)
+        }
+        var reachedSubmit = false
+        for _ in 0..<200 {
+            if await submitter.hasPendingDefund() {
+                reachedSubmit = true
+                break
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(reachedSubmit)
+        if !reachedSubmit {
+            redeeming.cancel()
+            return
+        }
+        let hasPendingDefund = await submitter.hasPendingDefund()
+        XCTAssertTrue(hasPendingDefund)
+        let defundCount = await submitter.defundCount()
+        XCTAssertEqual(defundCount, 1)
+        XCTAssertEqual(try store.findNote(noteCommitment: note.noteCommitment)?.state, .redeemPending)
+        await XCTAssertThrowsErrorAsync(try await wallet.redeem(note)) { _ in }
+        let defundCountAfterDuplicate = await submitter.defundCount()
+        XCTAssertEqual(defundCountAfterDuplicate, 1)
+
+        await submitter.completeAccepted()
+        let redeemed = try await redeeming.value
+        XCTAssertEqual(redeemed.state, .redeemPending)
+    }
+
     func testOfflineNoteWalletRejectsAdversarialCertificateBindings() throws {
         let fixture = try Self.loadFixture()
         let derivation = fixture.chainVectors.derivation
@@ -4288,6 +4340,36 @@ final class OfflineNoteTests: XCTestCase {
         func submitDefund(_ redemption: OfflineNoteRedeem,
                           bearerAuditTrail: [OfflineNoteAuditBundle]) async throws {
             throw OfflineNoteWalletError.invalidState
+        }
+    }
+
+    private actor PendingDefundTransactionSubmitter: OfflineNoteTransactionSubmitter {
+        private var defunds: [(redemption: OfflineNoteRedeem, bearerAuditTrail: [OfflineNoteAuditBundle])] = []
+        private var continuation: CheckedContinuation<Void, Error>?
+
+        func submitAudit(_ audit: OfflineNoteAuditBundle) async throws {}
+
+        func submitRedeem(_ redemption: OfflineNoteRedeem) async throws {}
+
+        func submitDefund(_ redemption: OfflineNoteRedeem,
+                          bearerAuditTrail: [OfflineNoteAuditBundle]) async throws {
+            defunds.append((redemption, bearerAuditTrail))
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+
+        func defundCount() -> Int {
+            defunds.count
+        }
+
+        func hasPendingDefund() -> Bool {
+            continuation != nil
+        }
+
+        func completeAccepted() {
+            continuation?.resume()
+            continuation = nil
         }
     }
 

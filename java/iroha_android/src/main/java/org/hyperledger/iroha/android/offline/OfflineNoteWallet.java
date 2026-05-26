@@ -629,8 +629,9 @@ public final class OfflineNoteWallet {
       return failedFuture(new IllegalStateException(
           "Offline Note transaction submitter is required for redeem"));
     }
+    final OfflineNoteWalletNote stored = store.findNote(note.noteCommitment());
     final OfflineNoteWalletNote current =
-        store.findNote(note.noteCommitment()) == null ? note : store.findNote(note.noteCommitment());
+        stored == null ? note : stored;
     if (current.state() != OfflineNoteWalletNoteState.SPENDABLE) {
       throw new IllegalArgumentException("only spendable Offline Note notes can be redeemed");
     }
@@ -653,25 +654,49 @@ public final class OfflineNoteWallet {
     if (!proofVerifier.verifyRedeem(redemption)) {
       throw new IllegalArgumentException("Offline Note recursive redeem proof verification failed");
     }
+    final OfflineNoteWalletNote pending =
+        store.mutateNotes(notes -> {
+          final OfflineNoteWalletNote latest =
+              notes.containsKey(current.noteCommitmentHex())
+                  ? notes.get(current.noteCommitmentHex())
+                  : current;
+          if (latest.state() != OfflineNoteWalletNoteState.SPENDABLE) {
+            throw new IllegalArgumentException("only spendable Offline Note notes can be redeemed");
+          }
+          final OfflineNoteWalletNote updated =
+              latest.withState(OfflineNoteWalletNoteState.REDEEM_PENDING, clock.getAsLong());
+          notes.put(latest.noteCommitmentHex(), updated);
+          return updated;
+        });
     final CompletableFuture<ClientResponse> submitted;
     try {
       submitted = transactionSubmitter.submitDefund(redemption, bearerAuditTrail);
     } catch (final Throwable error) {
+      rollbackRedeemReservation(pending);
       return failedFuture(error);
     }
     return submitted.thenApply(response -> {
-      ensureSuccess(response);
-      return store.mutateNotes(notes -> {
-        final OfflineNoteWalletNote latest =
-            notes.containsKey(current.noteCommitmentHex()) ? notes.get(current.noteCommitmentHex()) : current;
-        if (latest.state() != OfflineNoteWalletNoteState.SPENDABLE) {
-          throw new IllegalArgumentException("only spendable Offline Note notes can be redeemed");
-        }
-        final OfflineNoteWalletNote updated =
-            latest.withState(OfflineNoteWalletNoteState.REDEEM_PENDING, clock.getAsLong());
-        notes.put(latest.noteCommitmentHex(), updated);
-        return updated;
-      });
+      try {
+        ensureSuccess(response);
+      } catch (final RuntimeException error) {
+        rollbackRedeemReservation(pending);
+        throw error;
+      }
+      return pending;
+    });
+  }
+
+  private void rollbackRedeemReservation(final OfflineNoteWalletNote reserved) {
+    store.mutateNotes(notes -> {
+      final OfflineNoteWalletNote latest = notes.get(reserved.noteCommitmentHex());
+      if (latest != null
+          && latest.state() == OfflineNoteWalletNoteState.REDEEM_PENDING
+          && latest.updatedAtMs() == reserved.updatedAtMs()) {
+        notes.put(
+            latest.noteCommitmentHex(),
+            latest.withState(OfflineNoteWalletNoteState.SPENDABLE, clock.getAsLong()));
+      }
+      return null;
     });
   }
 

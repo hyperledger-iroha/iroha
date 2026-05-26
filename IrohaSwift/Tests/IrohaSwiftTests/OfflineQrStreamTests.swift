@@ -104,6 +104,38 @@ final class OfflineQrStreamTests: XCTestCase {
         XCTAssertThrowsError(try OfflineNoteTransferTextPayloadCodec.decode(payment, expectedKind: .receiveRequest))
     }
 
+    func testCompatibilityReceiptAckTextCodecValidatesRequiredFields() throws {
+        let ack = OfflineReceiptAck(
+            tokenId: "token-1",
+            recipientAccountId: "recipient@paynet",
+            acceptedAtMs: 1_706_000_000_000
+        )
+        let encoded = try OfflineNoteTransferTextPayloadCodec.encodeReceiptAck(ack)
+
+        XCTAssertEqual(try OfflineNoteTransferTextPayloadCodec.decodeReceiptAck(encoded), ack)
+        XCTAssertThrowsError(
+            try OfflineNoteTransferTextPayloadCodec.decodeReceiptAck(
+                try OfflineNoteTransferTextPayloadCodec.encodeReceiptAck(
+                    OfflineReceiptAck(tokenId: "", recipientAccountId: ack.recipientAccountId, acceptedAtMs: ack.acceptedAtMs)
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteTransferTextPayloadCodec.decodeReceiptAck(
+                try OfflineNoteTransferTextPayloadCodec.encodeReceiptAck(
+                    OfflineReceiptAck(tokenId: ack.tokenId, recipientAccountId: " ", acceptedAtMs: ack.acceptedAtMs)
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteTransferTextPayloadCodec.decodeReceiptAck(
+                try OfflineNoteTransferTextPayloadCodec.encodeReceiptAck(
+                    OfflineReceiptAck(tokenId: ack.tokenId, recipientAccountId: ack.recipientAccountId, acceptedAtMs: 0)
+                )
+            )
+        )
+    }
+
     func testTransferTextNearbyEnvelopeRoundTripsKinds() throws {
         let payment = try Self.fixturePaymentTokenText()
         let token = try OfflineNotePaymentTokenCodec.decodeText(payment)

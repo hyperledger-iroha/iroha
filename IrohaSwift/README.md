@@ -623,6 +623,19 @@ generation/verification, transaction submission, and persistent storage.
 redeem-pending note records after redeem finality. The SDK includes an in-memory store, a
 `ToriiOfflineNoteIssuerClient` for body-signed key-refill plus note-issue
 loads, and a direct `IrohaSDK` audit/redeem/defund submitter.
+
+`OfflineBearerWallet` provides the v2 hardware-backed Offline Bearer purse
+surface for apps that need a real bearer instrument instead of a growing note
+trail. Apps inject an `OfflineBearerSecureElement` whose capabilities must be
+both hardware-backed and stateful; `UnsupportedOfflineBearerSecureElement` fails
+closed. The secure element owns the mutable balance and sequence, allowing
+partial spends, such as 2 out of 50, and re-spending by recipients while
+exporting only compact debit/credit settlement receipts. The app-side
+`OfflineBearerPolicyBundleV2` rejects stale policy material, stale certificates,
+stale handoff tokens, disallowed hardware classes, blacklisted
+accounts/devices/keys, transactions above the policy limit, and credits that
+would exceed the offline-balance cap.
+
 `OfflineNoteTransferHandoff` wraps the canonical payment token into app-facing
 transfer modalities. Use `qrStreamingFrameBytes(for:)` for animated/binary QR
 flows, `nfcFrameBytes(for:)` for APDU-sized NFC frame exchange, and

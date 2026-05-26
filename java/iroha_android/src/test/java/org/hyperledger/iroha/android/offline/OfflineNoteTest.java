@@ -52,6 +52,7 @@ public final class OfflineNoteTest {
     paymentTokenCodecRoundTripsNoritoTextAndQrFrames();
     receiveRequestCodecRoundTripsNoritoTextAndQrFrames();
     receiptAckCodecRoundTripsNoritoTextAndQrFrames();
+    receiptAckCodecRejectsNonPositiveAcceptedAtDecode();
     qrStreamRejectsAdversarialEnvelopesAndChunkShapes();
     transferHandoffSupportsQrNfcAndNearbyPayloads();
     transferHandoffRejectsAdversarialStreamsAndMetadata();
@@ -70,6 +71,7 @@ public final class OfflineNoteTest {
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
     walletSyncReconcilesPendingSpendChangeAndRedeemStates();
     walletRejectsDuplicateTokenAndAlreadyPendingInputs();
+    walletRedeemReservesNoteBeforeSubmitCompletes();
     walletRejectsAdversarialCertificateBindings();
     walletSyncReconcilesFailedAuditAndRedeemOutcomes();
     outcomeIndexResolvesCommittedAndRejectedExplorerInstructions();
@@ -468,6 +470,20 @@ public final class OfflineNoteTest {
     assertTrue(
         proof.proof().bytes().length <= OfflineNoteHalo2Prover.MAX_ENVELOPE_BYTES,
         "Java Offline Halo2 envelope fits QR budget");
+    final byte[] envelope = OfflineNoteHalo2Prover.proveOpenVerifyEnvelope(values);
+    assertTrue(envelope.length > 0, "Java Offline Halo2 SDK envelope helper returns bytes");
+    assertTrue(
+        OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
+            proof.proof().bytes(), values.publicValues()),
+        "Java Offline Halo2 SDK envelope helper verifies public values");
+    assertTrue(
+        OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
+            proof.proof().bytes(), hex(proof.publicInputsHash())),
+        "Java Offline Halo2 SDK envelope helper verifies public input hash");
+    assertTrue(
+        !OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
+            proof.proof().bytes(), "0000000000000000000000000000000000000000000000000000000000000000"),
+        "Java Offline Halo2 SDK envelope helper rejects a wrong public input hash");
   }
 
   private static void nativeHalo2ProverPerformanceWhenRequested() throws Exception {
@@ -701,6 +717,36 @@ public final class OfflineNoteTest {
         ack.tokenIdHex(),
         OfflineNoteReceiptAckCodec.decodeQrPayload(payload).tokenIdHex(),
         "receipt ACK QR token id");
+  }
+
+  private static void receiptAckCodecRejectsNonPositiveAcceptedAtDecode() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final OfflineNotePaymentToken token =
+        OfflineNotePaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")));
+    assertThrows(
+        () ->
+            OfflineNoteReceiptAck.fromPaymentToken(
+                token, string(payment, "recipient_account_id"), 0L),
+        "zero receipt ACK acceptance time should fail");
+
+    final OfflineNoteReceiptAck ack =
+        OfflineNoteReceiptAck.fromPaymentToken(
+            token,
+            string(payment, "recipient_account_id"),
+            longValue(obj(fixture, "receipt_ack"), "accepted_at_ms"));
+    final byte[] malformed = OfflineNoteReceiptAckCodec.encodeNorito(ack);
+    Arrays.fill(malformed, malformed.length - Long.BYTES, malformed.length, (byte) 0);
+    assertThrows(
+        () -> OfflineNoteReceiptAckCodec.decodeNorito(malformed),
+        "zero decoded receipt ACK acceptance time should fail");
+    assertThrows(
+        () ->
+            OfflineNoteReceiptAckCodec.decodeText(
+                OfflineNoteReceiptAckCodec.TEXT_PREFIX
+                    + Base64.getUrlEncoder().withoutPadding().encodeToString(malformed)),
+        "zero text receipt ACK acceptance time should fail");
   }
 
   private static OfflineNoteReceiveRequest receiveRequestFixture(
@@ -2469,6 +2515,51 @@ public final class OfflineNoteTest {
     assertThrows(() -> recipientWallet.accept(token), "duplicate token replay should fail");
   }
 
+  private static void walletRedeemReservesNoteBeforeSubmitCompletes() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> chainIssue = obj(chain, "issue");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(payment, "sender_key_certificate"));
+    final InMemoryOfflineNoteStore store = new InMemoryOfflineNoteStore();
+    final OfflineNoteWalletNote note = sourceWalletNote(fixture, senderCertificate);
+    store.upsert(note);
+    final PendingDefundTransactionSubmitter submitter =
+        new PendingDefundTransactionSubmitter();
+    final OfflineNoteWallet wallet =
+        new OfflineNoteWallet(
+            string(derivation, "chain_id"),
+            accountFromAssetId(string(chainIssue, "asset_id")),
+            new StaticAttestationProvider(senderCertificate),
+            store,
+            null,
+            submitter,
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            certificateVerifier(fixture),
+            new QueueRandomSource(Collections.emptyList()),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_004_000L);
+
+    final CompletableFuture<OfflineNoteWalletNote> redeeming = wallet.redeem(note);
+    assertTrue(!redeeming.isDone(), "redeem future should wait for submit completion");
+    assertEquals(1L, submitter.defunds.size(), "defund submission count");
+    assertEquals(
+        OfflineNoteWalletNoteState.REDEEM_PENDING.name(),
+        store.findNote(note.noteCommitment()).state().name(),
+        "redeem reserves note before submit completes");
+    assertThrows(() -> wallet.redeem(note), "second redeem should reject pending note");
+    assertEquals(1L, submitter.defunds.size(), "duplicate redeem should not submit");
+
+    submitter.completeAccepted();
+    assertEquals(
+        OfflineNoteWalletNoteState.REDEEM_PENDING.name(),
+        redeeming.get(1, TimeUnit.SECONDS).state().name(),
+        "redeem returns pending note after submit");
+  }
+
   private static void walletRejectsAdversarialCertificateBindings() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
@@ -3731,6 +3822,33 @@ public final class OfflineNoteTest {
         final OfflineNote.Redeem redemption,
         final List<OfflineNote.AuditBundle> bearerAuditTrail) {
       return CompletableFuture.completedFuture(new ClientResponse(409, new byte[0], "rejected"));
+    }
+  }
+
+  private static final class PendingDefundTransactionSubmitter implements OfflineNoteTransactionSubmitter {
+    private final List<DefundSubmission> defunds = new ArrayList<>();
+    private final CompletableFuture<ClientResponse> pending = new CompletableFuture<>();
+
+    @Override
+    public CompletableFuture<ClientResponse> submitAudit(final OfflineNote.AuditBundle audit) {
+      return CompletableFuture.completedFuture(new ClientResponse(202, new byte[0], "accepted"));
+    }
+
+    @Override
+    public CompletableFuture<ClientResponse> submitRedeem(final OfflineNote.Redeem redemption) {
+      return CompletableFuture.completedFuture(new ClientResponse(202, new byte[0], "accepted"));
+    }
+
+    @Override
+    public CompletableFuture<ClientResponse> submitDefund(
+        final OfflineNote.Redeem redemption,
+        final List<OfflineNote.AuditBundle> bearerAuditTrail) {
+      defunds.add(new DefundSubmission(redemption, bearerAuditTrail));
+      return pending;
+    }
+
+    private void completeAccepted() {
+      pending.complete(new ClientResponse(202, new byte[0], "accepted"));
     }
   }
 

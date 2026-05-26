@@ -24,8 +24,8 @@ public final class OfflineNoteReceiptAck {
       throw new IllegalArgumentException("tokenId must be 32 bytes");
     }
     this.recipientAccountId = requireNonBlank(recipientAccountId, "recipientAccountId");
-    if (acceptedAtMs < 0L) {
-      throw new IllegalArgumentException("acceptedAtMs must be non-negative");
+    if (acceptedAtMs <= 0L) {
+      throw new IllegalArgumentException("acceptedAtMs must be positive");
     }
     this.acceptedAtMs = acceptedAtMs;
   }

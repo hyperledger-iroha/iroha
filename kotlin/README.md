@@ -32,6 +32,19 @@ implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1-SNAPSHOT")
 
 ### Offline Note wallet flow
 
+`core-jvm` also exposes `OfflineBearerWallet` for the v2 hardware-backed
+Offline Bearer purse model. Apps must inject an `OfflineBearerSecureElement`
+that reports both `hardwareBacked` and `statefulPurse`; the default
+`UnsupportedOfflineBearerSecureElement` fails closed and never stores value.
+The secure element owns the mutable purse balance and sequence, so users can
+send partial amounts, such as 2 out of 50, and recipients can re-spend received
+value without carrying a growing transfer trail. Sender debit receipts and
+receiver credit receipts are kept in a compact settlement batch for later
+online submission. `OfflineBearerPolicyBundleV2` gates correct apps on allowed
+hardware class, certificate age, policy age, token age, issuer/policy hash,
+blacklisted accounts/devices/keys, maximum transaction amount, and maximum
+offline balance.
+
 `core-jvm` exposes `OfflineNoteWallet` for the one-call Offline Note app
 actions: load, prepare receive, pay, accept, optional audit publication, redeem,
 and sync. Offline-to-offline `pay` and `accept` are the local-final value
