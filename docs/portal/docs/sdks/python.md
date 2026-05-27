@@ -5,6 +5,10 @@ interact with Torii from scripts, notebooks, or web backends. This quickstart
 covers installation, transaction submission, and event streaming. For deeper
 coverage see `python/iroha_python/README.md` in the repository.
 
+For SORA Nexus wallet-approved app transfers, import
+`NexusAppClient` from `iroha_python.nexus_app`; see
+[Nexus App Facade](./nexus-app-facade).
+
 ## 1. Install
 
 ```bash

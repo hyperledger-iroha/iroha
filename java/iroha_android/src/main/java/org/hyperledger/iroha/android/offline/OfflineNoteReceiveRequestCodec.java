@@ -13,7 +13,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 /** QR/Norito handoff codec for Offline Note receive requests. */
 public final class OfflineNoteReceiveRequestCodec {
   public static final String TYPE = "offline_receive_request";
-  public static final String TEXT_PREFIX = "wallet-offline-receive:";
+  public static final String TEXT_PREFIX = "wallet-offline-bearer-cash-receive:";
   private static final String RECEIVE_REQUEST_ENVELOPE_SCHEMA =
       "iroha_data_model::offline::model::OfflineNoteReceiveRequestEnvelope";
 

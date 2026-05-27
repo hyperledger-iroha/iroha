@@ -14,7 +14,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 /** QR/Norito handoff codec for Offline Note payment tokens. */
 public final class OfflineNotePaymentTokenCodec {
   public static final String TYPE = "offline_payment_token";
-  public static final String TEXT_PREFIX = "wallet-offline-payment:";
+  public static final String TEXT_PREFIX = "wallet-offline-bearer-cash-payment:";
   private static final String TOKEN_ENVELOPE_SCHEMA =
       "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelope";
 

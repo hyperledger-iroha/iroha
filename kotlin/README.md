@@ -32,32 +32,19 @@ implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1-SNAPSHOT")
 
 ### Offline Note wallet flow
 
-`core-jvm` also exposes `OfflineBearerWallet` for the v2 hardware-backed
-Offline Bearer purse model. Apps must inject an `OfflineBearerSecureElement`
-that reports both `hardwareBacked` and `statefulPurse`; the default
-`UnsupportedOfflineBearerSecureElement` fails closed and never stores value.
-The secure element owns the mutable purse balance and sequence, so users can
-send partial amounts, such as 2 out of 50, and recipients can re-spend received
-value without carrying a growing transfer trail. Sender debit receipts and
-receiver credit receipts are kept in a compact settlement batch for later
-online submission. `OfflineBearerPolicyBundleV2` gates correct apps on allowed
-hardware class, certificate age, policy age, token age, issuer/policy hash,
-blacklisted accounts/devices/keys, maximum transaction amount, and maximum
-offline balance.
-
-`core-jvm` exposes `OfflineNoteWallet` for the one-call Offline Note app
-actions: load, prepare receive, pay, accept, optional audit publication, redeem,
-and sync. Offline-to-offline `pay` and `accept` are the local-final value
-transfer: the sender marks inputs spent and change spendable immediately, and
-the recipient marks the matched pending output spendable after local token and
-proof verification. No online sync is required for that transfer. Audit
-publication is an explicit optional online step that submits evidence but does
-not affect spendability. Wallets derive note commitments, input nullifiers, and
-payment token ids locally, then delegate Torii issuance, device attestation,
-proof generation/verification, persistence, and direct audit/redeem transaction
-submission through injectable interfaces. The `sync()` call uses an optional
-transaction-outcome resolver to reconcile redeem-pending note records once the
-app's Torii/outcome index observes redeem finality.
+`core-jvm` exposes `OfflineBearerCashWallet` over the Offline Note engine for
+the one-call app actions: load, prepare receive, pay, accept, optional audit
+publication, redeem, and sync. Offline-to-offline `pay` and `accept` are the
+local-final value transfer: the sender marks inputs spent and change spendable
+immediately, and the recipient marks the matched pending output spendable after
+local token and proof verification. No online sync is required for that
+transfer. Audit publication is an explicit optional online step that submits
+evidence but does not affect spendability. Wallets derive note commitments,
+input nullifiers, and payment token ids locally, then delegate Torii issuance,
+device attestation, proof generation/verification, persistence, and direct
+audit/redeem transaction submission through injectable interfaces. The `sync()`
+call uses an optional transaction-outcome resolver to reconcile redeem-pending
+note records once the app's Torii/outcome index observes redeem finality.
 JVM core includes an in-memory store, `IrohaOfflineNoteTransactionSubmitter`,
 and `ToriiOfflineNoteIssuerClient` for Torii key-refill plus note-issue
 loads. Apps provide canonical auth and a device-binding provider; Android

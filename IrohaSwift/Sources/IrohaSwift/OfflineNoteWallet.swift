@@ -434,7 +434,7 @@ public enum OfflineNoteReceiveRequestCodecError: Error, LocalizedError, Equatabl
 
 public enum OfflineNoteReceiveRequestCodec {
     public static let type = "offline_receive_request"
-    public static let textPrefix = "wallet-offline-receive:"
+    public static let textPrefix = "wallet-offline-bearer-cash-receive:"
     private static let envelopeTypeName = "iroha_data_model::offline::model::OfflineNoteReceiveRequestEnvelope"
 
     public static func encodeNorito(_ request: OfflineNoteReceiveRequest) throws -> Data {
@@ -666,7 +666,7 @@ public enum OfflineNotePaymentTokenCodecError: Error, LocalizedError, Equatable 
 
 public enum OfflineNotePaymentTokenCodec {
     public static let type = "offline_payment_token"
-    public static let textPrefix = "wallet-offline-payment:"
+    public static let textPrefix = "wallet-offline-bearer-cash-payment:"
     private static let envelopeTypeName = "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelope"
 
     public static func encodeNorito(_ token: OfflineNotePaymentToken) throws -> Data {
@@ -943,7 +943,7 @@ public enum OfflineNoteReceiptAckCodecError: Error, LocalizedError, Equatable {
 
 public enum OfflineNoteReceiptAckCodec {
     public static let type = "offline_receipt_ack"
-    public static let textPrefix = "wallet-offline-ack:"
+    public static let textPrefix = "wallet-offline-bearer-cash-ack:"
     private static let envelopeTypeName = "iroha_data_model::offline::model::OfflineNoteReceiptAckEnvelope"
 
     public static func encodeNorito(_ ack: OfflineNoteReceiptAck) throws -> Data {

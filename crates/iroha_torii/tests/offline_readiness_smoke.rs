@@ -124,6 +124,7 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
     let body = readiness.into_body().collect().await.unwrap().to_bytes();
     let body = String::from_utf8(body.to_vec()).unwrap();
     assert!(body.contains("\"offline_note\":true"));
+    assert!(body.contains("\"offline_bearer_cash_v1\":true"));
     assert!(body.contains("\"offline_one_use_keys\":true"));
     assert!(body.contains("\"offline_recursive_note_proof\":true"));
     assert!(body.contains("\"offline_recursive_note_proof_backend\":\"halo2/ipa\""));
@@ -151,7 +152,6 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
         "/v1/offline/transfers",
         "/v1/offline/transfers/query",
         "/v1/offline/revocations",
-        "/v1/offline/revocations/bundle",
     ] {
         let response = app
             .clone()
@@ -169,7 +169,7 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
         assert_eq!(
             response.status(),
             StatusCode::NOT_FOUND,
-            "legacy offline route should be absent: {path}"
+            "offline app route should be absent from readiness-only router: {path}"
         );
     }
 }

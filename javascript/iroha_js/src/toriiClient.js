@@ -450,7 +450,7 @@ export class TransactionStatusError extends Error {
   constructor(hashHex, status, payload) {
     const statusLabel = status == null ? "unknown" : String(status);
     const rejectionReason = extractPipelineRejectionReason(payload);
-    const reasonSuffix = rejectionReason ? ` (reason=${rejectionReason})` : "";
+    const reasonSuffix = rejectionReason ? ` (rejection_reason=${rejectionReason})` : "";
     super(`Transaction ${hashHex} reported failure status ${statusLabel}${reasonSuffix}`);
     this.name = "TransactionStatusError";
     this.hashHex = hashHex;

@@ -137,7 +137,7 @@ final class OfflineQrStreamTests: XCTestCase {
     }
 
     func testTransferTextNearbyEnvelopeRoundTripsKinds() throws {
-        let payloads = try OfflineBearerWalletTests.bearerTextPayloadFixture()
+        let payloads = try Self.fixtureBearerCashTextPayloads()
         let challenge = payloads.receiveRequest
         let payment = payloads.payment
         let ack = payloads.ack
@@ -646,6 +646,51 @@ final class OfflineQrStreamTests: XCTestCase {
         return try JSONDecoder().decode(TextNearbyInteropFixture.self, from: data).sdkInterop.paymentTokenText
     }
 
+    private static func fixtureBearerCashTextPayloads() throws -> (
+        receiveRequest: String,
+        payment: String,
+        ack: String
+    ) {
+        let fixture = try loadTextNearbyFixture()
+        guard let tokenBytes = Data(base64Encoded: fixture.sdkInterop.paymentTokenNoritoBase64) else {
+            throw OfflineQrStreamFixtureError.invalidFixture
+        }
+        let token = try OfflineNotePaymentTokenCodec.decodeNorito(tokenBytes)
+        guard let recipientOutput = token.audit.outputClaims.first else {
+            throw OfflineQrStreamFixtureError.invalidFixture
+        }
+        let receiveRequest = try OfflineNoteReceiveRequest(
+            chainId: token.chainId,
+            paymentRequestId: token.paymentRequestId,
+            accountId: recipientOutput.keyCertificate.accountId,
+            assetDefinitionId: recipientOutput.assetId,
+            assetId: recipientOutput.assetId,
+            amount: recipientOutput.amount,
+            keyCertificate: recipientOutput.keyCertificate,
+            outputCommitment: recipientOutput.noteCommitment
+        )
+        let ack = try OfflineNoteReceiptAck.fromPaymentToken(
+            token,
+            recipientAccountId: recipientOutput.keyCertificate.accountId,
+            acceptedAtMs: 1_706_000_000_000
+        )
+        return (
+            try OfflineBearerCashTextCodec.encodeReceiveRequestText(receiveRequest),
+            fixture.sdkInterop.paymentTokenText,
+            try OfflineBearerCashTextCodec.encodeAckText(ack)
+        )
+    }
+
+    private static func loadTextNearbyFixture() throws -> TextNearbyInteropFixture {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let fixtureURL = testFile
+            .deletingLastPathComponent()
+            .appendingPathComponent("../../../fixtures/offline/interop_contract.json")
+            .standardizedFileURL
+        let data = try Data(contentsOf: fixtureURL)
+        return try JSONDecoder().decode(TextNearbyInteropFixture.self, from: data)
+    }
+
     private func mutatedHeaderFrame(
         _ header: OfflineQrStreamFrame,
         mutate: (inout Data) -> Void
@@ -677,8 +722,14 @@ private struct TextNearbyInteropFixture: Decodable {
 
 private struct TextNearbySdkInterop: Decodable {
     let paymentTokenText: String
+    let paymentTokenNoritoBase64: String
 
     private enum CodingKeys: String, CodingKey {
         case paymentTokenText = "payment_token_text"
+        case paymentTokenNoritoBase64 = "payment_token_norito_base64"
     }
+}
+
+private enum OfflineQrStreamFixtureError: Error {
+    case invalidFixture
 }

@@ -65,7 +65,7 @@ public enum OfflineNoteNfcApduProtocol {
     public static let androidSafeChunkBytes = 240
     public static let maxExtendedReadChunkBytes = 1_024
     public static let maxExtendedWriteChunkBytes = 16_384
-    public static let maxIncomingPayloadBytes = 64 * 1_024
+    public static let maxIncomingPayloadBytes = OfflineBearerCashPolicyV1.default.maxStreamPayloadBytes
 
     public static let statusSuccess = Data([0x90, 0x00])
     public static let statusWrongData = Data([0x6A, 0x80])

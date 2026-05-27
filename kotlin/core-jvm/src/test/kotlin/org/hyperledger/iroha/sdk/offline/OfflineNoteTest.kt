@@ -22,6 +22,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
@@ -497,11 +498,18 @@ class OfflineNoteTest {
         val text = OfflineNotePaymentTokenCodec.encodeText(token)
         assertEquals(string(sdkInterop, "payment_token_text"), text)
         assertTrue(text.startsWith(OfflineNotePaymentTokenCodec.TEXT_PREFIX))
+        assertEquals(OfflineBearerCashTextCodec.PAYMENT_TEXT_PREFIX, OfflineNotePaymentTokenCodec.TEXT_PREFIX)
         assertEquals(token.tokenIdHex(), OfflineNotePaymentTokenCodec.decodeText(text).tokenIdHex())
+        assertEquals(token.tokenIdHex(), OfflineBearerCashTextCodec.decodePaymentText(text).tokenIdHex())
         assertEquals(
             token.tokenIdHex(),
             OfflineNotePaymentTokenCodec.decodeText(string(sdkInterop, "payment_token_text")).tokenIdHex(),
         )
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNotePaymentTokenCodec.decodeText(
+                "wallet-offline-bearer-cash-payment-invalid:${text.substringAfter(':')}",
+            )
+        }
 
         val frames = OfflineNotePaymentTokenCodec.encodeQrFrameBytes(
             token,
@@ -530,6 +538,28 @@ class OfflineNoteTest {
             token.tokenIdHex(),
             OfflineNotePaymentTokenCodec.decodeQrPayload(assertNotNull(canonicalQrPayload)).tokenIdHex(),
         )
+    }
+
+    @Test
+    fun offlineBearerCashPolicyAndPrefixesUseSingleAppSurface() {
+        val policy = OfflineBearerCashPolicyV1.DEFAULT
+        assertEquals(5, policy.maxCustodyHops)
+        assertEquals(32, policy.maxLineageSteps)
+        assertEquals(2_048, policy.maxSingleQrPayloadBytes)
+        assertEquals(12_288, policy.maxStreamPayloadBytes)
+        assertEquals(20, policy.androidKeyPoolTarget)
+        assertEquals(8, policy.androidKeyPoolReplenishBelow)
+        assertEquals(40, policy.androidKeyPoolCap)
+        assertEquals(OfflineBearerCashTransport.STATIC_QR, policy.recommendedTransportForPayloadByteCount(2_048))
+        assertEquals(OfflineBearerCashTransport.STREAMING_QR, policy.recommendedTransportForPayloadByteCount(2_049))
+        assertEquals(
+            OfflineBearerCashTransport.FRAMED_BYTE_TRANSPORT,
+            policy.recommendedTransportForPayloadByteCount(12_289),
+        )
+        assertEquals("wallet-offline-bearer-cash-receive:", OfflineNoteReceiveRequestCodec.TEXT_PREFIX)
+        assertEquals("wallet-offline-bearer-cash-payment:", OfflineNotePaymentTokenCodec.TEXT_PREFIX)
+        assertEquals("wallet-offline-bearer-cash-ack:", OfflineNoteReceiptAckCodec.TEXT_PREFIX)
+        assertNull(OfflineBearerCashTextCodec.payloadKind("wallet-offline-bearer-cash-unknown:AAAA"))
     }
 
     @Test

@@ -98,7 +98,7 @@ object OfflineNoteNfcApduProtocol {
     const val ANDROID_SAFE_CHUNK_BYTES: Int = 240
     const val MAX_EXTENDED_READ_CHUNK_BYTES: Int = 1024
     const val MAX_EXTENDED_WRITE_CHUNK_BYTES: Int = 16 * 1024
-    const val MAX_INCOMING_PAYLOAD_BYTES: Int = 64 * 1024
+    const val MAX_INCOMING_PAYLOAD_BYTES: Int = 12 * 1024
 
     private const val CLA_IROHA = 0x80
     private const val INS_GET_INFO = 0x10

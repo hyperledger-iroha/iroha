@@ -183,6 +183,11 @@ from .client import (
     VpnReceiptSubmitRequest,
     VpnSession,
     VpnSessionCreateRequest,
+    SorafsPorObservationResponse,
+    SorafsPorSubmissionResponse,
+    SorafsPorVerdictResponse,
+    SorafsPorIngestionProviderStatus,
+    SorafsPorIngestionStatus,
     build_canonical_request_headers,
     canonical_query_string,
     canonical_request_message,
@@ -523,6 +528,18 @@ _BASE_EXPORTS = [
 _CRYPTO_EXPORTS: List[str] = [
     "TransactionConfig",
     "TransactionDraft",
+    "NexusAppClient",
+    "NexusAppConfig",
+    "NexusAppError",
+    "DefaultNexusConnectTransport",
+    "DefaultNexusTransactionCodec",
+    "NexusConnectOptions",
+    "NexusConnectSession",
+    "NexusSignableTransaction",
+    "NexusTransferDraft",
+    "NexusTransferInput",
+    "NexusTransferReceipt",
+    "NexusWalletSignature",
     "CryptoKeyPair",
     "Ed25519KeyPair",
     "Sm2KeyPair",
@@ -633,6 +650,20 @@ _CRYPTO_EXPORTS: List[str] = [
 
 try:
     from .tx import TransactionConfig, TransactionDraft
+    from .nexus_app import (
+        NexusAppClient,
+        NexusAppConfig,
+        NexusAppError,
+        DefaultNexusConnectTransport,
+        DefaultNexusTransactionCodec,
+        NexusConnectOptions,
+        NexusConnectSession,
+        NexusSignableTransaction,
+        NexusTransferDraft,
+        NexusTransferInput,
+        NexusTransferReceipt,
+        NexusWalletSignature,
+    )
     from .crypto import (
         ED25519_ALGORITHM,
         SECP256K1_ALGORITHM,
@@ -724,11 +755,6 @@ try:
     SorafsScoreboardRow,
     SorafsMultiFetchResult,
     SorafsMultiFetchError,
-    SorafsPorObservationResponse,
-    SorafsPorSubmissionResponse,
-    SorafsPorVerdictResponse,
-    SorafsPorIngestionProviderStatus,
-    SorafsPorIngestionStatus,
     multi_fetch_local,
 )
     from .gpu import (

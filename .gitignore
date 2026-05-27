@@ -171,6 +171,7 @@ test_*
 !python/iroha_torii_client/tests/test_client.py
 !python/iroha_python/tests/test_address_format.py
 !python/iroha_python/tests/test_governance_zk_ballot.py
+!python/iroha_python/tests/test_nexus_app.py
 !python/norito_py/tests/test_header_padding.py
 !crates/iroha_torii/src/test_utils.rs
 !crates/iroha_core/tests/test_world.rs

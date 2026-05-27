@@ -1332,6 +1332,43 @@ impl TransactionBuilder {
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX");
         self
     }
+
+    /// Encode the transaction payload to canonical Norito bytes.
+    ///
+    /// This is the byte sequence external signers should receive before
+    /// applying Iroha's typed transaction prehash.
+    #[must_use]
+    pub fn encode_payload(&self) -> Vec<u8> {
+        norito::codec::encode_adaptive(&self.payload)
+    }
+
+    /// Return the canonical prehash signed by transaction signatures.
+    #[must_use]
+    pub fn payload_hash(&self) -> Hash {
+        Hash::from(HashOf::new(&self.payload))
+    }
+
+    /// Return the canonical prehash signed by transaction signatures as raw bytes.
+    #[must_use]
+    pub fn payload_hash_bytes(&self) -> [u8; Hash::LENGTH] {
+        *HashOf::new(&self.payload).as_ref()
+    }
+
+    /// Build a signed transaction from a signature produced by an external signer.
+    ///
+    /// The signature is not trusted blindly by this constructor. Callers that
+    /// receive signatures over the wire should verify the returned transaction
+    /// with [`SignedTransaction::verify_signature`] before submitting it.
+    #[must_use]
+    pub fn build_with_signature(self, signature: Signature) -> SignedTransaction {
+        SignedTransaction {
+            signature: TransactionSignature(SignatureOf::from_signature(signature)),
+            payload: self.payload,
+            attachments: self.attachments,
+            multisig_signatures: self.multisig_signatures,
+        }
+    }
+
     /// Sign transaction with provided key pair.
     #[must_use]
     pub fn sign(self, private_key: &iroha_crypto::PrivateKey) -> SignedTransaction {
@@ -1473,6 +1510,23 @@ mod tests {
         } else {
             panic!("expected Instructions variant");
         }
+    }
+
+    #[test]
+    fn transaction_builder_exports_signable_payload_and_accepts_external_signature() {
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let key_pair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let builder = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "external signature".into())]);
+
+        let payload_bytes = builder.encode_payload();
+        let payload_hash = builder.payload_hash();
+        assert_eq!(payload_hash, Hash::new(&payload_bytes));
+
+        let signature = Signature::new(key_pair.private_key(), &builder.payload_hash_bytes());
+        let signed = builder.build_with_signature(signature);
+        assert!(signed.verify_signature().is_ok());
     }
 
     #[test]

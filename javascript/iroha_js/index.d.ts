@@ -9683,3 +9683,5 @@ export function buildSoracloudPrivateUploadedModelReceiptQuery(
 export function privateUploadedModelReceiptInstruction(
   response: Record<string, unknown>,
 ): SoracloudTxInstruction;
+
+export * from "./nexus-app";

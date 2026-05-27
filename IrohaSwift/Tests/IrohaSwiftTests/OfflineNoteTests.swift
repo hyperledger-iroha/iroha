@@ -230,11 +230,13 @@ final class OfflineNoteTests: XCTestCase {
         let text = try OfflineNotePaymentTokenCodec.encodeText(token)
         XCTAssertEqual(text, fixture.sdkInterop.paymentTokenText)
         XCTAssertTrue(text.hasPrefix(OfflineNotePaymentTokenCodec.textPrefix))
-        XCTAssertNotEqual(OfflineNotePaymentTokenCodec.textPrefix, OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix)
+        XCTAssertEqual(OfflineNotePaymentTokenCodec.textPrefix, OfflineBearerCashTextCodec.paymentTextPrefix)
+        XCTAssertEqual(OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix, OfflineBearerCashTextCodec.paymentTextPrefix)
         XCTAssertEqual(try OfflineNotePaymentTokenCodec.decodeText(text).tokenIdHex, token.tokenIdHex)
+        XCTAssertEqual(try OfflineBearerCashTextCodec.decodePaymentText(text).tokenIdHex, token.tokenIdHex)
         XCTAssertThrowsError(
             try OfflineNotePaymentTokenCodec.decodeText(
-                OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix + String(text.split(separator: ":").last!)
+                "wallet-offline-bearer-cash-payment-invalid:" + String(text.split(separator: ":").last!)
             )
         )
 
@@ -267,6 +269,25 @@ final class OfflineNoteTests: XCTestCase {
             try OfflineNotePaymentTokenCodec.decodeQrPayload(try XCTUnwrap(canonicalQrPayload)).tokenIdHex,
             token.tokenIdHex
         )
+    }
+
+    func testOfflineBearerCashPolicyAndPrefixesUseSingleAppSurface() throws {
+        let policy = OfflineBearerCashPolicyV1.default
+        XCTAssertEqual(policy.maxCustodyHops, 5)
+        XCTAssertEqual(policy.maxLineageSteps, 32)
+        XCTAssertEqual(policy.maxSingleQrPayloadBytes, 2_048)
+        XCTAssertEqual(policy.maxStreamPayloadBytes, 12_288)
+        XCTAssertEqual(policy.androidKeyPoolTarget, 20)
+        XCTAssertEqual(policy.androidKeyPoolReplenishBelow, 8)
+        XCTAssertEqual(policy.androidKeyPoolCap, 40)
+        XCTAssertEqual(policy.recommendedTransport(payloadByteCount: 2_048), .staticQr)
+        XCTAssertEqual(policy.recommendedTransport(payloadByteCount: 2_049), .streamingQr)
+        XCTAssertEqual(policy.recommendedTransport(payloadByteCount: 12_289), .framedByteTransport)
+
+        XCTAssertEqual(OfflineNoteReceiveRequestCodec.textPrefix, "wallet-offline-bearer-cash-receive:")
+        XCTAssertEqual(OfflineNotePaymentTokenCodec.textPrefix, "wallet-offline-bearer-cash-payment:")
+        XCTAssertEqual(OfflineNoteReceiptAckCodec.textPrefix, "wallet-offline-bearer-cash-ack:")
+        XCTAssertNil(OfflineBearerCashTextCodec.payloadKind("wallet-offline-bearer-cash-unknown:AAAA"))
     }
 
     func testOfflineNoteReceiveRequestCodecRoundTripsNoritoTextAndQrFrames() throws {
@@ -1016,10 +1037,9 @@ final class OfflineNoteTests: XCTestCase {
             payload: OfflineNoteTransferHandoff.rawReceiptAckBytes(for: receiptAck),
             contentType: OfflineNoteTransferHandoff.receiptAckContentType
         )
-        let bearerTextPayloads = try OfflineBearerWalletTests.bearerTextPayloadFixture()
-        let textChallenge = bearerTextPayloads.receiveRequest
-        let textPayment = bearerTextPayloads.payment
-        let textAck = bearerTextPayloads.ack
+        let textChallenge = try OfflineNoteTransferTextPayloadCodec.encodeReceiveRequest(receiveRequest)
+        let textPayment = try OfflineNoteTransferTextPayloadCodec.encodePaymentToken(token)
+        let textAck = try OfflineNoteTransferTextPayloadCodec.encodeReceiptAck(receiptAck)
         let textChallengeBytes = try OfflineNoteTransferHandoff.nearbyTextEnvelopeBytes(
             payload: textChallenge,
             kind: .receiveRequest,

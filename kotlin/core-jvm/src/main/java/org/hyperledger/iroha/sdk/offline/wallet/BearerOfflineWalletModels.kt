@@ -371,8 +371,6 @@ data class OfflineWalletState(
     @SerialName("note_records") val noteRecords: List<OfflineNoteRecord> = emptyList(),
     @SerialName("one_use_key_pool_state") val oneUseKeyPoolState: OfflineOneUseKeyPoolState = OfflineOneUseKeyPoolState(),
     @SerialName("key_certificate_reserve") val keyCertificateReserve: List<OfflineCompactKeyCertificate> = emptyList(),
-    @SerialName("bearer_policy_bundle_norito_base64") val bearerPolicyBundleNoritoBase64: String? = null,
-    @SerialName("bearer_purse_certificate_norito_base64") val bearerPurseCertificateNoritoBase64: String? = null,
     @SerialName("pending_outbox") val pendingOutbox: List<OfflinePendingOutboxEntry> = emptyList(),
     @SerialName("pending_audit_receipts") val pendingAuditReceipts: List<OfflinePendingAuditReceipt> = emptyList(),
     @SerialName("restore_quarantine_state") val restoreQuarantineState: OfflineRestoreQuarantineState? = null,
@@ -531,12 +529,6 @@ object BearerOfflineWalletPolicy {
                 .takeLast(512),
             oneUseKeyPoolState = normalizedOneUseKeys,
             keyCertificateReserve = normalizedReserve,
-            bearerPolicyBundleNoritoBase64 = state.bearerPolicyBundleNoritoBase64
-                ?.trim()
-                ?.takeIf { it.isNotBlank() },
-            bearerPurseCertificateNoritoBase64 = state.bearerPurseCertificateNoritoBase64
-                ?.trim()
-                ?.takeIf { it.isNotBlank() },
             pendingOutbox = state.pendingOutbox
                 .filter { it.tokenId.isNotBlank() }
                 .distinctBy { it.tokenId }

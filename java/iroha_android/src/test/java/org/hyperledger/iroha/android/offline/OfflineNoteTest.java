@@ -50,6 +50,7 @@ public final class OfflineNoteTest {
     nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
     paymentTokenCodecRoundTripsNoritoTextAndQrFrames();
+    offlineBearerCashPolicyAndPrefixesUseSingleAppSurface();
     receiveRequestCodecRoundTripsNoritoTextAndQrFrames();
     receiptAckCodecRoundTripsNoritoTextAndQrFrames();
     receiptAckCodecRejectsNonPositiveAcceptedAtDecode();
@@ -558,14 +559,28 @@ public final class OfflineNoteTest {
         text.startsWith(OfflineNotePaymentTokenCodec.TEXT_PREFIX),
         "payment token text prefix");
     assertEquals(
+        OfflineBearerCashTextCodec.PAYMENT_TEXT_PREFIX,
+        OfflineNotePaymentTokenCodec.TEXT_PREFIX,
+        "Bearer Cash payment prefix");
+    assertEquals(
         token.tokenIdHex(),
         OfflineNotePaymentTokenCodec.decodeText(text).tokenIdHex(),
         "text token id");
     assertEquals(
         token.tokenIdHex(),
+        OfflineBearerCashTextCodec.decodePaymentText(text).tokenIdHex(),
+        "Bearer Cash text token id");
+    assertEquals(
+        token.tokenIdHex(),
         OfflineNotePaymentTokenCodec.decodeText(string(sdkInterop, "payment_token_text"))
             .tokenIdHex(),
         "canonical text token id");
+    assertThrows(
+        () ->
+            OfflineNotePaymentTokenCodec.decodeText(
+                "wallet-offline-bearer-cash-payment-invalid:"
+                    + text.substring(text.indexOf(':') + 1)),
+        "unknown payment prefix should reject");
 
     final List<byte[]> frames =
         OfflineNotePaymentTokenCodec.encodeQrFrameBytes(
@@ -611,6 +626,45 @@ public final class OfflineNoteTest {
         token.tokenIdHex(),
         OfflineNotePaymentTokenCodec.decodeQrPayload(canonicalQrPayload).tokenIdHex(),
         "canonical QR token id");
+  }
+
+  private static void offlineBearerCashPolicyAndPrefixesUseSingleAppSurface() {
+    final OfflineBearerCashPolicyV1 policy = OfflineBearerCashPolicyV1.DEFAULT;
+    assertEquals(5, policy.maxCustodyHops(), "max custody hops");
+    assertEquals(32, policy.maxLineageSteps(), "max lineage steps");
+    assertEquals(2048, policy.maxSingleQrPayloadBytes(), "static QR max");
+    assertEquals(12288, policy.maxStreamPayloadBytes(), "stream max");
+    assertEquals(20, policy.androidKeyPoolTarget(), "android key pool target");
+    assertEquals(8, policy.androidKeyPoolReplenishBelow(), "android key pool replenish");
+    assertEquals(40, policy.androidKeyPoolCap(), "android key pool cap");
+    assertTrue(
+        OfflineBearerCashTransport.STATIC_QR
+            == policy.recommendedTransportForPayloadByteCount(2048),
+        "static QR threshold");
+    assertTrue(
+        OfflineBearerCashTransport.STREAMING_QR
+            == policy.recommendedTransportForPayloadByteCount(2049),
+        "streaming QR threshold");
+    assertTrue(
+        OfflineBearerCashTransport.FRAMED_BYTE_TRANSPORT
+            == policy.recommendedTransportForPayloadByteCount(12289),
+        "framed byte threshold");
+    assertEquals(
+        "wallet-offline-bearer-cash-receive:",
+        OfflineNoteReceiveRequestCodec.TEXT_PREFIX,
+        "receive prefix");
+    assertEquals(
+        "wallet-offline-bearer-cash-payment:",
+        OfflineNotePaymentTokenCodec.TEXT_PREFIX,
+        "payment prefix");
+    assertEquals(
+        "wallet-offline-bearer-cash-ack:",
+        OfflineNoteReceiptAckCodec.TEXT_PREFIX,
+        "ack prefix");
+    assertTrue(
+        OfflineBearerCashTextCodec.payloadKind("wallet-offline-bearer-cash-unknown:AAAA")
+            == null,
+        "unknown prefix");
   }
 
   private static void receiveRequestCodecRoundTripsNoritoTextAndQrFrames() throws Exception {

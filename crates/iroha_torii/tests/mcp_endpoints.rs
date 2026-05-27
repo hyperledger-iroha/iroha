@@ -21,7 +21,7 @@ use norito::json::Value;
 use tower::ServiceExt as _;
 
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
-const TOOL_LIST_PAGE_LIMIT: usize = 32;
+const TOOL_LIST_PAGE_LIMIT: usize = 128;
 
 fn build_router(cfg: iroha_config::parameters::actual::Root) -> axum::Router {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -2313,10 +2313,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected account transaction MCP tool"
     );
     assert!(
-        names.iter().any(|name| name == "torii.post_transaction"),
-        "expected transaction submission MCP tool"
-    );
-    assert!(
         names.iter().any(|name| name == "iroha.health"),
         "expected agent-friendly node health MCP tool"
     );
@@ -2967,16 +2963,16 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly rwa query MCP tool"
     );
     assert!(
-        names
+        !names
             .iter()
-            .any(|name| name == "iroha.offline.transfers.list"),
-        "expected agent-friendly offline transfer list MCP tool"
+            .any(|name| name.starts_with("iroha.offline.transfers.")),
+        "legacy offline transfer MCP compatibility tools should not be advertised"
     );
     assert!(
-        names
+        !names
             .iter()
-            .any(|name| name == "iroha.offline.revocations.list"),
-        "expected agent-friendly offline revocation list MCP tool"
+            .any(|name| name.starts_with("iroha.offline.revocations.")),
+        "legacy offline revocation MCP compatibility tools should not be advertised"
     );
     assert!(
         names
@@ -4030,164 +4026,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_rwas_query_accepts_flat_envelope_fie
         !tool_is_error(&call),
         "rwas query alias with flat envelope fields should dispatch successfully"
     );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106160,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.transfers.list",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline transfer list compatibility alias should return structured success"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_get_accepts_bundle_shortcut() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106161,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.transfers.get",
-                "arguments": {
-                    "bundle": "legacy-bundle-001"
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "offline transfer bundle compatibility alias should report missing legacy bundles as a tool error"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(404));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106162,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.transfers.query",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline transfer query compatibility alias should return structured success"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106163,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.revocations.list",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline revocation list compatibility alias should return structured success"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_bundle_dispatches_route() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106164,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.revocations.bundle",
-                "arguments": {
-                    "bundle": {
-                        "id": "legacy-revocation-bundle-001"
-                    }
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }

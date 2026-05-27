@@ -59,6 +59,9 @@ const CREATED_AT_MS: u64 = 1_706_000_000_123;
 const ACCEPTED_AT_MS: u64 = 1_706_000_000_333;
 const PAYMENT_TOKEN_ENVELOPE_SCHEMA: &str =
     "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelope";
+const OFFLINE_BEARER_CASH_RECEIVE_PREFIX: &str = "wallet-offline-bearer-cash-receive:";
+const OFFLINE_BEARER_CASH_PAYMENT_PREFIX: &str = "wallet-offline-bearer-cash-payment:";
+const OFFLINE_BEARER_CASH_ACK_PREFIX: &str = "wallet-offline-bearer-cash-ack:";
 
 fn main() -> Result<(), Box<dyn Error>> {
     let check_only = env::args().any(|arg| arg == "--check");
@@ -359,6 +362,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         bearer_audit_trail: &payment_bearer_audit_trail,
     })?;
     let sdk_interop = sdk_interop_json(&payment_token_wire)?;
+    let offline_bearer_cash_v1 = offline_bearer_cash_v1_fixture(&payment_token_wire)?;
 
     let payment_token_payload = json::to_string(&payment_token)?;
     let fountain = fountain_qr_fixture(payment_token_payload.as_bytes())?;
@@ -379,9 +383,15 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         (
             "prefixes",
             object(vec![
-                ("receive_request", Value::from("wallet-offline-receive:")),
-                ("payment_token", Value::from("wallet-offline-payment:")),
-                ("receipt_ack", Value::from("wallet-offline-ack:")),
+                (
+                    "receive_request",
+                    Value::from(OFFLINE_BEARER_CASH_RECEIVE_PREFIX),
+                ),
+                (
+                    "payment_token",
+                    Value::from(OFFLINE_BEARER_CASH_PAYMENT_PREFIX),
+                ),
+                ("receipt_ack", Value::from(OFFLINE_BEARER_CASH_ACK_PREFIX)),
                 ("fountain_qr", Value::from("iroha:qr:")),
             ]),
         ),
@@ -389,6 +399,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
             "capabilities",
             str_array(&[
                 "offline_note",
+                "offline_bearer_cash",
                 "offline_one_use_keys",
                 "offline_recursive_note_proof",
                 "offline_fountain_qr",
@@ -403,6 +414,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         ("receive_request", receive_request),
         ("payment_token", payment_token),
         ("sdk_interop", sdk_interop),
+        ("offline_bearer_cash_v1", offline_bearer_cash_v1),
         ("receipt_ack", receipt_ack),
         ("fountain_qr", fountain),
         (
@@ -643,6 +655,54 @@ struct PaymentTokenJsonFields<'a> {
     public_inputs_hash_hex: &'a str,
     assertion_base64: &'a str,
     proof_bytes_base64: &'a str,
+}
+
+fn offline_bearer_cash_v1_fixture(payment_token_wire: &[u8]) -> Result<Value, Box<dyn Error>> {
+    Ok(object(vec![
+        ("version", Value::from(1_u64)),
+        (
+            "prefixes",
+            object(vec![
+                (
+                    "receive_request",
+                    Value::from(OFFLINE_BEARER_CASH_RECEIVE_PREFIX),
+                ),
+                ("payment", Value::from(OFFLINE_BEARER_CASH_PAYMENT_PREFIX)),
+                ("ack", Value::from(OFFLINE_BEARER_CASH_ACK_PREFIX)),
+            ]),
+        ),
+        (
+            "policy_defaults",
+            object(vec![
+                ("max_custody_hops", Value::from(5_u64)),
+                ("max_lineage_steps", Value::from(32_u64)),
+                ("max_single_qr_payload_bytes", Value::from(2_048_u64)),
+                ("max_stream_payload_bytes", Value::from(12_288_u64)),
+                ("android_key_pool_target", Value::from(20_u64)),
+                ("android_key_pool_replenish_below", Value::from(8_u64)),
+                ("android_key_pool_cap", Value::from(40_u64)),
+            ]),
+        ),
+        (
+            "text",
+            object(vec![(
+                "payment_token",
+                Value::from(format!(
+                    "{}{}",
+                    OFFLINE_BEARER_CASH_PAYMENT_PREFIX,
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payment_token_wire)
+                )),
+            )]),
+        ),
+        (
+            "transport",
+            object(vec![
+                ("static_qr_max_payload_bytes", Value::from(2_048_u64)),
+                ("stream_qr_max_payload_bytes", Value::from(12_288_u64)),
+                ("nearby_uses_framed_bytes", Value::from(true)),
+            ]),
+        ),
+    ]))
 }
 
 #[derive(Clone)]
@@ -968,7 +1028,8 @@ fn mobile_payment_token_wire(
 
 fn sdk_interop_json(payment_token_wire: &[u8]) -> Result<Value, Box<dyn Error>> {
     let text_payload = format!(
-        "wallet-offline-payment:{}",
+        "{}{}",
+        OFFLINE_BEARER_CASH_PAYMENT_PREFIX,
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payment_token_wire)
     );
     Ok(object(vec![
@@ -1201,15 +1262,15 @@ mod tests {
         let prefixes = field(&fixture, "prefixes");
         assert_eq!(
             string(field(prefixes, "receive_request")),
-            "wallet-offline-receive:"
+            OFFLINE_BEARER_CASH_RECEIVE_PREFIX
         );
         assert_eq!(
             string(field(prefixes, "payment_token")),
-            "wallet-offline-payment:"
+            OFFLINE_BEARER_CASH_PAYMENT_PREFIX
         );
         assert_eq!(
             string(field(prefixes, "receipt_ack")),
-            "wallet-offline-ack:"
+            OFFLINE_BEARER_CASH_ACK_PREFIX
         );
 
         let token = field(&fixture, "payment_token");
@@ -1239,7 +1300,8 @@ mod tests {
             PAYMENT_TOKEN_ENVELOPE_SCHEMA
         );
         assert!(
-            string(field(sdk_interop, "payment_token_text")).starts_with("wallet-offline-payment:")
+            string(field(sdk_interop, "payment_token_text"))
+                .starts_with(OFFLINE_BEARER_CASH_PAYMENT_PREFIX)
         );
         assert!(!string(field(sdk_interop, "payment_token_norito_base64")).is_empty());
         let sdk_qr = field(sdk_interop, "payment_token_qr");
@@ -1275,6 +1337,36 @@ mod tests {
         );
         assert!(!string(field(field(chain, "audit"), "public_inputs_hash")).is_empty());
         assert!(!string(field(field(chain, "redeem"), "public_inputs_hash")).is_empty());
+        let cash = field(&fixture, "offline_bearer_cash_v1");
+        assert_eq!(number(field(cash, "version")), 1);
+        let cash_prefixes = field(cash, "prefixes");
+        assert_eq!(
+            string(field(cash_prefixes, "receive_request")),
+            OFFLINE_BEARER_CASH_RECEIVE_PREFIX
+        );
+        assert_eq!(
+            string(field(cash_prefixes, "payment")),
+            OFFLINE_BEARER_CASH_PAYMENT_PREFIX
+        );
+        assert_eq!(
+            string(field(cash_prefixes, "ack")),
+            OFFLINE_BEARER_CASH_ACK_PREFIX
+        );
+        let policy_defaults = field(cash, "policy_defaults");
+        assert_eq!(number(field(policy_defaults, "max_custody_hops")), 5);
+        assert_eq!(number(field(policy_defaults, "max_lineage_steps")), 32);
+        assert_eq!(
+            number(field(policy_defaults, "max_single_qr_payload_bytes")),
+            2_048
+        );
+        assert_eq!(
+            number(field(policy_defaults, "max_stream_payload_bytes")),
+            12_288
+        );
+        assert!(
+            string(field(field(cash, "text"), "payment_token"))
+                .starts_with(OFFLINE_BEARER_CASH_PAYMENT_PREFIX)
+        );
         assert_eq!(array(field(&fixture, "bad_variants")).len(), 3);
     }
 

@@ -13,7 +13,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 /** QR/Norito handoff codec for Offline Note receipt ACKs. */
 public final class OfflineNoteReceiptAckCodec {
   public static final String TYPE = "offline_receipt_ack";
-  public static final String TEXT_PREFIX = "wallet-offline-ack:";
+  public static final String TEXT_PREFIX = "wallet-offline-bearer-cash-ack:";
   private static final String RECEIPT_ACK_ENVELOPE_SCHEMA =
       "iroha_data_model::offline::model::OfflineNoteReceiptAckEnvelope";
 

@@ -7963,7 +7963,7 @@ test("waitForTransactionStatus surfaces rejection reason on failure status", asy
       error instanceof TransactionStatusError
       && error.status === "Rejected"
       && error.rejectionReason === rejectionReason
-      && String(error.message).includes(`reason=${rejectionReason}`),
+      && String(error.message).includes(`rejection_reason=${rejectionReason}`),
   );
 });
 

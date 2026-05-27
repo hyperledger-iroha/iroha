@@ -80,7 +80,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.offline.OfflineAuditLoggerTest",
         "org.hyperledger.iroha.android.offline.OfflineJournalTest",
         "org.hyperledger.iroha.android.offline.OfflineJsonParserTest",
-        "org.hyperledger.iroha.android.offline.OfflineBearerWalletTest",
         "org.hyperledger.iroha.android.offline.OfflineNoteTest",
         "org.hyperledger.iroha.android.offline.OfflineQrStreamTest",
         "org.hyperledger.iroha.android.runtime.RuntimeUpgradeInstructionTests",

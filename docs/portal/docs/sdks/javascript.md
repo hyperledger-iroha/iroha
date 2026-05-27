@@ -8,6 +8,10 @@ slug: /sdks/javascript
 bundles Norito builders, Ed25519 helpers, pagination utilities, and a resilient
 HTTP/WebSocket client so you can mirror the CLI flows from TypeScript.
 
+For SORA Nexus wallet-approved app transfers, import
+`NexusAppClient` from `@iroha/iroha-js/nexus-app`; see
+[Nexus App Facade](./nexus-app-facade).
+
 ## Installation
 
 ```bash

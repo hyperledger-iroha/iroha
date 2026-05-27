@@ -16,7 +16,7 @@ public final class OfflineNoteNfcApduProtocol {
   public static final int ANDROID_SAFE_CHUNK_BYTES = 240;
   public static final int MAX_EXTENDED_READ_CHUNK_BYTES = 1024;
   public static final int MAX_EXTENDED_WRITE_CHUNK_BYTES = 16 * 1024;
-  public static final int MAX_INCOMING_PAYLOAD_BYTES = 64 * 1024;
+  public static final int MAX_INCOMING_PAYLOAD_BYTES = 12 * 1024;
 
   public static final byte[] STATUS_SUCCESS = new byte[] {(byte) 0x90, 0x00};
   public static final byte[] STATUS_WRONG_DATA = new byte[] {(byte) 0x6A, (byte) 0x80};

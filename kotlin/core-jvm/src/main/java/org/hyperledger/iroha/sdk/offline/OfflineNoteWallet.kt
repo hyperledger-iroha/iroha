@@ -359,7 +359,7 @@ class OfflineNoteReceiveRequest(
 /** QR/Norito handoff codec for Offline Note receive requests. */
 object OfflineNoteReceiveRequestCodec {
     const val TYPE: String = "offline_receive_request"
-    const val TEXT_PREFIX: String = "wallet-offline-receive:"
+    const val TEXT_PREFIX: String = "wallet-offline-bearer-cash-receive:"
     private const val RECEIVE_REQUEST_ENVELOPE_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteReceiveRequestEnvelope"
 
@@ -516,7 +516,7 @@ class OfflineNotePaymentToken(
 /** QR/Norito handoff codec for Offline Note payment tokens. */
 object OfflineNotePaymentTokenCodec {
     const val TYPE: String = "offline_payment_token"
-    const val TEXT_PREFIX: String = "wallet-offline-payment:"
+    const val TEXT_PREFIX: String = "wallet-offline-bearer-cash-payment:"
     private const val TOKEN_ENVELOPE_SCHEMA =
         "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelope"
 
@@ -718,7 +718,7 @@ private fun receiptAckTokenHasRecipientOutput(
 /** QR/Norito handoff codec for Offline Note receipt ACKs. */
 object OfflineNoteReceiptAckCodec {
     const val TYPE: String = "offline_receipt_ack"
-    const val TEXT_PREFIX: String = "wallet-offline-ack:"
+    const val TEXT_PREFIX: String = "wallet-offline-bearer-cash-ack:"
     private const val RECEIPT_ACK_ENVELOPE_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteReceiptAckEnvelope"
 
