@@ -318,7 +318,6 @@ impl Normalize {
 
 #[derive(Debug)]
 struct AddressNetworkContext {
-    profile: Option<String>,
     chain_discriminant: u16,
 }
 
@@ -347,7 +346,6 @@ fn resolve_address_network_context(
                 );
             }
             Ok(AddressNetworkContext {
-                profile: Some(expected.name.to_owned()),
                 chain_discriminant: actual,
             })
         }
@@ -359,22 +357,15 @@ fn resolve_address_network_context(
                 )
             })?;
             Ok(AddressNetworkContext {
-                profile: Some(expected.name.to_owned()),
                 chain_discriminant: expected.chain_discriminant,
             })
         }
         (None, Some(network_prefix)) => Ok(AddressNetworkContext {
-            profile: None,
             chain_discriminant: network_prefix,
         }),
         (None, None) => default_network_prefix.map_or_else(
             || Err(eyre::eyre!("provide --profile or --network-prefix")),
-            |chain_discriminant| {
-                Ok(AddressNetworkContext {
-                    profile: None,
-                    chain_discriminant,
-                })
-            },
+            |chain_discriminant| Ok(AddressNetworkContext { chain_discriminant }),
         ),
     }
 }
@@ -383,20 +374,6 @@ fn resolve_address_expect_prefix(
     context: &AddressNetworkContext,
     expect_prefix: Option<u16>,
 ) -> Result<u16> {
-    if let Some(actual) = expect_prefix
-        && actual != context.chain_discriminant
-    {
-        if let Some(profile) = context.profile.as_deref() {
-            eyre::bail!(
-                "network profile mismatch: profile `{profile}` expected chain_discriminant={}, actual expect_prefix={actual}",
-                context.chain_discriminant
-            );
-        }
-        eyre::bail!(
-            "network prefix mismatch: network_prefix={} actual expect_prefix={actual}",
-            context.chain_discriminant
-        );
-    }
     Ok(expect_prefix.unwrap_or(context.chain_discriminant))
 }
 
@@ -778,6 +755,31 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("profile `taira` expected chain_discriminant=369")
+        );
+    }
+
+    #[test]
+    fn explicit_expect_prefix_allows_reencoding_between_networks() {
+        let account = account_id_for_domain("treasury", 7);
+        let input_prefix = DEFAULT_I105_PREFIX;
+        let output_prefix = iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT;
+        let input = AccountAddress::from_account_id(&account)
+            .expect("address encoding")
+            .to_i105_for_discriminant(input_prefix)
+            .expect("input i105");
+        let context = resolve_address_network_context(None, Some(output_prefix), None)
+            .expect("output prefix resolves");
+        let expect_prefix =
+            resolve_address_expect_prefix(&context, Some(input_prefix)).expect("expect prefix");
+
+        let parsed = parse_address_input(&input, Some(expect_prefix)).expect("input parses");
+        let rendered = encode_address_literal(&parsed, output_prefix, OutputFormat::I105)
+            .expect("output i105");
+
+        assert_ne!(rendered, input);
+        assert!(
+            AccountAddress::parse_encoded(&rendered, Some(output_prefix)).is_ok(),
+            "rendered address should parse under output prefix"
         );
     }
 
