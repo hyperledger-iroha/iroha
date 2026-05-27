@@ -575,22 +575,25 @@ impl GatewayPolicy {
         }
 
         if self.config.enforce_admission {
-            let Some(registry) = &self.admission else {
-                return PolicyDecision::Deny(PolicyViolation::AdmissionUnavailable);
-            };
-
-            let Some(provider_id) = ctx.provider_id() else {
-                return PolicyDecision::Deny(PolicyViolation::MissingProviderId);
-            };
-
-            if registry.entry(provider_id).is_none() {
-                debug!(
-                    "GAR enforcement: provider {provider_id:02x?} missing from registry",
-                    provider_id = provider_id
-                );
-                return PolicyDecision::Deny(PolicyViolation::ProviderNotAdmitted {
-                    provider_id: *provider_id,
-                });
+            match (self.admission.as_ref(), ctx.provider_id()) {
+                (Some(registry), Some(provider_id)) => {
+                    if registry.entry(provider_id).is_none() {
+                        debug!(
+                            "GAR enforcement: provider {provider_id:02x?} missing from registry",
+                            provider_id = provider_id
+                        );
+                        return PolicyDecision::Deny(PolicyViolation::ProviderNotAdmitted {
+                            provider_id: *provider_id,
+                        });
+                    }
+                }
+                (Some(_), None) => {
+                    return PolicyDecision::Deny(PolicyViolation::MissingProviderId);
+                }
+                (None, Some(_)) => {
+                    return PolicyDecision::Deny(PolicyViolation::AdmissionUnavailable);
+                }
+                (None, None) => {}
             }
         }
 

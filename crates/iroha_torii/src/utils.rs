@@ -72,16 +72,6 @@ pub fn current_response_format() -> ResponseFormat {
         .unwrap_or(ResponseFormat::Norito)
 }
 
-impl ResponseFormat {
-    fn prefer_for_default(a: Self, b: Self, default_format: Self) -> bool {
-        match (a == default_format, b == default_format) {
-            (true, false) => true,
-            (false, true) => false,
-            _ => a == Self::Norito && b == Self::Json,
-        }
-    }
-}
-
 /// Negotiate the response format from an optional `Accept` header value.
 ///
 /// Returns an HTTP response carrying status `406 Not Acceptable` when the header
@@ -127,6 +117,7 @@ fn negotiate_response_format_with_default(
         format: ResponseFormat,
         quality: f32,
         index: usize,
+        explicit: bool,
     }
 
     const EPS: f32 = 1e-6;
@@ -166,19 +157,19 @@ fn negotiate_response_format_with_default(
             continue;
         }
 
-        let format = if is_norito_media_type(media_type) {
-            Some(ResponseFormat::Norito)
+        let candidate_format = if is_norito_media_type(media_type) {
+            Some((ResponseFormat::Norito, true))
         } else if media_type.eq_ignore_ascii_case("application/*")
             || media_type.eq_ignore_ascii_case("*/*")
         {
-            Some(default_format)
+            Some((default_format, false))
         } else if is_json_media_type(media_type) {
-            Some(ResponseFormat::Json)
+            Some((ResponseFormat::Json, true))
         } else {
             None
         };
 
-        let Some(format) = format else {
+        let Some((format, explicit)) = candidate_format else {
             continue;
         };
 
@@ -186,6 +177,7 @@ fn negotiate_response_format_with_default(
             format,
             quality,
             index: idx,
+            explicit,
         };
 
         match best {
@@ -193,12 +185,12 @@ fn negotiate_response_format_with_default(
             Some(current) => {
                 if candidate.quality > current.quality + EPS
                     || ((candidate.quality - current.quality).abs() <= EPS
-                        && (ResponseFormat::prefer_for_default(
-                            candidate.format,
-                            current.format,
-                            default_format,
-                        ) || (candidate.format == current.format
-                            && candidate.index < current.index)))
+                        && ((candidate.explicit && !current.explicit)
+                            || (candidate.explicit == current.explicit
+                                && ((candidate.format == ResponseFormat::Norito
+                                    && current.format == ResponseFormat::Json)
+                                    || (candidate.format == current.format
+                                        && candidate.index < current.index)))))
                 {
                     best = Some(candidate);
                 }
@@ -1379,6 +1371,15 @@ pub mod extractors {
         #[test]
         fn negotiate_json_preferred_preserves_explicit_norito() {
             let header = HeaderValue::from_static("application/x-norito");
+            let format = super::super::negotiate_json_preferred_response_format(Some(&header))
+                .expect("format");
+            assert_eq!(format, super::super::ResponseFormat::Norito);
+        }
+
+        #[test]
+        fn negotiate_json_preferred_explicit_tie_prefers_norito() {
+            let header =
+                HeaderValue::from_static("application/json;q=0.7, application/x-norito;q=0.7");
             let format = super::super::negotiate_json_preferred_response_format(Some(&header))
                 .expect("format");
             assert_eq!(format, super::super::ResponseFormat::Norito);
