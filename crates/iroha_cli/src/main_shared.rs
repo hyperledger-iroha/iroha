@@ -5206,6 +5206,10 @@ mod trigger {
         Mint(IdInt),
         /// Decrease the number of trigger executions
         Burn(IdInt),
+        /// Enable a trigger by setting metadata key `__enabled=true`
+        Enable(TriggerIdArg),
+        /// Disable a trigger by setting metadata key `__enabled=false`
+        Disable(TriggerIdArg),
         /// Execute a by-call trigger with optional JSON arguments
         Execute(Execute),
         /// Inspect trigger declaration and optional live completion evidence
@@ -5257,6 +5261,8 @@ mod trigger {
                         .finish([instruction])
                         .wrap_err("Failed to burn trigger repetitions")
                 }
+                Enable(args) => set_trigger_enabled(context, args.id, true),
+                Disable(args) => set_trigger_enabled(context, args.id, false),
                 Execute(args) => args.run(context),
                 Inspect(args) => args.run(context),
                 Completed(cmd) => cmd.run(context),
@@ -5324,6 +5330,26 @@ mod trigger {
         /// Amount of change (integer)
         #[arg(short, long)]
         pub repetitions: u32,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct TriggerIdArg {
+        /// Trigger name
+        pub id: TriggerId,
+    }
+
+    fn set_trigger_enabled<C: RunContext>(
+        context: &mut C,
+        id: TriggerId,
+        enabled: bool,
+    ) -> Result<()> {
+        let key: Name = "__enabled"
+            .parse()
+            .wrap_err("failed to construct trigger enabled metadata key")?;
+        let instruction = iroha::data_model::isi::SetKeyValue::trigger(id, key, Json::from(enabled));
+        context
+            .finish([instruction])
+            .wrap_err("Failed to set trigger enabled metadata")
     }
 
     #[derive(clap::Args, Debug)]
@@ -8213,6 +8239,23 @@ mod tests {
 
         assert!(!status.wait.wait);
         assert!(status.wait.is_enabled());
+    }
+
+    #[test]
+    fn trigger_enable_disable_parse_positional_id() {
+        let args = Args::try_parse_from(["iroha", "trigger", "enable", "soraswap_tick"])
+            .expect("parse trigger enable");
+        let Command::Trigger(trigger::Command::Enable(enable)) = args.command else {
+            panic!("expected trigger enable command");
+        };
+        assert_eq!(enable.id.to_string(), "soraswap_tick");
+
+        let args = Args::try_parse_from(["iroha", "trigger", "disable", "soraswap_tick"])
+            .expect("parse trigger disable");
+        let Command::Trigger(trigger::Command::Disable(disable)) = args.command else {
+            panic!("expected trigger disable command");
+        };
+        assert_eq!(disable.id.to_string(), "soraswap_tick");
     }
 
     #[test]
