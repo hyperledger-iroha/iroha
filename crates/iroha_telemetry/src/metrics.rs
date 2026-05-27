@@ -2593,6 +2593,19 @@ mod tests {
         let mut status = Status {
             teu_lane_commit: vec![sample_lane_teu_status()],
             teu_dataspace_backlog: vec![sample_dataspace_teu_status()],
+            dataspace_catalog: vec![NexusDataspaceCatalogStatus {
+                lane_id: 0,
+                lane_alias: "lane-x".into(),
+                dataspace_id: 0,
+                alias: "universal".into(),
+                visibility: "public".into(),
+                storage_profile: "full_replica".into(),
+                manifest_required: false,
+                manifest_ready: true,
+                sealed: false,
+                manifest_path: None,
+                protected_namespaces: Vec::new(),
+            }],
             da_receipt_cursors: vec![DaReceiptCursorStatus {
                 lane_id: 0,
                 epoch: 1,
@@ -2610,6 +2623,7 @@ mod tests {
 
         assert!(status.teu_lane_commit.is_empty());
         assert!(status.teu_dataspace_backlog.is_empty());
+        assert!(status.dataspace_catalog.is_empty());
         assert!(status.da_receipt_cursors.is_empty());
         let consensus = status.sumeragi.expect("consensus present");
         assert_eq!(consensus.lane_governance_sealed_total, 0);
@@ -3309,6 +3323,7 @@ mod serde_tests {
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
+            dataspace_catalog: Vec::new(),
             tx_gossip: TxGossipSnapshot::default(),
             da_reschedule_total: 0,
             sorafs_micropayments: Vec::new(),
@@ -4019,6 +4034,46 @@ impl<'a> DecodeFromSlice<'a> for NexusLaneRuntimeUpgradeHookStatus {
             used,
         ))
     }
+}
+
+/// Configured dataspace entry exposed through `/status` for preflight checks.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+pub struct NexusDataspaceCatalogStatus {
+    /// Numeric lane identifier that services this dataspace.
+    pub lane_id: u32,
+    /// Human-readable lane alias.
+    pub lane_alias: String,
+    /// Numeric dataspace identifier.
+    pub dataspace_id: u64,
+    /// Human-readable dataspace alias.
+    pub alias: String,
+    /// Declarative lane visibility.
+    pub visibility: String,
+    /// Storage profile configured for the lane.
+    pub storage_profile: String,
+    /// Whether the lane requires a governance manifest.
+    pub manifest_required: bool,
+    /// Whether the required governance manifest is loaded.
+    pub manifest_ready: bool,
+    /// Whether the lane is sealed because the manifest is not ready.
+    pub sealed: bool,
+    /// Source path of the active governance manifest, if available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub manifest_path: Option<String>,
+    /// Protected namespaces enforced by the lane manifest.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub protected_namespaces: Vec<String>,
 }
 
 /// Snapshot of per-dataspace scheduler state exposed via `/status`.
@@ -5267,6 +5322,10 @@ pub struct Status {
     pub teu_lane_commit: Vec<NexusLaneTeuStatus>,
     /// Nexus dataspace-level backlog snapshot
     pub teu_dataspace_backlog: Vec<NexusDataspaceTeuStatus>,
+    /// Configured Nexus dataspace catalog joined with lane metadata.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub dataspace_catalog: Vec<NexusDataspaceCatalogStatus>,
     /// Transaction gossip target/cap snapshots grouped by dataspace/plane.
     #[norito(default)]
     pub tx_gossip: TxGossipSnapshot,
@@ -5293,6 +5352,7 @@ impl Status {
     pub fn strip_nexus(&mut self) {
         self.teu_lane_commit.clear();
         self.teu_dataspace_backlog.clear();
+        self.dataspace_catalog.clear();
         self.da_receipt_cursors.clear();
         if let Some(consensus) = self.sumeragi.as_mut() {
             consensus.clear_nexus_fields();
@@ -5330,6 +5390,9 @@ struct StatusPayload {
     teu_lane_commit: Vec<NexusLaneTeuStatus>,
     teu_dataspace_backlog: Vec<NexusDataspaceTeuStatus>,
     #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    dataspace_catalog: Vec<NexusDataspaceCatalogStatus>,
+    #[norito(default)]
     tx_gossip: TxGossipSnapshot,
     #[norito(default)]
     sorafs_micropayments: Vec<MicropaymentSampleStatus>,
@@ -5364,6 +5427,7 @@ impl From<&Status> for StatusPayload {
             governance: status.governance.clone(),
             teu_lane_commit: status.teu_lane_commit.clone(),
             teu_dataspace_backlog: status.teu_dataspace_backlog.clone(),
+            dataspace_catalog: status.dataspace_catalog.clone(),
             tx_gossip: status.tx_gossip.clone(),
             sorafs_micropayments: status.sorafs_micropayments.clone(),
             taikai_alias_rotations: status.taikai_alias_rotations.clone(),
@@ -5395,6 +5459,7 @@ impl From<StatusPayload> for Status {
             governance: payload.governance,
             teu_lane_commit: payload.teu_lane_commit,
             teu_dataspace_backlog: payload.teu_dataspace_backlog,
+            dataspace_catalog: payload.dataspace_catalog,
             tx_gossip: payload.tx_gossip,
             sorafs_micropayments: payload.sorafs_micropayments,
             taikai_alias_rotations: payload.taikai_alias_rotations,
@@ -6046,6 +6111,42 @@ fn collect_teu_lane_commit(metrics: &Metrics) -> Vec<NexusLaneTeuStatus> {
         .collect()
 }
 
+fn collect_dataspace_catalog(metrics: &Metrics) -> Vec<NexusDataspaceCatalogStatus> {
+    let mut entries: Vec<_> = metrics
+        .nexus_scheduler_lane_teu_status
+        .read()
+        .expect("lane TEU cache poisoned")
+        .values()
+        .map(|lane| {
+            let alias = lane
+                .dataspace_alias
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| format!("dataspace-{}", lane.dataspace_id));
+            let visibility = lane
+                .visibility
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "public".to_owned());
+            NexusDataspaceCatalogStatus {
+                lane_id: lane.lane_id,
+                lane_alias: lane.alias.clone(),
+                dataspace_id: lane.dataspace_id,
+                alias,
+                visibility,
+                storage_profile: lane.storage_profile.clone(),
+                manifest_required: lane.manifest_required,
+                manifest_ready: lane.manifest_ready,
+                sealed: lane.manifest_required && !lane.manifest_ready,
+                manifest_path: lane.manifest_path.clone(),
+                protected_namespaces: lane.manifest_protected_namespaces.clone(),
+            }
+        })
+        .collect();
+    entries.sort_by_key(|entry| (entry.lane_id, entry.dataspace_id));
+    entries
+}
+
 fn collect_teu_dataspace_backlog(metrics: &Metrics) -> Vec<NexusDataspaceTeuStatus> {
     metrics
         .nexus_scheduler_dataspace_teu_status
@@ -6095,6 +6196,7 @@ impl From<&Metrics> for Status {
             governance: build_governance_status(value),
             teu_lane_commit: collect_teu_lane_commit(value),
             teu_dataspace_backlog: collect_teu_dataspace_backlog(value),
+            dataspace_catalog: collect_dataspace_catalog(value),
             tx_gossip: TxGossipSnapshot {
                 caps: value
                     .tx_gossip_caps
@@ -18479,6 +18581,7 @@ mod test {
             },
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
+            dataspace_catalog: Vec::new(),
             tx_gossip: TxGossipSnapshot {
                 caps: TxGossipCaps {
                     frame_cap_bytes: 0,
@@ -18778,8 +18881,7 @@ mod test {
                 "view_change_suggest_total": 0,
                 "view_change_install_total": 0,
                 "lane_governance_sealed_total": 0,
-                "lane_governance_sealed_aliases": [
-              ]
+                "lane_governance_sealed_aliases": []
               },
               "governance": {
                 "proposals": {
@@ -18817,14 +18919,11 @@ mod test {
                   }
                 ],
                 "sealed_lanes_total": 0,
-                "sealed_lane_aliases": [
-              ],
+                "sealed_lane_aliases": [],
                 "citizens_total": 0
               },
-              "teu_lane_commit": [
-              ],
-              "teu_dataspace_backlog": [
-              ],
+              "teu_lane_commit": [],
+              "teu_dataspace_backlog": [],
               "tx_gossip": {
                 "caps": {
                   "frame_cap_bytes": 0,

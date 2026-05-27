@@ -465,8 +465,16 @@ pub struct PipelineTransactionStatusResponse {
 pub struct PipelineDiagnostic {
     /// Stable broad category such as `validation`, `ivm_execution`, or `trigger_execution`.
     pub category: String,
+    /// Stable machine-readable rejection code.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// Human-readable diagnostic message.
     pub message: String,
+    /// Decoded rejection reason text without transport encoding.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub decoded_reason: Option<String>,
     /// Contract address or alias when available.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -622,22 +630,36 @@ fn pipeline_status_summary(
 fn diagnostics_from_rejection_reason(
     reason: &TransactionRejectionReason,
 ) -> Vec<PipelineDiagnostic> {
-    let (category, message): (&str, String) = match reason {
-        TransactionRejectionReason::AccountDoesNotExist(err) => {
-            ("account", format!("account does not exist: {err}"))
+    let (category, code, message): (&str, &str, String) = match reason {
+        TransactionRejectionReason::AccountDoesNotExist(err) => (
+            "account",
+            "account_does_not_exist",
+            format!("account does not exist: {err}"),
+        ),
+        TransactionRejectionReason::LimitCheck(err) => {
+            ("limit_check", "limit_check", err.to_string())
         }
-        TransactionRejectionReason::LimitCheck(err) => ("limit_check", err.to_string()),
-        TransactionRejectionReason::Validation(err) => ("validation", err.to_string()),
-        TransactionRejectionReason::InstructionExecution(err) => {
-            ("instruction_execution", err.to_string())
+        TransactionRejectionReason::Validation(err) => {
+            ("validation", "validation", err.to_string())
         }
-        TransactionRejectionReason::IvmExecution(err) => ("ivm_execution", err.to_string()),
-        TransactionRejectionReason::TriggerExecution(err) => ("trigger_execution", err.to_string()),
+        TransactionRejectionReason::InstructionExecution(err) => (
+            "instruction_execution",
+            "instruction_execution",
+            err.to_string(),
+        ),
+        TransactionRejectionReason::IvmExecution(err) => {
+            ("ivm_execution", "ivm_execution", err.to_string())
+        }
+        TransactionRejectionReason::TriggerExecution(err) => {
+            ("trigger_execution", "trigger_execution", err.to_string())
+        }
     };
 
     let mut diagnostic = PipelineDiagnostic {
         category: category.to_owned(),
+        code: Some(code.to_owned()),
         message: message.clone(),
+        decoded_reason: Some(message.clone()),
         contract: extract_labeled_value(&message, &["contract=", "contract: "]),
         entrypoint: extract_labeled_value(&message, &["entrypoint=", "entrypoint: "]),
         trigger_id: extract_labeled_value(&message, &["trigger=", "trigger_id="]),
@@ -656,6 +678,7 @@ fn diagnostics_from_rejection_reason(
             .raw_reason
             .clone()
             .unwrap_or_else(|| "transaction rejected".to_owned());
+        diagnostic.decoded_reason = Some(diagnostic.message.clone());
     }
     vec![diagnostic]
 }
@@ -860,10 +883,17 @@ mod tests {
         assert!(payload.summary.contains("Rejected"));
         assert_eq!(payload.diagnostics.len(), 1);
         assert_eq!(payload.diagnostics[0].category, "validation");
+        assert_eq!(payload.diagnostics[0].code.as_deref(), Some("validation"));
         assert!(
             payload.diagnostics[0]
                 .message
                 .contains("missing permission")
+        );
+        assert!(
+            payload.diagnostics[0]
+                .decoded_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("missing permission"))
         );
         assert!(payload.diagnostics[0].raw_reason.is_some());
     }

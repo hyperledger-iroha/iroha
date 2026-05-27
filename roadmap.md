@@ -25,9 +25,11 @@ and completed history lives in [`status.md`](./status.md).
   QR/stream payload limits, and Android one-use-key pool sizing. Torii no
   longer carries legacy offline transfer/revocation compatibility routes or
   MCP aliases.
-  Remaining release evidence is physical-device iOS App Attest/HCE/CardSession
-  and Android StrongBox/KeyMint/HCE validation, plus follow-up lineage/privacy
-  proof compression for a later version.
+  Current release evidence covers physical iOS App Attest/HCE/CardSession
+  availability and Android StrongBox/KeyMint one-use-key validation. The open
+  physical gap is the end-to-end cross-platform NFC/HCE payment
+  exchange with both devices unlocked and ready; lineage/privacy proof
+  compression remains follow-up work for a later version.
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 

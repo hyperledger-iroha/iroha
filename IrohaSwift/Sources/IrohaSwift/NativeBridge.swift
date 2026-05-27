@@ -33,9 +33,9 @@ enum NoritoBridgeLoader {
     static let expectedVersion = "0.1.0"
     static let expectedBridgeAbiVersion: UInt32 = 2
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "7096b157ef1ee9bec0b2a238bbd79a76ddae4eaaabfdb960387151a00b175063",
-        "ios-arm64": "b253468efed1c94c2447a7475701bf27846480b45104c4e8cb077acd481dbb4d",
-        "ios-arm64_x86_64-simulator": "7d2db7b96a9c0b8f187d4763db853102937e5842211af77b70e65467634b6cb1"
+        "macos-arm64": "0739c675bd46e64d6dc5e212071ab7e92486f913b0f3b55880a3e37319f4e918",
+        "ios-arm64": "26bb800e9dce021ef38306caef70dbba7928dd99c6612801fb1bbc520b52b7a9",
+        "ios-arm64_x86_64-simulator": "12847a2da1d72839186e19838b1359b14bbaf035bed92d6ac07703d3bf96e219"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
@@ -2639,7 +2639,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 && encodeZkTransferFn != nil
                 && encodeRegisterZkAssetFn != nil
         case .sm2:
-            return isSm2Available && hasAlgorithmEncoders
+            return isSm2Available && hasAlgorithmEncoders && canParseSm2TransactionAuthority()
         case .secp256k1:
             return secp256k1Supported && hasAlgorithmEncoders
         case .mlDsa:
@@ -2652,6 +2652,28 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 && verifyDetachedFn != nil
                 && hasAlgorithmEncoders
         }
+        #else
+        return false
+        #endif
+    }
+
+    private func canParseSm2TransactionAuthority() -> Bool {
+        #if canImport(Darwin) && IROHASWIFT_ENABLE_SM
+        guard isAccountAddressCodecAvailable else { return false }
+        let distid = Sm2Keypair.defaultDistid()
+        let seed = Data(repeating: 0xA5, count: Sm2Keypair.privateKeyLength)
+        guard let pair = sm2KeypairFromSeed(distid: distid, seed: seed),
+              let authority = try? AccountId.makeI105(
+                publicKey: pair.publicKey,
+                algorithm: "sm2",
+                distid: distid
+              ) else {
+            return false
+        }
+        return (try? parseAccountAddress(
+            literal: authority,
+            expectedPrefix: AccountId.defaultNetworkPrefix
+        )) != nil
         #else
         return false
         #endif

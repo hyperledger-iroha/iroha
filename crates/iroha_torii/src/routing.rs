@@ -13016,7 +13016,8 @@ async fn submit_contract_call_request(
             code_hash_hex,
             abi_hash_hex,
             creation_time_ms,
-            tx_hash_hex: Some(tx_hash_hex),
+            tx_hash_hex: Some(tx_hash_hex.clone()),
+            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
             entrypoint_hash_hex: Some(entrypoint_hash_hex),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
@@ -13082,7 +13083,8 @@ async fn submit_contract_call_request(
             code_hash_hex,
             abi_hash_hex,
             creation_time_ms,
-            tx_hash_hex: Some(tx_hash_hex),
+            tx_hash_hex: Some(tx_hash_hex.clone()),
+            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
             entrypoint_hash_hex: Some(entrypoint_hash_hex),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
@@ -13110,12 +13112,29 @@ async fn submit_contract_call_request(
         abi_hash_hex,
         creation_time_ms,
         tx_hash_hex: None,
+        pipeline_status: None,
         entrypoint_hash_hex: Some(entrypoint_hash_hex),
         transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
         signed_transaction_b64: Some(signed_transaction_b64),
         signing_message_b64: Some(signing_message_b64),
         entrypoint: response_entrypoint,
     })
+}
+
+#[cfg(feature = "app_api")]
+fn queued_pipeline_status_response(
+    tx_hash_hex: String,
+) -> iroha_torii_shared::PipelineTransactionStatusResponse {
+    iroha_torii_shared::PipelineTransactionStatusResponse::new(
+        tx_hash_hex,
+        iroha_torii_shared::PipelineTransactionStatus {
+            kind: "Queued".to_owned(),
+            block_height: None,
+            rejection_reason: None,
+        },
+        "local".to_owned(),
+        "queue".to_owned(),
+    )
 }
 
 #[cfg(feature = "app_api")]
@@ -22564,6 +22583,9 @@ pub struct DeployContractBundleContractReceiptDto {
     /// Transaction hash for the deployment transaction, when submitted.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
+    /// Pipeline status envelope for the submitted deployment transaction, when available.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pipeline_status: Option<iroha_torii_shared::PipelineTransactionStatusResponse>,
     /// Current deployment status (`submitted` after queue admission, `deployed`
     /// once a waiting bundle observes the live alias binding).
     pub status: String,
@@ -22590,6 +22612,9 @@ pub struct DeployContractBundleCallReceiptDto {
     /// Transaction hash for the submitted call, when any.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
+    /// Pipeline status envelope for the submitted call transaction, when available.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pipeline_status: Option<iroha_torii_shared::PipelineTransactionStatusResponse>,
     /// Final call status.
     pub status: String,
 }
@@ -23181,6 +23206,7 @@ fn plan_contract_bundle(
             code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
             abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
             tx_hash_hex: None,
+            pipeline_status: None,
             status: "planned".to_owned(),
         });
     }
@@ -23202,6 +23228,7 @@ fn plan_contract_bundle(
                 contract_alias: call.contract_alias.clone(),
                 entrypoint: call.entrypoint.clone(),
                 tx_hash_hex: None,
+                pipeline_status: None,
                 status: "pending".to_owned(),
             })
             .collect(),
@@ -23361,6 +23388,10 @@ pub struct ContractCallResponseDto {
     /// Hex-encoded transaction hash submitted to the queue.
     #[norito(default)]
     pub tx_hash_hex: Option<String>,
+    /// Pipeline status envelope for the submitted transaction, when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pipeline_status: Option<iroha_torii_shared::PipelineTransactionStatusResponse>,
     /// Hex-encoded transaction entrypoint hash used by committed transaction queries.
     #[norito(default)]
     pub entrypoint_hash_hex: Option<String>,
@@ -25599,7 +25630,8 @@ async fn submit_contract_deploy_request(
         upgraded: previous_contract_address.is_some(),
         dataspace: dataspace_alias,
         deploy_nonce,
-        tx_hash_hex: Some(tx_hash_hex),
+        tx_hash_hex: Some(tx_hash_hex.clone()),
+        pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
         code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
         abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
         status: "submitted".to_owned(),
@@ -25641,6 +25673,7 @@ fn invalidate_completed_deploy_stage_if_contracts_drifted(
         }
 
         contract.tx_hash_hex = None;
+        contract.pipeline_status = None;
         contract.status = "planned".to_owned();
         true
     });
@@ -25655,6 +25688,7 @@ fn invalidate_completed_deploy_stage_if_contracts_drifted(
 
     for call in &mut receipt.init_calls {
         call.tx_hash_hex = None;
+        call.pipeline_status = None;
         call.status = "pending".to_owned();
     }
 
@@ -25911,6 +25945,7 @@ async fn execute_contract_bundle_request(
                 }
             };
             receipt.init_calls[index].tx_hash_hex = response.tx_hash_hex;
+            receipt.init_calls[index].pipeline_status = response.pipeline_status;
             receipt.init_calls[index].status = if response.submitted {
                 "submitted".to_owned()
             } else {
@@ -26305,6 +26340,7 @@ mod contract_bundle_tests {
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
                 tx_hash_hex: Some("tx".to_owned()),
+                pipeline_status: None,
                 status: "deployed".to_owned(),
             }],
             init_calls: vec![DeployContractBundleCallReceiptDto {
@@ -26312,6 +26348,7 @@ mod contract_bundle_tests {
                 contract_alias: sample_alias("greeter::universal"),
                 entrypoint: Some("init".to_owned()),
                 tx_hash_hex: Some("tx-init".to_owned()),
+                pipeline_status: None,
                 status: "submitted".to_owned(),
             }],
             assertions: vec![DeployContractBundleAssertionReceiptDto {
@@ -26362,6 +26399,7 @@ mod contract_bundle_tests {
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
                 tx_hash_hex: Some("tx".to_owned()),
+                pipeline_status: None,
                 status: "deployed".to_owned(),
             }],
             init_calls: Vec::new(),
@@ -26420,6 +26458,7 @@ mod contract_bundle_tests {
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
                 tx_hash_hex: Some("tx".to_owned()),
+                pipeline_status: None,
                 status: "deployed".to_owned(),
             }],
             init_calls: Vec::new(),
@@ -73948,6 +73987,9 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
         "governance" if segments.next().is_none() => {
             norito::json::to_value(&status.governance).ok()
         }
+        "dataspace_catalog" if segments.next().is_none() => {
+            norito::json::to_value(&status.dataspace_catalog).ok()
+        }
         "sorafs_micropayments" => match segments.next() {
             None => norito::json::to_value(&status.sorafs_micropayments).ok(),
             Some(provider_hex) => {
@@ -74000,7 +74042,13 @@ fn is_nexus_status_segment(tail: &str) -> bool {
     let mut segments = tail.split('/').filter(|s| !s.is_empty());
     matches!(
         segments.next(),
-        Some("teu_lane_commit" | "teu_dataspace_backlog" | "tx_gossip" | "da_receipt_cursors")
+        Some(
+            "teu_lane_commit"
+                | "teu_dataspace_backlog"
+                | "dataspace_catalog"
+                | "tx_gossip"
+                | "da_receipt_cursors"
+        )
     )
 }
 

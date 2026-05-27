@@ -65,6 +65,8 @@ I105_BECH32M_CONST = 0x2BC830A3
 I105_SENTINELS = ("sora", "test", "dev")
 I105_NUMERIC_SENTINEL_PREFIX = "n"
 I105_DISCRIMINANT_MAX = 0xFFFF
+I105_SENTINEL_DISCRIMINANTS = {"sora": 0x02F1, "test": 0x0171, "dev": 0}
+I105_PROFILE_NAMES = {0x02F1: "minamoto", 0x0171: "taira", 0: "dev"}
 SCCP_FINALITY_MODEL_VALUES = {
     "EthereumBeaconExecution",
     "BscValidatorSet",
@@ -168,9 +170,13 @@ def _i105_checksum_digits(canonical: bytes) -> List[int]:
 
 
 def _strip_i105_sentinel(encoded: str) -> str:
+    return _parse_i105_sentinel_and_payload(encoded)[2]
+
+
+def _parse_i105_sentinel_and_payload(encoded: str) -> Tuple[str, int, str]:
     for sentinel in I105_SENTINELS:
         if encoded.startswith(sentinel):
-            return encoded[len(sentinel) :]
+            return sentinel, I105_SENTINEL_DISCRIMINANTS[sentinel], encoded[len(sentinel) :]
     if encoded.startswith(I105_NUMERIC_SENTINEL_PREFIX):
         index = len(I105_NUMERIC_SENTINEL_PREFIX)
         while index < len(encoded) and "0" <= encoded[index] <= "9":
@@ -181,7 +187,7 @@ def _strip_i105_sentinel(encoded: str) -> str:
                 raise ValueError(
                     "i105 chain discriminant must fit in an unsigned 16-bit integer"
                 )
-            return encoded[index:]
+            return encoded[:index], discriminant, encoded[index:]
     raise ValueError("i105 address is missing the expected chain-discriminant sentinel")
 
 
@@ -202,9 +208,49 @@ def _decode_i105_string(encoded: str) -> bytes:
         raise ValueError("i105 checksum mismatch")
     return canonical
 
+
+@dataclass(frozen=True)
+class I105NetworkPrefix:
+    """Network prefix decoded from a canonical I105 account/address literal."""
+
+    sentinel: str
+    chain_discriminant: int
+    profile: Optional[str]
+
+
+def inspect_i105_network_prefix(
+    encoded: str,
+    *,
+    expected_chain_discriminant: Optional[int] = None,
+) -> I105NetworkPrefix:
+    """Validate an I105 literal and report its strict network prefix.
+
+    This helper intentionally does not convert between network prefixes. Account
+    and address prefixes identify separate networks, so callers can inspect or
+    enforce a prefix but must not silently rewrite it.
+    """
+
+    sentinel, discriminant, _ = _parse_i105_sentinel_and_payload(encoded)
+    _decode_i105_string(encoded)
+    if (
+        expected_chain_discriminant is not None
+        and discriminant != int(expected_chain_discriminant)
+    ):
+        raise ValueError(
+            "i105 chain discriminant mismatch: "
+            f"expected {int(expected_chain_discriminant)}, got {discriminant}"
+        )
+    return I105NetworkPrefix(
+        sentinel=sentinel,
+        chain_discriminant=discriminant,
+        profile=I105_PROFILE_NAMES.get(discriminant),
+    )
+
 __all__ = [
     "ToriiClient",
     "decode_pdp_commitment_header",
+    "inspect_i105_network_prefix",
+    "I105NetworkPrefix",
     "CouncilMember",
     "CouncilCurrentStatus",
     "CouncilAuditMetadata",
@@ -221,6 +267,9 @@ __all__ = [
     "ContractDeployAssertionReceipt",
     "ContractDeployResponse",
     "ContractCallResponse",
+    "PipelineDiagnostic",
+    "PipelineTransactionStatus",
+    "PipelineTransactionStatusResponse",
     "MultisigResponse",
     "GovernanceContractResponse",
     "BallotSubmitResult",
@@ -304,6 +353,7 @@ __all__ = [
     "UaidManifestsResponse",
     "LaneRuntimeUpgradeHook",
     "LaneGovernanceSnapshot",
+    "DataspaceCatalogEntry",
     "GovernanceProposalCounters",
     "GovernanceProtectedNamespaceStats",
     "GovernanceManifestAdmissionStats",
@@ -2547,6 +2597,64 @@ class GovernanceProposalDraft:
 
 
 @dataclass(frozen=True)
+class PipelineDiagnostic:
+    """Structured diagnostic inside a pipeline status envelope."""
+
+    category: str
+    message: str
+    code: Optional[str]
+    decoded_reason: Optional[str]
+    contract: Optional[str]
+    entrypoint: Optional[str]
+    trigger_id: Optional[str]
+    step_index: Optional[int]
+    vm_pc: Optional[int]
+    function: Optional[str]
+    source: Optional[str]
+    opcode: Optional[str]
+    syscall: Optional[str]
+    raw_reason: Optional[str]
+
+
+@dataclass(frozen=True)
+class PipelineTransactionStatus:
+    """Status details inside a pipeline status envelope."""
+
+    kind: str
+    block_height: Optional[int]
+    rejection_reason: Any
+
+
+@dataclass(frozen=True)
+class PipelineTransactionStatusResponse:
+    """Canonical transaction outcome envelope returned by pipeline-aware endpoints."""
+
+    hash: str
+    status: PipelineTransactionStatus
+    summary: Optional[str]
+    diagnostics: List[PipelineDiagnostic]
+    scope: Optional[str]
+    resolved_from: Optional[str]
+    raw: Dict[str, Any]
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status.kind in {"Committed", "Applied", "Rejected", "Expired"}
+
+    @property
+    def is_committed(self) -> bool:
+        return self.status.kind in {"Committed", "Applied"}
+
+    @property
+    def is_rejected(self) -> bool:
+        return self.status.kind == "Rejected"
+
+    @property
+    def primary_diagnostic(self) -> Optional[PipelineDiagnostic]:
+        return self.diagnostics[0] if self.diagnostics else None
+
+
+@dataclass(frozen=True)
 class ContractDeployContractReceipt:
     """One contract receipt returned by ``POST /v1/contracts/deploy``."""
 
@@ -2558,6 +2666,7 @@ class ContractDeployContractReceipt:
     dataspace: Optional[str]
     deploy_nonce: Optional[int]
     tx_hash_hex: Optional[str]
+    pipeline_status: Optional[PipelineTransactionStatusResponse]
     code_hash_hex: str
     abi_hash_hex: str
     status: str
@@ -2571,6 +2680,7 @@ class ContractDeployCallReceipt:
     contract_alias: Optional[str]
     entrypoint: Optional[str]
     tx_hash_hex: Optional[str]
+    pipeline_status: Optional[PipelineTransactionStatusResponse]
     status: str
 
 
@@ -2615,6 +2725,7 @@ class ContractCallResponse:
     creation_time_ms: int
     contract_address: Optional[str]
     tx_hash_hex: Optional[str]
+    pipeline_status: Optional[PipelineTransactionStatusResponse]
     entrypoint: Optional[str]
     transaction_scaffold_b64: Optional[str]
     signed_transaction_b64: Optional[str]
@@ -2881,6 +2992,23 @@ class LaneGovernanceSnapshot:
 
 
 @dataclass(frozen=True)
+class DataspaceCatalogEntry:
+    """Configured Nexus dataspace joined with lane metadata from `/v1/status`."""
+
+    lane_id: int
+    lane_alias: str
+    dataspace_id: int
+    alias: str
+    visibility: str
+    storage_profile: str
+    manifest_required: bool
+    manifest_ready: bool
+    sealed: bool
+    manifest_path: Optional[str]
+    protected_namespaces: List[str]
+
+
+@dataclass(frozen=True)
 class GovernanceProposalCounters:
     """Proposal lifecycle counters inside the status payload."""
 
@@ -2977,9 +3105,23 @@ class StatusPayload:
     lane_commitments: List[LaneCommitmentSnapshot]
     dataspace_commitments: List[DataspaceCommitmentSnapshot]
     lane_governance: List[LaneGovernanceSnapshot]
+    dataspace_catalog: List[DataspaceCatalogEntry]
     lane_governance_sealed_total: int
     lane_governance_sealed_aliases: List[str]
     raw: Dict[str, Any]
+
+    def get_dataspace(self, alias: Union[str, int]) -> Optional[DataspaceCatalogEntry]:
+        lookup = str(alias)
+        for entry in self.dataspace_catalog:
+            if entry.alias == lookup or str(entry.dataspace_id) == lookup:
+                return entry
+        return None
+
+    def require_dataspace(self, alias: Union[str, int]) -> DataspaceCatalogEntry:
+        entry = self.get_dataspace(alias)
+        if entry is None:
+            raise KeyError(f"dataspace not found in status catalog: {alias}")
+        return entry
 
 
 @dataclass(frozen=True)
@@ -6254,6 +6396,10 @@ class ToriiClient:
             record.get("lane_governance"),
             context=f"{context}.lane_governance",
         )
+        dataspace_catalog = self._parse_dataspace_catalog(
+            record.get("dataspace_catalog"),
+            context=f"{context}.dataspace_catalog",
+        )
         sealed_aliases = self._parse_string_array(
             record.get("lane_governance_sealed_aliases"),
             context=f"{context}.lane_governance_sealed_aliases",
@@ -6286,6 +6432,7 @@ class ToriiClient:
             lane_commitments=lane_commitments,
             dataspace_commitments=dataspace_commitments,
             lane_governance=lane_governance,
+            dataspace_catalog=dataspace_catalog,
             lane_governance_sealed_total=self._coerce_int(
                 record.get("lane_governance_sealed_total"),
                 f"{context}.lane_governance_sealed_total",
@@ -6496,6 +6643,52 @@ class ToriiClient:
                 )
             )
         return snapshots
+
+    def _parse_dataspace_catalog(
+        self,
+        payload: Any,
+        *,
+        context: str,
+    ) -> List[DataspaceCatalogEntry]:
+        if payload is None:
+            return []
+        if not isinstance(payload, list):
+            raise RuntimeError(f"{context} must be a list")
+        entries: List[DataspaceCatalogEntry] = []
+        for index, entry in enumerate(payload):
+            record = self._ensure_mapping(entry, f"{context}[{index}]")
+            manifest_required = self._coerce_bool(
+                record.get("manifest_required"),
+                f"{context}[{index}].manifest_required",
+            )
+            manifest_ready = self._coerce_bool(
+                record.get("manifest_ready"),
+                f"{context}[{index}].manifest_ready",
+            )
+            sealed_value = record.get("sealed")
+            if sealed_value is None:
+                sealed = manifest_required and not manifest_ready
+            else:
+                sealed = self._coerce_bool(sealed_value, f"{context}[{index}].sealed")
+            entries.append(
+                DataspaceCatalogEntry(
+                    lane_id=self._coerce_int(record.get("lane_id"), f"{context}[{index}].lane_id"),
+                    lane_alias="" if record.get("lane_alias") is None else str(record.get("lane_alias")),
+                    dataspace_id=self._coerce_int(record.get("dataspace_id"), f"{context}[{index}].dataspace_id"),
+                    alias="" if record.get("alias") is None else str(record.get("alias")),
+                    visibility="" if record.get("visibility") is None else str(record.get("visibility")),
+                    storage_profile="" if record.get("storage_profile") is None else str(record.get("storage_profile")),
+                    manifest_required=manifest_required,
+                    manifest_ready=manifest_ready,
+                    sealed=sealed,
+                    manifest_path=None if record.get("manifest_path") is None else str(record.get("manifest_path")),
+                    protected_namespaces=self._parse_string_array(
+                        record.get("protected_namespaces"),
+                        context=f"{context}[{index}].protected_namespaces",
+                    ),
+                )
+            )
+        return entries
 
     @staticmethod
     def _parse_uaid_portfolio_response(payload: Mapping[str, Any], *, context: str) -> UaidPortfolioResponse:
@@ -9195,6 +9388,83 @@ class ToriiClient:
         )
 
     @staticmethod
+    def _parse_pipeline_diagnostic(payload: Any, *, context: str) -> PipelineDiagnostic:
+        record = ToriiClient._ensure_mapping(payload, context)
+        return PipelineDiagnostic(
+            category=ToriiClient._require_non_empty_string(record.get("category"), f"{context}.category"),
+            message=ToriiClient._require_non_empty_string(record.get("message"), f"{context}.message"),
+            code=ToriiClient._coerce_optional_string(record.get("code"), context=f"{context}.code"),
+            decoded_reason=ToriiClient._coerce_optional_string(
+                record.get("decoded_reason"),
+                context=f"{context}.decoded_reason",
+            ),
+            contract=ToriiClient._coerce_optional_string(record.get("contract"), context=f"{context}.contract"),
+            entrypoint=ToriiClient._coerce_optional_string(record.get("entrypoint"), context=f"{context}.entrypoint"),
+            trigger_id=ToriiClient._coerce_optional_string(record.get("trigger_id"), context=f"{context}.trigger_id"),
+            step_index=ToriiClient._coerce_optional_unsigned(
+                record.get("step_index"),
+                context=f"{context}.step_index",
+            ),
+            vm_pc=ToriiClient._coerce_optional_unsigned(record.get("vm_pc"), context=f"{context}.vm_pc"),
+            function=ToriiClient._coerce_optional_string(record.get("function"), context=f"{context}.function"),
+            source=ToriiClient._coerce_optional_string(record.get("source"), context=f"{context}.source"),
+            opcode=ToriiClient._coerce_optional_string(record.get("opcode"), context=f"{context}.opcode"),
+            syscall=ToriiClient._coerce_optional_string(record.get("syscall"), context=f"{context}.syscall"),
+            raw_reason=ToriiClient._coerce_optional_string(record.get("raw_reason"), context=f"{context}.raw_reason"),
+        )
+
+    @staticmethod
+    def _parse_pipeline_status_response(
+        payload: Any,
+        *,
+        context: str,
+    ) -> PipelineTransactionStatusResponse:
+        record = ToriiClient._ensure_mapping(payload, context)
+        status_record = ToriiClient._ensure_mapping(record.get("status"), f"{context}.status")
+        diagnostics_value = record.get("diagnostics") or []
+        if not isinstance(diagnostics_value, list):
+            raise RuntimeError(f"{context}.diagnostics must be a list")
+        raw_hash = record.get("hash", record.get("tx_hash_hex"))
+        return PipelineTransactionStatusResponse(
+            hash=ToriiClient._require_non_empty_string(raw_hash, f"{context}.hash"),
+            status=PipelineTransactionStatus(
+                kind=ToriiClient._require_non_empty_string(
+                    status_record.get("kind"),
+                    f"{context}.status.kind",
+                ),
+                block_height=ToriiClient._coerce_optional_unsigned(
+                    status_record.get("block_height"),
+                    context=f"{context}.status.block_height",
+                ),
+                rejection_reason=status_record.get("rejection_reason"),
+            ),
+            summary=ToriiClient._coerce_optional_string(record.get("summary"), context=f"{context}.summary"),
+            diagnostics=[
+                ToriiClient._parse_pipeline_diagnostic(
+                    entry,
+                    context=f"{context}.diagnostics[{index}]",
+                )
+                for index, entry in enumerate(diagnostics_value)
+            ],
+            scope=ToriiClient._coerce_optional_string(record.get("scope"), context=f"{context}.scope"),
+            resolved_from=ToriiClient._coerce_optional_string(
+                record.get("resolved_from"),
+                context=f"{context}.resolved_from",
+            ),
+            raw=dict(record),
+        )
+
+    @staticmethod
+    def _parse_optional_pipeline_status_response(
+        payload: Any,
+        *,
+        context: str,
+    ) -> Optional[PipelineTransactionStatusResponse]:
+        if payload is None:
+            return None
+        return ToriiClient._parse_pipeline_status_response(payload, context=context)
+
+    @staticmethod
     def _parse_contract_deploy_contract_receipt(
         payload: Mapping[str, Any],
         *,
@@ -9237,6 +9507,10 @@ class ToriiClient:
             ),
             deploy_nonce=deploy_nonce,
             tx_hash_hex=tx_hash_hex,
+            pipeline_status=ToriiClient._parse_optional_pipeline_status_response(
+                record.get("pipeline_status"),
+                context=f"{context}.pipeline_status",
+            ),
             code_hash_hex=ToriiClient._normalize_hex_string(
                 record.get("code_hash_hex"),
                 context=f"{context}.code_hash_hex",
@@ -9279,6 +9553,10 @@ class ToriiClient:
                 context=f"{context}.entrypoint",
             ),
             tx_hash_hex=tx_hash_hex,
+            pipeline_status=ToriiClient._parse_optional_pipeline_status_response(
+                record.get("pipeline_status"),
+                context=f"{context}.pipeline_status",
+            ),
             status=ToriiClient._require_non_empty_string(
                 record.get("status"),
                 f"{context}.status",
@@ -9429,6 +9707,10 @@ class ToriiClient:
                 context=f"{context}.contract_address",
             ),
             tx_hash_hex=tx_hash_hex,
+            pipeline_status=ToriiClient._parse_optional_pipeline_status_response(
+                record.get("pipeline_status"),
+                context=f"{context}.pipeline_status",
+            ),
             entrypoint=ToriiClient._coerce_optional_string(
                 record.get("entrypoint"),
                 context=f"{context}.entrypoint",

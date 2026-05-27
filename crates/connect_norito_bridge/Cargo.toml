@@ -12,7 +12,7 @@ iroha_core = { workspace = true, features = ["zk-halo2-ipa"] }
 iroha_torii_shared = { workspace = true }
 fastpq_prover = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["std", "bls", "gost", "sm"] }
-iroha_data_model = { workspace = true }
+iroha_data_model = { workspace = true, features = ["sm"] }
 iroha_executor_data_model = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_version = { workspace = true }

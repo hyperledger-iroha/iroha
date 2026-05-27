@@ -203,6 +203,29 @@ final class AccountAddressTests: XCTestCase {
         }
     }
 
+    func testInspectI105NetworkPrefixReportsProfileWithoutRewriting() throws {
+        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 1, count: 32))
+        let minamoto = try address.toI105(networkPrefix: 0x02F1)
+        let prefix = try AccountAddress.inspectI105NetworkPrefix(minamoto, expectedPrefix: 0x02F1)
+        XCTAssertEqual(prefix.sentinel, "sora")
+        XCTAssertEqual(prefix.chainDiscriminant, 0x02F1)
+        XCTAssertEqual(prefix.profileName, "minamoto")
+
+        let custom = try address.toI105(networkPrefix: 42)
+        let customPrefix = try AccountAddress.inspectI105NetworkPrefix(custom)
+        XCTAssertEqual(customPrefix.sentinel, "n42")
+        XCTAssertEqual(customPrefix.chainDiscriminant, 42)
+        XCTAssertNil(customPrefix.profileName)
+
+        XCTAssertThrowsError(try AccountAddress.inspectI105NetworkPrefix(minamoto, expectedPrefix: 0x0171)) { error in
+            guard case let AccountAddressError.unexpectedNetworkPrefix(expected, found) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(expected, 0x0171)
+            XCTAssertEqual(found, 0x02F1)
+        }
+    }
+
     func testI105RequiresSentinel() {
         XCTAssertThrowsError(try AccountAddress.fromI105("invalid"))
     }

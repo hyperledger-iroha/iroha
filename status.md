@@ -60,6 +60,15 @@ Last updated: 2026-05-27
   transfer/revocation compatibility MCP aliases, the revocation-bundle route,
   the revocation-bundle capability flag, and the unused revocation policy
   config fields were removed for the first release.
+- Final app and SDK regression evidence now includes full Swift package tests,
+  Kotlin JVM SDK tests, Java Android SDK tests, PK/BPNG Android unit tests plus
+  debug androidTest compilation, PK iOS simulator build, and clean release
+  marker greps across the main SDK and PK/BPNG app repos.
+- Physical evidence now covers iOS App Attest, iOS HCE/CardSession
+  availability, and Android StrongBox/KeyMint one-use-key validation. The open
+  physical gap is the end-to-end cross-platform NFC/HCE payment
+  exchange; the last Android-to-iOS attempt stopped before exchange because the
+  Android sender was locked at keyguard.
 - Focused validation passed:
   - `cargo fmt --all`
   - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors`
@@ -72,9 +81,11 @@ Last updated: 2026-05-27
   - `cd IrohaSwift && swift test --filter OfflineNoteTests --filter OfflineQrStreamTests`
   - `cd kotlin && ./gradlew :core-jvm:clean :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain`
   - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew clean test --console=plain`
-- Remaining physical-release evidence: iOS App Attest/HCE/CardSession and
-  Android StrongBox/KeyMint/HCE tests still need device-backed execution before
-  strong-tier production claims are final.
+- Full workspace `cargo test` still needs one clean uninterrupted run. A retry
+  reached a transient Torii telemetry status-shape compile failure while local
+  telemetry edits were changing; the current focused
+  `cargo test -p iroha_torii --features telemetry --lib --no-run` compile
+  passes.
 
 ## 2026-05-26 Torii routing and SoraFS regression fixes
 
@@ -110,7 +121,7 @@ Last updated: 2026-05-27
 ## 2026-05-26 Offline Bearer SDK ownership and settlement hardening
 
 - Rust, Swift, Kotlin, and Java Android SDK paths now expose canonical
-  Norito-backed Offline Bearer v2 payloads for policy bundles, purse
+  Norito-backed Offline Bearer payloads for policy bundles, purse
   certificates, receive requests, debit receipts, credit receipts, and
   settlement batches.
 - Swift, Kotlin, and Java Android also expose SDK-owned Bearer text codecs for
@@ -118,7 +129,7 @@ Last updated: 2026-05-27
   `wallet-offline-bearer-payment:`, and `wallet-offline-bearer-ack:` prefixes,
   and reject the old OfflineNote production prefixes in the new Bearer codec
   tests.
-- Swift, Kotlin, and Java Android SDKs now verify Offline Bearer v2 policy,
+- Swift, Kotlin, and Java Android SDKs now verify Offline Bearer policy,
   issuer certificates, receive requests, debit receipts, and credit receipts
   with SDK-owned Ed25519 and P-256 signature handling and fail-closed default
   hardware capability checks.
@@ -154,11 +165,9 @@ Last updated: 2026-05-27
   prefixes, decode Bearer receipts through `IrohaSwift` Bearer codecs, and
   keep unsupported secure-element hardware fail-closed instead of falling back
   to app-local proof engines.
-- Remaining follow-up: retire or rename residual legacy DTO/test-fixture names
-  once downstream response contracts no longer expose OfflineNote-shaped
-  fields, broaden physical-device secure-element rollout evidence beyond the
-  simulator/JVM corridors, and remove temporary SDK compatibility shims after
-  all app imports have moved to canonical SDK packages.
+- Remaining follow-up: finish the device-to-device NFC/HCE payment evidence,
+  and keep release docs focused on the single first-release Offline Bearer Cash
+  v1 surface.
 - Focused validation passed:
   - `cargo fmt --all`
   - `cargo test -p iroha_torii bearer_settlement -- --nocapture`
@@ -172,18 +181,10 @@ Last updated: 2026-05-27
   - `cd ../bpng/png2-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'id=0C0009F1-A828-40CC-AD7E-639582DDEE24' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/OfflineViewModelTests -only-testing:RetailWalletIOSTests/OfflineViewFormattingTests -only-testing:RetailWalletIOSTests/OfflineNfcApduProtocolTests`
   - `cd ../pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'id=0C0009F1-A828-40CC-AD7E-639582DDEE24' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/OfflineViewModelTests -only-testing:RetailWalletIOSTests/OfflineViewFormattingTests` was run; it exited with only known expected legacy cutover failures and no unexpected failures.
   - Production source audits across the PK/BPNG Android and iOS app repos found
-    no remaining production references to `OfflineNoteWallet`,
-    `OfflineNotePaymentTokenCodec`, `Halo2OfflineNoteProver`,
-    `OfflineRecursiveProofs`, or the other retired app-local proof engines.
+    no remaining production references to retired app-local proof engines.
   - `git diff --check` passed in the main Iroha repo and the four app repos.
-- Known validation gap: the PK iOS focused `xcodebuild` offline suite still
-  reports expected legacy cutover failures because some deleted-history tests
-  intentionally exercise old OfflineNote receive/payment-token and
-  recursive-proof fixture assumptions. The BPNG iOS focused offline suite now
-  succeeds with those legacy expectations classified.
-- Full workspace `cargo test` was not run because the focused SDK and Torii
-  coverage exercises the changed Offline Bearer paths without invoking the
-  multi-hour workspace suite.
+- Historical validation gap superseded by the 2026-05-27 Offline Bearer Cash
+  v1 regression pass above.
 
 ## 2026-05-26 integration-test hang hardening follow-up
 
@@ -240,7 +241,7 @@ Last updated: 2026-05-27
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineQrStreamTest,org.hyperledger.iroha.android.offline.OfflineNoteTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks`
   - `cd javascript/iroha_js && node --test test/offlineQrStream.test.js`
   - `/tmp/iroha-pytest-venv/bin/python -m pytest python/iroha_torii_client/tests/test_client.py -k offline_readiness -q`
-  - `cd ../bpng/png2-android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:testDebugUnitTest --tests pg.bpng.digitalkina.core.offline.OfflinePayloadCodecTest --tests pg.bpng.digitalkina.core.offline.OfflineQrStreamCodecTest --console=plain`
+  - `cd ../bpng/png2-android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:testDebugUnitTest --tests pg.bpng.digitalkina.core.offline.OfflineQrStreamCodecTest --console=plain`
   - `cd ../bpng/png2-android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :app:testDebugUnitTest --tests pg.bpng.digitalkina.nfc.OfflineNfcApduProtocolTest --tests pg.bpng.digitalkina.nearby.OfflineNearbyEnvelopeTest --tests pg.bpng.digitalkina.ui.OfflineQrStreamAnalyzerTest --tests pg.bpng.digitalkina.nfc.OfflineNfcDatastreamInteropTest --console=plain`
   - `cd ../bpng/png2-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/NFC/OfflineNfcApduProtocolTests -only-testing:RetailWalletIOSTests/FixtureDecodingTests CODE_SIGNING_ALLOWED=NO`
   - `cd ../bpng/png2-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' -only-testing:RetailWalletIOSTests/OfflineNfcApduProtocolTests CODE_SIGNING_ALLOWED=NO`
@@ -4446,7 +4447,7 @@ Last updated: 2026-05-27
   and the canonical Norito audit bundle as `audit_norito_base64`.
 - The codecs roundtrip through the public Norito audit decoder, reject token
   ids that do not match the embedded audit bundle, support the
-  `wallet-offline-payment:` text prefix, and produce Fountain QR frames
+  `wallet-offline-bearer-cash-payment:` text prefix, and produce Fountain QR frames
   tagged as `offline_payment_token`.
 - Cross-SDK tests now cover JSON bytes, prefixed text, and QR frame
   encode/decode roundtrips for the shared Offline Note fixture token.

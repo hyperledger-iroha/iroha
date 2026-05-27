@@ -292,6 +292,7 @@ class _MockState:
                         "dataspace": "universal",
                         "deploy_nonce": 0,
                         "tx_hash_hex": "11" * 32,
+                        "pipeline_status": self._queued_pipeline_status("11" * 32),
                         "code_hash_hex": "22" * 32,
                         "abi_hash_hex": "33" * 32,
                         "status": "submitted",
@@ -315,6 +316,7 @@ class _MockState:
                 "creation_time_ms": 0,
                 "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                 "tx_hash_hex": "44" * 32,
+                "pipeline_status": self._queued_pipeline_status("44" * 32),
                 "entrypoint": "ping",
                 "transaction_scaffold_b64": "AQID",
                 "signed_transaction_b64": "BAUG",
@@ -949,6 +951,9 @@ class _MockState:
             contract = dict(contracts[0])
             contract.setdefault("name", payload["contract_alias"])
             contract.setdefault("contract_alias", payload["contract_alias"])
+            tx_hash_hex = contract.get("tx_hash_hex")
+            if isinstance(tx_hash_hex, str):
+                contract.setdefault("pipeline_status", self._queued_pipeline_status(tx_hash_hex))
             receipt["contracts"] = [contract]
         return _json_response(HTTPStatus.ACCEPTED, receipt)
 
@@ -1023,6 +1028,9 @@ class _MockState:
                 "code_hash_hex": "22" * 32,
                 "abi_hash_hex": "33" * 32,
                 "tx_hash_hex": None if dry_run else f"{index + 1:02x}" * 32,
+                "pipeline_status": None
+                if dry_run
+                else self._queued_pipeline_status(f"{index + 1:02x}" * 32),
                 "status": "planned" if dry_run else "deployed",
             }
             for index, contract in enumerate(contracts)
@@ -1037,6 +1045,9 @@ class _MockState:
                 "contract_alias": call.get("contract_alias", contracts[0]["contract_alias"]),
                 "entrypoint": call.get("entrypoint"),
                 "tx_hash_hex": None if dry_run else f"{index + 17:02x}" * 32,
+                "pipeline_status": None
+                if dry_run
+                else self._queued_pipeline_status(f"{index + 17:02x}" * 32),
                 "status": "pending" if dry_run else "submitted",
             }
             for index, call in enumerate(init_calls)
@@ -1090,7 +1101,11 @@ class _MockState:
         gas_limit = payload.get("gas_limit")
         if not isinstance(gas_limit, (int, float, str)):
             raise ValueError("contract call payload missing 'gas_limit'")
-        return _json_response(HTTPStatus.ACCEPTED, dict(self.contract_call_response))
+        response = dict(self.contract_call_response)
+        tx_hash_hex = response.get("tx_hash_hex")
+        if isinstance(tx_hash_hex, str):
+            response.setdefault("pipeline_status", self._queued_pipeline_status(tx_hash_hex))
+        return _json_response(HTTPStatus.ACCEPTED, response)
 
     def _gov_proposals_get(self, proposal_id: str) -> _Response:
         key = proposal_id.lower()
@@ -1308,6 +1323,12 @@ class _MockState:
             rejection_reason = entry.get("rejection_reason")
             if not isinstance(rejection_reason, Mapping):
                 rejection_reason = None
+            summary = entry.get("summary")
+            if summary is not None:
+                summary = str(summary)
+            diagnostics = entry.get("diagnostics")
+            if not isinstance(diagnostics, list):
+                diagnostics = []
             scope = entry.get("scope")
             if scope is not None:
                 scope = str(scope)
@@ -1319,6 +1340,8 @@ class _MockState:
                 "content": content_value,
                 "block_height": block_height,
                 "rejection_reason": rejection_reason,
+                "summary": summary,
+                "diagnostics": diagnostics,
                 "scope": scope,
                 "resolved_from": resolved_from,
             }
@@ -1338,6 +1361,33 @@ class _MockState:
         rejection_reason = entry.get("rejection_reason")
         if not isinstance(rejection_reason, dict):
             rejection_reason = None
+        diagnostics = entry.get("diagnostics")
+        if not isinstance(diagnostics, list):
+            diagnostics = []
+        content = entry.get("content")
+        if kind == "Rejected" and not diagnostics:
+            message = content if isinstance(content, str) and content else "transaction rejected"
+            diagnostics = [
+                {
+                    "category": "rejected",
+                    "code": "rejected",
+                    "message": message,
+                    "decoded_reason": message,
+                    "raw_reason": message,
+                }
+            ]
+        summary = entry.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            first_message = None
+            if diagnostics and isinstance(diagnostics[0], Mapping):
+                message_value = diagnostics[0].get("message")
+                if isinstance(message_value, str) and message_value:
+                    first_message = message_value
+            summary = (
+                f"{kind}: {first_message}"
+                if first_message
+                else kind
+            )
         return {
             "hash": hash_value,
             "status": {
@@ -1345,9 +1395,18 @@ class _MockState:
                 "block_height": block_height,
                 "rejection_reason": rejection_reason,
             },
+            "summary": summary,
+            "diagnostics": diagnostics,
             "scope": str(entry.get("scope", "auto")),
             "resolved_from": str(entry.get("resolved_from", "state")),
         }
+
+    @classmethod
+    def _queued_pipeline_status(cls, hash_value: str) -> Dict[str, Any]:
+        return cls._make_status_payload(
+            hash_value,
+            {"kind": "Queued", "scope": "local", "resolved_from": "queue"},
+        )
 
     def _next_pipeline_hash_locked(self) -> str:
         self._pipeline_submit_seq += 1

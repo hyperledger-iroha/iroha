@@ -820,6 +820,16 @@ public enum PipelineStatusError: Error, LocalizedError {
     }
 
     private static func resolveRejectionReason(from payload: ToriiPipelineTransactionStatus) -> String? {
+        if let diagnostic = payload.primaryDiagnostic {
+            if let decoded = diagnostic.decodedReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !decoded.isEmpty {
+                return decoded
+            }
+            let message = diagnostic.message.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !message.isEmpty {
+                return message
+            }
+        }
         if let explicit = payload.content.status.rejectionReason?.trimmingCharacters(in: .whitespacesAndNewlines),
            !explicit.isEmpty {
             return explicit

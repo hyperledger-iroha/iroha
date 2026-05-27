@@ -224,8 +224,8 @@ offline HTTP routes are no longer published.
 
 ### Offline audit logging
 
-Offline wallet state is V2-only. App startup should discard legacy local state instead of
-migrating it.
+Offline wallet state uses the first-release schema only. App startup should discard legacy
+local state instead of migrating it.
 
 ## SoraFS orchestrator client
 

@@ -8802,6 +8802,7 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
     public let dataspace: String
     public let deployNonce: UInt64
     public let txHashHex: String
+    public let pipelineStatus: ToriiPipelineTransactionStatus?
     public let codeHashHex: String
     public let abiHashHex: String
 
@@ -8814,6 +8815,7 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
         case dataspace
         case deployNonce = "deploy_nonce"
         case txHashHex = "tx_hash_hex"
+        case pipelineStatus = "pipeline_status"
         case codeHashHex = "code_hash_hex"
         case abiHashHex = "abi_hash_hex"
     }
@@ -8852,6 +8854,7 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
             field: "tx_hash_hex",
             codingPath: container.codingPath + [CodingKeys.txHashHex]
         )
+        self.pipelineStatus = try container.decodeIfPresent(ToriiPipelineTransactionStatus.self, forKey: .pipelineStatus)
         let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
         self.codeHashHex = try ToriiValidation.normalized32ByteHex(
             codeHashHex,
@@ -8985,6 +8988,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
     public let abiHashHex: String
     public let creationTimeMs: UInt64
     public let txHashHex: String?
+    public let pipelineStatus: ToriiPipelineTransactionStatus?
     public let transactionScaffoldB64: String?
     public let signedTransactionB64: String?
     public let signingMessageB64: String?
@@ -8999,6 +9003,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
         case abiHashHex = "abi_hash_hex"
         case creationTimeMs = "creation_time_ms"
         case txHashHex = "tx_hash_hex"
+        case pipelineStatus = "pipeline_status"
         case transactionScaffoldB64 = "transaction_scaffold_b64"
         case signedTransactionB64 = "signed_transaction_b64"
         case signingMessageB64 = "signing_message_b64"
@@ -9044,6 +9049,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
         } else {
             self.txHashHex = nil
         }
+        self.pipelineStatus = try container.decodeIfPresent(ToriiPipelineTransactionStatus.self, forKey: .pipelineStatus)
         if let transactionScaffoldB64 = try container.decodeIfPresent(String.self, forKey: .transactionScaffoldB64) {
             self.transactionScaffoldB64 = try ToriiValidation.normalizedBase64(
                 transactionScaffoldB64,
@@ -9901,6 +9907,49 @@ public struct ToriiStatusMetrics: Sendable, Equatable {
     }
 }
 
+public struct ToriiDataspaceCatalogEntry: Decodable, Sendable, Equatable {
+    public let laneId: UInt64
+    public let laneAlias: String
+    public let dataspaceId: UInt64
+    public let alias: String
+    public let visibility: String
+    public let storageProfile: String
+    public let manifestRequired: Bool
+    public let manifestReady: Bool
+    public let sealed: Bool
+    public let manifestPath: String?
+    public let protectedNamespaces: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case laneId = "lane_id"
+        case laneAlias = "lane_alias"
+        case dataspaceId = "dataspace_id"
+        case alias
+        case visibility
+        case storageProfile = "storage_profile"
+        case manifestRequired = "manifest_required"
+        case manifestReady = "manifest_ready"
+        case sealed
+        case manifestPath = "manifest_path"
+        case protectedNamespaces = "protected_namespaces"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.laneId = try container.decode(UInt64.self, forKey: .laneId)
+        self.laneAlias = try container.decode(String.self, forKey: .laneAlias)
+        self.dataspaceId = try container.decode(UInt64.self, forKey: .dataspaceId)
+        self.alias = try container.decode(String.self, forKey: .alias)
+        self.visibility = try container.decode(String.self, forKey: .visibility)
+        self.storageProfile = try container.decode(String.self, forKey: .storageProfile)
+        self.manifestRequired = try container.decode(Bool.self, forKey: .manifestRequired)
+        self.manifestReady = try container.decode(Bool.self, forKey: .manifestReady)
+        self.sealed = try container.decodeIfPresent(Bool.self, forKey: .sealed) ?? (manifestRequired && !manifestReady)
+        self.manifestPath = try container.decodeIfPresent(String.self, forKey: .manifestPath)
+        self.protectedNamespaces = try container.decodeIfPresent([String].self, forKey: .protectedNamespaces) ?? []
+    }
+}
+
 public struct ToriiStatusPayload: Decodable, Sendable, Equatable {
     public let peers: Int
     public let queueSize: Int
@@ -9910,6 +9959,7 @@ public struct ToriiStatusPayload: Decodable, Sendable, Equatable {
     public let viewChanges: Int
     public let laneGovernanceSealedTotal: Int
     public let laneGovernanceSealedAliases: [String]
+    public let dataspaceCatalog: [ToriiDataspaceCatalogEntry]
     public let raw: [String: ToriiJSONValue]
 
     public init(from decoder: Decoder) throws {
@@ -9928,10 +9978,33 @@ public struct ToriiStatusPayload: Decodable, Sendable, Equatable {
         self.viewChanges = try Self.decodeInt(raw["view_changes"], field: "view_changes")
         self.laneGovernanceSealedTotal = try Self.decodeInt(raw["lane_governance_sealed_total"], field: "lane_governance_sealed_total")
         self.laneGovernanceSealedAliases = try Self.decodeStringArray(raw["lane_governance_sealed_aliases"], field: "lane_governance_sealed_aliases")
+        self.dataspaceCatalog = try Self.decodeArray(raw["dataspace_catalog"], field: "dataspace_catalog")
     }
 
     public subscript(field name: String) -> ToriiJSONValue? {
         raw[name]
+    }
+
+    public func dataspace(alias: String) -> ToriiDataspaceCatalogEntry? {
+        dataspaceCatalog.first { $0.alias == alias }
+    }
+
+    public func dataspace(id: UInt64) -> ToriiDataspaceCatalogEntry? {
+        dataspaceCatalog.first { $0.dataspaceId == id }
+    }
+
+    public func requireDataspace(alias: String) throws -> ToriiDataspaceCatalogEntry {
+        guard let entry = dataspace(alias: alias) else {
+            throw ToriiClientError.invalidPayload("dataspace not found in status catalog: \(alias)")
+        }
+        return entry
+    }
+
+    public func requireDataspace(id: UInt64) throws -> ToriiDataspaceCatalogEntry {
+        guard let entry = dataspace(id: id) else {
+            throw ToriiClientError.invalidPayload("dataspace not found in status catalog: \(id)")
+        }
+        return entry
     }
 
     private static func decodeInt(_ value: ToriiJSONValue?, field: String) throws -> Int {
@@ -9979,6 +10052,20 @@ public struct ToriiStatusPayload: Decodable, Sendable, Equatable {
             return []
         default:
             throw ToriiClientError.invalidPayload("status field `\(field)` must be an array of strings")
+        }
+    }
+
+    private static func decodeArray<T: Decodable>(_ value: ToriiJSONValue?, field: String) throws -> [T] {
+        guard let value else { return [] }
+        if case .null = value {
+            return []
+        }
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(value)
+        do {
+            return try JSONDecoder().decode([T].self, from: data)
+        } catch {
+            throw ToriiClientError.invalidPayload("failed to decode status field `\(field)`: \(error.localizedDescription)")
         }
     }
 }
@@ -10855,6 +10942,40 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
     }
 }
 
+public struct ToriiPipelineDiagnostic: Decodable, Sendable {
+    public let category: String
+    public let code: String?
+    public let message: String
+    public let decodedReason: String?
+    public let contract: String?
+    public let entrypoint: String?
+    public let triggerId: String?
+    public let stepIndex: UInt32?
+    public let vmPc: UInt64?
+    public let function: String?
+    public let source: String?
+    public let opcode: String?
+    public let syscall: String?
+    public let rawReason: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case category
+        case code
+        case message
+        case decodedReason = "decoded_reason"
+        case contract
+        case entrypoint
+        case triggerId = "trigger_id"
+        case stepIndex = "step_index"
+        case vmPc = "vm_pc"
+        case function
+        case source
+        case opcode
+        case syscall
+        case rawReason = "raw_reason"
+    }
+}
+
 public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
     public struct Status: Decodable, Sendable {
         public let kind: String
@@ -10869,8 +10990,36 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
             case blockHeight = "block_height"
         }
 
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.kind = try container.decode(String.self, forKey: .kind)
+            self.content = try container.decodeIfPresent(String.self, forKey: .content)
+            self.blockHeight = try container.decodeIfPresent(UInt64.self, forKey: .blockHeight)
+            if !container.contains(.rejectionReason) {
+                self.rejectionReason = nil
+            } else if try container.decodeNil(forKey: .rejectionReason) {
+                self.rejectionReason = nil
+            } else if let reason = try? container.decode(String.self, forKey: .rejectionReason) {
+                let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.rejectionReason = trimmed.isEmpty ? nil : trimmed
+            } else {
+                let reason = try container.decode(ToriiJSONValue.self, forKey: .rejectionReason)
+                self.rejectionReason = try Self.compactJSONString(reason)
+            }
+        }
+
         public var state: PipelineTransactionState {
             PipelineTransactionState(kind: kind)
+        }
+
+        private static func compactJSONString(_ value: ToriiJSONValue) throws -> String? {
+            if case .null = value {
+                return nil
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(value)
+            return String(data: data, encoding: .utf8)
         }
     }
 
@@ -10886,12 +11035,20 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
 
     public let kind: String
     public let content: Content
+    public let summary: String?
+    public let diagnostics: [ToriiPipelineDiagnostic]
+    public let scope: String?
+    public let resolvedFrom: String?
 
     private enum CodingKeys: String, CodingKey {
         case kind
         case content
         case hash
         case status
+        case summary
+        case diagnostics
+        case scope
+        case resolvedFrom = "resolved_from"
     }
 
     public init(from decoder: Decoder) throws {
@@ -10900,6 +11057,10 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
         if container.contains(.content) {
             self.kind = try container.decode(String.self, forKey: .kind)
             self.content = try container.decode(Content.self, forKey: .content)
+            self.summary = try container.decodeIfPresent(String.self, forKey: .summary)
+            self.diagnostics = try container.decodeIfPresent([ToriiPipelineDiagnostic].self, forKey: .diagnostics) ?? []
+            self.scope = try container.decodeIfPresent(String.self, forKey: .scope)
+            self.resolvedFrom = try container.decodeIfPresent(String.self, forKey: .resolvedFrom)
             return
         }
 
@@ -10907,6 +11068,35 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
         let status = try container.decode(Status.self, forKey: .status)
         self.kind = "Transaction"
         self.content = Content(hash: hash, status: status)
+        self.summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        self.diagnostics = try container.decodeIfPresent([ToriiPipelineDiagnostic].self, forKey: .diagnostics) ?? []
+        self.scope = try container.decodeIfPresent(String.self, forKey: .scope)
+        self.resolvedFrom = try container.decodeIfPresent(String.self, forKey: .resolvedFrom)
+    }
+
+    public var state: PipelineTransactionState {
+        content.status.state
+    }
+
+    public var isTerminal: Bool {
+        switch state {
+        case .committed, .applied, .rejected, .expired:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var isCommitted: Bool {
+        state == .committed || state == .applied
+    }
+
+    public var isRejected: Bool {
+        state == .rejected
+    }
+
+    public var primaryDiagnostic: ToriiPipelineDiagnostic? {
+        diagnostics.first
     }
 }
 
