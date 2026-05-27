@@ -8,6 +8,7 @@ import { buildTransferAssetInstruction } from "./instructionBuilders.js";
 import { getNativeBinding } from "./native.js";
 import { ToriiClient } from "./toriiClient.js";
 import { blake2b256 } from "./blake2b.js";
+import { verifyEd25519 } from "./crypto.js";
 import { hashSignedTransaction } from "./transaction.js";
 
 const ALGORITHM_ED25519 = "ed25519";
@@ -45,9 +46,14 @@ function requireNonEmptyString(value, context) {
   return value.trim();
 }
 
-function irohaPrehashHex(payloadBytes) {
+function irohaPrehash(payloadBytes) {
   const digest = Buffer.from(blake2b256(payloadBytes));
   digest[digest.length - 1] |= 1;
+  return digest;
+}
+
+function irohaPrehashHex(payloadBytes) {
+  const digest = irohaPrehash(payloadBytes);
   return digest.toString("hex");
 }
 
@@ -89,6 +95,21 @@ function validateEd25519PublicKey(publicKey, context) {
     );
   }
   return publicKey;
+}
+
+function validateEd25519SignatureForPayload(publicKey, payloadBytes, signature) {
+  let verified = false;
+  try {
+    verified = verifyEd25519(irohaPrehash(payloadBytes), signature, publicKey);
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    throw new NexusAppError(
+      "invalid_signature",
+      "Ed25519 signature does not verify for the signable payload",
+    );
+  }
 }
 
 function normalizeAlgorithm(algorithm) {
@@ -522,6 +543,11 @@ export class NexusAppClient {
     const publicKey = validateEd25519PublicKey(
       toBuffer(signingPublicKey, "signingPublicKey"),
       "signingPublicKey",
+    );
+    validateEd25519SignatureForPayload(
+      publicKey,
+      signable.payloadBytes,
+      normalizedSignature.signature,
     );
     const finalized = normalizeFinalizedTransaction(
       this.transactionCodec?.finalizeSignedTransaction
