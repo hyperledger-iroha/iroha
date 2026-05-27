@@ -23255,10 +23255,12 @@ async fn handler_kaigi_relays(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     routing::handle_v1_kaigi_relays(
         app.state.clone(),
         app.telemetry.clone(),
@@ -23381,10 +23383,12 @@ async fn handler_kaigi_relay_detail(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     match routing::handle_v1_kaigi_relay_detail_with_policy(
         app.state.clone(),
         app.telemetry.clone(),
@@ -23395,7 +23399,10 @@ async fn handler_kaigi_relay_detail(
     .await
     {
         Ok(response) => Ok(response.into_response()),
-        Err(error) => Ok(error_response_with_format(error, format)),
+        Err(error) => Ok(error_response_with_format(
+            error,
+            crate::utils::ResponseFormat::Norito,
+        )),
     }
 }
 
@@ -23418,10 +23425,12 @@ async fn handler_kaigi_relays_health(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     routing::handle_v1_kaigi_relays_health(app.state.clone(), app.telemetry.clone(), format)
         .await
         .map(axum::response::IntoResponse::into_response)

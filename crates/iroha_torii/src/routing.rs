@@ -44277,6 +44277,108 @@ mod governance_stream_tests {
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
+fn respond_kaigi_json_document_with_format<T>(
+    value: &T,
+    format: crate::utils::ResponseFormat,
+) -> Response
+where
+    T: json::JsonSerialize,
+{
+    match format {
+        crate::utils::ResponseFormat::Json => match norito::json::to_vec(value) {
+            Ok(bytes) => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(bytes))
+                .expect("build Kaigi JSON response"),
+            Err(err) => {
+                iroha_logger::error!(?err, "failed to serialise Kaigi response payload");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to serialise response",
+                )
+                    .into_response()
+            }
+        },
+        crate::utils::ResponseFormat::Norito => match norito::json::to_string(value) {
+            Ok(json) => crate::NoritoBody(json).into_response(),
+            Err(err) => {
+                iroha_logger::error!(?err, "failed to serialise Kaigi response payload");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to serialise response",
+                )
+                    .into_response()
+            }
+        },
+    }
+}
+
+#[cfg(all(test, feature = "app_api", feature = "telemetry"))]
+mod kaigi_response_format_tests {
+    use axum::http::header::CONTENT_TYPE;
+    use http_body_util::BodyExt as _;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn kaigi_json_document_response_renders_json() {
+        let payload = KaigiRelaySummaryListDto {
+            total: 1,
+            items: Vec::new(),
+        };
+
+        let response =
+            respond_kaigi_json_document_with_format(&payload, crate::utils::ResponseFormat::Json);
+
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect JSON body")
+            .to_bytes();
+        let decoded: norito::json::Value =
+            norito::json::from_slice(&bytes).expect("decode JSON body");
+        assert_eq!(decoded["total"].as_u64(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn kaigi_json_document_response_wraps_json_string_as_norito() {
+        let payload = KaigiRelaySummaryListDto {
+            total: 1,
+            items: Vec::new(),
+        };
+
+        let response =
+            respond_kaigi_json_document_with_format(&payload, crate::utils::ResponseFormat::Norito);
+
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect Norito body")
+            .to_bytes();
+        let json: String = norito::decode_from_bytes(&bytes).expect("decode Norito JSON string");
+        let decoded: norito::json::Value = norito::json::from_str(&json).expect("decode JSON body");
+        assert_eq!(decoded["total"].as_u64(), Some(1));
+    }
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
 /// GET `/v1/kaigi/relays` — summary snapshot of registered relays and health indicators.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_kaigi_relays(
@@ -44323,7 +44425,7 @@ pub async fn handle_v1_kaigi_relays(
         total: items.len() as u64,
         items,
     };
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(respond_kaigi_json_document_with_format(&payload, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -44432,7 +44534,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
         notes,
         metrics,
     };
-    Ok(crate::utils::respond_with_format(detail, format))
+    Ok(respond_kaigi_json_document_with_format(&detail, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -44500,7 +44602,7 @@ pub async fn handle_v1_kaigi_relays_health(
         failovers_total,
         domains,
     };
-    Ok(crate::utils::respond_with_format(snapshot, format))
+    Ok(respond_kaigi_json_document_with_format(&snapshot, format))
 }
 
 #[cfg(feature = "app_api")]

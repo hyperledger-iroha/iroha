@@ -2259,7 +2259,7 @@ fn jsonrpc_error_response(
     message: &str,
     data: Option<Value>,
 ) -> Value {
-    let mut data_object = match data {
+    let input_data = match data {
         Some(Value::Object(map)) => map,
         Some(other) => {
             let mut map = Map::new();
@@ -2268,21 +2268,32 @@ fn jsonrpc_error_response(
         }
         None => Map::new(),
     };
-    let label = data_object
-        .remove("error_code")
+    let label = input_data
+        .get("error_code")
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| jsonrpc_error_code_label(code).to_owned());
-    if !data_object.contains_key("code") {
-        let details = if data_object.is_empty() {
+    let mut data_object = if input_data.contains_key("code") {
+        input_data.clone()
+    } else {
+        let mut details_object = input_data.clone();
+        details_object.remove("error_code");
+        let details = if details_object.is_empty() {
             Some(norito::json!({ "layer": "mcp" }))
         } else {
-            Some(Value::Object(data_object))
+            Some(Value::Object(details_object))
         };
-        data_object = match error_envelope_value(label.as_str(), message, details) {
+        let mut envelope = match error_envelope_value(label.as_str(), message, details) {
             Value::Object(map) => map,
             _ => Map::new(),
         };
-    }
+        for (key, value) in input_data {
+            envelope.entry(key).or_insert(value);
+        }
+        envelope
+    };
+    data_object
+        .entry("error_code".into())
+        .or_insert_with(|| Value::String(label));
 
     let mut err = Map::new();
     err.insert("code".into(), Value::from(code));
@@ -2611,6 +2622,12 @@ fn find_tool_spec_by_name<'a>(tools: &'a [ToolSpec], requested_name: &str) -> Op
     if let Some(tool) = tools.iter().find(|tool| tool.name == requested_name) {
         return Some(tool);
     }
+    if let Some(tool) = tools
+        .iter()
+        .find(|tool| is_legacy_torii_tool_alias(tool, requested_name))
+    {
+        return Some(tool);
+    }
     if !requested_name.starts_with("torii.") {
         return None;
     }
@@ -2619,6 +2636,12 @@ fn find_tool_spec_by_name<'a>(tools: &'a [ToolSpec], requested_name: &str) -> Op
     tools
         .iter()
         .find(|tool| openapi_operation_alias(tool, &spec).as_deref() == Some(requested_name))
+}
+
+fn is_legacy_torii_tool_alias(tool: &ToolSpec, requested_name: &str) -> bool {
+    requested_name == "torii.post_transaction"
+        && tool.method == Method::POST
+        && tool.path_template == iroha_torii_shared::uri::TRANSACTION
 }
 
 async fn dispatch_openapi_tool(
@@ -7025,10 +7048,7 @@ async fn wait_for_terminal_transaction_status(
                 last_kind = Some(kind.to_owned());
             }
             if !retryable_http {
-                return Err(format!(
-                    "status polling failed with HTTP {status_code} for `{tx_hash}`; last_status={}",
-                    last_kind.as_deref().unwrap_or("not_observed")
-                ));
+                return Ok(status_result);
             }
         }
 
@@ -14267,6 +14287,36 @@ mod tests {
     }
 
     #[test]
+    fn jsonrpc_error_response_preserves_legacy_data_fields() {
+        let payload = jsonrpc_error_response(
+            None,
+            JSONRPC_INVALID_REQUEST,
+            "too large",
+            Some(norito::json!({
+                "error_code": "payload_too_large",
+                "max_request_bytes": 32
+            })),
+        );
+        let data = payload
+            .get("error")
+            .and_then(|err| err.get("data"))
+            .and_then(Value::as_object)
+            .expect("error data");
+        assert_eq!(
+            data.get("code").and_then(Value::as_str),
+            Some("payload_too_large")
+        );
+        assert_eq!(
+            data.get("error_code").and_then(Value::as_str),
+            Some("payload_too_large")
+        );
+        assert_eq!(
+            data.get("max_request_bytes").and_then(Value::as_u64),
+            Some(32)
+        );
+    }
+
+    #[test]
     fn read_only_policy_blocks_mutating_tools() {
         let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
         cfg.profile = ToriiMcpProfile::ReadOnly;
@@ -15345,6 +15395,17 @@ mod tests {
             .expect("operationId alias should resolve to the health tool");
         assert_eq!(tool.path_template, "/health");
         assert_eq!(tool.method, Method::GET);
+    }
+
+    #[test]
+    fn find_tool_spec_by_name_accepts_legacy_post_transaction_alias() {
+        let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        let tools = build_tool_specs(&cfg);
+
+        let tool = find_tool_spec_by_name(&tools, "torii.post_transaction")
+            .expect("legacy transaction alias should resolve to transaction submit");
+        assert_eq!(tool.path_template, iroha_torii_shared::uri::TRANSACTION);
+        assert_eq!(tool.method, Method::POST);
     }
 
     #[tokio::test]

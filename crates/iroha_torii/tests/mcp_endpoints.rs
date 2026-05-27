@@ -577,12 +577,10 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
         .and_then(Value::as_array)
         .expect("tools list page2");
     assert_eq!(page2_tools.len(), 2);
-    let connect_ticket_listed = list_all_tool_names(&app)
-        .await
-        .iter()
-        .any(|name| name == "connect.ws.ticket");
-    assert!(
-        connect_ticket_listed,
+    let connect_ticket_tool = find_tool(&app, "connect.ws.ticket").await;
+    assert_eq!(
+        connect_ticket_tool.get("name").and_then(Value::as_str),
+        Some("connect.ws.ticket"),
         "connect.ws.ticket should be discoverable across paginated tools/list responses"
     );
 

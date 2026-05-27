@@ -2,6 +2,23 @@
 
 Last updated: 2026-05-27
 
+## 2026-05-27 Torii MCP JSON-RPC regression fixes
+
+- Torii MCP JSON-RPC errors now preserve legacy top-level `error_code` and
+  detail fields while retaining the structured `code`/`message`/`details`
+  envelope, restoring oversized-payload and hidden-tool policy responses.
+- The transaction wait MCP alias now surfaces non-retryable pipeline status
+  HTTP responses as structured tool results instead of replacing them with a
+  generic MCP-layer error.
+- The legacy raw `torii.post_transaction` tool name resolves to the generated
+  transaction submission route, and the connect-ticket pagination test now
+  searches for the target tool instead of enumerating the expanded registry
+  two tools at a time.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib mcp::tests:: -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints -- --nocapture`
+
 ## 2026-05-27 Bridge finality verifier preimage alignment
 
 - `BridgeFinalityVerifier` now reconstructs the same canonical Sumeragi
