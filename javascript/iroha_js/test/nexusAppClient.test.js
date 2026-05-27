@@ -14,6 +14,15 @@ const fixture = JSON.parse(
     "utf8",
   ),
 );
+const fixturePayloadBytes = Buffer.from(fixture.expected.payload_bytes_hex, "hex");
+const fixturePublicKey = Buffer.from(
+  fixture.connect.approval_frame.signing_public_key_hex,
+  "hex",
+);
+const fixtureWalletSignature = Buffer.from(
+  fixture.expected.wallet_signature_hex,
+  "hex",
+);
 
 test("NexusAppClient builds a signable transfer draft", () => {
   const payloadBytes = Buffer.from("canonical-transfer-payload");
@@ -89,8 +98,8 @@ test("NexusAppClient payload hashing matches the shared Nexus fixture", () => {
 });
 
 test("NexusAppClient runs connect approval, wallet signature, finalize, submit, wait", async () => {
-  const payloadBytes = Buffer.from("canonical-transfer-payload");
-  const walletSignature = Buffer.alloc(64, 7);
+  const payloadBytes = fixturePayloadBytes;
+  const walletSignature = fixtureWalletSignature;
   const signedTransaction = Buffer.from("signed-transaction");
   const hashHex = "a".repeat(64);
   const submitted = [];
@@ -99,7 +108,7 @@ test("NexusAppClient runs connect approval, wallet signature, finalize, submit, 
 
   const client = new NexusAppClient({
     chainId: "test-chain",
-    signingPublicKey: Buffer.alloc(32, 1),
+    signingPublicKey: fixturePublicKey,
     connectTransport: {
       startConnect(options) {
         return {
@@ -125,7 +134,7 @@ test("NexusAppClient runs connect approval, wallet signature, finalize, submit, 
       finalizeSignedTransaction(signable, signature, signingPublicKey) {
         assert.equal(signable.payloadHashHex, nexusPayloadHashHex(payloadBytes));
         assert.deepEqual(signature.signature, walletSignature);
-        assert.deepEqual(signingPublicKey, Buffer.alloc(32, 1));
+        assert.deepEqual(signingPublicKey, fixturePublicKey);
         return { signedTransaction, hashHex };
       },
     },
@@ -158,6 +167,52 @@ test("NexusAppClient runs connect approval, wallet signature, finalize, submit, 
   assert.deepEqual(requested, [payloadBytes]);
   assert.deepEqual(submitted, [signedTransaction]);
   assert.deepEqual(waited, [hashHex]);
+});
+
+test("NexusAppClient accepts raw wallet signature byte inputs", async () => {
+  const payloadBytes = fixturePayloadBytes;
+  const signable = {
+    payloadBytes,
+    payloadHashHex: nexusPayloadHashHex(payloadBytes),
+    authority: "account-i105",
+    signingPublicKey: fixturePublicKey,
+    signatureAlgorithm: "ed25519",
+  };
+  const walletSignature = fixtureWalletSignature;
+  const signedTransaction = Buffer.from("signed-transaction");
+  const hashHex = "d".repeat(64);
+  let finalizedSignature = null;
+  let submittedPayload = null;
+
+  const client = new NexusAppClient({
+    signingPublicKey: fixturePublicKey,
+    connectTransport: {
+      requestSignature() {
+        return new Uint8Array(walletSignature);
+      },
+    },
+    transactionCodec: {
+      finalizeSignedTransaction(_signable, signature) {
+        finalizedSignature = Buffer.from(signature.signature);
+        return { signedTransaction, hashHex };
+      },
+    },
+    toriiClient: {
+      async submitTransaction(payload) {
+        submittedPayload = Buffer.from(payload);
+        return { hashHex };
+      },
+    },
+  });
+
+  const requestedSignature = await client.requestSignature({ sid: "sid-1" }, signable);
+  assert.deepEqual(requestedSignature.signature, walletSignature);
+
+  const receipt = await client.finalizeAndSubmit(signable, walletSignature, { wait: false });
+
+  assert.deepEqual(finalizedSignature, walletSignature);
+  assert.deepEqual(receipt.signedTransaction, signedTransaction);
+  assert.deepEqual(submittedPayload, signedTransaction);
 });
 
 test("NexusAppClient rejects non-Ed25519 wallet signatures", async () => {
@@ -265,7 +320,7 @@ test("NexusAppClient rejects authority mismatch before wallet signature request"
 });
 
 test("NexusAppClient accepts shared approvedAccount session field", async () => {
-  const payloadBytes = Buffer.from("payload");
+  const payloadBytes = fixturePayloadBytes;
   const signedTransaction = Buffer.from("signed");
   const hashHex = "c".repeat(64);
   let requestedAuthority = null;
@@ -283,7 +338,7 @@ test("NexusAppClient accepts shared approvedAccount session field", async () => 
     },
     connectTransport: {
       requestSignature() {
-        return { algorithm: "ed25519", signature: Buffer.alloc(64, 7) };
+        return { algorithm: "ed25519", signature: fixtureWalletSignature };
       },
     },
     toriiClient: {
@@ -297,7 +352,7 @@ test("NexusAppClient accepts shared approvedAccount session field", async () => 
     {
       sid: "sid-1",
       approvedAccount: "approved-account-i105",
-      signingPublicKey: Buffer.alloc(32, 1),
+      signingPublicKey: fixturePublicKey,
     },
     {
       sourceAssetHoldingId: "asset#approved-account-i105",
@@ -341,22 +396,39 @@ test("NexusAppClient rejects invalid signature lengths", async () => {
     (error) =>
       error instanceof NexusAppError && error.code === "invalid_signature",
   );
+
+  await assert.rejects(
+    () =>
+      client.finalizeAndSubmit(
+        {
+          payloadBytes: fixturePayloadBytes,
+          payloadHashHex: nexusPayloadHashHex(fixturePayloadBytes),
+          authority: "account-i105",
+          signingPublicKey: fixturePublicKey,
+          signatureAlgorithm: "ed25519",
+        },
+        { algorithm: "ed25519", signature: Buffer.alloc(64, 7) },
+        { wait: false },
+      ),
+    (error) =>
+      error instanceof NexusAppError && error.code === "invalid_signature",
+  );
 });
 
 test("NexusAppClient rejects Torii hash mismatches and maps submit/status failures", async () => {
   const signable = {
-    payloadBytes: Buffer.from("payload"),
-    payloadHashHex: nexusPayloadHashHex(Buffer.from("payload")),
+    payloadBytes: fixturePayloadBytes,
+    payloadHashHex: nexusPayloadHashHex(fixturePayloadBytes),
     authority: "account-i105",
-    signingPublicKey: Buffer.alloc(32, 1),
+    signingPublicKey: fixturePublicKey,
     signatureAlgorithm: "ed25519",
   };
-  const signature = { algorithm: "ed25519", signature: Buffer.alloc(64, 7) };
+  const signature = { algorithm: "ed25519", signature: fixtureWalletSignature };
   const signedTransaction = Buffer.from("signed-transaction");
   const localHash = "a".repeat(64);
 
   const mismatchClient = new NexusAppClient({
-    signingPublicKey: Buffer.alloc(32, 1),
+    signingPublicKey: fixturePublicKey,
     transactionCodec: {
       finalizeSignedTransaction() {
         return { signedTransaction, hashHex: localHash };
@@ -376,7 +448,7 @@ test("NexusAppClient rejects Torii hash mismatches and maps submit/status failur
   );
 
   const submitFailureClient = new NexusAppClient({
-    signingPublicKey: Buffer.alloc(32, 1),
+    signingPublicKey: fixturePublicKey,
     transactionCodec: {
       finalizeSignedTransaction() {
         return { signedTransaction, hashHex: localHash };
@@ -394,7 +466,7 @@ test("NexusAppClient rejects Torii hash mismatches and maps submit/status failur
   );
 
   const statusFailureClient = new NexusAppClient({
-    signingPublicKey: Buffer.alloc(32, 1),
+    signingPublicKey: fixturePublicKey,
     transactionCodec: {
       finalizeSignedTransaction() {
         return { signedTransaction, hashHex: localHash };

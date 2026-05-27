@@ -142,8 +142,18 @@ function normalizeConnectSession(session) {
   };
 }
 
+function isRawByteSignature(value) {
+  return (
+    Buffer.isBuffer(value) ||
+    value instanceof Uint8Array ||
+    ArrayBuffer.isView(value) ||
+    value instanceof ArrayBuffer ||
+    Array.isArray(value)
+  );
+}
+
 function normalizeSignature(signature) {
-  if (!signature || typeof signature !== "object") {
+  if (isRawByteSignature(signature) || !signature || typeof signature !== "object") {
     return {
       algorithm: ALGORITHM_ED25519,
       signature: toBuffer(signature, "signature"),

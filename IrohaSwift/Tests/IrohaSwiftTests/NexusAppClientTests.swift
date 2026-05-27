@@ -5,6 +5,7 @@ import XCTest
 final class NexusAppClientTests: XCTestCase {
     private static let assetDefinitionID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
     private static let publicKey = Data(hexString: "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737")!
+    private static let walletSignature = Data(hexString: "c82d2ee732a9251153eff6f510a0d12b292cb51a5d961a7eddb84f6ee944e34eaca60ca2f1ccfe7a53fd6813fc9a6db9e35cb276b2411b7d583d45fdc6caee05")!
     private static let accountID = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
     private static let destinationAccountID = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L"
 
@@ -208,6 +209,25 @@ final class NexusAppClientTests: XCTestCase {
         XCTAssertEqual(error.code, "invalid_signature")
     }
 
+    func testFinalizeAndSubmitRejectsInvalidSignatureBytes() async throws {
+        let client = NexusAppClient(
+            config: NexusAppConfig(chainId: "test-chain",
+                                   authority: Self.accountID,
+                                   signingPublicKey: Self.publicKey),
+            toriiSubmitter: FakeToriiSubmitter()
+        )
+        let draft = try client.buildTransferDraft(input: sampleInput())
+
+        let error = await expectNexusErrorAsync {
+            _ = try await client.finalizeAndSubmit(
+                signable: draft.signable,
+                signature: NexusWalletSignature(signature: Data(repeating: 0x07, count: 64))
+            )
+        }
+
+        XCTAssertEqual(error.code, "invalid_signature")
+    }
+
     func testFinalizeAndSubmitRejectsHashMismatchAndMapsSubmitStatusFailures() async throws {
         let draftClient = NexusAppClient(
             config: NexusAppConfig(chainId: "test-chain",
@@ -216,7 +236,7 @@ final class NexusAppClientTests: XCTestCase {
             toriiSubmitter: FakeToriiSubmitter()
         )
         let draft = try draftClient.buildTransferDraft(input: sampleInput())
-        let signature = NexusWalletSignature(signature: Data(repeating: 0x07, count: 64))
+        let signature = NexusWalletSignature(signature: Self.walletSignature)
 
         let mismatchClient = NexusAppClient(
             config: NexusAppConfig(chainId: "test-chain"),
@@ -349,7 +369,7 @@ final class NexusAppClientTests: XCTestCase {
                               config: NexusAppConfig) async throws -> NexusWalletSignature {
             lastSignable = signable
             XCTAssertEqual(signable.signatureAlgorithm, NexusSignatureAlgorithmEd25519)
-            return NexusWalletSignature(signature: Data(repeating: 0x07, count: 64))
+            return NexusWalletSignature(signature: NexusAppClientTests.walletSignature)
         }
     }
 

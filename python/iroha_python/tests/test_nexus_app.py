@@ -23,12 +23,22 @@ FIXTURE = json.loads(
         encoding="utf-8"
     )
 )
+FIXTURE_PAYLOAD = bytes.fromhex(FIXTURE["expected"]["payload_bytes_hex"])
+FIXTURE_PUBLIC_KEY = bytes.fromhex(FIXTURE["connect"]["approval_frame"]["signing_public_key_hex"])
+FIXTURE_SIGNATURE = bytes.fromhex(FIXTURE["expected"]["wallet_signature_hex"])
 
 
 class FakeConnect:
-    def __init__(self, signature: bytes, approval=None):
+    def __init__(
+        self,
+        signature: bytes,
+        approval=None,
+        *,
+        signing_public_key: bytes = bytes([1]) * 32,
+    ):
         self.signature = signature
         self.approval = approval
+        self.signing_public_key = signing_public_key
         self.requested_payloads: list[bytes] = []
 
     def start_connect(self, options: NexusConnectOptions, _config: NexusAppConfig) -> NexusConnectSession:
@@ -44,7 +54,7 @@ class FakeConnect:
             return self.approval
         return {
             "account_id": "approved-account-i105",
-            "signing_public_key": bytes([1]) * 32,
+            "signing_public_key": self.signing_public_key,
         }
 
     def request_signature(self, _session, signable, _config):
@@ -60,11 +70,15 @@ class FakeCodec:
         hash_hex: str,
         *,
         expected_authority: str = "approved-account-i105",
+        expected_signature: bytes = bytes([7]) * 64,
+        expected_signing_public_key: bytes = bytes([1]) * 32,
     ):
         self.payload = payload
         self.signed = signed
         self.hash_hex = hash_hex
         self.expected_authority = expected_authority
+        self.expected_signature = expected_signature
+        self.expected_signing_public_key = expected_signing_public_key
         self.finalized = []
 
     def build_transfer_payload(self, payload_input):
@@ -75,8 +89,8 @@ class FakeCodec:
 
     def finalize_signed_transaction(self, signable, signature, signing_public_key):
         assert signable.payload_bytes == self.payload
-        assert signature.signature == bytes([7]) * 64
-        assert signing_public_key == bytes([1]) * 32
+        assert signature.signature == self.expected_signature
+        assert signing_public_key == self.expected_signing_public_key
         self.finalized.append((signable, signature))
         return {"signed_transaction": self.signed, "hash_hex": self.hash_hex}
 
@@ -155,16 +169,22 @@ def test_nexus_app_default_codec_matches_shared_fixture():
 
 
 def test_nexus_app_runs_wallet_transfer_flow():
-    payload = b"canonical-transfer-payload"
+    payload = FIXTURE_PAYLOAD
     signed = b"signed-transaction"
     hash_hex = "b" * 64
-    connect = FakeConnect(bytes([7]) * 64)
-    codec = FakeCodec(payload, signed, hash_hex)
+    connect = FakeConnect(FIXTURE_SIGNATURE, signing_public_key=FIXTURE_PUBLIC_KEY)
+    codec = FakeCodec(
+        payload,
+        signed,
+        hash_hex,
+        expected_signature=FIXTURE_SIGNATURE,
+        expected_signing_public_key=FIXTURE_PUBLIC_KEY,
+    )
     torii = FakeTorii()
     client = NexusAppClient(
         NexusAppConfig(
             chain_id="test-chain",
-            signing_public_key=bytes([1]) * 32,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         connect_transport=connect,
         transaction_codec=codec,
@@ -277,10 +297,15 @@ def test_nexus_app_rejects_invalid_signature_length():
         NexusAppConfig(
             chain_id="test-chain",
             authority="account-i105",
-            signing_public_key=bytes([1]) * 32,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FakeCodec(
-            b"payload", b"signed", "c" * 64, expected_authority="account-i105"
+            FIXTURE_PAYLOAD,
+            b"signed",
+            "c" * 64,
+            expected_authority="account-i105",
+            expected_signature=FIXTURE_SIGNATURE,
+            expected_signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         torii_client=FakeTorii(),
     )
@@ -297,6 +322,11 @@ def test_nexus_app_rejects_invalid_signature_length():
 
     assert excinfo.value.code == "invalid_signature"
 
+    with pytest.raises(NexusAppError) as bad_signature:
+        client.finalize_and_submit(draft.signable, bytes([7]) * 64, wait=False)
+
+    assert bad_signature.value.code == "invalid_signature"
+
 
 def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
     hash_hex = "d" * 64
@@ -304,10 +334,15 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
         NexusAppConfig(
             chain_id="test-chain",
             authority="account-i105",
-            signing_public_key=bytes([1]) * 32,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FakeCodec(
-            b"payload", b"signed", hash_hex, expected_authority="account-i105"
+            FIXTURE_PAYLOAD,
+            b"signed",
+            hash_hex,
+            expected_authority="account-i105",
+            expected_signature=FIXTURE_SIGNATURE,
+            expected_signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         torii_client=FakeTorii(submit_hash_hex="e" * 64),
     )
@@ -320,17 +355,22 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
     )
 
     with pytest.raises(NexusAppError) as mismatch_exc:
-        client.finalize_and_submit(draft.signable, NexusWalletSignature(bytes([7]) * 64), wait=False)
+        client.finalize_and_submit(draft.signable, NexusWalletSignature(FIXTURE_SIGNATURE), wait=False)
     assert mismatch_exc.value.code == "transaction_hash_mismatch"
 
     submit_failure = NexusAppClient(
         NexusAppConfig(
             chain_id="test-chain",
             authority="account-i105",
-            signing_public_key=bytes([1]) * 32,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FakeCodec(
-            b"payload", b"signed", hash_hex, expected_authority="account-i105"
+            FIXTURE_PAYLOAD,
+            b"signed",
+            hash_hex,
+            expected_authority="account-i105",
+            expected_signature=FIXTURE_SIGNATURE,
+            expected_signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         torii_client=FakeTorii(submit_error=RuntimeError("down")),
     )
@@ -342,17 +382,22 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
         )
     )
     with pytest.raises(NexusAppError) as submit_exc:
-        submit_failure.finalize_and_submit(draft.signable, NexusWalletSignature(bytes([7]) * 64), wait=False)
+        submit_failure.finalize_and_submit(draft.signable, NexusWalletSignature(FIXTURE_SIGNATURE), wait=False)
     assert submit_exc.value.code == "submit_failed"
 
     status_failure = NexusAppClient(
         NexusAppConfig(
             chain_id="test-chain",
             authority="account-i105",
-            signing_public_key=bytes([1]) * 32,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FakeCodec(
-            b"payload", b"signed", hash_hex, expected_authority="account-i105"
+            FIXTURE_PAYLOAD,
+            b"signed",
+            hash_hex,
+            expected_authority="account-i105",
+            expected_signature=FIXTURE_SIGNATURE,
+            expected_signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         torii_client=FakeTorii(submit_hash_hex=hash_hex, wait_error=RuntimeError("timeout")),
     )
@@ -364,7 +409,7 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
         )
     )
     with pytest.raises(NexusAppError) as status_exc:
-        status_failure.finalize_and_submit(draft.signable, NexusWalletSignature(bytes([7]) * 64))
+        status_failure.finalize_and_submit(draft.signable, NexusWalletSignature(FIXTURE_SIGNATURE))
     assert status_exc.value.code == "status_wait_failed"
 
 

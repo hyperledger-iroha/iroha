@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.sdk.nexus
 
 import java.util.concurrent.CompletionException
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.PipelineStatusOptions
@@ -227,6 +229,11 @@ class NexusAppClient @JvmOverloads constructor(
         ensureEd25519(signature.algorithm)
         validateEd25519PublicKey(signable.signingPublicKey)
         validateEd25519Signature(signature.signature)
+        validateEd25519SignatureForPayload(
+            signable.signingPublicKey,
+            signable.payloadBytes,
+            signature.signature,
+        )
 
         val signed = SignedTransaction.builder()
             .setEncodedPayload(signable.payloadBytes)
@@ -313,6 +320,28 @@ private fun validateEd25519PublicKey(publicKey: ByteArray) {
 private fun validateEd25519Signature(signature: ByteArray) {
     if (signature.size != 64) {
         throw NexusAppError("invalid_signature", "Ed25519 signature must be 64 bytes")
+    }
+}
+
+private fun validateEd25519SignatureForPayload(
+    publicKey: ByteArray,
+    payloadBytes: ByteArray,
+    signature: ByteArray,
+) {
+    val message = IrohaHash.prehash(payloadBytes)
+    val verified = try {
+        val verifier = Ed25519Signer()
+        verifier.init(false, Ed25519PublicKeyParameters(publicKey, 0))
+        verifier.update(message, 0, message.size)
+        verifier.verifySignature(signature)
+    } catch (ex: RuntimeException) {
+        false
+    }
+    if (!verified) {
+        throw NexusAppError(
+            "invalid_signature",
+            "Ed25519 signature does not verify for the signable payload",
+        )
     }
 }
 

@@ -313,6 +313,27 @@ def _normalize_signature(value: Union[NexusWalletSignature, Mapping[str, Any], B
     return NexusWalletSignature(signature.signature, "ed25519")
 
 
+def _validate_ed25519_signature_for_payload(
+    public_key: bytes,
+    payload_bytes: bytes,
+    signature: bytes,
+) -> None:
+    from .crypto import verify_ed25519
+
+    try:
+        verified = verify_ed25519(public_key, hash_blake2b_32(payload_bytes), signature)
+    except Exception as exc:
+        raise NexusAppError(
+            "invalid_signature",
+            "Ed25519 signature does not verify for the signable payload",
+        ) from exc
+    if not verified:
+        raise NexusAppError(
+            "invalid_signature",
+            "Ed25519 signature does not verify for the signable payload",
+        )
+
+
 class DefaultNexusTransactionCodec:
     """Default transaction codec backed by the Python SDK's native Norito builder."""
 
@@ -689,6 +710,11 @@ class NexusAppClient:
             signable.signing_public_key
             if signable.signing_public_key is not None
             else self.config.signing_public_key,
+        )
+        _validate_ed25519_signature_for_payload(
+            signing_public_key,
+            signable.payload_bytes,
+            normalized.signature,
         )
         finalized = self.transaction_codec.finalize_signed_transaction(
             signable,

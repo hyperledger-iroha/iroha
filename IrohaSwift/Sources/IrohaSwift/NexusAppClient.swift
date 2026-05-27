@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public let NexusSignatureAlgorithmEd25519 = "ed25519"
 
@@ -405,6 +406,9 @@ public final class NexusAppClient {
         try ensureEd25519(signature.algorithm)
         try validateEd25519PublicKey(signable.signingPublicKey)
         try validateEd25519Signature(signature.signature)
+        try validateEd25519SignatureForPayload(publicKey: signable.signingPublicKey,
+                                               payloadBytes: signable.payloadBytes,
+                                               signature: signature.signature)
         let envelope = try transactionCodec.finalizeSignedTransaction(signable: signable,
                                                                       signature: signature)
         guard let toriiSubmitter else {
@@ -620,6 +624,24 @@ private func validateEd25519Signature(_ signature: Data) throws {
     guard signature.count == 64 else {
         throw NexusAppError(code: "invalid_signature",
                             message: "Ed25519 signature must be 64 bytes.")
+    }
+}
+
+private func validateEd25519SignatureForPayload(publicKey: Data,
+                                                payloadBytes: Data,
+                                                signature: Data) throws {
+    do {
+        let key = try Curve25519.Signing.PublicKey(rawRepresentation: publicKey)
+        let message = IrohaHash.hash(payloadBytes)
+        guard key.isValidSignature(signature, for: message) else {
+            throw NexusAppError(code: "invalid_signature",
+                                message: "Ed25519 signature does not verify for the signable payload.")
+        }
+    } catch let error as NexusAppError {
+        throw error
+    } catch {
+        throw NexusAppError(code: "invalid_signature",
+                            message: "Ed25519 signature does not verify for the signable payload.")
     }
 }
 

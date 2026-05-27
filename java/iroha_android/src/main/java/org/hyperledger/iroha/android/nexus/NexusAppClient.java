@@ -5,11 +5,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionException;
 import java.util.function.Supplier;
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
+import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.IrohaClient;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
-import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -154,6 +156,8 @@ public final class NexusAppClient {
     ensureEd25519(signature.algorithm());
     validateEd25519PublicKey(signable.signingPublicKey());
     validateEd25519Signature(signature.signature());
+    validateEd25519SignatureForPayload(
+        signable.signingPublicKey(), signable.payloadBytes(), signature.signature());
     final SignedTransaction signed = SignedTransaction.builder()
         .setEncodedPayload(signable.payloadBytes())
         .setSignature(signature.signature())
@@ -248,6 +252,27 @@ public final class NexusAppClient {
   private static void validateEd25519Signature(final byte[] signature) {
     if (signature == null || signature.length != 64) {
       throw new NexusAppError("invalid_signature", "Ed25519 signature must be 64 bytes");
+    }
+  }
+
+  private static void validateEd25519SignatureForPayload(
+      final byte[] publicKey, final byte[] payloadBytes, final byte[] signature) {
+    final byte[] message = IrohaHash.prehash(payloadBytes);
+    final boolean verified;
+    try {
+      final Ed25519Signer verifier = new Ed25519Signer();
+      verifier.init(false, new Ed25519PublicKeyParameters(publicKey, 0));
+      verifier.update(message, 0, message.length);
+      verified = verifier.verifySignature(signature);
+    } catch (final RuntimeException ex) {
+      throw new NexusAppError(
+          "invalid_signature",
+          "Ed25519 signature does not verify for the signable payload",
+          ex);
+    }
+    if (!verified) {
+      throw new NexusAppError(
+          "invalid_signature", "Ed25519 signature does not verify for the signable payload");
     }
   }
 

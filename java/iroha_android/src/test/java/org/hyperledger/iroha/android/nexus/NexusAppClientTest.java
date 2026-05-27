@@ -26,6 +26,9 @@ public final class NexusAppClientTest {
   private static final String ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
   private static final byte[] PUBLIC_KEY =
       hexToBytes("d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737");
+  private static final byte[] WALLET_SIGNATURE =
+      hexToBytes(
+          "c82d2ee732a9251153eff6f510a0d12b292cb51a5d961a7eddb84f6ee944e34eaca60ca2f1ccfe7a53fd6813fc9a6db9e35cb276b2411b7d583d45fdc6caee05");
   private static final String ACCOUNT_ID =
       "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
   private static final String DESTINATION_ACCOUNT_ID =
@@ -209,7 +212,7 @@ public final class NexusAppClientTest {
             null,
             new FakeToriiClient());
     final NexusTransferDraft draft = draftClient.buildTransferDraft(sampleInput());
-    final NexusWalletSignature signature = new NexusWalletSignature(filled(0x07, 64));
+    final NexusWalletSignature signature = new NexusWalletSignature(WALLET_SIGNATURE);
 
     final NexusAppClient mismatchClient =
         new NexusAppClient(
@@ -240,6 +243,24 @@ public final class NexusAppClientTest {
     final NexusAppError statusError =
         expectNexusError(() -> statusFailureClient.finalizeAndSubmit(draft.signable(), signature));
     assertEquals("status_wait_failed", statusError.code());
+  }
+
+  @Test
+  public void finalizeAndSubmitRejectsInvalidSignatureBytes() {
+    final NexusAppClient client =
+        new NexusAppClient(
+            new NexusAppConfig(
+                "test-chain", null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
+            null,
+            null,
+            new FakeToriiClient());
+    final NexusTransferDraft draft = client.buildTransferDraft(sampleInput());
+
+    final NexusAppError error =
+        expectNexusError(
+            () -> client.finalizeAndSubmit(draft.signable(), new NexusWalletSignature(filled(0x07, 64))));
+
+    assertEquals("invalid_signature", error.code());
   }
 
   private static NexusTransferInput sampleInput() {
@@ -305,7 +326,7 @@ public final class NexusAppClientTest {
   }
 
   private static final class FakeConnect implements NexusConnectTransport {
-    private final byte[] signature = filled(0x07, 64);
+    private final byte[] signature = Arrays.copyOf(WALLET_SIGNATURE, WALLET_SIGNATURE.length);
     private NexusSignableTransaction lastSignable;
 
     @Override
