@@ -25,6 +25,9 @@ use iroha_primitives::addr::{SocketAddr, socket_addr};
 use norito::codec::{Decode, Encode};
 use tokio::time::Duration;
 
+// These tests assert process-global cap counters, so their snapshots must not overlap.
+static FRAME_CAP_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(Clone, Debug, Decode, Encode)]
 struct BigMsg {
     topic: u8,
@@ -193,6 +196,8 @@ fn make_config(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn topic_cap_violation_disconnects() {
+    let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
+
     let chain = ChainId::from("test_chain");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
@@ -314,6 +319,8 @@ async fn topic_cap_violation_disconnects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn tcp_global_frame_cap_disconnects() {
+    let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
+
     let chain = ChainId::from("test_chain_tcp");
     let kp_listener = KeyPair::random();
     let kp_dialer = KeyPair::random();
@@ -365,11 +372,9 @@ async fn tcp_global_frame_cap_disconnects() {
     let peer_listener = Peer::new(listen_addr.clone(), kp_listener.public_key().clone());
     let peer_dialer = Peer::new(dialer_addr.clone(), kp_dialer.public_key().clone());
 
+    // The listener only needs topology membership to accept the dialer; omitting the dialer
+    // address prevents a simultaneous outbound session from masking the tested disconnect.
     net_listener.update_topology(UpdateTopology(HashSet::from([peer_dialer.id().clone()])));
-    net_listener.update_peers_addresses(UpdatePeers(vec![(
-        peer_dialer.id().clone(),
-        dialer_addr.clone(),
-    )]));
 
     net_dialer.update_topology(UpdateTopology(HashSet::from([peer_listener.id().clone()])));
     net_dialer.update_peers_addresses(UpdatePeers(vec![(
@@ -440,6 +445,8 @@ async fn tcp_global_frame_cap_disconnects() {
 #[cfg(feature = "p2p_tls")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_global_frame_cap_disconnects() {
+    let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
+
     let chain = ChainId::from("test_chain_tls");
     let kp_listener = KeyPair::random();
     let kp_dialer = KeyPair::random();
@@ -500,11 +507,8 @@ async fn tls_global_frame_cap_disconnects() {
     let peer_listener = Peer::new(public_host.clone(), kp_listener.public_key().clone());
     let peer_dialer = Peer::new(client_addr.clone(), kp_dialer.public_key().clone());
 
+    // Keep this one-way so the oversized inbound frame closes the only listener-side session.
     net_listener.update_topology(UpdateTopology(HashSet::from([peer_dialer.id().clone()])));
-    net_listener.update_peers_addresses(UpdatePeers(vec![(
-        peer_dialer.id().clone(),
-        client_addr.clone(),
-    )]));
 
     net_dialer.update_topology(UpdateTopology(HashSet::from([peer_listener.id().clone()])));
     net_dialer.update_peers_addresses(UpdatePeers(vec![(
@@ -576,6 +580,8 @@ async fn tls_global_frame_cap_disconnects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn quic_global_frame_cap_disconnects() {
+    let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
+
     let chain = ChainId::from("test_chain_quic");
     let kp_listener = KeyPair::random();
     let kp_dialer = KeyPair::random();
@@ -638,11 +644,8 @@ async fn quic_global_frame_cap_disconnects() {
     let peer_listener = Peer::new(public_host.clone(), kp_listener.public_key().clone());
     let peer_dialer = Peer::new(client_addr.clone(), kp_dialer.public_key().clone());
 
+    // Keep this one-way so the oversized inbound frame closes the only listener-side session.
     net_listener.update_topology(UpdateTopology(HashSet::from([peer_dialer.id().clone()])));
-    net_listener.update_peers_addresses(UpdatePeers(vec![(
-        peer_dialer.id().clone(),
-        client_addr.clone(),
-    )]));
 
     net_dialer.update_topology(UpdateTopology(HashSet::from([peer_listener.id().clone()])));
     net_dialer.update_peers_addresses(UpdatePeers(vec![(
@@ -709,6 +712,8 @@ async fn quic_global_frame_cap_disconnects() {
 #[cfg(feature = "p2p_ws")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ws_global_frame_cap_disconnects() {
+    let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
+
     use bytes::Bytes;
     use futures::StreamExt;
     use tokio::{

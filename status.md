@@ -1,6 +1,21 @@
 # Status
 
-Last updated: 2026-05-26
+Last updated: 2026-05-27
+
+## 2026-05-27 P2P cap integration test stabilization
+
+- `iroha_p2p` frame-cap integration tests now serialize assertions against
+  process-global cap violation counters so concurrent tests cannot invalidate
+  start/end snapshots.
+- TCP/TLS/QUIC global frame-cap tests keep the capped listener in accept-only
+  mode, preventing simultaneous outbound sessions from masking the disconnect
+  caused by an oversized inbound frame.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_p2p --test mod integration::p2p_caps -- --nocapture`
+  - `for i in $(seq 1 30); do cargo test -p iroha_p2p --test mod integration::p2p_caps::tcp_global_frame_cap_disconnects --quiet || exit 1; done`
+  - `cargo test -p iroha_p2p --test mod --quiet`
+  - `git diff --check`
 
 ## 2026-05-26 Torii routing and SoraFS regression fixes
 
