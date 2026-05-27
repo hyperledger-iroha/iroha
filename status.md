@@ -2,6 +2,22 @@
 
 Last updated: 2026-05-27
 
+## 2026-05-27 Bridge finality verifier preimage alignment
+
+- `BridgeFinalityVerifier` now reconstructs the same canonical Sumeragi
+  `Vote` v2 preimage that production commit QCs sign, including chain-order
+  hash, rechain sequence, and highest-QC marker fields. This lets Torii bridge
+  finality endpoint proofs round-trip into the light-client verifier.
+- Bridge finality documentation now describes the full signed vote preimage
+  instead of saying the aggregate signature is checked only against the header
+  hash.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model bridge_finality --lib -- --nocapture`
+  - `cargo test -p iroha_data_model commit_vote_preimage --lib -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --test bridge_finality_endpoint bridge_finality_endpoint_roundtrips_into_verifier -- --nocapture`
+  - `git diff --check`
+
 ## 2026-05-27 P2P cap integration test stabilization
 
 - `iroha_p2p` frame-cap integration tests now serialize assertions against
