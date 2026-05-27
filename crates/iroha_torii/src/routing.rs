@@ -886,7 +886,8 @@ impl AppCountMode {
 fn app_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
     match raw {
         Some("exact") => AppCountMode::Exact,
-        Some("bounded") | None => AppCountMode::Bounded,
+        Some("bounded") => AppCountMode::Bounded,
+        None => AppCountMode::Exact,
         Some(other) => {
             iroha_logger::warn!(
                 endpoint,
@@ -896,6 +897,15 @@ fn app_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
             AppCountMode::Bounded
         }
     }
+}
+
+#[cfg(feature = "app_api")]
+fn normalize_app_generic_count_mode(
+    envelope: &mut crate::filter::QueryEnvelope,
+    endpoint: &'static str,
+) {
+    let count_mode = app_count_mode(envelope.count_mode.as_deref(), endpoint);
+    envelope.count_mode = Some(count_mode.label().to_owned());
 }
 
 #[cfg(feature = "app_api")]
@@ -5203,7 +5213,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
         view_timeout_target_ms: m.sumeragi_pacemaker_view_timeout_target_ms.get(),
         view_timeout_remaining_ms: m.sumeragi_pacemaker_view_timeout_remaining_ms.get(),
     };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5214,7 +5224,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
     let snap = sumeragi::status_snapshot();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5274,7 +5284,7 @@ pub async fn handle_v1_sumeragi_checkpoints(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let checkpoints: Vec<ValidatorSetCheckpoint> = sumeragi::status::validator_checkpoint_history();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5310,7 +5320,7 @@ pub async fn handle_v1_sumeragi_consensus_keys(
             .then_with(|| a.id.cmp(&b.id))
     });
 
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5345,7 +5355,7 @@ pub async fn handle_v1_sumeragi_commit_qcs(
         COMMIT_CERT_PAGE_CAP,
         |cert| cert.height,
     );
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -7803,7 +7813,7 @@ pub async fn handle_v1_sumeragi_validator_sets(
         COMMIT_CERT_PAGE_CAP,
         |snap| snap.height,
     );
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8563,7 +8573,7 @@ pub async fn handle_v1_zk_roots(
         // For convenience, report the total number of roots recorded for this asset.
         height: roots_all.len() as u32,
     };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -25773,6 +25783,7 @@ async fn execute_contract_bundle_request(
         .collect::<BTreeMap<_, _>>();
 
     if !bundle_stage_completed(&receipt, "deploy") {
+        let requires_active_contracts = !req.init_calls.is_empty() || !req.assertions.is_empty();
         for index in 0..receipt.contracts.len() {
             let contract_name = receipt.contracts[index].name.clone();
             let contract_alias = receipt.contracts[index].contract_alias.clone();
@@ -25832,23 +25843,25 @@ async fn execute_contract_bundle_request(
             receipt.contracts[index] = response;
             persist_contract_bundle_receipt(&receipt)?;
 
-            if let Err(err) = wait_for_contract_alias_target(
-                state.clone(),
-                &response_contract_alias,
-                &response_contract_address,
-            )
-            .await
-            {
-                mark_bundle_failure(
-                    &mut receipt,
-                    format!("activate contract `{contract_name}`: {err}"),
-                );
-                persist_contract_bundle_receipt(&receipt)?;
-                return Err(err);
-            }
+            if requires_active_contracts {
+                if let Err(err) = wait_for_contract_alias_target(
+                    state.clone(),
+                    &response_contract_alias,
+                    &response_contract_address,
+                )
+                .await
+                {
+                    mark_bundle_failure(
+                        &mut receipt,
+                        format!("activate contract `{contract_name}`: {err}"),
+                    );
+                    persist_contract_bundle_receipt(&receipt)?;
+                    return Err(err);
+                }
 
-            receipt.contracts[index].status = "deployed".to_owned();
-            persist_contract_bundle_receipt(&receipt)?;
+                receipt.contracts[index].status = "deployed".to_owned();
+                persist_contract_bundle_receipt(&receipt)?;
+            }
         }
 
         record_bundle_stage(&mut receipt, "deploy");
@@ -48369,7 +48382,7 @@ pub async fn handle_v1_sumeragi_status(
     if !nexus_enabled {
         snap = snap.strip_lane_details();
     }
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -49835,7 +49848,7 @@ pub async fn handle_v1_sumeragi_commit_qc(
     let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
     let world = state.world_view();
     let qc_opt = world.commit_qcs().get(&typed).cloned();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -71185,6 +71198,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
         .clamp_fetch_size(fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
     let count_mode = app_count_mode(count_mode.as_deref(), ENDPOINT_ASSET_HOLDERS_QUERY);
+    normalize_app_generic_count_mode(&mut generic_envelope, ENDPOINT_ASSET_HOLDERS_QUERY);
     let mut filter = filter;
     // Optional filtering via JSON DSL over projected fields
     if let Some(ref mut expr) = filter {
@@ -71917,13 +71931,14 @@ fn generic_query_snapshot(
 fn execute_generic_resource_query<I>(
     state: &CoreState,
     resource_id: &str,
-    envelope: crate::filter::QueryEnvelope,
+    mut envelope: crate::filter::QueryEnvelope,
     rows: I,
     query_source: &'static str,
 ) -> Result<Response, Error>
 where
     I: IntoIterator<Item = norito::json::Map>,
 {
+    normalize_app_generic_count_mode(&mut envelope, "generic_resource_query");
     let resource = crate::generic_query::registered_resource(resource_id).ok_or_else(|| {
         Error::AppQueryValidation {
             code: "unsupported_query_resource",

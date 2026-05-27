@@ -2,6 +2,37 @@
 
 Last updated: 2026-05-26
 
+## 2026-05-26 Torii routing and SoraFS regression fixes
+
+- Torii app-facing query routes now default omitted `count_mode` to exact
+  totals, and app generic query envelopes normalize that default before using
+  the shared generic executor. This restores `total` fields for account assets,
+  asset holders, repo agreements, transaction history, and aggregate app API
+  responses.
+- REST-style runtime, ledger, proof, Sumeragi, and ZK root handlers now prefer
+  JSON for omitted or wildcard `Accept` headers while preserving explicit
+  Norito negotiation. Explicit JSON/Norito quality ties continue to prefer
+  Norito.
+- SoraFS gateway and storage regressions were fixed for admission policy
+  fallback, manifest alias proof validation, inline chunker profile manifests,
+  idempotent storage plan metadata attachment, CAR range content length/metrics,
+  and pin registry Norito negotiation.
+- Contract deploy endpoints no longer wait for alias activation when a bundle
+  only submits deploy transactions and has no init calls or assertions.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `cargo test -p iroha_torii --lib -- --nocapture`
+  - `cargo test -p iroha_torii --lib routing::app_api_integration_tests -- --nocapture`
+  - `cargo test -p iroha_torii --lib routing::repo_agreements -- --nocapture`
+  - `cargo test -p iroha_torii --lib routing::zk_roots_selector_tests -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --lib sumeragi_status_strips_lane_fields_when_nexus_disabled -- --nocapture`
+  - `cargo test -p iroha_torii --lib tests_runtime_handlers -- --nocapture`
+  - `cargo test -p iroha_torii --lib sorafs::api::advert_tests -- --nocapture`
+  - `cargo test -p iroha_torii --lib sorafs::gateway::tests -- --nocapture`
+  - `cargo test -p sorafs_manifest --lib -- --nocapture`
+
 ## 2026-05-26 integration-test hang hardening follow-up
 
 - `iroha_test_network::NetworkBuilder::new()` now defaults to a 4-peer local

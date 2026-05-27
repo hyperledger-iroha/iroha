@@ -1149,6 +1149,78 @@ impl StorageBackend {
         Ok(())
     }
 
+    /// Persist updated file-layout and optional stripe metadata for an existing manifest.
+    ///
+    /// This supports idempotent re-pinning of the same manifest payload with richer logical-file
+    /// metadata, such as upgrading a raw blob pin into a site manifest for the same content CID.
+    pub fn attach_plan_metadata(
+        &self,
+        manifest_id: &str,
+        plan: &CarBuildPlan,
+        stripe_layout: Option<DaStripeLayout>,
+        chunk_roles: Option<Vec<ChunkRoleMetadata>>,
+    ) -> Result<(), StorageError> {
+        let mut state = self.state.write().expect("storage state poisoned");
+        let manifest =
+            state
+                .manifests
+                .get_mut(manifest_id)
+                .ok_or_else(|| StorageError::ManifestNotFound {
+                    manifest_id: manifest_id.to_owned(),
+                })?;
+
+        if manifest.content_length != plan.content_length
+            || manifest.payload_digest != *plan.payload_digest.as_bytes()
+        {
+            return Err(StorageError::ManifestExists {
+                manifest_id: manifest_id.to_owned(),
+            });
+        }
+
+        let chunks_match = manifest.chunk_files.len() == plan.chunks.len()
+            && manifest
+                .chunk_files
+                .iter()
+                .zip(&plan.chunks)
+                .all(|(stored, planned)| {
+                    stored.offset == planned.offset
+                        && stored.length == planned.length
+                        && stored.digest == planned.digest
+                });
+        if !chunks_match && (stripe_layout.is_some() || chunk_roles.is_some()) {
+            return Err(StorageError::ManifestExists {
+                manifest_id: manifest_id.to_owned(),
+            });
+        }
+
+        if let Some(roles) = chunk_roles {
+            let expected = manifest.chunk_files.len();
+            if roles.len() != expected {
+                return Err(StorageError::ChunkRoleLengthMismatch {
+                    expected,
+                    actual: roles.len(),
+                });
+            }
+            for (chunk, role) in manifest.chunk_files.iter_mut().zip(roles.iter()) {
+                chunk.role = Some(role.role);
+                chunk.group_id = Some(role.group_id);
+            }
+        }
+        if let Some(layout) = stripe_layout {
+            manifest.stripe_layout = Some(layout);
+        }
+        manifest.files = stored_files_from_plan(plan);
+
+        let record = manifest.to_record();
+        let metadata_path = manifest
+            .manifest_path
+            .parent()
+            .expect("manifest path must have parent")
+            .join(METADATA_FILE_NAME);
+        write_manifest_metadata(&record, &metadata_path)?;
+        Ok(())
+    }
+
     /// Ingest a manifest payload using the provided build plan and payload stream.
     ///
     /// The manifest bytes are encoded using Norito to ensure canonical hashing.
