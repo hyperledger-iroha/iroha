@@ -4000,6 +4000,53 @@ fn taira_config_enables_untrusted_cid_hosting() {
     let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
     let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
 
+    let dataspaces = doc
+        .get("nexus")
+        .and_then(TomlValue::as_table)
+        .and_then(|nexus| nexus.get("dataspace_catalog"))
+        .and_then(TomlValue::as_array)
+        .expect("nexus.dataspace_catalog should be configured");
+    let external_dataspace = dataspaces
+        .iter()
+        .find(|entry| {
+            entry
+                .get("alias")
+                .and_then(TomlValue::as_str)
+                .is_some_and(|alias| alias == "is")
+        })
+        .expect("Taira profile should include the external `is` dataspace");
+    assert_eq!(
+        external_dataspace.get("id").and_then(TomlValue::as_integer),
+        Some(6_647_857_470_246_403_404),
+        "external dataspace id should match its manifest hash"
+    );
+
+    let nexus = doc
+        .get("nexus")
+        .and_then(TomlValue::as_table)
+        .expect("nexus should be configured");
+    assert_eq!(
+        nexus.get("lane_count").and_then(TomlValue::as_integer),
+        Some(4),
+        "Taira profile should reserve a lane for the external dataspace"
+    );
+    let lanes = nexus
+        .get("lane_catalog")
+        .and_then(TomlValue::as_array)
+        .expect("nexus.lane_catalog should be configured");
+    assert!(
+        lanes.iter().any(|lane| {
+            lane.get("alias")
+                .and_then(TomlValue::as_str)
+                .is_some_and(|alias| alias == "external-poc")
+                && lane
+                    .get("dataspace")
+                    .and_then(TomlValue::as_str)
+                    .is_some_and(|dataspace| dataspace == "is")
+        }),
+        "Taira profile should bind the external dataspace to a lane"
+    );
+
     let block = doc
         .get("sumeragi")
         .and_then(TomlValue::as_table)

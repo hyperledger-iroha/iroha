@@ -5790,12 +5790,12 @@ mod tests {
     fn dataspace_alias_target_with_world_resolves_active_sns_dataspace() {
         let (authority_id, _) = gen_account_in("wonderland");
         let catalog = dataspace_catalog(&[]);
-        let world = world_with_dynamic_dataspace("boi", &authority_id);
+        let world = world_with_dynamic_dataspace("alpha", &authority_id);
         let view = world.view();
-        let expected = crate::sns::dataspace_id_for_sns_alias("boi").expect("dynamic id");
+        let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
 
         assert_eq!(
-            dataspace_alias_target_with_world("boi", Some(&catalog), &view, Some(0)),
+            dataspace_alias_target_with_world("alpha", Some(&catalog), &view, Some(0)),
             Some(expected)
         );
         assert_eq!(
@@ -5803,7 +5803,7 @@ mod tests {
             None
         );
         assert_eq!(
-            dataspace_alias_target_with_world("boi", Some(&catalog), &view, None),
+            dataspace_alias_target_with_world("alpha", Some(&catalog), &view, None),
             None
         );
     }
@@ -5812,16 +5812,16 @@ mod tests {
     fn dataspace_alias_target_with_world_rejects_inactive_sns_dataspace_at_ledger_time() {
         let (authority_id, _) = gen_account_in("wonderland");
         let catalog = dataspace_catalog(&[]);
-        let world = world_with_dynamic_dataspace_until("boi", &authority_id, 10);
+        let world = world_with_dynamic_dataspace_until("alpha", &authority_id, 10);
         let view = world.view();
-        let expected = crate::sns::dataspace_id_for_sns_alias("boi").expect("dynamic id");
+        let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
 
         assert_eq!(
-            dataspace_alias_target_with_world("boi", Some(&catalog), &view, Some(9)),
+            dataspace_alias_target_with_world("alpha", Some(&catalog), &view, Some(9)),
             Some(expected)
         );
         assert_eq!(
-            dataspace_alias_target_with_world("boi", Some(&catalog), &view, Some(10)),
+            dataspace_alias_target_with_world("alpha", Some(&catalog), &view, Some(10)),
             None
         );
     }
@@ -5830,7 +5830,7 @@ mod tests {
     fn evaluate_policy_with_catalog_and_world_resolves_static_alias_without_ledger_time() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         let static_dataspace = DataSpaceId::new(7);
-        let catalog = dataspace_catalog(&[(static_dataspace, "boi")]);
+        let catalog = dataspace_catalog(&[(static_dataspace, "alpha")]);
         let lane_catalog =
             catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
         let policy = LaneRoutingPolicy {
@@ -5842,7 +5842,7 @@ mod tests {
             &authority_id,
             authority_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("static", "boi").expect("domain"),
+                DomainId::try_new("static", "alpha").expect("domain"),
             )))],
         );
         let world = crate::state::World::default();
@@ -5870,12 +5870,12 @@ mod tests {
             &authority_id,
             authority_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("dynamic", "boi").expect("domain"),
+                DomainId::try_new("dynamic", "alpha").expect("domain"),
             )))],
         );
-        let world = world_with_dynamic_dataspace_until("boi", &authority_id, 10);
+        let world = world_with_dynamic_dataspace_until("alpha", &authority_id, 10);
         let view = world.view();
-        let expected = crate::sns::dataspace_id_for_sns_alias("boi").expect("dynamic id");
+        let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
 
         assert_eq!(
             evaluate_policy_with_catalog_and_world_at(
@@ -5923,12 +5923,12 @@ mod tests {
             &authority_id,
             authority_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("dynamic", "boi").expect("domain"),
+                DomainId::try_new("dynamic", "alpha").expect("domain"),
             )))],
         );
-        let world = world_with_dynamic_dataspace_until("boi", &authority_id, 10);
+        let world = world_with_dynamic_dataspace_until("alpha", &authority_id, 10);
         let view = world.view();
-        let expected = crate::sns::dataspace_id_for_sns_alias("boi").expect("dynamic id");
+        let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
 
         assert_eq!(
             evaluate_policy_plan_with_catalog_and_world_at(

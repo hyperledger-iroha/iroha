@@ -782,7 +782,7 @@ pub mod isi {
         }
     }
 
-    fn unique_account_dataspace_hint(
+    pub(crate) fn unique_account_dataspace_hint(
         state_transaction: &StateTransaction<'_, '_>,
         account_id: &AccountId,
     ) -> Result<Option<DataSpaceId>, Error> {

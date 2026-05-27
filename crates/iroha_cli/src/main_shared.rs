@@ -5333,7 +5333,7 @@ mod trigger {
         /// JSON object passed as trigger execution arguments
         #[arg(long, default_value = "{}")]
         pub args_json: String,
-        /// Include trace intent in the submission envelope. Runtime trace hydration is best effort.
+        /// Include runtime completion and pipeline diagnostics from Torii after finality.
         #[arg(long)]
         pub trace: bool,
         #[command(flatten)]
@@ -5381,9 +5381,43 @@ mod trigger {
                     "trigger_completions",
                     json_utils::json_value(&status.trigger_completions)?,
                 ));
+                if self.trace {
+                    let trace = if let Some(height) = status.block_height {
+                        let completions = client.get_trigger_completions(
+                            Some(&self.id.to_string()),
+                            None,
+                            Some("all"),
+                            Some(height),
+                            Some(height),
+                            Some(100),
+                            Some(1),
+                        )?;
+                        norito::json!({
+                            "mode": "committed_trigger_completion",
+                            "pipeline": (status.r#final.clone()),
+                            "completion_query": (completions),
+                        })
+                    } else {
+                        norito::json!({
+                            "mode": "pipeline_status",
+                            "pipeline": (status.r#final.clone()),
+                            "completion_query": null,
+                        })
+                    };
+                    pairs.push(("trace", trace));
+                }
                 pairs.push(("final", json_utils::json_value(&status.r#final)?));
             } else {
                 pairs.push(("finalized", json_utils::json_value(&false)?));
+                if self.trace {
+                    pairs.push((
+                        "trace",
+                        norito::json!({
+                            "mode": "submit_only",
+                            "message": "trace hydration requires waiting for finality",
+                        }),
+                    ));
+                }
             }
             let response = json_utils::json_object(pairs)?;
             context.print_data(&response)
@@ -5392,7 +5426,7 @@ mod trigger {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Completed {
-        /// Collect matching trigger completion events from the live event stream.
+        /// List matching trigger completions from committed block history.
         List(CompletedList),
         /// Stream matching trigger completion events until interrupted, timed out, or limited.
         Watch(CompletedWatch),
@@ -5444,12 +5478,21 @@ mod trigger {
         /// Optional completion outcome filter.
         #[arg(long, value_enum, default_value_t = CompletedOutcomeArg::All)]
         pub outcome: CompletedOutcomeArg,
-        /// Maximum events to collect before returning.
+        /// Maximum completion records to return.
         #[arg(long, default_value_t = 10)]
         pub limit: u64,
-        /// Maximum live-stream collection time.
-        #[arg(long, default_value_t = 5_000)]
-        pub timeout_ms: u64,
+        /// First block height to scan. Defaults to the recent bounded window.
+        #[arg(long)]
+        pub from_height: Option<u64>,
+        /// Last block height to scan. Defaults to the current committed height.
+        #[arg(long)]
+        pub to_height: Option<u64>,
+        /// Maximum number of recent blocks to scan when --from-height is omitted.
+        #[arg(long, default_value_t = 1_000)]
+        pub scan_limit_blocks: u64,
+        /// Deprecated compatibility flag; `list` is historical and does not wait.
+        #[arg(long, hide = true)]
+        pub timeout_ms: Option<u64>,
     }
 
     #[derive(clap::Args, Debug)]
@@ -5468,33 +5511,20 @@ mod trigger {
         pub timeout_ms: Option<u64>,
     }
 
-    #[derive(crate::json_macros::JsonSerialize)]
-    struct TriggerCompletedCollectResponse {
-        trigger_id: Option<TriggerId>,
-        outcome: String,
-        timeout_ms: Option<u64>,
-        limit: Option<u64>,
-        count: u64,
-        events: Vec<iroha::data_model::events::trigger_completed::TriggerCompletedEvent>,
-    }
-
     impl CompletedList {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let filter = completed_filter(self.id.clone(), self.outcome);
-            let events = collect_completed_events(
-                context,
-                filter,
-                Some(Duration::from_millis(self.timeout_ms)),
+            let client = context.client_from_config();
+            let trigger_id = self.id.as_ref().map(ToString::to_string);
+            let response = client.get_trigger_completions(
+                trigger_id.as_deref(),
+                None,
+                Some(self.outcome.as_str()),
+                self.from_height,
+                self.to_height,
                 Some(self.limit),
+                Some(self.scan_limit_blocks),
             )?;
-            context.print_data(&TriggerCompletedCollectResponse {
-                trigger_id: self.id,
-                outcome: self.outcome.as_str().to_owned(),
-                timeout_ms: Some(self.timeout_ms),
-                limit: Some(self.limit),
-                count: events.len() as u64,
-                events,
-            })
+            context.print_data(&response)
         }
     }
 

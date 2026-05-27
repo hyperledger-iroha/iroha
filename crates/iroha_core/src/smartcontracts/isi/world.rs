@@ -39,8 +39,11 @@ pub mod isi {
     use iroha_data_model::{
         Level,
         account::AccountController,
-        asset::definition::{
-            AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
+        asset::{
+            AssetBalancePolicy, AssetBalanceScope,
+            definition::{
+                AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
+            },
         },
         confidential::ConfidentialStatus,
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
@@ -8639,6 +8642,46 @@ pub mod isi {
         }
     }
 
+    fn shield_public_asset_id(
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_def_id: &AssetDefinitionId,
+        account_id: &AccountId,
+    ) -> Result<AssetId, Error> {
+        let asset_definition = state_transaction
+            .world
+            .asset_definition(asset_def_id)
+            .map_err(Error::from)?;
+        let scope = match asset_definition.balance_scope_policy() {
+            AssetBalancePolicy::Global => AssetBalanceScope::Global,
+            AssetBalancePolicy::DataspaceRestricted => {
+                let route_dataspace = state_transaction
+                    .current_dataspace_id
+                    .or(state_transaction.world.current_dataspace_id);
+                let dataspace = if let Some(dataspace) = route_dataspace
+                    .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
+                {
+                    Some(dataspace)
+                } else {
+                    crate::smartcontracts::isi::asset::isi::unique_account_dataspace_hint(
+                        state_transaction,
+                        account_id,
+                    )?
+                }
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "dataspace-restricted shield requires a non-universal execution dataspace or a single account dataspace binding"
+                            .into(),
+                    )
+                })?;
+                AssetBalanceScope::Dataspace(dataspace)
+            }
+        };
+        let asset_id = AssetId::with_scope(asset_def_id.clone(), account_id.clone(), scope);
+        state_transaction
+            .world
+            .resolve_asset_id_for_current_scope(&asset_id)
+    }
+
     impl Execute for zk::Shield {
         #[allow(clippy::too_many_lines)]
         fn execute(
@@ -8648,7 +8691,6 @@ pub mod isi {
         ) -> Result<(), Error> {
             // Debit public balance by burning, then append a note commitment to shielded ledger.
             // Policy: ZkNative always ok; Hybrid requires allow_shield.
-            let asset_id = AssetId::of(self.asset().clone(), self.from().clone());
             let def_id = self.asset().clone();
             let policy_mode = apply_policy_if_due(state_transaction, &def_id)?.mode();
             match policy_mode {
@@ -8672,6 +8714,7 @@ pub mod isi {
                 }
                 ConfidentialPolicyMode::ShieldedOnly => {}
             }
+            let asset_id = shield_public_asset_id(state_transaction, &def_id, self.from())?;
             if !self.enc_payload().is_supported() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
@@ -13820,6 +13863,357 @@ pub mod isi {
             .expect("dataspace catalog");
             stx.nexus.dataspace_catalog = dataspace_catalog.clone();
             stx.world.dataspace_catalog = dataspace_catalog;
+        }
+
+        fn restricted_shield_fixture(
+            account_uaid: Option<UniversalAccountId>,
+            bindings: &[(UniversalAccountId, DataSpaceId)],
+            balances: &[(AssetBalanceScope, u64)],
+        ) -> (State, AssetDefinitionId, Vec<AssetId>) {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = new_account_in_domain(&ALICE_ID)
+                .with_uaid(account_uaid)
+                .build(&ALICE_ID);
+            let asset_def_id =
+                AssetDefinitionId::new(domain_id.clone(), "ticket".parse().expect("asset name"));
+            let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string())
+                .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+                .confidential_policy(AssetConfidentialPolicy::convertible())
+                .build(&ALICE_ID);
+            let asset_ids: Vec<_> = balances
+                .iter()
+                .map(|(scope, _)| {
+                    AssetId::with_scope(asset_def_id.clone(), ALICE_ID.clone(), *scope)
+                })
+                .collect();
+            let assets: Vec<_> = asset_ids
+                .iter()
+                .zip(balances.iter())
+                .map(|(asset_id, (_, amount))| {
+                    Asset::new(asset_id.clone(), Numeric::new(*amount, 0))
+                })
+                .collect();
+            let mut world = World::with_assets([domain], [account], [asset_definition], assets, []);
+            world.zk_assets.insert(asset_def_id.clone(), {
+                let mut state = crate::state::ZkAssetState::default();
+                state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
+                state.allow_shield = true;
+                state
+            });
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new(world, kura, query_handle);
+            let mut grouped: BTreeMap<
+                UniversalAccountId,
+                crate::nexus::space_directory::UaidDataspaceBindings,
+            > = BTreeMap::new();
+            for (uaid, dataspace) in bindings {
+                grouped
+                    .entry(*uaid)
+                    .or_default()
+                    .bind_account(*dataspace, ALICE_ID.clone());
+            }
+            for (uaid, bindings) in grouped {
+                state.world.uaid_accounts.insert(uaid, ALICE_ID.clone());
+                state.world.uaid_dataspaces.insert(uaid, bindings);
+            }
+            (state, asset_def_id, asset_ids)
+        }
+
+        fn shield_amount(
+            stx: &mut StateTransaction<'_, '_>,
+            asset_def_id: &AssetDefinitionId,
+            amount: u128,
+        ) -> Result<(), InstructionExecutionError> {
+            iroha_data_model::isi::zk::Shield::new(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                amount,
+                [3; 32],
+                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+            )
+            .execute(&ALICE_ID, stx)
+        }
+
+        fn numeric_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Numeric {
+            stx.world
+                .assets
+                .get(asset_id)
+                .expect("asset balance exists")
+                .as_ref()
+                .clone()
+        }
+
+        fn commitment_count(
+            stx: &StateTransaction<'_, '_>,
+            asset_def_id: &AssetDefinitionId,
+        ) -> usize {
+            stx.world
+                .zk_assets
+                .get(asset_def_id)
+                .map_or(0, |state| state.commitments.len())
+        }
+
+        #[test]
+        fn shield_restricted_asset_uses_unique_account_dataspace_on_universal_route() {
+            let dataspace = DataSpaceId::new(7);
+            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::shield-source"));
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                Some(uaid),
+                &[(uaid, dataspace)],
+                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
+            );
+            let scoped_asset_id = asset_ids[0].clone();
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            assert!(
+                stx.world
+                    .uaid_dataspaces
+                    .iter()
+                    .any(|(_, bindings)| bindings.is_bound_to(dataspace, &ALICE_ID)),
+                "fixture must expose the account dataspace binding"
+            );
+            assert_eq!(
+                crate::smartcontracts::isi::asset::isi::unique_account_dataspace_hint(
+                    &stx, &ALICE_ID
+                )
+                .expect("dataspace hint resolves"),
+                Some(dataspace)
+            );
+
+            shield_amount(&mut stx, &asset_def_id, 3)
+                .expect("shield must debit the account's scoped transparent balance");
+
+            assert_eq!(numeric_balance(&stx, &scoped_asset_id), Numeric::new(7, 0));
+            let universal_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
+            );
+            assert!(
+                stx.world.assets.get(&universal_asset_id).is_none(),
+                "universal route must not debit a universal bucket when the account has one private dataspace binding"
+            );
+            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
+        }
+
+        #[test]
+        fn shield_restricted_asset_uses_non_universal_route_without_account_binding() {
+            let dataspace = DataSpaceId::new(7);
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                None,
+                &[],
+                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(dataspace);
+            stx.world.current_dataspace_id = Some(dataspace);
+
+            shield_amount(&mut stx, &asset_def_id, 4)
+                .expect("non-universal route determines the restricted public bucket");
+
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(6, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
+        }
+
+        #[test]
+        fn shield_restricted_asset_non_universal_route_overrides_ambiguous_bindings() {
+            let first_dataspace = DataSpaceId::new(7);
+            let route_dataspace = DataSpaceId::new(8);
+            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::route-shield"));
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                Some(uaid),
+                &[(uaid, first_dataspace), (uaid, route_dataspace)],
+                &[
+                    (AssetBalanceScope::Dataspace(first_dataspace), 10),
+                    (AssetBalanceScope::Dataspace(route_dataspace), 11),
+                ],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(route_dataspace);
+            stx.world.current_dataspace_id = Some(route_dataspace);
+
+            shield_amount(&mut stx, &asset_def_id, 4)
+                .expect("non-universal route must select the route bucket directly");
+
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(numeric_balance(&stx, &asset_ids[1]), Numeric::new(7, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
+        }
+
+        #[test]
+        fn shield_restricted_asset_rejects_universal_route_without_account_dataspace() {
+            let universal_asset_id = AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL);
+            let (state, asset_def_id, asset_ids) =
+                restricted_shield_fixture(None, &[], &[(universal_asset_id, 10)]);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let err = shield_amount(&mut stx, &asset_def_id, 3)
+                .expect_err("universal route without a unique binding must not choose a bucket");
+
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => assert!(
+                    message.contains("dataspace-restricted shield requires"),
+                    "unexpected invariant message: {message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
+        }
+
+        #[test]
+        fn shield_restricted_asset_rejects_ambiguous_universal_route_bindings() {
+            let first_dataspace = DataSpaceId::new(7);
+            let second_dataspace = DataSpaceId::new(8);
+            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::ambiguous-shield"));
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                Some(uaid),
+                &[(uaid, first_dataspace), (uaid, second_dataspace)],
+                &[
+                    (AssetBalanceScope::Dataspace(first_dataspace), 10),
+                    (AssetBalanceScope::Dataspace(second_dataspace), 11),
+                ],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let err = shield_amount(&mut stx, &asset_def_id, 3)
+                .expect_err("ambiguous account bindings must not be guessed");
+
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => assert!(
+                    message.contains("multiple dataspaces"),
+                    "unexpected invariant message: {message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(numeric_balance(&stx, &asset_ids[1]), Numeric::new(11, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
+        }
+
+        #[test]
+        fn shield_restricted_asset_ignores_stale_unrelated_uaid_binding() {
+            let dataspace = DataSpaceId::new(7);
+            let account_uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::shield-account"));
+            let stale_uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::stale-shield"));
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                Some(account_uaid),
+                &[(stale_uaid, dataspace)],
+                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let err = shield_amount(&mut stx, &asset_def_id, 3)
+                .expect_err("stale bindings for another UAID must not select a shield bucket");
+
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => assert!(
+                    message.contains("dataspace-restricted shield requires"),
+                    "unexpected invariant message: {message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
+        }
+
+        #[test]
+        fn shield_restricted_asset_does_not_fall_back_to_universal_bucket() {
+            let dataspace = DataSpaceId::new(7);
+            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::no-fallback-shield"));
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                Some(uaid),
+                &[(uaid, dataspace)],
+                &[(AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL), 10)],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let err = shield_amount(&mut stx, &asset_def_id, 3)
+                .expect_err("missing private bucket must not debit a universal bucket");
+
+            assert!(
+                matches!(err, InstructionExecutionError::Find(FindError::Asset(_)))
+                    || err.to_string().contains("NotEnoughQuantity"),
+                "unexpected error: {err:?}"
+            );
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
+        }
+
+        #[test]
+        fn shield_global_asset_still_uses_global_bucket_on_universal_route() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = new_account_in_domain(&ALICE_ID).build(&ALICE_ID);
+            let asset_def_id =
+                AssetDefinitionId::new(domain_id.clone(), "coupon".parse().expect("asset name"));
+            let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string())
+                .with_balance_scope_policy(AssetBalancePolicy::Global)
+                .confidential_policy(AssetConfidentialPolicy::convertible())
+                .build(&ALICE_ID);
+            let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
+            let asset = Asset::new(asset_id.clone(), Numeric::new(10, 0));
+            let mut world =
+                World::with_assets([domain], [account], [asset_definition], [asset], []);
+            world.zk_assets.insert(asset_def_id.clone(), {
+                let mut state = crate::state::ZkAssetState::default();
+                state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
+                state.allow_shield = true;
+                state
+            });
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            shield_amount(&mut stx, &asset_def_id, 3)
+                .expect("global assets must keep using the global public bucket");
+
+            assert_eq!(numeric_balance(&stx, &asset_id), Numeric::new(7, 0));
+            let universal_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
+            );
+            assert!(
+                stx.world.assets.get(&universal_asset_id).is_none(),
+                "global shield must not move balances into a dataspace bucket"
+            );
+            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
         }
 
         fn seed_manifest_record(

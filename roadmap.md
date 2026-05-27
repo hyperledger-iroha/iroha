@@ -16,11 +16,18 @@ and completed history lives in [`status.md`](./status.md).
 - Keep focused validation green for the core transaction pipeline, Torii query
   APIs, Norito wire formats, and SDK fixtures before broader workspace test
   runs.
-- Finish the remaining server-side settlement integration for the v2 Offline
-  Bearer purse model. The Kotlin, Swift, and Java Android SDKs now expose
-  hardware-backed stateful purse contracts, and Torii signs config-driven
-  revocation, blacklist, and per-asset offline-limit bundles for app policy
-  refresh.
+- Complete production rollout of the v2 Offline Bearer purse model. The
+  Kotlin, Swift, and Java Android SDKs now own canonical Norito-backed bearer
+  payloads and production Bearer text prefixes, strict hardware-backed purse
+  capability checks, settlement-batch verification, durable Torii replay
+  markers, issuer-authority settlement transactions, issuer-signed Bearer
+  policy/certificate response material, and a Bearer-named Android NFC facade.
+  PK and BPNG Android/iOS app production paths build against SDK Bearer codecs
+  and receiver-complete settlement batches; remaining cleanup is legacy
+  OfflineNote DTO/test-fixture naming, physical-device secure-element rollout
+  evidence, temporary SDK compatibility-shim removal, and expanded
+  cross-SDK golden-vector coverage as new signature/hardware combinations are
+  added.
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 

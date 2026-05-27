@@ -2521,6 +2521,18 @@ pub struct WorldBlock<'world> {
 }
 
 impl<'world> WorldBlock<'world> {
+    /// Return trigger completion events emitted during the current block without
+    /// draining the live event buffer.
+    pub(crate) fn trigger_completions(&self) -> Vec<TriggerCompletedEvent> {
+        self.external_event_buf
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(completed) => Some(completed.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Drain and return any events that were emitted into the external buffer during
     /// the current block application. Intended for tests and block-assembly paths.
     pub fn take_external_events(&mut self) -> Vec<EventBox> {

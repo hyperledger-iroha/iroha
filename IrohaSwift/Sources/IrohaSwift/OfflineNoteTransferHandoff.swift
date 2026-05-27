@@ -142,9 +142,9 @@ public enum OfflineNoteTransferTextPayloadCodecError: Error, LocalizedError, Equ
 }
 
 public enum OfflineNoteTransferTextPayloadCodec {
-    public static let receiveRequestPrefix = OfflineNoteReceiveRequestCodec.textPrefix
-    public static let paymentTokenPrefix = OfflineNotePaymentTokenCodec.textPrefix
-    public static let receiptAckPrefix = OfflineNoteReceiptAckCodec.textPrefix
+    public static let receiveRequestPrefix = OfflineBearerV2TextCodec.receiveRequestTextPrefix
+    public static let paymentTokenPrefix = OfflineBearerV2TextCodec.paymentTextPrefix
+    public static let receiptAckPrefix = OfflineBearerV2TextCodec.ackTextPrefix
 
     public static func prefix(for kind: OfflineNoteTextPayloadKind) -> String {
         switch kind {
@@ -292,18 +292,15 @@ public enum OfflineNoteTransferTextPayloadCodec {
     }
 
     private static func validateReceiveRequest(_ value: String) throws {
-        _ = try decodeReceiveRequestPayload(value)
+        _ = try OfflineBearerV2TextCodec.decodeReceiveRequestText(value)
     }
 
     private static func validatePaymentToken(_ value: String) throws {
-        if (try? OfflineNotePaymentTokenCodec.decodeText(value)) != nil {
-            return
-        }
-        _ = try decodePaymentToken(value)
+        _ = try OfflineBearerV2TextCodec.decodePaymentText(value)
     }
 
     private static func validateReceiptAck(_ value: String) throws {
-        _ = try decodeReceiptAck(value)
+        _ = try OfflineBearerV2TextCodec.decodeAckText(value)
     }
 
     private static func validateReceiptAckFields(_ ack: OfflineReceiptAck) throws {
