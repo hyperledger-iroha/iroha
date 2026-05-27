@@ -122,7 +122,7 @@ Code Size Cap
 
 - GET `/v1/gov/council/current`
   - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
-  - Notes: Returns the persisted council when present; otherwise derives a deterministic fallback from bonded citizens at or above `citizenship_bond_amount`.
+  - Notes: Returns the persisted council when present; otherwise derives a deterministic fallback from accounts holding at least `parliament_min_stake` of `parliament_eligibility_asset_id`.
 
 - POST `/v1/gov/parliament/ballots`
   - Request: { "authority": "<account>", "chain_id": "...", "proposal_id": "<hex32>", "body": "PolicyJury", "decision": "approve|reject|abstain" }

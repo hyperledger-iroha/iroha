@@ -23,7 +23,6 @@ use iroha_p2p::{
     ConfidentialFeatureDigest, ConfidentialHandshakeCaps, ConsensusConfigCaps,
     ConsensusHandshakeCaps, CryptoHandshakeCaps, NetworkHandle, network::message::*,
 };
-use iroha_primitives::addr::socket_addr;
 use norito::codec::{Decode, Encode};
 use tokio::time::Duration;
 
@@ -181,8 +180,8 @@ async fn consensus_caps_match_connects() {
     let chain = ChainId::from("caps-test");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let addr1 = socket_addr!(127.0.0.1:0);
-    let addr2 = socket_addr!(127.0.0.1:0);
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
     let config_caps = sample_consensus_config_caps();
 
     let caps = ConsensusHandshakeCaps {
@@ -236,8 +235,8 @@ async fn consensus_caps_mismatch_rejected() {
     let chain = ChainId::from("caps-test");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let addr1 = socket_addr!(127.0.0.1:0);
-    let addr2 = socket_addr!(127.0.0.1:0);
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
     let config_caps = sample_consensus_config_caps();
 
     let caps_ok = ConsensusHandshakeCaps {
@@ -298,8 +297,8 @@ async fn consensus_config_caps_mismatch_rejected() {
     let chain = ChainId::from("caps-config-test");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let addr1 = socket_addr!(127.0.0.1:0);
-    let addr2 = socket_addr!(127.0.0.1:0);
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
 
     let config_caps = sample_consensus_config_caps();
     let mut mismatched = config_caps.clone();
@@ -362,8 +361,8 @@ async fn confidential_caps_match_connects() {
     let chain = ChainId::from("conf-caps-test");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let addr1 = socket_addr!(127.0.0.1:0);
-    let addr2 = socket_addr!(127.0.0.1:0);
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
 
     let features = Some(ConfidentialFeatureDigest {
         vk_set_hash: Some([7u8; 32]),
@@ -423,8 +422,8 @@ async fn confidential_caps_mismatch_rejected() {
     let chain = ChainId::from("conf-caps-test");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let addr1 = socket_addr!(127.0.0.1:0);
-    let addr2 = socket_addr!(127.0.0.1:0);
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
 
     let features = Some(ConfidentialFeatureDigest {
         vk_set_hash: Some([9u8; 32]),
@@ -491,8 +490,8 @@ async fn confidential_caps_backend_mismatch_rejected() {
     let chain = ChainId::from("conf-caps-test");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let addr1 = socket_addr!(127.0.0.1:0);
-    let addr2 = socket_addr!(127.0.0.1:0);
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
 
     let features = Some(ConfidentialFeatureDigest {
         vk_set_hash: Some([3u8; 32]),
@@ -559,8 +558,8 @@ async fn confidential_caps_features_mismatch_rejected() {
     let chain = ChainId::from("conf-caps-test");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let addr1 = socket_addr!(127.0.0.1:0);
-    let addr2 = socket_addr!(127.0.0.1:0);
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
 
     let features_ok = Some(ConfidentialFeatureDigest {
         vk_set_hash: Some([1u8; 32]),
@@ -634,9 +633,9 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
     let chain = ChainId::from("conf-caps-recover-test");
     let validator_kp = KeyPair::random();
     let peer_kp = KeyPair::random();
-    let addr1 = socket_addr!(127.0.0.1:0);
-    let addr_stale = socket_addr!(127.0.0.1:0);
-    let addr_fresh = socket_addr!(127.0.0.1:0);
+    let addr1 = super::next_addr();
+    let addr_stale = super::next_addr();
+    let addr_fresh = super::next_addr();
 
     let features_expected = Some(ConfidentialFeatureDigest {
         vk_set_hash: Some([4u8; 32]),
@@ -781,8 +780,8 @@ async fn crypto_caps_match_connects() {
     let chain = ChainId::from("crypto-caps-test");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let addr1 = socket_addr!(127.0.0.1:0);
-    let addr2 = socket_addr!(127.0.0.1:0);
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
 
     let caps = CryptoHandshakeCaps {
         sm_enabled: true,
@@ -836,8 +835,8 @@ async fn crypto_caps_mismatch_rejected() {
     let chain = ChainId::from("crypto-caps-test");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let addr1 = socket_addr!(127.0.0.1:0);
-    let addr2 = socket_addr!(127.0.0.1:0);
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
 
     let caps_enabled = CryptoHandshakeCaps {
         sm_enabled: true,
@@ -898,8 +897,8 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
     let chain = ChainId::from("crypto-caps-test");
     let kp1 = KeyPair::random();
     let kp2 = KeyPair::random();
-    let addr1 = socket_addr!(127.0.0.1:0);
-    let addr2 = socket_addr!(127.0.0.1:0);
+    let addr1 = super::next_addr();
+    let addr2 = super::next_addr();
 
     let caps_enabled = CryptoHandshakeCaps {
         sm_enabled: true,
@@ -914,7 +913,7 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
         require_sm_openssl_preview_match: false,
     };
 
-    let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
+    let (mut net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp1.clone(),
         cfg(addr1.clone()),
         Some(chain.clone()),
@@ -947,10 +946,18 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let online = net1.online_peers(std::collections::HashSet::len);
-    assert!(
-        online >= 1,
-        "permissive configuration should allow mismatched peers to connect (observed {online})"
-    );
+    let online = tokio::time::timeout(Duration::from_millis(1_500), async {
+        loop {
+            let online = net1
+                .wait_online_peers_update(std::collections::HashSet::len)
+                .await
+                .expect("online peers channel closed");
+            if online >= 1 {
+                break online;
+            }
+        }
+    })
+    .await
+    .expect("permissive configuration should allow mismatched peers to connect");
+    assert!(online >= 1);
 }

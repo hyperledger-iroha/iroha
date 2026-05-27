@@ -4095,10 +4095,12 @@ async fn handler_account_get(
     let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     let key_hint = account_id.clone();
     let telemetry = app.telemetry_handle();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(format) => format,
-        Err(response) => return Ok(response),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(format) => format,
+            Err(response) => return Ok(response),
+        };
     if !trusted_internal {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -4969,10 +4971,12 @@ async fn handler_proofs_query(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     let tel = app.telemetry.clone();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
 
     ensure_proof_api_version(&app, negotiated, "v1/proofs/query")?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
@@ -8869,10 +8873,12 @@ async fn handler_runtime_abi_active(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/runtime/abi/active").await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_runtime_abi_active(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -8886,10 +8892,12 @@ async fn handler_runtime_abi_hash(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/runtime/abi/hash").await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_runtime_abi_hash(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -9166,10 +9174,12 @@ async fn handler_runtime_metrics(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/runtime/metrics").await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_runtime_metrics(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -9183,10 +9193,12 @@ async fn handler_node_capabilities(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/node/capabilities").await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_node_capabilities(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -9206,10 +9218,12 @@ async fn handler_node_query_projection_checkpoint(
         "v1/node/query/projection/checkpoint",
     )
     .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let Some(payload) =
         crate::runtime::handle_node_query_projection_checkpoint(app.state.clone()).await
     else {
@@ -9238,10 +9252,12 @@ async fn handler_node_query_projection_checkpoint_plan(
         true,
     )
     .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload =
         crate::runtime::handle_node_query_projection_checkpoint_plan(app.state.clone(), body.0)
             .await?;
@@ -9268,10 +9284,12 @@ async fn handler_node_query_projection_checkpoint_publish(
         true,
     )
     .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_node_query_projection_checkpoint_publish_with_app(
         Some(app.clone()),
         app.state.clone(),
@@ -9299,10 +9317,12 @@ async fn handler_node_query_projection_shard_catalog(
         "v1/node/query/projection/catalog",
     )
     .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_node_query_projection_shard_catalog(
         app.state.clone(),
         resource,
@@ -9359,10 +9379,12 @@ async fn handler_runtime_upgrades_list(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/runtime/upgrades", true).await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_runtime_upgrades_list(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -9383,10 +9405,12 @@ async fn handler_runtime_propose_upgrade(
         true,
     )
     .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     let payload = crate::runtime::handle_runtime_propose_upgrade(body).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
@@ -30616,10 +30640,12 @@ async fn handler_proof_retention_status(
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
     ensure_proof_api_version(
         &app,
         negotiated,
@@ -32363,7 +32389,9 @@ async fn handler_alias_voprf_evaluate(
 
     let evaluated = iroha_core::alias::evaluate_alias_voprf(&blinded_bytes).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "Conversion: {err}"
+            )),
         ))
     })?;
     let evaluated_element_hex = hex::encode(evaluated.evaluated_element);
@@ -33526,7 +33554,7 @@ async fn handler_ledger_headers(
     headers: axum::http::HeaderMap,
 ) -> Result<Response, Error> {
     let accept = headers.get(axum::http::header::ACCEPT);
-    let format = match crate::utils::negotiate_response_format(accept) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -33596,7 +33624,7 @@ async fn handler_ledger_state_root(
     headers: axum::http::HeaderMap,
 ) -> Result<Response, Error> {
     let accept = headers.get(axum::http::header::ACCEPT);
-    let format = match crate::utils::negotiate_response_format(accept) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -33665,7 +33693,7 @@ async fn handler_ledger_state_proof(
     headers: axum::http::HeaderMap,
 ) -> Result<Response, Error> {
     let accept = headers.get(axum::http::header::ACCEPT);
-    let format = match crate::utils::negotiate_response_format(accept) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -41584,6 +41612,15 @@ pub(crate) mod tests_runtime_handlers {
         ) -> Result<RoutingDecision, RoutingResolveError> {
             self.route_calls.fetch_add(1, Ordering::Relaxed);
             Ok(self.route(tx))
+        }
+
+        fn try_route_plan_with_state(
+            &self,
+            tx: &AcceptedTransaction<'_>,
+            state: &IrohaState,
+        ) -> Result<RoutingPlan, RoutingResolveError> {
+            self.try_route_with_state(tx, state)
+                .map(RoutingPlan::single)
         }
     }
 

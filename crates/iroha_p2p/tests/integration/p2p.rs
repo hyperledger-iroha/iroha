@@ -687,11 +687,12 @@ async fn ws_fallback_connects_and_handshakes() {
     let kp2 = KeyPair::random();
     let chain_id = ChainId::from("test_chain");
     let idle = Duration::from_millis(5000);
+    let network2_addr = super::next_addr();
     let (network2, _child2) = NetworkHandle::<TestMessage>::start(
         kp2.clone(),
         Config {
-            address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
-            public_address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
+            address: WithOrigin::inline(network2_addr.clone()),
+            public_address: WithOrigin::inline(network2_addr),
             relay_mode: RelayMode::Disabled,
             relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
@@ -955,11 +956,12 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
 
     // Start the dialer network (peer1) and point to the WS endpoint via Host address.
     let kp1 = KeyPair::random();
+    let network1_addr = super::next_addr();
     let (mut network1, _child1) = NetworkHandle::<TestMessage>::start(
         kp1.clone(),
         Config {
-            address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
-            public_address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
+            address: WithOrigin::inline(network1_addr.clone()),
+            public_address: WithOrigin::inline(network1_addr),
             relay_mode: RelayMode::Disabled,
             relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
@@ -3399,7 +3401,7 @@ async fn tls_inbound_listener_smoke() {
     let peer1 = Peer::new(public_host_addr.clone(), key_pair1.public_key().clone());
 
     let config1 = Config {
-        address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
+        address: WithOrigin::inline(super::next_addr()),
         public_address: WithOrigin::inline(public_host_addr.clone()),
         relay_mode: RelayMode::Disabled,
         relay_hub_addresses: Vec::new(),
@@ -3540,11 +3542,12 @@ async fn tls_inbound_listener_smoke() {
 
     // Network 2 (dialer with outbound TLS via hostname)
     let key_pair2 = KeyPair::random();
+    let dialer_addr = super::next_addr();
     let (_n2, _child2) = match NetworkHandle::<TestMessage>::start(
         key_pair2.clone(),
         Config {
-            address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
-            public_address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
+            address: WithOrigin::inline(dialer_addr.clone()),
+            public_address: WithOrigin::inline(dialer_addr),
             relay_mode: RelayMode::Disabled,
             relay_hub_addresses: Vec::new(),
             relay_ttl: RELAY_TTL,
