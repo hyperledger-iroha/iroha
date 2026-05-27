@@ -57130,6 +57130,8 @@ pub struct AccountFaucetResponseDto {
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct AccountFaucetPuzzleDto {
     pub algorithm: &'static str,
+    pub chain_id: String,
+    pub chain_discriminant: u16,
     pub difficulty_bits: u8,
     pub anchor_height: u64,
     pub anchor_block_hash_hex: String,
@@ -57383,9 +57385,43 @@ fn onboarding_error_metadata(reason: &str) -> (&'static str, Option<&'static str
 #[cfg(feature = "app_api")]
 fn faucet_invalid_request(reason: &str) -> Error {
     iroha_logger::warn!(target: "torii.faucet", reason, "Account faucet request rejected");
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        QueryExecutionFail::InvalidSingularParameters,
-    ))
+    let normalized = reason.to_ascii_lowercase();
+    let code = if normalized.contains("account_id must not be empty") {
+        "missing_account_id"
+    } else if normalized.contains("account id literal") {
+        "invalid_account_id"
+    } else if normalized.contains("pow anchor height required") {
+        "faucet_pow_anchor_required"
+    } else if normalized.contains("pow anchor height out of range")
+        || normalized.contains("invalid faucet pow anchor height")
+    {
+        "faucet_pow_anchor_out_of_range"
+    } else if normalized.contains("unknown faucet pow anchor height") {
+        "faucet_pow_anchor_unknown"
+    } else if normalized.contains("pow anchor is stale") {
+        "faucet_pow_anchor_stale"
+    } else if normalized.contains("pow nonce required") {
+        "faucet_pow_nonce_required"
+    } else if normalized.contains("invalid faucet pow nonce") {
+        "faucet_pow_nonce_invalid"
+    } else if normalized.contains("invalid faucet pow solution") {
+        "faucet_pow_solution_invalid"
+    } else if normalized.contains("pow vrf seed unavailable") {
+        "faucet_pow_vrf_seed_unavailable"
+    } else if normalized.contains("pow scrypt configuration") {
+        "faucet_pow_config_invalid"
+    } else if normalized.contains("out of funds") {
+        return Error::AppServiceUnavailable {
+            code: "faucet_out_of_funds",
+            message: reason.to_owned(),
+        };
+    } else {
+        "faucet_invalid_request"
+    };
+    Error::AppQueryValidation {
+        code,
+        message: reason.to_owned(),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -57702,6 +57738,18 @@ mod faucet_pow_tests {
         assert_eq!(adaptive_faucet_pow_extra_bits(999, 4, 6), 6);
         assert_eq!(adaptive_faucet_pow_extra_bits(10, 0, 6), 0);
         assert_eq!(adaptive_faucet_pow_extra_bits(10, 4, 0), 0);
+    }
+
+    #[test]
+    fn faucet_invalid_request_returns_specific_app_error() {
+        let err = super::faucet_invalid_request("invalid account id literal");
+        match err {
+            crate::Error::AppQueryValidation { code, message } => {
+                assert_eq!(code, "invalid_account_id");
+                assert_eq!(message, "invalid account id literal");
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
     }
 
     #[test]
@@ -58483,6 +58531,8 @@ pub async fn handle_v1_accounts_faucet_puzzle(
     };
     let response = AccountFaucetPuzzleDto {
         algorithm: FAUCET_POW_ALGORITHM,
+        chain_id: app.chain_id.to_string(),
+        chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         difficulty_bits,
         anchor_height,
         anchor_block_hash_hex: hex::encode(anchor_hash.as_ref()),

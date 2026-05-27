@@ -5273,8 +5273,11 @@ mod trigger {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
-        /// List all trigger IDs
+        /// List registered trigger IDs
         All {
+            /// Only list active trigger IDs
+            #[arg(long)]
+            active: bool,
             /// Maximum number of items to return (server-side limit)
             #[arg(long)]
             limit: Option<u64>,
@@ -5292,24 +5295,46 @@ mod trigger {
             let client = context.client_from_config();
             match self {
                 List::All {
+                    active,
                     limit,
                     offset,
                     fetch_size,
                 } => {
-                    let mut builder = client.query(FindActiveTriggerIds);
-                    if limit.is_some() || offset > 0 {
-                        let pagination = iroha::data_model::query::parameters::Pagination::new(
-                            limit.and_then(NonZeroU64::new),
-                            offset,
-                        );
-                        builder = builder.with_pagination(pagination);
+                    if active {
+                        let mut builder = client.query(FindActiveTriggerIds);
+                        if limit.is_some() || offset > 0 {
+                            let pagination = iroha::data_model::query::parameters::Pagination::new(
+                                limit.and_then(NonZeroU64::new),
+                                offset,
+                            );
+                            builder = builder.with_pagination(pagination);
+                        }
+                        if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
+                            let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
+                            builder = builder.with_fetch_size(fs);
+                        }
+                        let ids = builder.execute_all()?;
+                        context.print_data(&ids)
+                    } else {
+                        let mut builder = client.query(FindTriggers);
+                        if limit.is_some() || offset > 0 {
+                            let pagination = iroha::data_model::query::parameters::Pagination::new(
+                                limit.and_then(NonZeroU64::new),
+                                offset,
+                            );
+                            builder = builder.with_pagination(pagination);
+                        }
+                        if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
+                            let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
+                            builder = builder.with_fetch_size(fs);
+                        }
+                        let triggers = builder.execute_all()?;
+                        let ids: Vec<_> = triggers
+                            .into_iter()
+                            .map(|trigger| trigger.id().clone())
+                            .collect();
+                        context.print_data(&ids)
                     }
-                    if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
-                        let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
-                        builder = builder.with_fetch_size(fs);
-                    }
-                    let ids = builder.execute_all()?;
-                    context.print_data(&ids)
                 }
             }
         }
@@ -8256,6 +8281,27 @@ mod tests {
             panic!("expected trigger disable command");
         };
         assert_eq!(disable.id.to_string(), "soraswap_tick");
+    }
+
+    #[test]
+    fn trigger_list_all_active_parse() {
+        let args =
+            Args::try_parse_from(["iroha", "trigger", "list", "all"]).expect("parse trigger list");
+        let Command::Trigger(trigger::Command::List(trigger::List::All { active, .. })) =
+            args.command
+        else {
+            panic!("expected trigger list all command");
+        };
+        assert!(!active);
+
+        let args = Args::try_parse_from(["iroha", "trigger", "list", "all", "--active"])
+            .expect("parse active trigger list");
+        let Command::Trigger(trigger::Command::List(trigger::List::All { active, .. })) =
+            args.command
+        else {
+            panic!("expected trigger list all --active command");
+        };
+        assert!(active);
     }
 
     #[test]
