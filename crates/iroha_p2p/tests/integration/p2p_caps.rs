@@ -217,7 +217,7 @@ async fn topic_cap_violation_disconnects() {
         ShutdownSignal::new(),
     )
     .await;
-    let (mut net1, _c1) = match started1 {
+    let (net1, _c1) = match started1 {
         Ok(ok) => ok,
         Err(_) => return,
     };
@@ -230,30 +230,26 @@ async fn topic_cap_violation_disconnects() {
         ShutdownSignal::new(),
     )
     .await;
-    let (mut net2, _c2) = match started2 {
+    let (net2, _c2) = match started2 {
         Ok(ok) => ok,
         Err(_) => return,
     };
 
-    // Connect
+    // Connect with a single outbound dial to avoid racing simultaneous
+    // connection resolution with the cap-violation post below.
     let p2 = Peer::new(a2.clone(), kp2.public_key().clone());
     let p1 = Peer::new(a1.clone(), kp1.public_key().clone());
     net1.update_topology(UpdateTopology(HashSet::from([p2.id().clone()])));
-    net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), a2.clone())]));
     net2.update_topology(UpdateTopology(HashSet::from([p1.id().clone()])));
     net2.update_peers_addresses(UpdatePeers(vec![(p1.id().clone(), a1.clone())]));
 
     // Wait connection established
     if tokio::time::timeout(Duration::from_millis(1500), async {
-        let mut n = net1
-            .wait_online_peers_update(std::collections::HashSet::len)
-            .await
-            .expect("online peers channel closed");
-        while n < 1 {
-            n = net1
-                .wait_online_peers_update(std::collections::HashSet::len)
-                .await
-                .expect("online peers channel closed");
+        loop {
+            if net1.online_peers(std::collections::HashSet::len) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
@@ -262,15 +258,11 @@ async fn topic_cap_violation_disconnects() {
         return;
     }
     if tokio::time::timeout(Duration::from_millis(1500), async {
-        let mut n = net2
-            .wait_online_peers_update(std::collections::HashSet::len)
-            .await
-            .expect("online peers channel closed");
-        while n < 1 {
-            n = net2
-                .wait_online_peers_update(std::collections::HashSet::len)
-                .await
-                .expect("online peers channel closed");
+        loop {
+            if net2.online_peers(std::collections::HashSet::len) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
