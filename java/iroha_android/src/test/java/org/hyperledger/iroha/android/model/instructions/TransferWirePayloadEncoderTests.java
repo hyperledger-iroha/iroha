@@ -45,6 +45,8 @@ public final class TransferWirePayloadEncoderTests {
 
     assert wirePayloadBytes(box).length > 0
         : "dataspace-scoped asset ids must encode transfer payloads";
+    assert hex(wirePayloadBytes(box)).contains("0100000009082a00000000000000")
+        : "dataspace scope must use canonical DataSpaceId payload length encoding";
   }
 
   private static void encodeAssetTransferAcceptsMultisigI105AssetOwner() throws Exception {
@@ -166,5 +168,13 @@ public final class TransferWirePayloadEncoderTests {
     final byte[] key = new byte[32];
     Arrays.fill(key, fill);
     return key;
+  }
+
+  private static String hex(final byte[] bytes) {
+    final StringBuilder builder = new StringBuilder(bytes.length * 2);
+    for (final byte value : bytes) {
+      builder.append(String.format("%02x", value & 0xFF));
+    }
+    return builder.toString();
   }
 }

@@ -927,6 +927,20 @@ fn asset_balance_operation_dataspace_target(
     } else {
         asset_definition_target.dataspace_id
     };
+
+    let authoritative_asset_target =
+        settlement_pair_dataspace_target(effective_definition_target, explicit_asset_target);
+    let ignore_universal_account_fallbacks = asset_definition_target.balance_scope_policy
+        == Some(AssetBalancePolicy::DataspaceRestricted)
+        && authoritative_asset_target.is_some_and(|target| target != DataSpaceId::UNIVERSAL);
+    let account_targets = account_targets.into_iter().map(|target| {
+        if ignore_universal_account_fallbacks && target == Some(DataSpaceId::UNIVERSAL) {
+            None
+        } else {
+            target
+        }
+    });
+
     merge_instruction_dataspace_targets(
         core::iter::once(effective_definition_target)
             .chain(core::iter::once(explicit_asset_target))
@@ -5059,6 +5073,27 @@ mod tests {
         );
     }
 
+    fn add_unlabeled_account_with_alias(
+        state: &mut crate::state::State,
+        account_id: &AccountId,
+        alias: AccountAlias,
+    ) {
+        let account = Account::new(account_id.clone()).build(account_id);
+        let (account_id, account_value) = account.into_key_value();
+        state
+            .world
+            .accounts
+            .insert(account_id.clone(), account_value);
+        state
+            .world
+            .account_aliases
+            .insert(alias.clone(), account_id.clone());
+        state
+            .world
+            .account_aliases_by_account
+            .insert(account_id, BTreeSet::from([alias]));
+    }
+
     fn scope_account_to_dataspace(
         state: &mut crate::state::State,
         account_id: &AccountId,
@@ -7420,6 +7455,87 @@ mod tests {
     }
 
     #[test]
+    fn dataspace_restricted_asset_transfer_ignores_universal_account_fallback_scope() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let (receiver_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
+            &transparent_asset_definition.canonical_address(),
+        )
+        .expect("opaque canonical asset definition id");
+        let transfer = Transfer::asset_numeric(
+            AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
+            1_u32,
+            receiver_id.clone(),
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(opaque_asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+                    .build(&sender_id),
+            ],
+            dataspace_catalog.clone(),
+            lane_catalog,
+        );
+        bind_asset_definition_alias(&mut state, &opaque_asset_definition, "pkr#sbp");
+        add_unlabeled_account_with_alias(
+            &mut state,
+            &sender_id,
+            account_alias("sender@ubl.sbp", &dataspace_catalog),
+        );
+        add_unlabeled_account_with_alias(
+            &mut state,
+            &receiver_id,
+            account_alias("receiver@hbl.sbp", &dataspace_catalog),
+        );
+
+        let state_view = state.view();
+        for account_id in [&sender_id, &receiver_id] {
+            assert_eq!(
+                state_view
+                    .world()
+                    .account_scope_hierarchy(account_id)
+                    .expect("account hierarchy")
+                    .into_keys()
+                    .collect::<Vec<_>>(),
+                vec![DataSpaceId::UNIVERSAL, dataspace_id]
+            );
+        }
+
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state_view)
+                .expect("dataspace-restricted transfer must route to the asset dataspace"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
     fn asset_definition_registration_routes_by_declared_alias_dataspace() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
@@ -8454,6 +8570,69 @@ mod tests {
             router
                 .try_route_with_view(&tx, &state.view())
                 .expect("explicit scoped mint must route to the asset balance bucket"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn explicit_dataspace_scoped_transfer_routes_to_private_bucket() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let scoped_asset_id = AssetId::with_scope(
+            asset_definition.clone(),
+            alice_id.clone(),
+            AssetBalanceScope::Dataspace(dataspace_id),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Transfer::asset_numeric(
+                scoped_asset_id,
+                1_u32,
+                bob_id,
+            ))],
+        );
+        let state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition)
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+
+        assert_eq!(
+            router.try_route_without_state(&tx).expect(
+                "explicit scoped transfer without state should defer for definition policy"
+            ),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("explicit transfer source scope must route to the asset balance bucket"),
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }

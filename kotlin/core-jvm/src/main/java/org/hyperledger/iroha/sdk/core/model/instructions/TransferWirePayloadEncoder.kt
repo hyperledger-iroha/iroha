@@ -476,8 +476,12 @@ object TransferWirePayloadEncoder {
         if (scope.isGlobal) return globalScopePayload()
         val encoder = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
         UINT32_ADAPTER.encode(encoder, 1L)
-        writePayloadLength(encoder, 8)
-        encoder.writeUInt(scope.dataspaceId, 64)
+        val child = encoder.childEncoder()
+        writePayloadLength(child, 8)
+        child.writeUInt(scope.dataspaceId, 64)
+        val payload = child.toByteArray()
+        writePayloadLength(encoder, payload.size)
+        encoder.writeBytes(payload)
         return encoder.toByteArray()
     }
 

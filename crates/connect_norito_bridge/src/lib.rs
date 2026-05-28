@@ -27,7 +27,7 @@ use iroha_data_model::{
         AccountId,
         address::{AccountAddress, AccountAddressError},
     },
-    asset::id::{AssetDefinitionId, AssetId},
+    asset::id::{AssetBalanceScope, AssetDefinitionId, AssetId},
     confidential::{CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1, ConfidentialEncryptedPayload},
     da::manifest::DaManifestV1,
     domain::DomainId,
@@ -46,6 +46,7 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     name::Name,
+    nexus::DataSpaceId,
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
     ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
@@ -371,6 +372,28 @@ fn parse_asset_definition(value: String) -> BridgeResult<AssetDefinitionId> {
     }
 
     AssetDefinitionId::parse_address_literal(trimmed).map_err(|_| BridgeError::AssetDefinition)
+}
+
+fn parse_asset_definition_with_balance_scope(
+    value: String,
+) -> BridgeResult<(AssetDefinitionId, AssetBalanceScope)> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(BridgeError::AssetDefinition);
+    }
+    let Some((definition_literal, scope_literal)) = trimmed.split_once("#dataspace:") else {
+        return parse_asset_definition(trimmed.to_owned())
+            .map(|definition| (definition, AssetBalanceScope::Global));
+    };
+    if definition_literal.is_empty() || scope_literal.is_empty() || scope_literal.contains('#') {
+        return Err(BridgeError::AssetDefinition);
+    }
+    let definition = parse_asset_definition(definition_literal.to_owned())?;
+    let dataspace_id = scope_literal
+        .parse::<u64>()
+        .map(DataSpaceId::new)
+        .map_err(|_| BridgeError::AssetDefinition)?;
+    Ok((definition, AssetBalanceScope::Dataspace(dataspace_id)))
 }
 
 fn parse_quantity(value: String) -> BridgeResult<Numeric> {
@@ -1374,6 +1397,7 @@ struct AssetTxInputs {
     chain_id: ChainId,
     authority: AccountId,
     asset_definition: AssetDefinitionId,
+    asset_scope: AssetBalanceScope,
     destination: AccountId,
     quantity: Numeric,
     ttl: Option<NonZeroU64>,
@@ -1436,10 +1460,14 @@ where
     }
     let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
 
+    let (asset_definition, asset_scope) =
+        parse_asset_definition_with_balance_scope(asset_definition_str)?;
+
     Ok(AssetTxInputs {
         chain_id: chain.parse().map_err(|_| BridgeError::ChainId)?,
         authority: parse_account_id(authority_str)?,
-        asset_definition: parse_asset_definition(asset_definition_str)?,
+        asset_definition,
+        asset_scope,
         destination: parse_destination(destination_str)?,
         quantity: parse_quantity(quantity_str)?,
         ttl: parse_ttl(ttl_ms, ttl_present != 0)?,
@@ -4553,6 +4581,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -4560,7 +4589,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
@@ -4640,6 +4670,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -4647,7 +4678,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
@@ -4727,6 +4759,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -4734,7 +4767,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
@@ -4818,6 +4852,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -4825,7 +4860,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
@@ -7200,6 +7236,7 @@ mod accel_tests {
     };
 
     use iroha_crypto::KeyPair;
+    use iroha_data_model::prelude::TransferBox;
 
     use super::*;
 
@@ -7549,6 +7586,81 @@ mod accel_tests {
         let expected = AssetDefinitionId::parse_address_literal(&canonical)
             .expect("canonical base58 should parse");
         assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn parse_asset_definition_accepts_dataspace_balance_scope_suffix() {
+        let canonical = asset_definition_literal("wonderland", "rose");
+        let (parsed, scope) =
+            parse_asset_definition_with_balance_scope(format!("{canonical}#dataspace:10"))
+                .expect("canonical base58 asset definition with dataspace scope should parse");
+        let expected = AssetDefinitionId::parse_address_literal(&canonical)
+            .expect("canonical base58 should parse");
+        assert_eq!(parsed, expected);
+        assert_eq!(scope, AssetBalanceScope::Dataspace(DataSpaceId::new(10)));
+    }
+
+    #[test]
+    fn encode_transfer_preserves_dataspace_balance_scope_suffix() {
+        let _reset = ChainDiscriminantReset::new(42);
+        let chain = cstring("00000042");
+        let authority = fixture_authority("wonderland");
+        let asset_definition = cstring(&format!(
+            "{}#dataspace:10",
+            asset_definition_literal("wonderland", "rose")
+        ));
+        let quantity = cstring("15.7500");
+        let destination = authority.clone();
+        let private_key = fixture_private_key();
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0u8; 32];
+        let result = unsafe {
+            connect_norito_encode_transfer_signed_transaction(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1_736_000_000_000,
+                3_500,
+                1,
+                17,
+                1,
+                asset_definition.as_ptr(),
+                asset_definition.as_bytes().len() as c_ulong,
+                quantity.as_ptr(),
+                quantity.as_bytes().len() as c_ulong,
+                destination.as_ptr(),
+                destination.as_bytes().len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_signed_ptr,
+                &mut out_signed_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(result, 0, "expected success");
+        let signed = decode_signed(out_signed_ptr, out_signed_len);
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                let transfer = instructions
+                    .first()
+                    .and_then(|instruction| instruction.as_any().downcast_ref::<TransferBox>())
+                    .expect("transfer instruction");
+                let TransferBox::Asset(transfer) = transfer else {
+                    panic!("expected asset transfer");
+                };
+                assert_eq!(
+                    transfer.source.scope(),
+                    &AssetBalanceScope::Dataspace(DataSpaceId::new(10))
+                );
+            }
+            other => panic!("unexpected executable: {other:?}"),
+        }
+        unsafe {
+            free(out_signed_ptr as *mut _);
+        }
     }
 
     #[test]
@@ -8736,6 +8848,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -8743,7 +8856,8 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), destination.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), destination.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
@@ -8822,6 +8936,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -8829,7 +8944,8 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), destination.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), destination.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
@@ -9027,6 +9143,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -9034,7 +9151,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition, destination.clone());
+        let asset_id = AssetId::with_scope(asset_definition, destination.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
@@ -9227,6 +9344,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -9234,7 +9352,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition, destination.clone());
+        let asset_id = AssetId::with_scope(asset_definition, destination.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,

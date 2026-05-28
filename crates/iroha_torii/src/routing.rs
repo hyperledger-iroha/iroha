@@ -15064,13 +15064,15 @@ fn build_multisig_contract_call_instructions(
     )
     .with_metadata(trigger_metadata);
     let trigger = iroha_data_model::trigger::Trigger::new(trigger_id.clone(), action);
+    let execute_trigger = payload.cloned().map_or_else(
+        || iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone()),
+        |payload| iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone()).with_args(payload),
+    );
     let instructions = vec![
         iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Register::trigger(
             trigger,
         )),
-        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
-            trigger_id.clone(),
-        )),
+        iroha_data_model::isi::InstructionBox::from(execute_trigger),
     ];
     let instructions_hash = HashOf::new(&instructions);
     Ok((instructions, instructions_hash))
@@ -16629,6 +16631,14 @@ mod multisig_contract_call_tests {
 
         assert_eq!(instructions.len(), 2);
         assert_eq!(instructions_hash, HashOf::new(&instructions));
+        let execute_trigger = instructions[1]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
+            .expect("second instruction should execute the registered trigger");
+        assert_eq!(
+            execute_trigger.args, payload,
+            "contract-call trigger execution must carry the normalized payload because the trigger host receives ExecuteTrigger args"
+        );
     }
 
     #[test]
