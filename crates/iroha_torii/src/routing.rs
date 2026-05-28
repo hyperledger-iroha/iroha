@@ -8419,9 +8419,7 @@ pub(crate) fn build_pipeline_preflight_response(
             per_gas_unit_fee: nexus.fees.per_gas_unit_fee,
             sponsorship_enabled: nexus.fees.sponsorship_enabled,
             sponsor_max_fee: nexus.fees.sponsor_max_fee,
-            sponsor_verified_balance_safety_floor: nexus
-                .fees
-                .sponsor_verified_balance_safety_floor,
+            sponsor_verified_balance_safety_floor: nexus.fees.sponsor_verified_balance_safety_floor,
             canonical_sponsor_account_id: nexus.fees.canonical_sponsor_account_id,
             fee_receipts_activation_height: nexus.fees.fee_receipts_activation_height,
             external_settlement_enabled: nexus.fees.external_settlement_enabled,

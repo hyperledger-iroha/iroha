@@ -6214,8 +6214,7 @@ impl From<&Metrics> for Status {
     fn from(value: &Metrics) -> Self {
         let now_ms = current_unix_time_ms();
         let last_block_committed_at_ms = value.last_block_committed_at_ms.get();
-        let last_non_empty_block_committed_at_ms =
-            value.last_non_empty_block_committed_at_ms.get();
+        let last_non_empty_block_committed_at_ms = value.last_non_empty_block_committed_at_ms.get();
         let time_since_last_block_ms = if last_block_committed_at_ms == 0 {
             0
         } else {

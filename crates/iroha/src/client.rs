@@ -3871,6 +3871,7 @@ mod status_tests {
     fn decode_status_prefers_norito_bare() {
         let s = Status {
             build: BuildStatus::default(),
+            observed_at_ms: 0,
             peers: 1,
             blocks: 2,
             blocks_non_empty: 1,
@@ -3882,6 +3883,12 @@ mod status_tests {
             uptime: Uptime(Duration::from_millis(1234)),
             view_changes: 0,
             queue_size: 7,
+            queue_queued: 0,
+            queue_inflight: 0,
+            last_block_committed_at_ms: 0,
+            last_non_empty_block_committed_at_ms: 0,
+            time_since_last_block_ms: 0,
+            time_since_last_non_empty_block_ms: 0,
             da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             stack: StackStatus::default(),
@@ -3918,6 +3925,7 @@ mod status_tests {
     fn decode_status_falls_back_to_json() {
         let s = Status {
             build: BuildStatus::default(),
+            observed_at_ms: 0,
             peers: 5,
             blocks: 6,
             blocks_non_empty: 4,
@@ -3929,6 +3937,12 @@ mod status_tests {
             uptime: Uptime(Duration::from_millis(5678)),
             view_changes: 1,
             queue_size: 9,
+            queue_queued: 0,
+            queue_inflight: 0,
+            last_block_committed_at_ms: 0,
+            last_non_empty_block_committed_at_ms: 0,
+            time_since_last_block_ms: 0,
+            time_since_last_non_empty_block_ms: 0,
             da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             stack: StackStatus::default(),
@@ -3958,6 +3972,7 @@ mod status_tests {
     fn decode_status_json_defaults_missing_build_metadata() {
         let mut value = norito::json::to_value(&Status {
             build: BuildStatus::default(),
+            observed_at_ms: 0,
             peers: 2,
             blocks: 3,
             blocks_non_empty: 2,
@@ -3969,6 +3984,12 @@ mod status_tests {
             uptime: Uptime(Duration::from_millis(999)),
             view_changes: 0,
             queue_size: 1,
+            queue_queued: 0,
+            queue_inflight: 0,
+            last_block_committed_at_ms: 0,
+            last_non_empty_block_committed_at_ms: 0,
+            time_since_last_block_ms: 0,
+            time_since_last_non_empty_block_ms: 0,
             da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             stack: StackStatus::default(),
@@ -19024,6 +19045,7 @@ mod tests {
         // Minimal JSON body with required fields
         let body = norito::json::to_vec(&S {
             build: BuildStatus::default(),
+            observed_at_ms: 0,
             peers: 0,
             blocks: 0,
             blocks_non_empty: 0,
@@ -19035,6 +19057,12 @@ mod tests {
             uptime: Uptime(Duration::from_secs(0)),
             view_changes: 0,
             queue_size: 0,
+            queue_queued: 0,
+            queue_inflight: 0,
+            last_block_committed_at_ms: 0,
+            last_non_empty_block_committed_at_ms: 0,
+            time_since_last_block_ms: 0,
+            time_since_last_non_empty_block_ms: 0,
             da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             crypto: CryptoStatus::default(),

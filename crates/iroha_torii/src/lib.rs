@@ -46646,16 +46646,15 @@ pub(crate) mod tests_runtime_handlers {
                 .get("sumeragi")
                 .and_then(|value| value.get("stall_threshold_ms")),
             Some(&norito::json::Value::from(
-                sumeragi
-                    .commit_time_ms
-                    .saturating_mul(3)
-                    .max(sumeragi.block_time_ms.saturating_add(sumeragi.commit_time_ms))
+                sumeragi.commit_time_ms.saturating_mul(3).max(
+                    sumeragi
+                        .block_time_ms
+                        .saturating_add(sumeragi.commit_time_ms)
+                )
             ))
         );
         assert_eq!(
-            payload
-                .get("queue")
-                .and_then(|value| value.get("size")),
+            payload.get("queue").and_then(|value| value.get("size")),
             Some(&norito::json::Value::from(0_u64))
         );
         assert!(
@@ -46696,16 +46695,12 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(payload.queue.size, 0);
         assert_eq!(
             payload.sumeragi.stall_threshold_ms,
-            payload
-                .sumeragi
-                .commit_time_ms
-                .saturating_mul(3)
-                .max(
-                    payload
-                        .sumeragi
-                        .block_time_ms
-                        .saturating_add(payload.sumeragi.commit_time_ms)
-                )
+            payload.sumeragi.commit_time_ms.saturating_mul(3).max(
+                payload
+                    .sumeragi
+                    .block_time_ms
+                    .saturating_add(payload.sumeragi.commit_time_ms)
+            )
         );
     }
 
