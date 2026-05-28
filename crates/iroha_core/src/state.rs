@@ -9429,10 +9429,22 @@ mod sumeragi_timing_tests {
             Duration::from_millis(400)
         );
 
-        let mut config = iroha_config::parameters::actual::Sumeragi::default();
-        config.da.enabled = true;
-        config.da.quorum_timeout_multiplier = 3;
-        state.set_sumeragi_parameters(&config);
+        let config = SumeragiPolicyConfig {
+            collectors_k: usize::from(iroha_config::parameters::defaults::sumeragi::COLLECTORS_K),
+            collectors_redundant_send_r:
+                iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
+            policy_flags: SumeragiPolicyFlags::new(true, false),
+            da_quorum_timeout_multiplier: 3,
+            key_activation_lead_blocks:
+                iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
+            key_overlap_grace_blocks:
+                iroha_config::parameters::defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
+            key_expiry_grace_blocks:
+                iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
+            key_allowed_algorithms: BTreeSet::new(),
+            key_allowed_hsm_providers: BTreeSet::new(),
+        };
+        state.set_sumeragi_parameters(config);
 
         assert_eq!(
             state.sumeragi_commit_quorum_timeout(),

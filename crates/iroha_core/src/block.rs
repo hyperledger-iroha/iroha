@@ -2665,6 +2665,34 @@ mod pending {
                 execution_context: None,
             })
         }
+
+        /// Chain the block to a known parent hash when the parent body is unavailable.
+        pub fn chain_with_parent_hash(
+            self,
+            view_change_index: u64,
+            parent_height: u64,
+            parent_hash: HashOf<BlockHeader>,
+        ) -> BlockBuilder<Chained> {
+            let mut header = self.make_header(None, view_change_index);
+            header.set_height(
+                core::num::NonZeroU64::new(parent_height.saturating_add(1))
+                    .expect("parent height plus one is non-zero"),
+            );
+            header.set_prev_block_hash(Some(parent_hash));
+            if header.confidential_features().is_none() {
+                header.set_confidential_features(Some(EMPTY_CONFIDENTIAL_FEATURE_DIGEST));
+            }
+            BlockBuilder(Chained {
+                header,
+                transactions: self.0.transactions,
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                previous_roster_evidence: None,
+                npos_consensus_effects: None,
+                execution_context: None,
+            })
+        }
     }
 }
 
@@ -5615,17 +5643,31 @@ pub(crate) mod valid {
                     check_genesis_block(block, genesis_account, chain_id)?;
                 }
             } else {
-                let prev_block_time = if soft_fork {
+                let prev_block = if soft_fork {
                     state.prev_block()
                 } else {
                     state.latest_block()
-                }
-                .expect("INTERNAL BUG: Genesis not committed")
-                .header()
-                .creation_time();
+                };
 
-                if block.header().creation_time() <= prev_block_time {
-                    return Err(BlockValidationError::BlockInThePast);
+                if let Some(prev_block) = prev_block {
+                    let prev_block_time = prev_block.header().creation_time();
+
+                    if block.header().creation_time() <= prev_block_time {
+                        return Err(BlockValidationError::BlockInThePast);
+                    }
+                } else if allow_missing_legacy_context {
+                    iroha_logger::warn!(
+                        block_height = block.header().height().get(),
+                        block_hash = ?block.hash(),
+                        parent_hash = ?actual_prev_block_hash,
+                        state_height,
+                        "skipping previous block timestamp check because legacy hard-fork state has hash-only parent context"
+                    );
+                } else {
+                    return Err(BlockValidationError::PrevBlockHashMismatch {
+                        expected: expected_prev_block_hash,
+                        actual: actual_prev_block_hash,
+                    });
                 }
 
                 if !skip_block_signatures {

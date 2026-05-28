@@ -15853,15 +15853,28 @@ impl Actor {
     ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
         let height_usize = usize::try_from(height).ok()?;
         let block_height = NonZeroUsize::new(height_usize)?;
-        let block = self.kura.get_block(block_height)?;
-        let header = block.header();
-        let height = header.height().get();
+        if let Some(block) = self.kura.get_block(block_height) {
+            let header = block.header();
+            let height = header.height().get();
+            let epoch = self.epoch_for_height(height);
+            return Some(crate::sumeragi::consensus::QcHeaderRef {
+                height,
+                view: header.view_change_index(),
+                epoch,
+                subject_block_hash: block.hash(),
+                phase: crate::sumeragi::consensus::Phase::Commit,
+            });
+        }
+        let subject_block_hash = self
+            .kura
+            .block_hash_at_height(block_height)
+            .or_else(|| self.kura.get_durable_block_hash(block_height))?;
         let epoch = self.epoch_for_height(height);
         Some(crate::sumeragi::consensus::QcHeaderRef {
             height,
-            view: header.view_change_index(),
+            view: 0,
             epoch,
-            subject_block_hash: block.hash(),
+            subject_block_hash,
             phase: crate::sumeragi::consensus::Phase::Commit,
         })
     }
