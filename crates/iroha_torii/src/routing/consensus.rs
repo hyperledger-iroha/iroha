@@ -867,7 +867,7 @@ pub async fn handle_v1_sumeragi_collectors(
                 epoch_seed: epoch_seed_hex,
             },
         };
-        let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+        let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
             Ok(fmt) => fmt,
             Err(resp) => return Ok(resp),
         };
@@ -955,7 +955,7 @@ pub async fn handle_v1_sumeragi_collectors(
             epoch_seed: epoch_seed_hex,
         },
     };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };

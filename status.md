@@ -2,6 +2,15 @@
 
 Last updated: 2026-05-28
 
+## 2026-05-28 Torii Sumeragi collectors negotiation fix
+
+- `/v1/sumeragi/collectors` now uses the JSON-preferred REST response
+  negotiation path, so omitted or wildcard `Accept` headers return JSON while
+  explicit `application/x-norito` requests still receive Norito.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_collectors_endpoint sumeragi_collectors_endpoint_shape -- --nocapture`
+
 ## 2026-05-28 Torii public transaction decode errors
 
 - Public `/v1/pipeline/transactions` Norito decode failures now return the
