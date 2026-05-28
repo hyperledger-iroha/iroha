@@ -507,9 +507,6 @@ private enum ControllerPayload {
             throw AccountAddressError.invalidPublicKey
         }
         let payload = try canonicalPublicKeyPayload(publicKey: publicKey, curve: curve, distid: distid)
-        guard payload.count <= 0xFF else {
-            throw AccountAddressError.keyPayloadTooLong(payload.count)
-        }
         return .singleKey(curve: curve, publicKey: payload)
     }
 
@@ -541,12 +538,19 @@ private enum ControllerPayload {
     func encode(into buffer: inout Data) throws {
         switch self {
         case .singleKey(let curve, let key):
-            buffer.append(ControllerPayloadTag.singleKey.rawValue)
-            buffer.append(curve.rawValue)
-            guard key.count <= 0xFF else {
+            guard key.count <= Int(UInt16.max) else {
                 throw AccountAddressError.keyPayloadTooLong(key.count)
             }
-            buffer.append(UInt8(key.count))
+            if key.count <= Int(UInt8.max) {
+                buffer.append(ControllerPayloadTag.singleKey.rawValue)
+                buffer.append(curve.rawValue)
+                buffer.append(UInt8(key.count))
+            } else {
+                buffer.append(ControllerPayloadTag.singleKeyExtended.rawValue)
+                buffer.append(curve.rawValue)
+                var lengthBE = UInt16(key.count).bigEndian
+                withUnsafeBytes(of: &lengthBE) { buffer.append(contentsOf: $0) }
+            }
             buffer.append(key)
         case .multiSig(let version, let threshold, let members):
             guard members.count <= multisigMemberMax else {
@@ -591,6 +595,21 @@ private enum ControllerPayload {
             guard end <= bytes.count else { throw AccountAddressError.invalidLength }
             let key = bytes[cursor..<end]
             return (.singleKey(curve: curve, publicKey: Data(key)), end)
+        case .singleKeyExtended:
+            guard cursor < bytes.count else { throw AccountAddressError.invalidLength }
+            let curveRaw = bytes[cursor]
+            cursor += 1
+            let curve = try CurveId.decode(rawValue: curveRaw)
+            guard cursor + 1 < bytes.count else { throw AccountAddressError.invalidLength }
+            let length = Int((UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1]))
+            cursor += 2
+            guard length > Int(UInt8.max) else {
+                throw AccountAddressError.invalidLength
+            }
+            let end = cursor + length
+            guard end <= bytes.count else { throw AccountAddressError.invalidLength }
+            let key = bytes[cursor..<end]
+            return (.singleKey(curve: curve, publicKey: Data(key)), end)
         case .multiSig:
             guard cursor < bytes.count else { throw AccountAddressError.invalidLength }
             let version = bytes[cursor]
@@ -626,6 +645,7 @@ private enum ControllerPayload {
     private enum ControllerPayloadTag: UInt8 {
         case singleKey = 0x00
         case multiSig = 0x01
+        case singleKeyExtended = 0x02
     }
 
     private enum MultisigCountWidth {

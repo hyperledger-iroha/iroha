@@ -6650,6 +6650,39 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetPipelinePreflightAsync() async throws {
+        let payload = """
+        {"schema_version":1,"chain_height":42,"sumeragi":{"block_time_ms":1000,"commit_time_ms":2000,"stall_threshold_ms":6000},"admission":{"max_signatures":32,"max_instructions":4096,"max_tx_bytes":1048576,"max_decompressed_bytes":1048576,"max_metadata_depth":16},"block":{"max_transactions":512},"pipeline":{"signature_batch_max":0,"signature_batch_max_ed25519":64,"signature_batch_max_secp256k1":16,"signature_batch_max_pqc":8,"signature_batch_max_bls":16,"overlay_max_instructions":0,"ivm_max_decoded_instructions":1048576},"queue":{"size":2,"queued":1,"inflight":1},"fees":{"fee_asset_id":"xor#sora","fee_sink_account_id":"fees@system","base_fee":"0","per_byte_fee":"0","per_instruction_fee":"0","per_gas_unit_fee":"0","sponsorship_enabled":false,"sponsor_max_fee":"0","sponsor_verified_balance_safety_floor":"0","canonical_sponsor_account_id":null,"fee_receipts_activation_height":7,"external_settlement_enabled":false,"burn_from_unix_timestamp_ms":0,"settlement_mode":"direct","successful_claim_fee_exempt_authorities":["authority@system"]}}
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/preflight")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            return (response, payload)
+        }
+
+        let preflight = try await makeClient().getPipelinePreflight()
+        let status = try ToriiStatusPayload(raw: [
+            "peers": .number(1),
+            "queue_size": .number(2),
+            "time_since_last_non_empty_block_ms": .number(6001),
+            "commit_time_ms": .number(30),
+            "txs_approved": .number(0),
+            "txs_rejected": .number(0),
+            "view_changes": .number(0)
+        ])
+        XCTAssertEqual(preflight.schemaVersion, 1)
+        XCTAssertEqual(preflight.chainHeight, 42)
+        XCTAssertEqual(preflight.sumeragi.stallThresholdMs, 6000)
+        XCTAssertEqual(preflight.admission.maxTxBytes, 1048576)
+        XCTAssertEqual(preflight.pipeline.signatureBatchMaxEd25519, 64)
+        XCTAssertEqual(preflight.queue.queued, 1)
+        XCTAssertEqual(preflight.fees.baseFee, .string("0"))
+        XCTAssertEqual(preflight.fees.successfulClaimFeeExemptAuthorities, ["authority@system"])
+        XCTAssertTrue(preflight.isStatusStalled(status))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testIrohaSDKGetPipelineRecoveryAsyncUsesREST() async throws {
         let payload = """
         {"format":"pipeline.recovery.v1","height":7,"dag":{"fingerprint":"cafebabe","key_count":2},"txs":[]}
@@ -9556,10 +9589,10 @@ id: 88
     func testStatusSnapshotTracksMetrics() async throws {
         var responses = [
             """
-            {"peers":2,"queue_size":4,"commit_time_ms":45,"txs_approved":5,"txs_rejected":1,"view_changes":0}
+            {"observed_at_ms":10000,"peers":2,"queue_size":4,"queue_queued":3,"queue_inflight":1,"last_block_committed_at_ms":9900,"last_non_empty_block_committed_at_ms":9000,"time_since_last_block_ms":100,"time_since_last_non_empty_block_ms":1000,"commit_time_ms":45,"txs_approved":5,"txs_rejected":1,"view_changes":0}
             """.data(using: .utf8)!,
             """
-            {"peers":3,"queue_size":11,"commit_time_ms":120,"txs_approved":9,"txs_rejected":3,"view_changes":2}
+            {"observed_at_ms":11000,"peers":3,"queue_size":11,"queue_queued":8,"queue_inflight":3,"last_block_committed_at_ms":10900,"last_non_empty_block_committed_at_ms":10000,"time_since_last_block_ms":100,"time_since_last_non_empty_block_ms":1000,"commit_time_ms":120,"txs_approved":9,"txs_rejected":3,"view_changes":2}
             """.data(using: .utf8)!,
         ]
 
@@ -9581,12 +9614,19 @@ id: 88
         let client = makeClient()
         let first = try await client.getStatusSnapshot()
         XCTAssertEqual(first.status.queueSize, 4)
+        XCTAssertEqual(first.status.queueQueued, 3)
+        XCTAssertEqual(first.status.queueInflight, 1)
+        XCTAssertEqual(first.metrics.timeSinceLastNonEmptyBlockMs, 1000)
+        XCTAssertTrue(first.status.isQueueStalled(stallThresholdMs: 999))
+        XCTAssertFalse(first.status.isQueueStalled(stallThresholdMs: 1000))
         XCTAssertEqual(first.metrics.queueDelta, 0)
         XCTAssertEqual(first.metrics.txApprovedDelta, 0)
         XCTAssertFalse(first.metrics.hasActivity)
 
         let second = try await client.getStatusSnapshot()
         XCTAssertEqual(second.status.queueSize, 11)
+        XCTAssertEqual(second.metrics.queueQueued, 8)
+        XCTAssertEqual(second.metrics.queueInflight, 3)
         XCTAssertEqual(second.metrics.queueDelta, 7)
         XCTAssertEqual(second.metrics.txApprovedDelta, 4)
         XCTAssertEqual(second.metrics.txRejectedDelta, 2)

@@ -27,7 +27,7 @@ use hex::ToHex;
 use iroha_config::{
     client_api::ConfigUpdateDTO,
     parameters::{
-        actual::{ConsensusMode, TelemetryProfile},
+        actual::{ConsensusMode, NexusFeeSettlementMode, TelemetryProfile},
         defaults,
     },
 };
@@ -53,7 +53,7 @@ use iroha_core::{
         },
     },
     query::store::LiveQueryStoreHandle,
-    queue::{RoutingDecision, RoutingPlan},
+    queue::{Queue, RoutingDecision, RoutingPlan},
     sns::{
         LeaseQuote, SnsNamespace, get_name_record,
         quote_account_alias_registration_with_fee_asset_fallback,
@@ -426,6 +426,126 @@ struct SumeragiParamsResponse {
     next_mode: Option<&'static str>,
     mode_activation_height: Option<u64>,
     chain_height: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightSumeragi {
+    pub block_time_ms: u64,
+    pub commit_time_ms: u64,
+    pub stall_threshold_ms: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightAdmission {
+    pub max_signatures: u64,
+    pub max_instructions: u64,
+    pub max_tx_bytes: u64,
+    pub max_decompressed_bytes: u64,
+    pub max_metadata_depth: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightBlock {
+    pub max_transactions: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightPipeline {
+    pub signature_batch_max: u64,
+    pub signature_batch_max_ed25519: u64,
+    pub signature_batch_max_secp256k1: u64,
+    pub signature_batch_max_pqc: u64,
+    pub signature_batch_max_bls: u64,
+    pub overlay_max_instructions: u64,
+    pub ivm_max_decoded_instructions: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightQueue {
+    pub size: u64,
+    pub queued: u64,
+    pub inflight: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightFees {
+    pub fee_asset_id: String,
+    pub fee_sink_account_id: String,
+    pub base_fee: iroha_primitives::numeric::Numeric,
+    pub per_byte_fee: iroha_primitives::numeric::Numeric,
+    pub per_instruction_fee: iroha_primitives::numeric::Numeric,
+    pub per_gas_unit_fee: iroha_primitives::numeric::Numeric,
+    pub sponsorship_enabled: bool,
+    pub sponsor_max_fee: iroha_primitives::numeric::Numeric,
+    pub sponsor_verified_balance_safety_floor: iroha_primitives::numeric::Numeric,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub canonical_sponsor_account_id: Option<String>,
+    pub fee_receipts_activation_height: u64,
+    pub external_settlement_enabled: bool,
+    pub burn_from_unix_timestamp_ms: u64,
+    pub settlement_mode: String,
+    pub successful_claim_fee_exempt_authorities: Vec<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightResponse {
+    pub schema_version: u64,
+    pub chain_height: u64,
+    pub sumeragi: PipelinePreflightSumeragi,
+    pub admission: PipelinePreflightAdmission,
+    pub block: PipelinePreflightBlock,
+    pub pipeline: PipelinePreflightPipeline,
+    pub queue: PipelinePreflightQueue,
+    pub fees: PipelinePreflightFees,
 }
 
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
@@ -8229,6 +8349,93 @@ pub async fn handle_v1_sumeragi_params(
         Err(resp) => return Ok(resp),
     };
     Ok(crate::utils::respond_with_format(payload, format))
+}
+
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn pipeline_stall_threshold_ms(block_time_ms: u64, commit_time_ms: u64) -> u64 {
+    commit_time_ms
+        .saturating_mul(3)
+        .max(block_time_ms.saturating_add(commit_time_ms))
+}
+
+pub(crate) fn build_pipeline_preflight_response(
+    state: &CoreState,
+    queue: &Queue,
+) -> PipelinePreflightResponse {
+    let world = state.world_view();
+    let params = world.parameters();
+    let sumeragi_params = params.sumeragi();
+    let transaction_params = params.transaction();
+    let block_params = params.block();
+    let pipeline = state.pipeline_snapshot();
+    let nexus = state.nexus_snapshot();
+    let queued = usize_to_u64(queue.queued_len());
+    let size = usize_to_u64(queue.active_len());
+
+    PipelinePreflightResponse {
+        schema_version: 1,
+        chain_height: usize_to_u64(state.committed_height()),
+        sumeragi: PipelinePreflightSumeragi {
+            block_time_ms: sumeragi_params.block_time_ms,
+            commit_time_ms: sumeragi_params.commit_time_ms,
+            stall_threshold_ms: pipeline_stall_threshold_ms(
+                sumeragi_params.block_time_ms,
+                sumeragi_params.commit_time_ms,
+            ),
+        },
+        admission: PipelinePreflightAdmission {
+            max_signatures: transaction_params.max_signatures().get(),
+            max_instructions: transaction_params.max_instructions().get(),
+            max_tx_bytes: transaction_params.max_tx_bytes().get(),
+            max_decompressed_bytes: transaction_params.max_decompressed_bytes().get(),
+            max_metadata_depth: u64::from(transaction_params.max_metadata_depth().get()),
+        },
+        block: PipelinePreflightBlock {
+            max_transactions: block_params.max_transactions().get(),
+        },
+        pipeline: PipelinePreflightPipeline {
+            signature_batch_max: usize_to_u64(pipeline.signature_batch_max),
+            signature_batch_max_ed25519: usize_to_u64(pipeline.signature_batch_max_ed25519),
+            signature_batch_max_secp256k1: usize_to_u64(pipeline.signature_batch_max_secp256k1),
+            signature_batch_max_pqc: usize_to_u64(pipeline.signature_batch_max_pqc),
+            signature_batch_max_bls: usize_to_u64(pipeline.signature_batch_max_bls),
+            overlay_max_instructions: usize_to_u64(pipeline.overlay_max_instructions),
+            ivm_max_decoded_instructions: pipeline.ivm_max_decoded_instructions,
+        },
+        queue: PipelinePreflightQueue {
+            size,
+            queued,
+            inflight: size.saturating_sub(queued),
+        },
+        fees: PipelinePreflightFees {
+            fee_asset_id: nexus.fees.fee_asset_id,
+            fee_sink_account_id: nexus.fees.fee_sink_account_id,
+            base_fee: nexus.fees.base_fee,
+            per_byte_fee: nexus.fees.per_byte_fee,
+            per_instruction_fee: nexus.fees.per_instruction_fee,
+            per_gas_unit_fee: nexus.fees.per_gas_unit_fee,
+            sponsorship_enabled: nexus.fees.sponsorship_enabled,
+            sponsor_max_fee: nexus.fees.sponsor_max_fee,
+            sponsor_verified_balance_safety_floor: nexus
+                .fees
+                .sponsor_verified_balance_safety_floor,
+            canonical_sponsor_account_id: nexus.fees.canonical_sponsor_account_id,
+            fee_receipts_activation_height: nexus.fees.fee_receipts_activation_height,
+            external_settlement_enabled: nexus.fees.external_settlement_enabled,
+            burn_from_unix_timestamp_ms: nexus.fees.burn_from_unix_timestamp_ms,
+            settlement_mode: match nexus.fees.settlement_mode {
+                NexusFeeSettlementMode::Direct => "direct",
+                NexusFeeSettlementMode::LaneRelayBurn => "lane_relay_burn",
+            }
+            .to_owned(),
+            successful_claim_fee_exempt_authorities: nexus
+                .fees
+                .successful_claim_fee_exempt_authorities,
+        },
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -26039,6 +26246,7 @@ const SINGLE_CONTRACT_DEPLOY_COMPAT_FIELDS: &[&str] = &[
     "code_hash_hex",
     "abi_hash_hex",
     "tx_hash_hex",
+    "pipeline_status",
     "status",
 ];
 
@@ -26409,7 +26617,7 @@ mod contract_bundle_tests {
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
                 tx_hash_hex: Some("tx".to_owned()),
-                pipeline_status: None,
+                pipeline_status: Some(queued_pipeline_status_response("tx".to_owned())),
                 status: "deployed".to_owned(),
             }],
             init_calls: Vec::new(),
@@ -26436,6 +26644,25 @@ mod contract_bundle_tests {
                 .get("tx_hash_hex")
                 .and_then(norito::json::Value::as_str),
             Some("tx")
+        );
+        assert_eq!(
+            value
+                .get("pipeline_status")
+                .and_then(|pipeline_status| pipeline_status.get("status"))
+                .and_then(|status| status.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("Queued")
+        );
+        assert_eq!(
+            value
+                .get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("pipeline_status"))
+                .and_then(|pipeline_status| pipeline_status.get("status"))
+                .and_then(|status| status.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("Queued")
         );
         assert!(
             value
@@ -74044,6 +74271,7 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
     let mut segments = tail.split('/').filter(|s| !s.is_empty());
     let field = segments.next()?;
     match field {
+        "observed_at_ms" if segments.next().is_none() => Some(status.observed_at_ms.into()),
         "peers" if segments.next().is_none() => Some(status.peers.into()),
         "blocks" if segments.next().is_none() => Some(status.blocks.into()),
         "blocks_non_empty" if segments.next().is_none() => Some(status.blocks_non_empty.into()),
@@ -74086,6 +74314,20 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
         ),
         "view_changes" if segments.next().is_none() => Some(status.view_changes.into()),
         "queue_size" if segments.next().is_none() => Some(status.queue_size.into()),
+        "queue_queued" if segments.next().is_none() => Some(status.queue_queued.into()),
+        "queue_inflight" if segments.next().is_none() => Some(status.queue_inflight.into()),
+        "last_block_committed_at_ms" if segments.next().is_none() => {
+            Some(status.last_block_committed_at_ms.into())
+        }
+        "last_non_empty_block_committed_at_ms" if segments.next().is_none() => {
+            Some(status.last_non_empty_block_committed_at_ms.into())
+        }
+        "time_since_last_block_ms" if segments.next().is_none() => {
+            Some(status.time_since_last_block_ms.into())
+        }
+        "time_since_last_non_empty_block_ms" if segments.next().is_none() => {
+            Some(status.time_since_last_non_empty_block_ms.into())
+        }
         "crypto" => match segments.next() {
             None => norito::json::to_value(&status.crypto).ok(),
             Some("sm_helpers_available") if segments.next().is_none() => {
@@ -74232,6 +74474,13 @@ mod tests {
     fn status_tail_accesses_field() {
         let metrics = Metrics::default();
         let mut status = Status::from(&metrics);
+        status.observed_at_ms = 1_000;
+        status.queue_queued = 3;
+        status.queue_inflight = 2;
+        status.last_block_committed_at_ms = 900;
+        status.last_non_empty_block_committed_at_ms = 800;
+        status.time_since_last_block_ms = 100;
+        status.time_since_last_non_empty_block_ms = 200;
         status.last_rejection_at_ms = Some(1_234);
         status.txs_rejected_recent_5m = 7;
         status.sorafs_micropayments = vec![MicropaymentSampleStatus {
@@ -74252,6 +74501,29 @@ mod tests {
 
         let peers = status_value_by_path(&status, "peers").unwrap();
         assert_eq!(peers, json_value(&0u64));
+
+        let observed = status_value_by_path(&status, "observed_at_ms").unwrap();
+        assert_eq!(observed, json_value(&1_000u64));
+
+        let queued = status_value_by_path(&status, "queue_queued").unwrap();
+        assert_eq!(queued, json_value(&3u64));
+
+        let inflight = status_value_by_path(&status, "queue_inflight").unwrap();
+        assert_eq!(inflight, json_value(&2u64));
+
+        let last_block = status_value_by_path(&status, "last_block_committed_at_ms").unwrap();
+        assert_eq!(last_block, json_value(&900u64));
+
+        let last_non_empty =
+            status_value_by_path(&status, "last_non_empty_block_committed_at_ms").unwrap();
+        assert_eq!(last_non_empty, json_value(&800u64));
+
+        let since_block = status_value_by_path(&status, "time_since_last_block_ms").unwrap();
+        assert_eq!(since_block, json_value(&100u64));
+
+        let since_non_empty =
+            status_value_by_path(&status, "time_since_last_non_empty_block_ms").unwrap();
+        assert_eq!(since_non_empty, json_value(&200u64));
 
         let last_rejection = status_value_by_path(&status, "last_rejection_at_ms").unwrap();
         assert_eq!(last_rejection, json_value(&Some(1_234u64)));

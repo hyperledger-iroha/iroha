@@ -5279,6 +5279,9 @@ pub struct Status {
     /// Build metadata for the currently running node binary.
     #[norito(default)]
     pub build: BuildStatus,
+    /// Millisecond UNIX timestamp when this status snapshot was observed.
+    #[norito(default)]
+    pub observed_at_ms: u64,
     /// Number of currently connected peers excluding the reporting peer
     pub peers: u64,
     /// Number of committed blocks (blockchain height)
@@ -5304,6 +5307,24 @@ pub struct Status {
     pub view_changes: u32,
     /// Number of transactions tracked by the queue (queued + in-flight)
     pub queue_size: u64,
+    /// Number of transactions still queued for selection.
+    #[norito(default)]
+    pub queue_queued: u64,
+    /// Number of transactions in-flight after selection.
+    #[norito(default)]
+    pub queue_inflight: u64,
+    /// Millisecond UNIX timestamp when this peer last processed a committed block.
+    #[norito(default)]
+    pub last_block_committed_at_ms: u64,
+    /// Millisecond UNIX timestamp when this peer last processed a committed non-empty block.
+    #[norito(default)]
+    pub last_non_empty_block_committed_at_ms: u64,
+    /// Milliseconds since this peer last processed a committed block.
+    #[norito(default)]
+    pub time_since_last_block_ms: u64,
+    /// Milliseconds since this peer last processed a committed non-empty block.
+    #[norito(default)]
+    pub time_since_last_non_empty_block_ms: u64,
     /// Total number of DA deadline reschedules observed by this peer.
     #[norito(default)]
     pub da_reschedule_total: u64,
@@ -5364,6 +5385,8 @@ impl Status {
 struct StatusPayload {
     #[norito(default)]
     build: BuildStatus,
+    #[norito(default)]
+    observed_at_ms: u64,
     peers: u64,
     blocks: u64,
     blocks_non_empty: u64,
@@ -5378,6 +5401,18 @@ struct StatusPayload {
     uptime: Uptime,
     view_changes: u32,
     queue_size: u64,
+    #[norito(default)]
+    queue_queued: u64,
+    #[norito(default)]
+    queue_inflight: u64,
+    #[norito(default)]
+    last_block_committed_at_ms: u64,
+    #[norito(default)]
+    last_non_empty_block_committed_at_ms: u64,
+    #[norito(default)]
+    time_since_last_block_ms: u64,
+    #[norito(default)]
+    time_since_last_non_empty_block_ms: u64,
     #[norito(default)]
     da_reschedule_total: u64,
     #[norito(default)]
@@ -5409,6 +5444,7 @@ impl From<&Status> for StatusPayload {
     fn from(status: &Status) -> Self {
         Self {
             build: status.build.clone(),
+            observed_at_ms: status.observed_at_ms,
             peers: status.peers,
             blocks: status.blocks,
             blocks_non_empty: status.blocks_non_empty,
@@ -5420,6 +5456,12 @@ impl From<&Status> for StatusPayload {
             uptime: status.uptime,
             view_changes: status.view_changes,
             queue_size: status.queue_size,
+            queue_queued: status.queue_queued,
+            queue_inflight: status.queue_inflight,
+            last_block_committed_at_ms: status.last_block_committed_at_ms,
+            last_non_empty_block_committed_at_ms: status.last_non_empty_block_committed_at_ms,
+            time_since_last_block_ms: status.time_since_last_block_ms,
+            time_since_last_non_empty_block_ms: status.time_since_last_non_empty_block_ms,
             da_reschedule_total: status.da_reschedule_total,
             crypto: status.crypto.clone(),
             stack: status.stack,
@@ -5441,6 +5483,7 @@ impl From<StatusPayload> for Status {
     fn from(payload: StatusPayload) -> Self {
         Self {
             build: payload.build,
+            observed_at_ms: payload.observed_at_ms,
             peers: payload.peers,
             blocks: payload.blocks,
             blocks_non_empty: payload.blocks_non_empty,
@@ -5452,6 +5495,12 @@ impl From<StatusPayload> for Status {
             uptime: payload.uptime,
             view_changes: payload.view_changes,
             queue_size: payload.queue_size,
+            queue_queued: payload.queue_queued,
+            queue_inflight: payload.queue_inflight,
+            last_block_committed_at_ms: payload.last_block_committed_at_ms,
+            last_non_empty_block_committed_at_ms: payload.last_non_empty_block_committed_at_ms,
+            time_since_last_block_ms: payload.time_since_last_block_ms,
+            time_since_last_non_empty_block_ms: payload.time_since_last_non_empty_block_ms,
             da_reschedule_total: payload.da_reschedule_total,
             crypto: payload.crypto,
             stack: payload.stack,
@@ -6164,8 +6213,22 @@ fn collect_da_receipt_cursors(metrics: &Metrics) -> Vec<DaReceiptCursorStatus> {
 impl From<&Metrics> for Status {
     fn from(value: &Metrics) -> Self {
         let now_ms = current_unix_time_ms();
+        let last_block_committed_at_ms = value.last_block_committed_at_ms.get();
+        let last_non_empty_block_committed_at_ms =
+            value.last_non_empty_block_committed_at_ms.get();
+        let time_since_last_block_ms = if last_block_committed_at_ms == 0 {
+            0
+        } else {
+            now_ms.saturating_sub(last_block_committed_at_ms)
+        };
+        let time_since_last_non_empty_block_ms = if last_non_empty_block_committed_at_ms == 0 {
+            0
+        } else {
+            now_ms.saturating_sub(last_non_empty_block_committed_at_ms)
+        };
         Self {
             build: BuildStatus::current(),
+            observed_at_ms: now_ms,
             peers: value.connected_peers.get(),
             blocks: value.block_height.get(),
             blocks_non_empty: value.block_height_non_empty.get(),
@@ -6181,6 +6244,12 @@ impl From<&Metrics> for Status {
                 .try_into()
                 .expect("INTERNAL BUG: Number of view changes exceeds u32::MAX"),
             queue_size: value.queue_size.get(),
+            queue_queued: value.queue_queued.get(),
+            queue_inflight: value.queue_inflight.get(),
+            last_block_committed_at_ms,
+            last_non_empty_block_committed_at_ms,
+            time_since_last_block_ms,
+            time_since_last_non_empty_block_ms,
             da_reschedule_total: value.sumeragi_rbc_da_reschedule_total.get(),
             crypto: CryptoStatus {
                 sm_helpers_available: cfg!(feature = "sm"),
@@ -6236,6 +6305,10 @@ pub struct Metrics {
     pub block_height_non_empty: IntCounter,
     /// Time (since block creation) it took for the latest block to reach _this_ peer
     pub last_commit_time_ms: GenericGauge<AtomicU64>,
+    /// Millisecond UNIX timestamp when this peer last processed a committed block.
+    pub last_block_committed_at_ms: GenericGauge<AtomicU64>,
+    /// Millisecond UNIX timestamp when this peer last processed a committed non-empty block.
+    pub last_non_empty_block_committed_at_ms: GenericGauge<AtomicU64>,
     /// Block commit time trends
     pub commit_time_ms: Histogram,
     /// Slot duration histogram for NX-18 1-second finality tracking (milliseconds).
@@ -7940,6 +8013,16 @@ impl Default for Metrics {
         let last_commit_time_ms = GenericGauge::new(
             "last_commit_time_ms",
             "Time (since block creation) it took for the latest block to be committed by this peer",
+        )
+        .expect("Infallible");
+        let last_block_committed_at_ms = GenericGauge::new(
+            "last_block_committed_at_ms",
+            "Millisecond UNIX timestamp when this peer last processed a committed block",
+        )
+        .expect("Infallible");
+        let last_non_empty_block_committed_at_ms = GenericGauge::new(
+            "last_non_empty_block_committed_at_ms",
+            "Millisecond UNIX timestamp when this peer last processed a committed non-empty block",
         )
         .expect("Infallible");
         let commit_time_ms = Histogram::with_opts(
@@ -13842,6 +13925,8 @@ impl Default for Metrics {
             block_height,
             block_height_non_empty,
             last_commit_time_ms,
+            last_block_committed_at_ms,
+            last_non_empty_block_committed_at_ms,
             commit_time_ms,
             slot_duration_ms,
             slot_duration_ms_latest,
@@ -14392,6 +14477,8 @@ impl Default for Metrics {
             block_height,
             block_height_non_empty,
             last_commit_time_ms,
+            last_block_committed_at_ms,
+            last_non_empty_block_committed_at_ms,
             commit_time_ms,
             slot_duration_ms,
             slot_duration_ms_latest,
@@ -18456,6 +18543,7 @@ mod test {
                 cargo_features: "telemetry,zk-halo2".to_owned(),
                 target_triple: "aarch64-apple-darwin".to_owned(),
             },
+            observed_at_ms: 1_234_999,
             peers: 4,
             blocks: 5,
             blocks_non_empty: 3,
@@ -18468,6 +18556,12 @@ mod test {
             uptime: Uptime(Duration::new(5, 937_000_000)),
             view_changes: 2,
             queue_size: 18,
+            queue_queued: 11,
+            queue_inflight: 7,
+            last_block_committed_at_ms: 1_234_777,
+            last_non_empty_block_committed_at_ms: 1_234_555,
+            time_since_last_block_ms: 222,
+            time_since_last_non_empty_block_ms: 444,
             crypto: CryptoStatus {
                 sm_helpers_available: true,
                 sm_openssl_preview_enabled: false,
@@ -18631,6 +18725,7 @@ mod test {
                 "cargo_features": "telemetry,zk-halo2",
                 "target_triple": "aarch64-apple-darwin"
             },
+            "observed_at_ms": 1_234_999,
             "peers": 4,
             "blocks": 5,
             "blocks_non_empty": 3,
@@ -18646,6 +18741,12 @@ mod test {
             },
             "view_changes": 2,
             "queue_size": 18,
+            "queue_queued": 11,
+            "queue_inflight": 7,
+            "last_block_committed_at_ms": 1_234_777,
+            "last_non_empty_block_committed_at_ms": 1_234_555,
+            "time_since_last_block_ms": 222,
+            "time_since_last_non_empty_block_ms": 444,
             "crypto": {
                 "sm_helpers_available": true,
                 "sm_openssl_preview_enabled": false,
@@ -18797,6 +18898,7 @@ mod test {
                 "cargo_features": "telemetry,zk-halo2",
                 "target_triple": "aarch64-apple-darwin"
               },
+              "observed_at_ms": 1234999,
               "peers": 4,
               "blocks": 5,
               "blocks_non_empty": 3,
@@ -18811,6 +18913,12 @@ mod test {
               },
               "view_changes": 2,
               "queue_size": 18,
+              "queue_queued": 11,
+              "queue_inflight": 7,
+              "last_block_committed_at_ms": 1234777,
+              "last_non_empty_block_committed_at_ms": 1234555,
+              "time_since_last_block_ms": 222,
+              "time_since_last_non_empty_block_ms": 444,
               "da_reschedule_total": 7,
               "crypto": {
                 "sm_helpers_available": true,
@@ -18934,5 +19042,34 @@ mod test {
               }
             }"#]];
         expected.assert_eq(&actual);
+    }
+
+    #[test]
+    fn status_from_metrics_includes_queue_and_block_liveness() {
+        let metrics = Metrics::default();
+        let now = current_unix_time_ms();
+        metrics.queue_size.set(8);
+        metrics.queue_queued.set(5);
+        metrics.queue_inflight.set(3);
+        metrics
+            .last_block_committed_at_ms
+            .set(now.saturating_sub(250));
+        metrics
+            .last_non_empty_block_committed_at_ms
+            .set(now.saturating_sub(500));
+
+        let status = Status::from(&metrics);
+
+        assert!(status.observed_at_ms >= now);
+        assert_eq!(status.queue_size, 8);
+        assert_eq!(status.queue_queued, 5);
+        assert_eq!(status.queue_inflight, 3);
+        assert_eq!(status.last_block_committed_at_ms, now.saturating_sub(250));
+        assert_eq!(
+            status.last_non_empty_block_committed_at_ms,
+            now.saturating_sub(500)
+        );
+        assert!(status.time_since_last_block_ms >= 250);
+        assert!(status.time_since_last_non_empty_block_ms >= 500);
     }
 }

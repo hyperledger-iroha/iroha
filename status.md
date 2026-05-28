@@ -1,6 +1,20 @@
 # Status
 
-Last updated: 2026-05-27
+Last updated: 2026-05-28
+
+## 2026-05-28 Swift SM2 I105 and Torii deploy status fixes
+
+- Swift account-address canonical encoding now uses the Rust-compatible
+  extended single-key controller tag (`0x02`) with a big-endian `u16` length
+  for SM2 and other single-key payloads above 255 bytes, while rejecting
+  non-canonical extended encodings for short payloads.
+- Torii single-contract deploy compatibility responses now promote
+  `pipeline_status` from the sole contract receipt to the top-level JSON
+  response while preserving the nested `contracts[0].pipeline_status`.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cd IrohaSwift && swift test --filter AccountAddressTests`
+  - `cargo test -p iroha_torii contract_bundle_tests --features app_api`
 
 ## 2026-05-27 Torii MCP JSON-RPC regression fixes
 

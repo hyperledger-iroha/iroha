@@ -1454,6 +1454,22 @@ public final class IrohaSDK: @unchecked Sendable {
         return try await toriiRestClient.getPipelineRecovery(height: height)
     }
 
+    public func getPipelinePreflight(completion: @Sendable @escaping (Result<ToriiPipelinePreflight, Error>) -> Void) {
+        guard let toriiRestClient else {
+            completion(.failure(Self.restUnavailableError()))
+            return
+        }
+        toriiRestClient.getPipelinePreflight(completion: completion)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func getPipelinePreflight() async throws -> ToriiPipelinePreflight {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.getPipelinePreflight()
+    }
+
     public func getTimeNow(completion: @Sendable @escaping (Result<ToriiTimeSnapshot, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))

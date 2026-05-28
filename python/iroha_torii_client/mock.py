@@ -90,6 +90,7 @@ class _MockState:
         self.sumeragi_rbc_sessions: Dict[str, Any] = {}
         self.pipeline_sequences: Dict[str, Dict[str, Any]] = {}
         self.pipeline_next_plan: Optional[Dict[str, Any]] = None
+        self.pipeline_preflight: Dict[str, Any] = {}
         self.pipeline_scenario = "success"
         self._pipeline_submit_seq = 0
         self.accounts: Dict[str, Dict[str, Any]] = {}
@@ -155,6 +156,8 @@ class _MockState:
             return self._pipeline_submit(body)
         if method == "GET" and path == "/v1/pipeline/transactions/status":
             return self._pipeline_status(params)
+        if method == "GET" and path == "/v1/pipeline/preflight":
+            return _json_response(HTTPStatus.OK, self.pipeline_preflight)
         if method == "GET" and path.startswith("/v1/accounts/"):
             account_id = unquote(path.rsplit("/", 1)[-1])
             return self._account_get(account_id)
@@ -258,6 +261,50 @@ class _MockState:
             self._report_seq = 0
             self.pipeline_sequences.clear()
             self.pipeline_next_plan = None
+            self.pipeline_preflight = {
+                "schema_version": 1,
+                "chain_height": 0,
+                "sumeragi": {
+                    "block_time_ms": 1000,
+                    "commit_time_ms": 2000,
+                    "stall_threshold_ms": 6000,
+                },
+                "admission": {
+                    "max_signatures": 32,
+                    "max_instructions": 4096,
+                    "max_tx_bytes": 1048576,
+                    "max_decompressed_bytes": 1048576,
+                    "max_metadata_depth": 16,
+                },
+                "block": {"max_transactions": 512},
+                "pipeline": {
+                    "signature_batch_max": 0,
+                    "signature_batch_max_ed25519": 64,
+                    "signature_batch_max_secp256k1": 16,
+                    "signature_batch_max_pqc": 8,
+                    "signature_batch_max_bls": 16,
+                    "overlay_max_instructions": 0,
+                    "ivm_max_decoded_instructions": 1048576,
+                },
+                "queue": {"size": 0, "queued": 0, "inflight": 0},
+                "fees": {
+                    "fee_asset_id": "xor#sora",
+                    "fee_sink_account_id": "fees@system",
+                    "base_fee": "0",
+                    "per_byte_fee": "0",
+                    "per_instruction_fee": "0",
+                    "per_gas_unit_fee": "0",
+                    "sponsorship_enabled": False,
+                    "sponsor_max_fee": "0",
+                    "sponsor_verified_balance_safety_floor": "0",
+                    "canonical_sponsor_account_id": None,
+                    "fee_receipts_activation_height": 0,
+                    "external_settlement_enabled": False,
+                    "burn_from_unix_timestamp_ms": 0,
+                    "settlement_mode": "direct",
+                    "successful_claim_fee_exempt_authorities": [],
+                },
+            }
             self.pipeline_scenario = "success"
             self._pipeline_submit_seq = 0
             self.accounts.clear()

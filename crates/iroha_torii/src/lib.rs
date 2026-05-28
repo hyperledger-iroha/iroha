@@ -30733,6 +30733,32 @@ async fn handler_pipeline_recovery(
     )
 }
 
+async fn handler_pipeline_preflight(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let format =
+        match crate::utils::negotiate_json_preferred_response_format(accept.as_ref().map(|v| &v.0))
+        {
+            Ok(format) => format,
+            Err(resp) => return Ok(resp),
+        };
+    check_access_with_rate_limiter(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/pipeline/preflight",
+        &app.rate_limiter,
+    )
+    .await?;
+    Ok(crate::utils::respond_with_format(
+        routing::build_pipeline_preflight_response(app.state.as_ref(), app.queue.as_ref()),
+        format,
+    ))
+}
+
 async fn handler_pipeline_recovery_fastpq_proofs(
     State(app): State<SharedAppState>,
     AxPath(height): AxPath<u64>,
@@ -35087,6 +35113,7 @@ impl Torii {
                     "/v1/pipeline/transactions/status",
                     get(handler_pipeline_transaction_status),
                 )
+                .route("/v1/pipeline/preflight", get(handler_pipeline_preflight))
                 .route(uri::TRIGGER_COMPLETIONS, get(handler_trigger_completions))
                 .route(
                     "/v1/pipeline/recovery/{height}",
@@ -46589,6 +46616,97 @@ pub(crate) mod tests_runtime_handlers {
             norito::decode_from_bytes(&bytes).expect("typed norito response");
         assert_eq!(payload.status.kind, "Queued");
         assert_eq!(payload.resolved_from, "queue");
+    }
+
+    #[tokio::test]
+    async fn pipeline_preflight_handler_returns_json_snapshot() {
+        let app = mk_app_state_for_tests();
+        let params = app.state.world.view().parameters().clone();
+        let sumeragi = params.sumeragi();
+
+        let resp = super::handler_pipeline_preflight(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        assert_eq!(
+            payload.get("schema_version"),
+            Some(&norito::json::Value::from(1_u64))
+        );
+        assert_eq!(
+            payload
+                .get("sumeragi")
+                .and_then(|value| value.get("stall_threshold_ms")),
+            Some(&norito::json::Value::from(
+                sumeragi
+                    .commit_time_ms
+                    .saturating_mul(3)
+                    .max(sumeragi.block_time_ms.saturating_add(sumeragi.commit_time_ms))
+            ))
+        );
+        assert_eq!(
+            payload
+                .get("queue")
+                .and_then(|value| value.get("size")),
+            Some(&norito::json::Value::from(0_u64))
+        );
+        assert!(
+            payload
+                .get("fees")
+                .and_then(norito::json::Value::as_object)
+                .is_some(),
+            "preflight payload should expose Nexus fee settings"
+        );
+    }
+
+    #[tokio::test]
+    async fn pipeline_preflight_handler_returns_typed_norito_when_requested() {
+        let app = mk_app_state_for_tests();
+        let resp = super::handler_pipeline_preflight(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            Some(crate::utils::extractors::ExtractAccept(
+                HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+            )),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: routing::PipelinePreflightResponse =
+            norito::decode_from_bytes(&bytes).expect("typed norito response");
+        assert_eq!(payload.schema_version, 1);
+        assert_eq!(payload.queue.size, 0);
+        assert_eq!(
+            payload.sumeragi.stall_threshold_ms,
+            payload
+                .sumeragi
+                .commit_time_ms
+                .saturating_mul(3)
+                .max(
+                    payload
+                        .sumeragi
+                        .block_time_ms
+                        .saturating_add(payload.sumeragi.commit_time_ms)
+                )
+        );
     }
 
     #[test]

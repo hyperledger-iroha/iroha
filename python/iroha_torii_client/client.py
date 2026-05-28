@@ -364,6 +364,13 @@ __all__ = [
     "StatusPayload",
     "SumeragiConsensusCaps",
     "StatusSnapshot",
+    "PipelinePreflightSumeragi",
+    "PipelinePreflightAdmission",
+    "PipelinePreflightBlock",
+    "PipelinePreflightPipeline",
+    "PipelinePreflightQueue",
+    "PipelinePreflightFees",
+    "PipelinePreflight",
     "SumeragiRbcSnapshot",
     "SumeragiRbcSessionsSnapshot",
     "SumeragiRbcSession",
@@ -3077,7 +3084,11 @@ class StatusMetrics:
 
     commit_latency_ms: int
     queue_size: int
+    queue_queued: int
+    queue_inflight: int
     queue_delta: int
+    time_since_last_block_ms: int
+    time_since_last_non_empty_block_ms: int
     da_reschedule_delta: int
     tx_approved_delta: int
     tx_rejected_delta: int
@@ -3089,6 +3100,7 @@ class StatusMetrics:
 class StatusPayload:
     """Raw `/v1/status` payload with typed fields."""
 
+    observed_at_ms: int
     mode_tag: Optional[str]
     staged_mode_tag: Optional[str]
     staged_mode_activation_height: Optional[int]
@@ -3096,6 +3108,12 @@ class StatusPayload:
     consensus_caps: Optional["SumeragiConsensusCaps"]
     peers: int
     queue_size: int
+    queue_queued: int
+    queue_inflight: int
+    last_block_committed_at_ms: int
+    last_non_empty_block_committed_at_ms: int
+    time_since_last_block_ms: int
+    time_since_last_non_empty_block_ms: int
     commit_time_ms: int
     da_reschedule_total: int
     txs_approved: int
@@ -3123,6 +3141,18 @@ class StatusPayload:
             raise KeyError(f"dataspace not found in status catalog: {alias}")
         return entry
 
+    def liveness_elapsed_ms(self) -> int:
+        """Return the elapsed block time used for queue-aware stall checks."""
+
+        if self.time_since_last_non_empty_block_ms > 0:
+            return self.time_since_last_non_empty_block_ms
+        return self.time_since_last_block_ms
+
+    def is_queue_stalled(self, stall_threshold_ms: int) -> bool:
+        """Classify stalls only when queued work exists and block progress exceeds the threshold."""
+
+        return self.queue_size > 0 and self.liveness_elapsed_ms() > int(stall_threshold_ms)
+
 
 @dataclass(frozen=True)
 class SumeragiConsensusCaps:
@@ -3146,6 +3176,96 @@ class StatusSnapshot:
     timestamp_ms: float
     status: StatusPayload
     metrics: StatusMetrics
+
+
+@dataclass(frozen=True)
+class PipelinePreflightSumeragi:
+    """Consensus timing limits used by pipeline liveness helpers."""
+
+    block_time_ms: int
+    commit_time_ms: int
+    stall_threshold_ms: int
+
+
+@dataclass(frozen=True)
+class PipelinePreflightAdmission:
+    """Transaction admission limits advertised by Torii preflight."""
+
+    max_signatures: int
+    max_instructions: int
+    max_tx_bytes: int
+    max_decompressed_bytes: int
+    max_metadata_depth: int
+
+
+@dataclass(frozen=True)
+class PipelinePreflightBlock:
+    """Block assembly limits advertised by Torii preflight."""
+
+    max_transactions: int
+
+
+@dataclass(frozen=True)
+class PipelinePreflightPipeline:
+    """Pipeline execution and verification limits advertised by Torii preflight."""
+
+    signature_batch_max: int
+    signature_batch_max_ed25519: int
+    signature_batch_max_secp256k1: int
+    signature_batch_max_pqc: int
+    signature_batch_max_bls: int
+    overlay_max_instructions: int
+    ivm_max_decoded_instructions: int
+
+
+@dataclass(frozen=True)
+class PipelinePreflightQueue:
+    """Current queue occupancy advertised by Torii preflight."""
+
+    size: int
+    queued: int
+    inflight: int
+
+
+@dataclass(frozen=True)
+class PipelinePreflightFees:
+    """Nexus fee configuration advertised by Torii preflight."""
+
+    fee_asset_id: str
+    fee_sink_account_id: str
+    base_fee: Any
+    per_byte_fee: Any
+    per_instruction_fee: Any
+    per_gas_unit_fee: Any
+    sponsorship_enabled: bool
+    sponsor_max_fee: Any
+    sponsor_verified_balance_safety_floor: Any
+    canonical_sponsor_account_id: Optional[str]
+    fee_receipts_activation_height: int
+    external_settlement_enabled: bool
+    burn_from_unix_timestamp_ms: int
+    settlement_mode: str
+    successful_claim_fee_exempt_authorities: List[str]
+
+
+@dataclass(frozen=True)
+class PipelinePreflight:
+    """Typed response from `GET /v1/pipeline/preflight`."""
+
+    schema_version: int
+    chain_height: int
+    sumeragi: PipelinePreflightSumeragi
+    admission: PipelinePreflightAdmission
+    block: PipelinePreflightBlock
+    pipeline: PipelinePreflightPipeline
+    queue: PipelinePreflightQueue
+    fees: PipelinePreflightFees
+    raw: Dict[str, Any]
+
+    def is_status_stalled(self, status: StatusPayload) -> bool:
+        """Classify status liveness using the preflight stall threshold."""
+
+        return status.is_queue_stalled(self.sumeragi.stall_threshold_ms)
 
 
 class ToriiClient:
@@ -3583,6 +3703,15 @@ class ToriiClient:
             status=status_payload,
             metrics=metrics,
         )
+
+    def get_pipeline_preflight(self) -> PipelinePreflight:
+        """Fetch pipeline preflight diagnostics (`GET /v1/pipeline/preflight`)."""
+
+        payload = self._get_json_object(
+            "/v1/pipeline/preflight",
+            context="pipeline preflight",
+        )
+        return self._parse_pipeline_preflight(payload, context="pipeline preflight")
 
     # ------------------------------------------------------------------
     # Sora VPN native lease helpers
@@ -6407,6 +6536,7 @@ class ToriiClient:
         consensus_caps = self._parse_consensus_caps(record.get("consensus_caps"))
         raw = dict(record)
         return StatusPayload(
+            observed_at_ms=self._coerce_int(record.get("observed_at_ms"), f"{context}.observed_at_ms"),
             mode_tag=None if record.get("mode_tag") is None else str(record.get("mode_tag")),
             staged_mode_tag=None if record.get("staged_mode_tag") is None else str(record.get("staged_mode_tag")),
             staged_mode_activation_height=self._coerce_optional_int(
@@ -6420,6 +6550,27 @@ class ToriiClient:
             consensus_caps=consensus_caps,
             peers=self._coerce_int(record.get("peers"), f"{context}.peers"),
             queue_size=self._coerce_int(record.get("queue_size"), f"{context}.queue_size"),
+            queue_queued=self._coerce_int(record.get("queue_queued"), f"{context}.queue_queued"),
+            queue_inflight=self._coerce_int(
+                record.get("queue_inflight"),
+                f"{context}.queue_inflight",
+            ),
+            last_block_committed_at_ms=self._coerce_int(
+                record.get("last_block_committed_at_ms"),
+                f"{context}.last_block_committed_at_ms",
+            ),
+            last_non_empty_block_committed_at_ms=self._coerce_int(
+                record.get("last_non_empty_block_committed_at_ms"),
+                f"{context}.last_non_empty_block_committed_at_ms",
+            ),
+            time_since_last_block_ms=self._coerce_int(
+                record.get("time_since_last_block_ms"),
+                f"{context}.time_since_last_block_ms",
+            ),
+            time_since_last_non_empty_block_ms=self._coerce_int(
+                record.get("time_since_last_non_empty_block_ms"),
+                f"{context}.time_since_last_non_empty_block_ms",
+            ),
             commit_time_ms=self._coerce_int(record.get("commit_time_ms"), f"{context}.commit_time_ms"),
             da_reschedule_total=self._coerce_int(
                 record.get("da_reschedule_total"),
@@ -6438,6 +6589,155 @@ class ToriiClient:
                 f"{context}.lane_governance_sealed_total",
             ),
             lane_governance_sealed_aliases=sealed_aliases,
+            raw=raw,
+        )
+
+    def _parse_pipeline_preflight(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> PipelinePreflight:
+        record = self._ensure_mapping(payload, context)
+        sumeragi = self._ensure_mapping(record.get("sumeragi"), f"{context}.sumeragi")
+        admission = self._ensure_mapping(record.get("admission"), f"{context}.admission")
+        block = self._ensure_mapping(record.get("block"), f"{context}.block")
+        pipeline = self._ensure_mapping(record.get("pipeline"), f"{context}.pipeline")
+        queue = self._ensure_mapping(record.get("queue"), f"{context}.queue")
+        fees = self._ensure_mapping(record.get("fees"), f"{context}.fees")
+        raw = self._clone_json_payload(record, context=context)
+
+        return PipelinePreflight(
+            schema_version=self._coerce_int(record.get("schema_version"), f"{context}.schema_version"),
+            chain_height=self._coerce_int(record.get("chain_height"), f"{context}.chain_height"),
+            sumeragi=PipelinePreflightSumeragi(
+                block_time_ms=self._coerce_int(
+                    sumeragi.get("block_time_ms"),
+                    f"{context}.sumeragi.block_time_ms",
+                ),
+                commit_time_ms=self._coerce_int(
+                    sumeragi.get("commit_time_ms"),
+                    f"{context}.sumeragi.commit_time_ms",
+                ),
+                stall_threshold_ms=self._coerce_int(
+                    sumeragi.get("stall_threshold_ms"),
+                    f"{context}.sumeragi.stall_threshold_ms",
+                ),
+            ),
+            admission=PipelinePreflightAdmission(
+                max_signatures=self._coerce_int(
+                    admission.get("max_signatures"),
+                    f"{context}.admission.max_signatures",
+                ),
+                max_instructions=self._coerce_int(
+                    admission.get("max_instructions"),
+                    f"{context}.admission.max_instructions",
+                ),
+                max_tx_bytes=self._coerce_int(
+                    admission.get("max_tx_bytes"),
+                    f"{context}.admission.max_tx_bytes",
+                ),
+                max_decompressed_bytes=self._coerce_int(
+                    admission.get("max_decompressed_bytes"),
+                    f"{context}.admission.max_decompressed_bytes",
+                ),
+                max_metadata_depth=self._coerce_int(
+                    admission.get("max_metadata_depth"),
+                    f"{context}.admission.max_metadata_depth",
+                ),
+            ),
+            block=PipelinePreflightBlock(
+                max_transactions=self._coerce_int(
+                    block.get("max_transactions"),
+                    f"{context}.block.max_transactions",
+                )
+            ),
+            pipeline=PipelinePreflightPipeline(
+                signature_batch_max=self._coerce_int(
+                    pipeline.get("signature_batch_max"),
+                    f"{context}.pipeline.signature_batch_max",
+                ),
+                signature_batch_max_ed25519=self._coerce_int(
+                    pipeline.get("signature_batch_max_ed25519"),
+                    f"{context}.pipeline.signature_batch_max_ed25519",
+                ),
+                signature_batch_max_secp256k1=self._coerce_int(
+                    pipeline.get("signature_batch_max_secp256k1"),
+                    f"{context}.pipeline.signature_batch_max_secp256k1",
+                ),
+                signature_batch_max_pqc=self._coerce_int(
+                    pipeline.get("signature_batch_max_pqc"),
+                    f"{context}.pipeline.signature_batch_max_pqc",
+                ),
+                signature_batch_max_bls=self._coerce_int(
+                    pipeline.get("signature_batch_max_bls"),
+                    f"{context}.pipeline.signature_batch_max_bls",
+                ),
+                overlay_max_instructions=self._coerce_int(
+                    pipeline.get("overlay_max_instructions"),
+                    f"{context}.pipeline.overlay_max_instructions",
+                ),
+                ivm_max_decoded_instructions=self._coerce_int(
+                    pipeline.get("ivm_max_decoded_instructions"),
+                    f"{context}.pipeline.ivm_max_decoded_instructions",
+                ),
+            ),
+            queue=PipelinePreflightQueue(
+                size=self._coerce_int(queue.get("size"), f"{context}.queue.size"),
+                queued=self._coerce_int(queue.get("queued"), f"{context}.queue.queued"),
+                inflight=self._coerce_int(queue.get("inflight"), f"{context}.queue.inflight"),
+            ),
+            fees=PipelinePreflightFees(
+                fee_asset_id=str(fees.get("fee_asset_id") or ""),
+                fee_sink_account_id=str(fees.get("fee_sink_account_id") or ""),
+                base_fee=self._clone_json_value(fees.get("base_fee"), context=f"{context}.fees.base_fee"),
+                per_byte_fee=self._clone_json_value(
+                    fees.get("per_byte_fee"),
+                    context=f"{context}.fees.per_byte_fee",
+                ),
+                per_instruction_fee=self._clone_json_value(
+                    fees.get("per_instruction_fee"),
+                    context=f"{context}.fees.per_instruction_fee",
+                ),
+                per_gas_unit_fee=self._clone_json_value(
+                    fees.get("per_gas_unit_fee"),
+                    context=f"{context}.fees.per_gas_unit_fee",
+                ),
+                sponsorship_enabled=self._coerce_bool(
+                    fees.get("sponsorship_enabled"),
+                    f"{context}.fees.sponsorship_enabled",
+                ),
+                sponsor_max_fee=self._clone_json_value(
+                    fees.get("sponsor_max_fee"),
+                    context=f"{context}.fees.sponsor_max_fee",
+                ),
+                sponsor_verified_balance_safety_floor=self._clone_json_value(
+                    fees.get("sponsor_verified_balance_safety_floor"),
+                    context=f"{context}.fees.sponsor_verified_balance_safety_floor",
+                ),
+                canonical_sponsor_account_id=(
+                    None
+                    if fees.get("canonical_sponsor_account_id") is None
+                    else str(fees.get("canonical_sponsor_account_id"))
+                ),
+                fee_receipts_activation_height=self._coerce_int(
+                    fees.get("fee_receipts_activation_height"),
+                    f"{context}.fees.fee_receipts_activation_height",
+                ),
+                external_settlement_enabled=self._coerce_bool(
+                    fees.get("external_settlement_enabled"),
+                    f"{context}.fees.external_settlement_enabled",
+                ),
+                burn_from_unix_timestamp_ms=self._coerce_int(
+                    fees.get("burn_from_unix_timestamp_ms"),
+                    f"{context}.fees.burn_from_unix_timestamp_ms",
+                ),
+                settlement_mode=str(fees.get("settlement_mode") or ""),
+                successful_claim_fee_exempt_authorities=self._parse_string_array(
+                    fees.get("successful_claim_fee_exempt_authorities"),
+                    context=f"{context}.fees.successful_claim_fee_exempt_authorities",
+                ),
+            ),
             raw=raw,
         )
 
@@ -10086,7 +10386,11 @@ def _compute_status_metrics(
     return StatusMetrics(
         commit_latency_ms=current.commit_time_ms,
         queue_size=current.queue_size,
+        queue_queued=current.queue_queued,
+        queue_inflight=current.queue_inflight,
         queue_delta=queue_delta,
+        time_since_last_block_ms=current.time_since_last_block_ms,
+        time_since_last_non_empty_block_ms=current.time_since_last_non_empty_block_ms,
         da_reschedule_delta=da_delta,
         tx_approved_delta=approved_delta,
         tx_rejected_delta=rejected_delta,

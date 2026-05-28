@@ -2747,6 +2747,11 @@ def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     second = client.get_status_snapshot()
 
     assert first.status.queue_size == 4
+    assert first.status.queue_queued == 2
+    assert first.status.queue_inflight == 2
+    assert first.metrics.time_since_last_non_empty_block_ms == 1_000
+    assert first.status.is_queue_stalled(999) is True
+    assert first.status.is_queue_stalled(1_000) is False
     assert first.metrics.queue_delta == 0
     assert first.metrics.has_activity is False
     assert first.status.lane_commitments[0].lane_id == 7
@@ -2754,6 +2759,8 @@ def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     assert first.status.dataspace_catalog[0].alias == "alpha"
 
     assert second.status.queue_size == 9
+    assert second.metrics.queue_queued == 7
+    assert second.metrics.queue_inflight == 2
     assert second.metrics.queue_delta == 5
     assert second.metrics.da_reschedule_delta == 3
     assert second.metrics.tx_approved_delta == 2
@@ -2773,6 +2780,82 @@ def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     assert second.status.require_dataspace("alpha").sealed is True
     assert second.status.require_dataspace(9).manifest_required is True
     assert "peers" in second.status.raw
+
+
+def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "schema_version": 1,
+                "chain_height": 42,
+                "sumeragi": {
+                    "block_time_ms": 1_000,
+                    "commit_time_ms": 2_000,
+                    "stall_threshold_ms": 6_000,
+                },
+                "admission": {
+                    "max_signatures": 32,
+                    "max_instructions": 4096,
+                    "max_tx_bytes": 1_048_576,
+                    "max_decompressed_bytes": 1_048_576,
+                    "max_metadata_depth": 16,
+                },
+                "block": {"max_transactions": 512},
+                "pipeline": {
+                    "signature_batch_max": 0,
+                    "signature_batch_max_ed25519": 64,
+                    "signature_batch_max_secp256k1": 16,
+                    "signature_batch_max_pqc": 8,
+                    "signature_batch_max_bls": 16,
+                    "overlay_max_instructions": 0,
+                    "ivm_max_decoded_instructions": 1_048_576,
+                },
+                "queue": {"size": 2, "queued": 1, "inflight": 1},
+                "fees": {
+                    "fee_asset_id": "xor#sora",
+                    "fee_sink_account_id": "fees@system",
+                    "base_fee": "0",
+                    "per_byte_fee": "0",
+                    "per_instruction_fee": "0",
+                    "per_gas_unit_fee": "0",
+                    "sponsorship_enabled": False,
+                    "sponsor_max_fee": "0",
+                    "sponsor_verified_balance_safety_floor": "0",
+                    "canonical_sponsor_account_id": None,
+                    "fee_receipts_activation_height": 7,
+                    "external_settlement_enabled": False,
+                    "burn_from_unix_timestamp_ms": 0,
+                    "settlement_mode": "direct",
+                    "successful_claim_fee_exempt_authorities": ["authority@system"],
+                },
+            }
+        )
+    )
+    status_payload = _status_payload(
+        queue_size=2,
+        da_total=0,
+        approved=0,
+        rejected=0,
+        views=0,
+    )
+    status_payload["time_since_last_non_empty_block_ms"] = 6_001
+    session.queue(StubResponse(payload=status_payload))
+    client = ToriiClient("http://node.test", session=session)
+
+    preflight = client.get_pipeline_preflight()
+    status = client.get_status_snapshot().status
+
+    assert preflight.schema_version == 1
+    assert preflight.chain_height == 42
+    assert preflight.sumeragi.stall_threshold_ms == 6_000
+    assert preflight.admission.max_tx_bytes == 1_048_576
+    assert preflight.pipeline.signature_batch_max_ed25519 == 64
+    assert preflight.queue.queued == 1
+    assert preflight.fees.base_fee == "0"
+    assert preflight.fees.successful_claim_fee_exempt_authorities == ["authority@system"]
+    assert preflight.is_status_stalled(status) is True
+    assert session.calls[0]["url"].endswith("/v1/pipeline/preflight")
 
 
 def _status_payload(
@@ -2880,8 +2963,15 @@ def _status_payload(
         }
     ]
     return {
+        "observed_at_ms": 10_000,
         "peers": 5,
         "queue_size": queue_size,
+        "queue_queued": max(0, queue_size - 2),
+        "queue_inflight": min(queue_size, 2),
+        "last_block_committed_at_ms": 9_900,
+        "last_non_empty_block_committed_at_ms": 9_000,
+        "time_since_last_block_ms": 100,
+        "time_since_last_non_empty_block_ms": 1_000,
         "commit_time_ms": 250,
         "da_reschedule_total": da_total,
         "txs_approved": approved,
