@@ -616,6 +616,69 @@ pub mod isi {
             })
     }
 
+    fn ensure_offline_note_certificate_signature_by_managers(
+        certificate: &OfflineNoteKeyCertificate,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let payload = certificate.signing_bytes().map_err(|err| {
+            labeled_invariant(
+                "invalid_issuer_cert",
+                format!("failed to encode Offline key certificate payload: {err}"),
+            )
+        })?;
+        let mut manager_count = 0usize;
+        for (account_id, perms) in state_transaction.world.account_permissions.iter() {
+            if !perms
+                .iter()
+                .any(|p| p.name() == CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)
+            {
+                continue;
+            }
+            manager_count += 1;
+            // Skip multisig managers; the cert must have been signed by some
+            // single-signature manager.
+            let Some(key) = account_id.try_signatory() else {
+                continue;
+            };
+            if certificate.issuer_signature.verify(key, &payload).is_ok() {
+                return Ok(());
+            }
+        }
+        if manager_count == 0 {
+            return Err(labeled_invariant(
+                "escrow_manager_missing",
+                "no offline escrow manager registered to validate the key certificate",
+            )
+            .into());
+        }
+        Err(labeled_invariant(
+            "invalid_issuer_cert",
+            "offline key certificate signature does not match any offline escrow manager",
+        )
+        .into())
+    }
+
+    fn ensure_authorized_audit_submitter(
+        sender_certificate_was_issued: bool,
+        sender_account: &AccountId,
+        authority_is_verified_recipient: bool,
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let authority_is_sender = sender_certificate_was_issued && sender_account == authority;
+        if authority_is_sender
+            || authority_is_verified_recipient
+            || is_offline_escrow_manager(authority, state_transaction)
+        {
+            return Ok(());
+        }
+        Err(labeled_invariant(
+            "unauthorized_controller",
+            "only the sender, a verified output recipient, or an offline escrow manager may submit Offline audits",
+        )
+        .into())
+    }
+
     fn offline_note_issued_claim_hash(claim: OfflineNoteIssuedClaim) -> Result<Hash, Error> {
         claim.claim_hash().map_err(|err| {
             labeled_invariant(
@@ -917,12 +980,32 @@ pub mod isi {
                 "audit_duplicate_output",
                 "offline audit output commitments must be unique",
             )?;
+            validate_offline_note_key_certificate(&audit.sender_key_certificate)?;
+            let sender_certificate_payload_hash =
+                audit.sender_key_certificate.payload_hash().map_err(|err| {
+                    labeled_invariant(
+                        "invalid_issuer_cert",
+                        format!("failed to encode Offline key certificate payload: {err}"),
+                    )
+                })?;
+            let sender_certificate_key =
+                offline_note_key_certificate_key(&sender_certificate_payload_hash);
+            let sender_certificate_was_issued = state_transaction
+                .world
+                .offline_note_replay_keys
+                .get(&sender_certificate_key)
+                .is_some();
             let output_commitment_set = audit
                 .output_commitments
                 .iter()
                 .copied()
                 .collect::<BTreeSet<_>>();
             let mut output_claim_commitments = BTreeSet::new();
+            // Recipient-based authorization is deferred until after the matching
+            // output-claim certificate has been verified by a manager signature,
+            // so an attacker cannot grant themselves authority by stuffing their
+            // account id into an unverified claim.
+            let mut authority_is_verified_recipient = false;
             for output_claim in &audit.output_claims {
                 if !output_commitment_set.contains(&output_claim.note_commitment) {
                     return Err(labeled_invariant(
@@ -939,10 +1022,13 @@ pub mod isi {
                     .into());
                 }
                 validate_offline_note_key_certificate(&output_claim.key_certificate)?;
-                ensure_offline_note_certificate_signature(
+                ensure_offline_note_certificate_signature_by_managers(
                     &output_claim.key_certificate,
-                    authority,
+                    state_transaction,
                 )?;
+                if output_claim.key_certificate.account_id == *authority {
+                    authority_is_verified_recipient = true;
+                }
                 if output_claim.amount <= Numeric::zero() {
                     return Err(labeled_invariant(
                         "invalid_amount",
@@ -960,26 +1046,14 @@ pub mod isi {
                 let spec = state_transaction.numeric_spec_for(output_claim.asset.definition())?;
                 assert_numeric_spec_with(&output_claim.amount, spec)?;
             }
-            validate_offline_note_key_certificate(&audit.sender_key_certificate)?;
-            ensure_can_submit_offline_note_for_account(
+            ensure_authorized_audit_submitter(
+                sender_certificate_was_issued,
                 &audit.sender_key_certificate.account_id,
+                authority_is_verified_recipient,
                 authority,
                 state_transaction,
             )?;
-            let certificate_payload_hash =
-                audit.sender_key_certificate.payload_hash().map_err(|err| {
-                    labeled_invariant(
-                        "invalid_issuer_cert",
-                        format!("failed to encode Offline key certificate payload: {err}"),
-                    )
-                })?;
-            let certificate_key = offline_note_key_certificate_key(&certificate_payload_hash);
-            if state_transaction
-                .world
-                .offline_note_replay_keys
-                .get(&certificate_key)
-                .is_none()
-            {
+            if !sender_certificate_was_issued {
                 return Err(labeled_invariant(
                     "invalid_issuer_cert",
                     "offline audit key certificate was not issued",
@@ -1234,7 +1308,9 @@ pub mod isi {
             asset::{Asset, AssetDefinition},
             block::BlockHeader,
             domain::{Domain, DomainId},
+            permission::Permission,
         };
+        use iroha_primitives::json::Json;
         use iroha_primitives::numeric::NumericSpec;
         use nonzero_ext::nonzero;
 
@@ -1594,6 +1670,138 @@ pub mod isi {
                 .len(),
                 5
             );
+        }
+
+        fn escrow_manager_permission() -> Permission {
+            Permission::new(
+                CAN_MANAGE_OFFLINE_ESCROW_PERMISSION.to_string(),
+                Json::new(()),
+            )
+        }
+
+        fn signed_certificate(
+            signer_kp: &KeyPair,
+            account: AccountId,
+        ) -> OfflineNoteKeyCertificate {
+            let (_, public_key) = signer_kp.public_key().to_bytes();
+            let mut cert = OfflineNoteKeyCertificate {
+                version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
+                platform: "test-platform".to_owned(),
+                key_id: "test-key".to_owned(),
+                device_id: "test-device".to_owned(),
+                account_id: account,
+                public_key: public_key.to_vec(),
+                assertion_scheme: "test-scheme".to_owned(),
+                assertion_key_algorithm: "test-alg".to_owned(),
+                assertion_public_key: vec![0x04; 65],
+                assertion_usage_count_limit: None,
+                one_use: true,
+                issuer_signature: Signature::from_bytes(&[0u8; 64]),
+            };
+            let payload = cert.signing_bytes().expect("encode cert payload");
+            cert.issuer_signature = Signature::new(signer_kp.private_key(), &payload);
+            cert
+        }
+
+        #[test]
+        fn offline_note_certificate_signature_accepts_registered_manager_signature() {
+            let manager_kp = KeyPair::from_seed(vec![0xC0; 32], Algorithm::Ed25519);
+            let manager_id = AccountId::new(manager_kp.public_key().clone());
+            let wallet_account = sample_account(0x99);
+            let cert = signed_certificate(&manager_kp, wallet_account);
+
+            let (state, _, _, _) = self_escrow_test_state(Numeric::new(0, 0));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .account_permissions
+                .insert(manager_id, BTreeSet::from([escrow_manager_permission()]));
+
+            ensure_offline_note_certificate_signature_by_managers(&cert, &transaction)
+                .expect("cert signed by registered escrow manager must validate");
+        }
+
+        #[test]
+        fn audit_submitter_authorized_for_issued_sender() {
+            let sender = sample_account(0x10);
+            let (state, _, _, _) = self_escrow_test_state(Numeric::new(0, 0));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let transaction = block.transaction();
+
+            ensure_authorized_audit_submitter(
+                true,
+                &sender,
+                false,
+                &sender,
+                &transaction,
+            )
+            .expect("issued sender must authorize");
+        }
+
+        #[test]
+        fn audit_submitter_authorized_for_verified_recipient() {
+            let sender = sample_account(0x10);
+            let recipient = sample_account(0x20);
+            let (state, _, _, _) = self_escrow_test_state(Numeric::new(0, 0));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let transaction = block.transaction();
+
+            ensure_authorized_audit_submitter(
+                false,
+                &sender,
+                true,
+                &recipient,
+                &transaction,
+            )
+            .expect("verified recipient must authorize");
+        }
+
+        #[test]
+        fn audit_submitter_authorized_for_escrow_manager() {
+            let sender = sample_account(0x10);
+            let manager = sample_account(0x30);
+            let (state, _, _, _) = self_escrow_test_state(Numeric::new(0, 0));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction.world.account_permissions.insert(
+                manager.clone(),
+                BTreeSet::from([escrow_manager_permission()]),
+            );
+
+            ensure_authorized_audit_submitter(
+                false,
+                &sender,
+                false,
+                &manager,
+                &transaction,
+            )
+            .expect("escrow manager must authorize");
+        }
+
+        #[test]
+        fn audit_submitter_rejects_unrelated_authority() {
+            let sender = sample_account(0x10);
+            let unrelated = sample_account(0x40);
+            let (state, _, _, _) = self_escrow_test_state(Numeric::new(0, 0));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let transaction = block.transaction();
+
+            let err = ensure_authorized_audit_submitter(
+                true,
+                &sender,
+                false,
+                &unrelated,
+                &transaction,
+            )
+            .expect_err("unrelated authority must be rejected");
+
+            assert_offline_rejection(err, "unauthorized_controller", "only the sender");
         }
     }
 }
