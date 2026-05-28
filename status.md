@@ -2,6 +2,17 @@
 
 Last updated: 2026-05-28
 
+## 2026-05-28 Torii Nexus lifecycle response negotiation
+
+- `/v1/nexus/lifecycle` now honors the current Torii response negotiation for
+  its dynamic control-plane payload: JSON clients receive JSON, while Norito
+  clients receive a Norito-framed JSON document string instead of plain JSON
+  bytes.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features app_api --test nexus_lifecycle_endpoint -- --nocapture`
+  - `cargo test -p iroha_torii --features app_api --lib response_format_tests::respond_json_document_with_format`
+
 ## 2026-05-28 Queue-aware Torii status and pipeline preflight
 
 - `/status` now exposes queue split counts plus last committed block and

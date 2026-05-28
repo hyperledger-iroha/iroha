@@ -73752,9 +73752,10 @@ pub async fn handle_post_nexus_lane_lifecycle(
         "lane_count".into(),
         norito::json::Value::from(nexus.lane_catalog.lane_count().get()),
     );
-    Ok((
+    Ok(utils::respond_json_document_with_status_and_format(
         StatusCode::ACCEPTED,
-        utils::JsonValueBody(norito::json::Value::Object(payload)),
+        norito::json::Value::Object(payload),
+        utils::current_response_format(),
     ))
 }
 

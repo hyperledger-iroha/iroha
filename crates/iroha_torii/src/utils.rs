@@ -356,6 +356,32 @@ pub fn respond_json_value_with_status(status: StatusCode, value: Value) -> Respo
     }
 }
 
+/// Encode a dynamically constructed JSON document using the negotiated response format.
+///
+/// Dynamic values do not carry a stable Norito object schema. For Norito responses, the
+/// JSON document is encoded as a Norito string so clients still receive a checksummed
+/// Norito envelope without relying on a dynamic schema.
+pub fn respond_json_document_with_status_and_format(
+    status: StatusCode,
+    value: Value,
+    format: ResponseFormat,
+) -> Response {
+    match format {
+        ResponseFormat::Json => respond_json_value_with_status(status, value),
+        ResponseFormat::Norito => match norito::json::to_string(&value) {
+            Ok(json) => respond_with_status_and_format(status, json, ResponseFormat::Norito),
+            Err(err) => {
+                iroha_logger::error!(?err, "failed to serialise response payload");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to serialise response",
+                )
+                    .into_response()
+            }
+        },
+    }
+}
+
 /// Encode a dynamically constructed Norito JSON value.
 ///
 /// Dynamic values do not carry a stable Norito schema, so they remain JSON-only.
@@ -425,6 +451,53 @@ mod response_format_tests {
         let bytes = body.collect().await.expect("collect JSON body").to_bytes();
         let parsed: json::Value = json::from_slice(&bytes).expect("decode JSON payload");
         assert_eq!(parsed, json::Value::from(7_u64));
+    }
+
+    #[tokio::test]
+    async fn respond_json_document_with_format_wraps_json_string_as_norito() {
+        let mut object = json::Map::new();
+        object.insert("ok".to_owned(), json::Value::Bool(true));
+        let (parts, body) = respond_json_document_with_status_and_format(
+            StatusCode::ACCEPTED,
+            json::Value::Object(object),
+            ResponseFormat::Norito,
+        )
+        .into_parts();
+
+        assert_eq!(parts.status, StatusCode::ACCEPTED);
+        assert_eq!(
+            parts.headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static(NORITO_MIME_TYPE))
+        );
+        let bytes = body
+            .collect()
+            .await
+            .expect("collect Norito body")
+            .to_bytes();
+        let json: String = norito::decode_from_bytes(&bytes).expect("decode Norito JSON string");
+        let decoded: json::Value = json::from_str(&json).expect("decode JSON document");
+        assert_eq!(decoded["ok"].as_bool(), Some(true));
+    }
+
+    #[tokio::test]
+    async fn respond_json_document_with_format_renders_json() {
+        let mut object = json::Map::new();
+        object.insert("ok".to_owned(), json::Value::Bool(true));
+        let (parts, body) = respond_json_document_with_status_and_format(
+            StatusCode::ACCEPTED,
+            json::Value::Object(object),
+            ResponseFormat::Json,
+        )
+        .into_parts();
+
+        assert_eq!(parts.status, StatusCode::ACCEPTED);
+        assert_eq!(
+            parts.headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static(JSON_MIME_TYPE))
+        );
+        let bytes = body.collect().await.expect("collect JSON body").to_bytes();
+        let decoded: json::Value = json::from_slice(&bytes).expect("decode JSON document");
+        assert_eq!(decoded["ok"].as_bool(), Some(true));
     }
 }
 
