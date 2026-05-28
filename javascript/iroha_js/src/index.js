@@ -117,6 +117,12 @@ export {
   laneSettlementHash,
 } from "./nexus.js";
 export {
+  NexusAppClient,
+  NexusAppError,
+  NexusSignatureAlgorithmEd25519,
+  nexusPayloadHashHex,
+} from "./nexusApp.js";
+export {
   hashSignedTransaction,
   resignSignedTransaction,
   buildRegisterDomainTransaction,

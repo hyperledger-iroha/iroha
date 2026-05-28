@@ -544,24 +544,24 @@ impl Actor {
                 block_height,
             );
 
-            let prepare_votes = self
-                .native_amx_sessions
-                .sorted_votes_for_body(key, &prepare_body);
-            let commit_votes = self
-                .native_amx_sessions
-                .sorted_votes_for_body(key, &commit_body);
+            let prepare_votes = self.native_amx_sessions.sorted_votes_for_body_from(
+                key,
+                &prepare_body,
+                &validator_set,
+            );
+            let commit_votes = self.native_amx_sessions.sorted_votes_for_body_from(
+                key,
+                &commit_body,
+                &validator_set,
+            );
             if prepare_votes.len() < min_signers {
                 pending = true;
-                self.schedule_background(BackgroundRequest::BroadcastNativeAmx {
-                    message: NativeAmxMessage::PrepareRequest(prepare_body),
-                });
+                self.request_native_amx_attestation_votes(&validator_set, prepare_body);
                 continue;
             }
             if commit_votes.len() < min_signers {
                 pending = true;
-                self.schedule_background(BackgroundRequest::BroadcastNativeAmx {
-                    message: NativeAmxMessage::CommitRequest(commit_body),
-                });
+                self.request_native_amx_attestation_votes(&validator_set, commit_body);
                 continue;
             }
 

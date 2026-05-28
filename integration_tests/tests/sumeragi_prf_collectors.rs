@@ -47,7 +47,7 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
         .torii_url
         .join("v1/sumeragi/collectors")
         .wrap_err("compose collectors URL")?;
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
 
     let snapshot_initial = fetch_collectors_snapshot(&http, &collectors_url).await?;
     ensure!(

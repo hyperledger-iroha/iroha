@@ -7,30 +7,30 @@ public final class OfflineJsonParserTest {
   private OfflineJsonParserTest() {}
 
   public static void main(final String[] args) {
-    parsesOfflineV2Readiness();
+    parsesOfflineReadiness();
     parsesOfflineTransfers();
     canonicalizesJson();
     System.out.println("[IrohaAndroid] OfflineJsonParserTest passed.");
   }
 
-  private static void parsesOfflineV2Readiness() {
+  private static void parsesOfflineReadiness() {
     final String json =
         """
         {
-          "offline_note_v2": true,
+          "offline_note": true,
           "offline_one_use_keys": true,
           "offline_recursive_note_proof": false,
-          "offline_fountain_qr_v1": true,
+          "offline_fountain_qr": true,
           "offline_sync_optional": true,
           "offline_telemetry": false
         }
         """;
-    final OfflineV2Readiness readiness =
-        OfflineJsonParser.parseOfflineV2Readiness(json.getBytes(StandardCharsets.UTF_8));
-    assert readiness.offlineNoteV2();
+    final OfflineReadiness readiness =
+        OfflineJsonParser.parseOfflineReadiness(json.getBytes(StandardCharsets.UTF_8));
+    assert readiness.offlineNote();
     assert readiness.offlineOneUseKeys();
     assert !readiness.offlineRecursiveNoteProof();
-    assert readiness.offlineFountainQrV1();
+    assert readiness.offlineFountainQr();
     assert readiness.offlineSyncOptional();
     assert !readiness.offlineTelemetry();
   }

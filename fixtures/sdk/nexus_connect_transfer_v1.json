@@ -1,0 +1,91 @@
+{
+  "fixture": "nexus_connect_transfer_v1",
+  "version": 1,
+  "description": "Deterministic SORA Nexus app facade transfer fixture for SDK parity tests.",
+  "connect": {
+    "app_id": "fixture-app",
+    "sid": "sid-fixture-1",
+    "wallet_launch_uri": "iroha://connect?sid=sid-fixture-1&role=wallet",
+    "approval_frame": {
+      "account_id": "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+      "signing_public_key_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "signature_algorithm": "ed25519"
+    }
+  },
+  "transfer_input": {
+    "chain_id": "test-chain",
+    "source_asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+    "quantity": "12.34",
+    "destination_account_id": "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L",
+    "authority": "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+    "creation_time_ms": 1700000000000,
+    "ttl_ms": 30000,
+    "nonce": 7,
+    "metadata": {
+      "purpose": "nexus-app-fixture"
+    }
+  },
+  "expected": {
+    "payload_bytes_hex": "0c0b0a746573742d636861696e4f000000004a2100000000000000010001d0014a01b201320174012b01b401ab013a0113016801bd0146011501e401e601d00122014a01b7011a0101016b01af0185012001a3013201c9017701870137080068e5cf8b010000ac0200000000a60201000000000000009c020f0e69726f68612e7472616e736665728a0202010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900da000000000000006356adc8a15d041a0202000000d401764f000000004a2100000000000000010001d0014a01b201320174012b01b401ab013a0113016801bd0146011501e401e601d00122014a01b7011a0101016b01af0185012001a3013201c90177018701372001be01f5013c011c01cd0117014901e1018001df01ba01d60151019b01fd016604000000000c0602000000d20404020000004f000000004a2100000000000000010001a0019a01a501f4017a016701590180012f01f9015501f801dc012d012a011401a501c9019d012301be019701f801640112017f01f901380134015501a401f00a01083075000000000000060104070000002801000000000000001f0807707572706f7365151413226e657875732d6170702d6669787475726522",
+    "payload_hash_hex": "1c39c49925ffafee69598d90d5073cb48bbfa1795cc15b41afb67d2cc3b69669",
+    "wallet_signature_hex": "c82d2ee732a9251153eff6f510a0d12b292cb51a5d961a7eddb84f6ee944e34eaca60ca2f1ccfe7a53fd6813fc9a6db9e35cb276b2411b7d583d45fdc6caee05",
+    "signed_transaction_hash_hex": "2d22bf944c58886de938e4094bf9887a43e66d598162bd2205f0812b64e180bb",
+    "status_sequence": [
+      "Submitted",
+      "Committed"
+    ]
+  },
+  "error_cases": [
+    {
+      "name": "unsupported signature algorithm",
+      "signature_algorithm": "secp256k1",
+      "expected_code": "unsupported_signature_algorithm"
+    },
+    {
+      "name": "approval without signing key",
+      "approval_frame": {
+        "account_id": "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
+      },
+      "expected_code": "missing_signing_public_key"
+    },
+    {
+      "name": "authority mismatch",
+      "transfer_authority": "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L",
+      "expected_code": "approval_account_mismatch"
+    },
+    {
+      "name": "connect transport unavailable",
+      "expected_code": "connect_transport_unavailable"
+    },
+    {
+      "name": "missing authority",
+      "expected_code": "missing_authority"
+    },
+    {
+      "name": "invalid signing public key",
+      "expected_code": "invalid_signing_public_key"
+    },
+    {
+      "name": "invalid signature length",
+      "signature_bytes_hex": "0707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707",
+      "expected_code": "invalid_signature"
+    },
+    {
+      "name": "torii client unavailable",
+      "expected_code": "torii_client_unavailable"
+    },
+    {
+      "name": "transaction hash mismatch",
+      "submitted_transaction_hash_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "expected_code": "transaction_hash_mismatch"
+    },
+    {
+      "name": "submit failure",
+      "expected_code": "submit_failed"
+    },
+    {
+      "name": "status wait failure",
+      "expected_code": "status_wait_failed"
+    }
+  ]
+}

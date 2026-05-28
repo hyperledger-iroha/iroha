@@ -661,6 +661,31 @@ function createPipelineRecoveryPayload(overrides = {}) {
   };
 }
 
+function createPipelineRecoveryFastpqProofsPayload(overrides = {}) {
+  const baseProofs =
+    overrides.proofs ??
+    [
+      {
+        entry_hash: fakeHashHex(0x22),
+        batch_index: 0,
+        parameter: "fastpq-lane-balanced",
+        transition_count: 2,
+        trace_commitment: fakeHashHex(0x33),
+        proof_digest: fakeHashHex(0x44),
+        batch: "YmF0Y2g=",
+        proof: "cHJvb2Y=",
+        batch_compact: false,
+        batch_reconstructed_from_block: true,
+      },
+    ];
+  return {
+    height: 42,
+    block_hash: fakeHashHex(0xbb),
+    proofs: baseProofs,
+    ...overrides,
+  };
+}
+
 test("listAccountAssets canonicalizes encoded account ids", async () => {
   const forms = sampleAccountForms();
   let capturedUrl;
@@ -7478,6 +7503,98 @@ test("getPipelineRecoveryTyped rejects malformed payloads", async () => {
   );
 });
 
+test("getPipelineRecoveryFastpqProofs fetches committed proof batches", async () => {
+  const fixture = createPipelineRecoveryFastpqProofsPayload({ height: 7 });
+  const controller = new AbortController();
+  let capturedUrl;
+  const fetchImpl = async (url, init) => {
+    capturedUrl = url;
+    assert.equal(init?.method, "GET");
+    assert.equal(init?.signal, controller.signal);
+    return createResponse({
+      status: 200,
+      jsonData: fixture,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.getPipelineRecoveryFastpqProofs(7n, {
+    signal: controller.signal,
+  });
+  assert.equal(capturedUrl, `${BASE_URL}/v1/pipeline/recovery/7/fastpq-proofs`);
+  assert.deepEqual(payload, fixture);
+});
+
+test("getPipelineRecoveryFastpqProofs returns null for missing heights", async () => {
+  const fetchImpl = async () => createResponse({ status: 404 });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.getPipelineRecoveryFastpqProofs(99);
+  assert.equal(payload, null);
+});
+
+test("getPipelineRecoveryFastpqProofsTyped normalises proof snapshots", async () => {
+  const proof = {
+    entry_hash: fakeHashHex(0x55),
+    batch_index: 3,
+    parameter: "fastpq-lane-balanced",
+    transition_count: 5,
+    trace_commitment: fakeHashHex(0x66),
+    proof_digest: fakeHashHex(0x77),
+    batch: "YmF0Y2gtMg==",
+    proof: "",
+    batch_compact: false,
+    batch_reconstructed_from_block: true,
+    batch_reconstruction_error: null,
+  };
+  const payload = createPipelineRecoveryFastpqProofsPayload({
+    height: 123,
+    block_hash: fakeHashHex(0x88),
+    proofs: [proof],
+  });
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: payload,
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getPipelineRecoveryFastpqProofsTyped(123);
+  assert.deepEqual(result, {
+    height: 123,
+    blockHashHex: payload.block_hash.toLowerCase(),
+    proofs: [
+      {
+        entryHash: proof.entry_hash.toLowerCase(),
+        batchIndex: 3,
+        parameter: "fastpq-lane-balanced",
+        transitionCount: 5,
+        traceCommitment: proof.trace_commitment.toLowerCase(),
+        proofDigest: proof.proof_digest.toLowerCase(),
+        batchBase64: "YmF0Y2gtMg==",
+        proofBase64: "",
+        batchCompact: false,
+        batchReconstructedFromBlock: true,
+        batchReconstructionError: null,
+        raw: proof,
+      },
+    ],
+  });
+});
+
+test("getPipelineRecoveryFastpqProofsTyped rejects malformed payloads", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: { height: 1, block_hash: fakeHashHex(0x99), proofs: {} },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getPipelineRecoveryFastpqProofsTyped(1),
+    /FASTPQ proofs response\.proofs must be an array/,
+  );
+});
+
 test("extractPipelineStatusKind returns nested status kind", () => {
   const payload = {
     kind: "Transaction",
@@ -7846,7 +7963,7 @@ test("waitForTransactionStatus surfaces rejection reason on failure status", asy
       error instanceof TransactionStatusError
       && error.status === "Rejected"
       && error.rejectionReason === rejectionReason
-      && String(error.message).includes(`reason=${rejectionReason}`),
+      && String(error.message).includes(`rejection_reason=${rejectionReason}`),
   );
 });
 
@@ -18791,13 +18908,13 @@ test("queryTriggers rejects unsupported option keys", async () => {
   assert.equal(fetchCalled, false);
 });
 
-test("getOfflineV2Readiness fetches canonical readiness payload", async () => {
+test("getOfflineReadiness fetches canonical readiness payload", async () => {
   let capturedRequest = null;
   const readiness = {
-    offline_note_v2: true,
+    offline_note: true,
     offline_one_use_keys: true,
     offline_recursive_note_proof: false,
-    offline_fountain_qr_v1: true,
+    offline_fountain_qr: true,
     offline_sync_optional: true,
     offline_telemetry: true,
   };
@@ -18812,10 +18929,10 @@ test("getOfflineV2Readiness fetches canonical readiness payload", async () => {
     },
   });
 
-  const response = await client.getOfflineV2Readiness();
+  const response = await client.getOfflineReadiness();
 
   assert.ok(capturedRequest, "request not captured");
-  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/v2/readiness`);
+  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/readiness`);
   assert.equal(capturedRequest.init.method, "GET");
   assert.equal(capturedRequest.init.headers.Accept, "application/json");
   assert.deepEqual(response, readiness);

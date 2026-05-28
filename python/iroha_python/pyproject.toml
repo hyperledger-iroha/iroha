@@ -12,6 +12,7 @@ license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 dependencies = [
   "iroha-norito>=0.1.0",
+  "iroha-torii-client>=0.0.1",
   "requests>=2.31",
   "urllib3<2",
 ]
@@ -30,6 +31,9 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+ws = [
+  "websocket-client>=1.7",
+]
 dev = [
   "pytest>=8.0",
   "mypy>=1.8.0",
@@ -43,6 +47,7 @@ Repository = "https://github.com/hyperledger/iroha"
 [tool.maturin]
 python-source = "src"
 manifest-path = "iroha_python_rs/Cargo.toml"
+module-name = "iroha_python._crypto"
 include = [
   "src/iroha_python/examples/connect_app_metadata.json",
 ]

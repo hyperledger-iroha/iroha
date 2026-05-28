@@ -209,7 +209,6 @@ thread_local! {
 
 const SENSITIVE_SYSCALLS: &[&str] = &[
     "set_account_detail",
-    "transfer_asset",
     "escrow_open_offer",
     "escrow_accept",
     "escrow_mark_payment_sent",

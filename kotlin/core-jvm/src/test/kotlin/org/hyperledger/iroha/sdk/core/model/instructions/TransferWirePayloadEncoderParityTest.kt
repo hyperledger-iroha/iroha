@@ -20,7 +20,16 @@ class TransferWirePayloadEncoderParityTest {
 
     @Test
     fun `transfer asset encoding matches Rust fixture generator`() {
-        val lines = FixtureGeneratorRunner.run("transfer-asset")
+        assertTransferAssetParity("transfer-asset")
+    }
+
+    @Test
+    fun `dataspace scoped transfer asset encoding matches Rust fixture generator`() {
+        assertTransferAssetParity("transfer-asset-scoped")
+    }
+
+    private fun assertTransferAssetParity(fixtureName: String) {
+        val lines = FixtureGeneratorRunner.run(fixtureName)
         val rustHex = lines[0]
         val assetId = lines[1]
         val amount = lines[2]

@@ -2505,7 +2505,7 @@ test(
 );
 
 test(
-  "offline v2 readiness responds (optional)",
+  "offline readiness responds (optional)",
   {
     skip: !!SKIP_REASON,
     timeout: 60_000,
@@ -2520,11 +2520,11 @@ test(
       apiToken: API_TOKEN,
     });
 
-    const readiness = await client.getOfflineV2Readiness();
-    assert.equal(readiness.offline_note_v2, true);
+    const readiness = await client.getOfflineReadiness();
+    assert.equal(readiness.offline_note, true);
     assert.equal(readiness.offline_one_use_keys, true);
     assert.equal(typeof readiness.offline_recursive_note_proof, "boolean");
-    assert.equal(readiness.offline_fountain_qr_v1, true);
+    assert.equal(readiness.offline_fountain_qr, true);
     assert.equal(readiness.offline_sync_optional, true);
     assert.equal(readiness.offline_telemetry, true);
   },

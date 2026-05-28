@@ -4,6 +4,10 @@ The Rust client API lives in the `iroha` crate, which exposes a `client::Client`
 type for talking to Torii. Use it when you need to submit transactions,
 subscribe to events, or query state from a Rust application.
 
+For SORA Nexus wallet-approved app transfers, use
+`iroha::nexus_app::NexusAppClient`; see
+[Nexus App Facade](./nexus-app-facade).
+
 ## 1. Add the crate
 
 ```toml title="Cargo.toml"

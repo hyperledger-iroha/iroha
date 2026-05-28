@@ -9094,16 +9094,31 @@ impl Actor {
                 inc_blocks += 1;
                 inc_txs_accepted += block_txs_approved;
                 inc_txs_rejected += block_txs_rejected;
-                if block_counts_as_non_empty(block.as_ref()) {
+                let block_counts_as_non_empty = block_counts_as_non_empty(block.as_ref());
+                if block_counts_as_non_empty {
                     inc_blocks_non_empty += 1;
                 }
 
-                if block_index == last_reported_block.height {
+                let block_observed_at_ms = if block_index == last_reported_block.height {
                     corrected_last_report |= reconcile_last_reported_block_with_kura(
                         &mut last_reported_block,
                         &block.header(),
                         &self.time_source,
                     );
+                    last_reported_block.observed_at_ms
+                } else {
+                    BlockCommitReport::new(&block.header(), &self.time_source).observed_at_ms
+                };
+                self.metrics
+                    .last_block_committed_at_ms
+                    .set(block_observed_at_ms);
+                if block_counts_as_non_empty {
+                    self.metrics
+                        .last_non_empty_block_committed_at_ms
+                        .set(block_observed_at_ms);
+                }
+
+                if block_index == last_reported_block.height {
                     #[allow(clippy::cast_precision_loss)]
                     self.metrics.last_commit_time_ms.set(
                         u64::try_from(last_reported_block.commit_time.as_millis())
@@ -9239,14 +9254,16 @@ struct BlockCommitReport {
     hash: HashOf<BlockHeader>,
     height: usize,
     commit_time: Duration,
+    observed_at_ms: u64,
 }
 
 impl BlockCommitReport {
     fn new(block_header: &BlockHeader, time_source: &TimeSource) -> Self {
+        let now = time_source.get_unix_time();
+        let observed_at_ms = u64::try_from(now.as_millis()).unwrap_or(u64::MAX);
         let commit_time = if block_header.is_genesis() {
             Duration::ZERO
         } else {
-            let now = time_source.get_unix_time();
             let created_at = block_header.creation_time();
             now.checked_sub(created_at).unwrap_or(Duration::ZERO)
         };
@@ -9255,6 +9272,7 @@ impl BlockCommitReport {
             height: usize::try_from(block_header.height().get())
                 .expect("block height should fit into usize"),
             commit_time,
+            observed_at_ms,
         }
     }
 }
@@ -12857,6 +12875,8 @@ mod tests {
 
         assert_eq!(metrics.block_height.get(), 0);
         assert_eq!(metrics.last_commit_time_ms.get(), 0);
+        assert_eq!(metrics.last_block_committed_at_ms.get(), 0);
+        assert_eq!(metrics.last_non_empty_block_committed_at_ms.get(), 0);
         assert_eq!(metrics.domains.get(), 0);
         assert_eq!(metrics.connected_peers.get(), 0);
     }
@@ -13319,6 +13339,8 @@ mod tests {
         assert_eq!(metrics.block_height.get(), 1);
         assert_eq!(metrics.block_height_non_empty.get(), 1);
         assert_eq!(metrics.last_commit_time_ms.get(), 0); // zero for genesis
+        assert_eq!(metrics.last_block_committed_at_ms.get(), 100);
+        assert_eq!(metrics.last_non_empty_block_committed_at_ms.get(), 100);
 
         let first_accepted = metrics.txs.with_label_values(&["accepted"]).get();
         let first_rejected = metrics.txs.with_label_values(&["rejected"]).get();
@@ -13336,6 +13358,8 @@ mod tests {
         assert_eq!(metrics.block_height.get(), 2);
         assert_eq!(metrics.block_height_non_empty.get(), 2);
         assert_eq!(metrics.last_commit_time_ms.get(), 150 - CORRECTION);
+        assert_eq!(metrics.last_block_committed_at_ms.get(), 250);
+        assert_eq!(metrics.last_non_empty_block_committed_at_ms.get(), 250);
         assert_eq!(
             metrics.slot_duration_ms_latest.get(),
             150 - CORRECTION,
@@ -13367,6 +13391,8 @@ mod tests {
         assert_eq!(metrics.block_height.get(), 3);
         assert_eq!(metrics.block_height_non_empty.get(), 3);
         assert_eq!(metrics.last_commit_time_ms.get(), 170 - CORRECTION);
+        assert_eq!(metrics.last_block_committed_at_ms.get(), 420);
+        assert_eq!(metrics.last_non_empty_block_committed_at_ms.get(), 420);
         assert_eq!(metrics.slot_duration_ms_latest.get(), 170 - CORRECTION);
         assert_eq!(metrics.slot_duration_ms.get_sample_count(), 3);
     }

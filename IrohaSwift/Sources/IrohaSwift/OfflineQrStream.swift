@@ -2,7 +2,6 @@ import Foundation
 
 public enum OfflineQrStreamError: Error, LocalizedError {
     case invalidMagic
-    case unsupportedVersion(UInt8)
     case invalidLength(String)
     case checksumMismatch
     case invalidEnvelope(String)
@@ -12,8 +11,6 @@ public enum OfflineQrStreamError: Error, LocalizedError {
         switch self {
         case .invalidMagic:
             return "QR stream magic mismatch"
-        case .unsupportedVersion(let version):
-            return "Unsupported QR stream version \(version)"
         case .invalidLength(let field):
             return "Invalid QR stream length for \(field)"
         case .checksumMismatch:
@@ -39,9 +36,9 @@ public enum OfflineQrStreamFrameEncoding: Sendable {
 
 public enum OfflineQrPayloadKind: UInt16, Sendable {
     case unspecified = 0
-    case offlineReceiveRequestV2 = 1
-    case offlinePaymentTokenV2 = 2
-    case offlineReceiptAckV2 = 3
+    case offlineReceiveRequest = 1
+    case offlinePaymentToken = 2
+    case offlineReceiptAck = 3
 }
 
 public struct OfflineQrStreamOptions: Sendable, Equatable {
@@ -55,7 +52,6 @@ public struct OfflineQrStreamOptions: Sendable, Equatable {
 }
 
 public struct OfflineQrStreamEnvelope: Sendable, Equatable {
-    public static let version: UInt8 = 1
     public static let encodingBinary: UInt8 = 0
 
     public let flags: UInt8
@@ -129,7 +125,6 @@ public struct OfflineQrStreamEnvelope: Sendable, Equatable {
 
     public func encode() -> Data {
         var data = Data()
-        data.append(OfflineQrStreamEnvelope.version)
         data.append(flags)
         data.append(encoding)
         data.append(parityGroup)
@@ -144,15 +139,11 @@ public struct OfflineQrStreamEnvelope: Sendable, Equatable {
 
     public static func decode(_ data: Data) throws -> OfflineQrStreamEnvelope {
         let bytes = [UInt8](data)
-        let minLength = 1 + 1 + 1 + 1 + 2 + 2 + 2 + 2 + 4 + 32
+        let minLength = 1 + 1 + 1 + 2 + 2 + 2 + 2 + 4 + 32
         guard bytes.count == minLength else {
             throw OfflineQrStreamError.invalidLength("envelope")
         }
-        let version = bytes[0]
-        guard version == OfflineQrStreamEnvelope.version else {
-            throw OfflineQrStreamError.unsupportedVersion(version)
-        }
-        var offset = 1
+        var offset = 0
         let flags = bytes[offset]
         offset += 1
         let encoding = bytes[offset]
@@ -190,7 +181,6 @@ public struct OfflineQrStreamEnvelope: Sendable, Equatable {
 
 public struct OfflineQrStreamFrame: Sendable, Equatable {
     public static let magic: [UInt8] = [0x49, 0x51]
-    public static let version: UInt8 = 1
 
     public let kind: OfflineQrStreamFrameKind
     public let streamId: Data
@@ -215,7 +205,6 @@ public struct OfflineQrStreamFrame: Sendable, Equatable {
     public func encode() -> Data {
         var data = Data()
         data.append(contentsOf: OfflineQrStreamFrame.magic)
-        data.append(OfflineQrStreamFrame.version)
         data.append(kind.rawValue)
         data.append(streamId)
         data.appendUInt16LE(index)
@@ -229,22 +218,18 @@ public struct OfflineQrStreamFrame: Sendable, Equatable {
 
     public static func decode(_ data: Data) throws -> OfflineQrStreamFrame {
         let bytes = [UInt8](data)
-        let headerLength = 2 + 1 + 1 + 16 + 2 + 2 + 2
+        let headerLength = 2 + 1 + 16 + 2 + 2 + 2
         guard bytes.count >= headerLength + 4 else {
             throw OfflineQrStreamError.invalidLength("frame")
         }
         guard bytes[0] == OfflineQrStreamFrame.magic[0], bytes[1] == OfflineQrStreamFrame.magic[1] else {
             throw OfflineQrStreamError.invalidMagic
         }
-        let version = bytes[2]
-        guard version == OfflineQrStreamFrame.version else {
-            throw OfflineQrStreamError.unsupportedVersion(version)
-        }
-        let kindRaw = bytes[3]
+        let kindRaw = bytes[2]
         guard let kind = OfflineQrStreamFrameKind(rawValue: kindRaw) else {
             throw OfflineQrStreamError.invalidEnvelope("unknown frame kind")
         }
-        let streamStart = 4
+        let streamStart = 3
         let streamEnd = streamStart + 16
         guard bytes.count >= streamEnd else {
             throw OfflineQrStreamError.invalidLength("stream_id")
@@ -274,7 +259,6 @@ public struct OfflineQrStreamFrame: Sendable, Equatable {
 
     private func crcPayload() -> Data {
         var data = Data()
-        data.append(OfflineQrStreamFrame.version)
         data.append(kind.rawValue)
         data.append(streamId)
         data.appendUInt16LE(index)
@@ -765,7 +749,7 @@ public final class OfflineQrStreamScanSession {
 }
 
 public enum OfflineQrStreamTextCodec {
-    public static let base64Prefix = "iroha:qr1:"
+    public static let base64Prefix = "iroha:qr:"
 
     public static func encode(_ data: Data, encoding: OfflineQrStreamFrameEncoding) -> String {
         switch encoding {

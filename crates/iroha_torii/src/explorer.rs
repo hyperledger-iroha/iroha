@@ -21,7 +21,7 @@ use iroha_data_model::{
         RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
         UnregisterBox, Upgrade,
         mint_burn::BurnBox,
-        offline::{AuditOfflineNoteV2, IssueOfflineNoteV2, RedeemOfflineNoteV2},
+        offline::{AuditOfflineNote, IssueOfflineNote, RedeemOfflineNote},
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         zk::{Shield, Unshield, ZkTransfer},
     },
@@ -682,9 +682,9 @@ pub(crate) enum ExplorerInstructionKind {
     Shield,
     ZkTransfer,
     Unshield,
-    IssueOfflineNoteV2,
-    RedeemOfflineNoteV2,
-    AuditOfflineNoteV2,
+    IssueOfflineNote,
+    RedeemOfflineNote,
+    AuditOfflineNote,
     Custom,
 }
 
@@ -707,9 +707,9 @@ impl ExplorerInstructionKind {
             Self::Shield => "Shield",
             Self::ZkTransfer => "ZkTransfer",
             Self::Unshield => "Unshield",
-            Self::IssueOfflineNoteV2 => "IssueOfflineNoteV2",
-            Self::RedeemOfflineNoteV2 => "RedeemOfflineNoteV2",
-            Self::AuditOfflineNoteV2 => "AuditOfflineNoteV2",
+            Self::IssueOfflineNote => "IssueOfflineNote",
+            Self::RedeemOfflineNote => "RedeemOfflineNote",
+            Self::AuditOfflineNote => "AuditOfflineNote",
             Self::Custom => "Custom",
         }
     }
@@ -736,9 +736,9 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "shield" => Ok(Self::Shield),
             "zktransfer" | "zk_transfer" => Ok(Self::ZkTransfer),
             "unshield" => Ok(Self::Unshield),
-            "issueofflinenotev2" | "issue_offline_note_v2" => Ok(Self::IssueOfflineNoteV2),
-            "redeemofflinenotev2" | "redeem_offline_note_v2" => Ok(Self::RedeemOfflineNoteV2),
-            "auditofflinenotev2" | "audit_offline_note_v2" => Ok(Self::AuditOfflineNoteV2),
+            "issueofflinenote" | "issue_offline_note" => Ok(Self::IssueOfflineNote),
+            "redeemofflinenote" | "redeem_offline_note" => Ok(Self::RedeemOfflineNote),
+            "auditofflinenote" | "audit_offline_note" => Ok(Self::AuditOfflineNote),
             "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
@@ -851,12 +851,12 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::ZkTransfer
             } else if any.downcast_ref::<Unshield>().is_some() {
                 ExplorerInstructionKind::Unshield
-            } else if any.downcast_ref::<IssueOfflineNoteV2>().is_some() {
-                ExplorerInstructionKind::IssueOfflineNoteV2
-            } else if any.downcast_ref::<RedeemOfflineNoteV2>().is_some() {
-                ExplorerInstructionKind::RedeemOfflineNoteV2
-            } else if any.downcast_ref::<AuditOfflineNoteV2>().is_some() {
-                ExplorerInstructionKind::AuditOfflineNoteV2
+            } else if any.downcast_ref::<IssueOfflineNote>().is_some() {
+                ExplorerInstructionKind::IssueOfflineNote
+            } else if any.downcast_ref::<RedeemOfflineNote>().is_some() {
+                ExplorerInstructionKind::RedeemOfflineNote
+            } else if any.downcast_ref::<AuditOfflineNote>().is_some() {
+                ExplorerInstructionKind::AuditOfflineNote
             } else {
                 ExplorerInstructionKind::Custom
             }
@@ -977,9 +977,9 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::Shield => zk_payload(instruction, "Shield"),
         ExplorerInstructionKind::ZkTransfer => zk_payload(instruction, "ZkTransfer"),
         ExplorerInstructionKind::Unshield => zk_payload(instruction, "Unshield"),
-        ExplorerInstructionKind::IssueOfflineNoteV2 => issue_offline_note_v2_payload(instruction),
-        ExplorerInstructionKind::RedeemOfflineNoteV2 => redeem_offline_note_v2_payload(instruction),
-        ExplorerInstructionKind::AuditOfflineNoteV2 => audit_offline_note_v2_payload(instruction),
+        ExplorerInstructionKind::IssueOfflineNote => issue_offline_note_payload(instruction),
+        ExplorerInstructionKind::RedeemOfflineNote => redeem_offline_note_payload(instruction),
+        ExplorerInstructionKind::AuditOfflineNote => audit_offline_note_payload(instruction),
         ExplorerInstructionKind::Custom => custom_payload(instruction),
     }
     .unwrap_or_else(|| fallback_structured_payload(instruction))
@@ -1159,8 +1159,8 @@ fn log_payload(instruction: &InstructionBox) -> Option<Value> {
     Some(instruction_variant_value("Log", value))
 }
 
-fn issue_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<IssueOfflineNoteV2>()?;
+fn issue_offline_note_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<IssueOfflineNote>()?;
     let issue = &isi.issue;
     let mut value = Map::new();
     value.insert(
@@ -1180,13 +1180,13 @@ fn issue_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> 
         Value::String(issue.amount.to_string()),
     );
     Some(instruction_variant_value(
-        "IssueOfflineNoteV2",
+        "IssueOfflineNote",
         Value::Object(value),
     ))
 }
 
-fn redeem_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<RedeemOfflineNoteV2>()?;
+fn redeem_offline_note_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<RedeemOfflineNote>()?;
     let redemption = &isi.redemption;
     let mut value = Map::new();
     value.insert(
@@ -1210,13 +1210,13 @@ fn redeem_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value>
         Value::Number((redemption.input_nullifiers.len() as u64).into()),
     );
     Some(instruction_variant_value(
-        "RedeemOfflineNoteV2",
+        "RedeemOfflineNote",
         Value::Object(value),
     ))
 }
 
-fn audit_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<AuditOfflineNoteV2>()?;
+fn audit_offline_note_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<AuditOfflineNote>()?;
     let audit = &isi.audit;
     let mut value = Map::new();
     value.insert(
@@ -1240,7 +1240,7 @@ fn audit_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> 
         Value::Number((audit.output_commitments.len() as u64).into()),
     );
     Some(instruction_variant_value(
-        "AuditOfflineNoteV2",
+        "AuditOfflineNote",
         Value::Object(value),
     ))
 }
@@ -1967,6 +1967,46 @@ mod tests {
     use nonzero_ext::nonzero;
 
     use super::*;
+
+    #[test]
+    fn instruction_kind_filter_accepts_offline_camelcase_and_snake_case() {
+        assert_eq!(
+            "IssueOfflineNote"
+                .parse::<ExplorerInstructionKind>()
+                .expect("issue offline kind"),
+            ExplorerInstructionKind::IssueOfflineNote
+        );
+        assert_eq!(
+            "issue_offline_note"
+                .parse::<ExplorerInstructionKind>()
+                .expect("issue offline kind"),
+            ExplorerInstructionKind::IssueOfflineNote
+        );
+        assert_eq!(
+            "RedeemOfflineNote"
+                .parse::<ExplorerInstructionKind>()
+                .expect("redeem offline kind"),
+            ExplorerInstructionKind::RedeemOfflineNote
+        );
+        assert_eq!(
+            "redeem_offline_note"
+                .parse::<ExplorerInstructionKind>()
+                .expect("redeem offline kind"),
+            ExplorerInstructionKind::RedeemOfflineNote
+        );
+        assert_eq!(
+            "AuditOfflineNote"
+                .parse::<ExplorerInstructionKind>()
+                .expect("audit offline kind"),
+            ExplorerInstructionKind::AuditOfflineNote
+        );
+        assert_eq!(
+            "audit_offline_note"
+                .parse::<ExplorerInstructionKind>()
+                .expect("audit offline kind"),
+            ExplorerInstructionKind::AuditOfflineNote
+        );
+    }
 
     #[test]
     fn paginate_truncates_correctly() {

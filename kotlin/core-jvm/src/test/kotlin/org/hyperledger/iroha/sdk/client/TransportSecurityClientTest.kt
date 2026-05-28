@@ -52,7 +52,7 @@ class TransportSecurityClientTest {
             .build()
 
         assertFailsWith<IllegalArgumentException> {
-            client.getOfflineV2Readiness()
+            client.getOfflineReadiness()
         }
     }
 

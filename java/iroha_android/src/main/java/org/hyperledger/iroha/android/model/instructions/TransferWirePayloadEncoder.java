@@ -54,7 +54,7 @@ public final class TransferWirePayloadEncoder {
 
   /** TransferBox enum discriminant for Asset variant. */
   private static final int TRANSFER_BOX_ASSET_DISCRIMINANT = 2;
-  private static final int MULTISIG_POLICY_VERSION_V1 = 1;
+  private static final int MULTISIG_POLICY_VERSION = 1;
 
   private static final TypeAdapter<Long> UINT8_ADAPTER = NoritoAdapters.uint(8);
   private static final TypeAdapter<Long> UINT16_ADAPTER = NoritoAdapters.uint(16);
@@ -748,7 +748,7 @@ public final class TransferWirePayloadEncoder {
 
   private static void validateMultisigPolicySemantics(
       int version, int threshold, List<AccountAddress.MultisigMemberPayload> members) {
-    if (version != MULTISIG_POLICY_VERSION_V1) {
+    if (version != MULTISIG_POLICY_VERSION) {
       throw new IllegalArgumentException(
           "Invalid multisig policy: unsupported version " + version);
     }
@@ -812,8 +812,12 @@ public final class TransferWirePayloadEncoder {
     }
     final NoritoEncoder encoder = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     UINT32_ADAPTER.encode(encoder, 1L);
-    writePayloadLength(encoder, 8);
-    encoder.writeUInt(scope.dataspaceId(), 64);
+    final NoritoEncoder child = encoder.childEncoder();
+    writePayloadLength(child, 8);
+    child.writeUInt(scope.dataspaceId(), 64);
+    final byte[] payload = child.toByteArray();
+    writePayloadLength(encoder, payload.length);
+    encoder.writeBytes(payload);
     return encoder.toByteArray();
   }
 

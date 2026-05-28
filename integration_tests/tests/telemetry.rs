@@ -151,7 +151,7 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             .map(|x| Peer::new(x.p2p_address(), x.id()))
             .collect();
 
-        let response_body = reqwest::Client::new()
+        let response_body = integration_tests::http::client()
             .get(peer.client().torii_url.join("/v1/peers").unwrap())
             .header("Accept", "application/json")
             .send()

@@ -103,6 +103,12 @@ public struct AccountAddressDisplayFormats: Equatable {
     public let i105Warning: String
 }
 
+public struct AccountAddressNetworkPrefix: Equatable {
+    public let sentinel: String
+    public let chainDiscriminant: UInt16
+    public let profileName: String?
+}
+
 public struct AccountAddress {
     private let header: AddressHeader
     private let domain: DomainSelector
@@ -129,9 +135,9 @@ public struct AccountAddress {
         public let digestBlake2b256Hex: String
     }
 
-    public static func fromAccount(publicKey: Data, algorithm: String = "ed25519") throws -> AccountAddress {
+    public static func fromAccount(publicKey: Data, algorithm: String = "ed25519", distid: String? = nil) throws -> AccountAddress {
         let header = try AddressHeader.new(version: 0, classId: .singleKey, normVersion: 1)
-        let controller = try ControllerPayload.singleKey(publicKey: publicKey, algorithm: algorithm)
+        let controller = try ControllerPayload.singleKey(publicKey: publicKey, algorithm: algorithm, distid: distid)
         return AccountAddress(
             header: header,
             domain: .default,
@@ -169,6 +175,18 @@ public struct AccountAddress {
         let trimmed = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
         return try parseEncodedSwiftOnly(trimmed, expectedPrefix: expectedPrefix)
+    }
+
+    public static func inspectI105NetworkPrefix(_ encoded: String,
+                                                expectedPrefix: UInt16? = nil) throws -> AccountAddressNetworkPrefix {
+        let trimmed = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
+        let (discriminant, _) = try decodeI105String(trimmed, expectedDiscriminant: expectedPrefix)
+        return AccountAddressNetworkPrefix(
+            sentinel: try i105SentinelLiteral(from: trimmed),
+            chainDiscriminant: discriminant,
+            profileName: i105ProfileName(for: discriminant)
+        )
     }
 
     public static func parseEncoded(_ input: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
@@ -483,29 +501,56 @@ private enum ControllerPayload {
         let publicKey: Data
     }
 
-    static func singleKey(publicKey: Data, algorithm: String) throws -> ControllerPayload {
+    static func singleKey(publicKey: Data, algorithm: String, distid: String? = nil) throws -> ControllerPayload {
         let curve = try CurveId.from(algorithm: algorithm)
         guard !publicKey.isEmpty else {
             throw AccountAddressError.invalidPublicKey
         }
+        let payload = try canonicalPublicKeyPayload(publicKey: publicKey, curve: curve, distid: distid)
+        return .singleKey(curve: curve, publicKey: payload)
+    }
+
+    private static func canonicalPublicKeyPayload(publicKey: Data, curve: CurveId, distid: String?) throws -> Data {
+        #if IROHASWIFT_ENABLE_SM
+        if curve == .sm2 {
+            guard publicKey.count == Sm2Keypair.publicKeyLength else {
+                throw AccountAddressError.invalidPublicKey
+            }
+            let resolvedDistid = distid ?? Sm2Keypair.defaultDistid()
+            guard let distidBytes = resolvedDistid.data(using: .utf8),
+                  distidBytes.count <= Int(UInt16.max) else {
+                throw AccountAddressError.invalidPublicKey
+            }
+            var payload = Data()
+            var length = UInt16(distidBytes.count).bigEndian
+            withUnsafeBytes(of: &length) { payload.append(contentsOf: $0) }
+            payload.append(distidBytes)
+            payload.append(publicKey)
+            return payload
+        }
+        #endif
         if let expected = curve.expectedPublicKeyLength, publicKey.count != expected {
             throw AccountAddressError.invalidPublicKey
         }
-        guard publicKey.count <= 0xFF else {
-            throw AccountAddressError.keyPayloadTooLong(publicKey.count)
-        }
-        return .singleKey(curve: curve, publicKey: publicKey)
+        return publicKey
     }
 
     func encode(into buffer: inout Data) throws {
         switch self {
         case .singleKey(let curve, let key):
-            buffer.append(ControllerPayloadTag.singleKey.rawValue)
-            buffer.append(curve.rawValue)
-            guard key.count <= 0xFF else {
+            guard key.count <= Int(UInt16.max) else {
                 throw AccountAddressError.keyPayloadTooLong(key.count)
             }
-            buffer.append(UInt8(key.count))
+            if key.count <= Int(UInt8.max) {
+                buffer.append(ControllerPayloadTag.singleKey.rawValue)
+                buffer.append(curve.rawValue)
+                buffer.append(UInt8(key.count))
+            } else {
+                buffer.append(ControllerPayloadTag.singleKeyExtended.rawValue)
+                buffer.append(curve.rawValue)
+                var lengthBE = UInt16(key.count).bigEndian
+                withUnsafeBytes(of: &lengthBE) { buffer.append(contentsOf: $0) }
+            }
             buffer.append(key)
         case .multiSig(let version, let threshold, let members):
             guard members.count <= multisigMemberMax else {
@@ -550,6 +595,21 @@ private enum ControllerPayload {
             guard end <= bytes.count else { throw AccountAddressError.invalidLength }
             let key = bytes[cursor..<end]
             return (.singleKey(curve: curve, publicKey: Data(key)), end)
+        case .singleKeyExtended:
+            guard cursor < bytes.count else { throw AccountAddressError.invalidLength }
+            let curveRaw = bytes[cursor]
+            cursor += 1
+            let curve = try CurveId.decode(rawValue: curveRaw)
+            guard cursor + 1 < bytes.count else { throw AccountAddressError.invalidLength }
+            let length = Int((UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1]))
+            cursor += 2
+            guard length > Int(UInt8.max) else {
+                throw AccountAddressError.invalidLength
+            }
+            let end = cursor + length
+            guard end <= bytes.count else { throw AccountAddressError.invalidLength }
+            let key = bytes[cursor..<end]
+            return (.singleKey(curve: curve, publicKey: Data(key)), end)
         case .multiSig:
             guard cursor < bytes.count else { throw AccountAddressError.invalidLength }
             let version = bytes[cursor]
@@ -585,6 +645,7 @@ private enum ControllerPayload {
     private enum ControllerPayloadTag: UInt8 {
         case singleKey = 0x00
         case multiSig = 0x01
+        case singleKeyExtended = 0x02
     }
 
     private enum MultisigCountWidth {
@@ -1023,6 +1084,45 @@ private func i105Sentinel(for discriminant: UInt16) -> String {
     default:
         return "\(i105SentinelNumericPrefix)\(discriminant)"
     }
+}
+
+private func i105ProfileName(for discriminant: UInt16) -> String? {
+    switch discriminant {
+    case i105DiscriminantSora:
+        return "minamoto"
+    case i105DiscriminantTest:
+        return "taira"
+    case i105DiscriminantDev:
+        return "dev"
+    default:
+        return nil
+    }
+}
+
+private func i105SentinelLiteral(from encoded: String) throws -> String {
+    if encoded.hasPrefix(i105SentinelSora) {
+        return i105SentinelSora
+    }
+    if encoded.hasPrefix(i105SentinelTest) {
+        return i105SentinelTest
+    }
+    if encoded.hasPrefix(i105SentinelDev) {
+        return i105SentinelDev
+    }
+    guard encoded.hasPrefix(i105SentinelNumericPrefix) else {
+        throw AccountAddressError.missingI105Sentinel
+    }
+    let tail = encoded.dropFirst(i105SentinelNumericPrefix.count)
+    var digits = ""
+    var index = tail.startIndex
+    while index < tail.endIndex, let value = asciiDigit(from: tail[index]) {
+        digits.append(value)
+        index = tail.index(after: index)
+    }
+    guard !digits.isEmpty, UInt16(digits) != nil else {
+        throw AccountAddressError.missingI105Sentinel
+    }
+    return "\(i105SentinelNumericPrefix)\(digits)"
 }
 
 private func parseI105SentinelAndPayload(_ encoded: String) -> (UInt16, Substring)? {

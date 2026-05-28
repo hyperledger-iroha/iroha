@@ -975,6 +975,7 @@ impl DevCallArgs {
             let status = wait_for_transaction_status(&client, tx_hash, &self.wait)?;
             context.print_data(&ContractSubmissionWaitResponse {
                 submit: value,
+                trace: None,
                 terminal_kind: status.terminal_kind,
                 attempts: status.attempts,
                 elapsed_ms: status.elapsed_ms,
@@ -982,10 +983,13 @@ impl DevCallArgs {
                 rejection_reason: status.rejection_reason,
                 scope: status.scope,
                 resolved_from: status.resolved_from,
+                summary: status.summary,
+                diagnostics: status.diagnostics,
+                trigger_completions: status.trigger_completions,
                 r#final: status.r#final,
             })
         } else {
-            context.print_data(&contract_submit_only_response(value))
+            context.print_data(&contract_submit_only_response(value, None))
         }
     }
 }
@@ -1103,10 +1107,13 @@ impl DevSmokeArgs {
                             "terminal_kind": (status.terminal_kind),
                             "attempts": (status.attempts),
                             "elapsed_ms": (status.elapsed_ms),
+                            "summary": (status.summary),
+                            "diagnostics": (status.diagnostics),
+                            "trigger_completions": (status.trigger_completions),
                             "final": (status.r#final),
                         })
                     } else {
-                        contract_submit_only_response(submit)
+                        contract_submit_only_response(submit, None)
                     }
                 }
             };
@@ -1951,6 +1958,7 @@ impl Run for DeployArgs {
             let status = wait_for_transaction_status(&client, tx_hash, &self.wait)?;
             context.print_data(&ContractSubmissionWaitResponse {
                 submit: v,
+                trace: None,
                 terminal_kind: status.terminal_kind,
                 attempts: status.attempts,
                 elapsed_ms: status.elapsed_ms,
@@ -1958,10 +1966,13 @@ impl Run for DeployArgs {
                 rejection_reason: status.rejection_reason,
                 scope: status.scope,
                 resolved_from: status.resolved_from,
+                summary: status.summary,
+                diagnostics: status.diagnostics,
+                trigger_completions: status.trigger_completions,
                 r#final: status.r#final,
             })?;
         } else {
-            context.print_data(&contract_submit_only_response(v))?;
+            context.print_data(&contract_submit_only_response(v, None))?;
         }
         Ok(())
     }
@@ -2114,6 +2125,9 @@ pub struct ContractPayloadArgs {
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
 struct ContractSubmissionWaitResponse {
     submit: norito::json::Value,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    trace: Option<norito::json::Value>,
     terminal_kind: String,
     attempts: u64,
     elapsed_ms: u64,
@@ -2121,14 +2135,28 @@ struct ContractSubmissionWaitResponse {
     rejection_reason: Option<iroha::data_model::transaction::error::TransactionRejectionReason>,
     scope: String,
     resolved_from: String,
+    summary: String,
+    diagnostics: Vec<iroha_torii_shared::PipelineDiagnostic>,
+    trigger_completions: Vec<iroha_torii_shared::TriggerCompletionSummary>,
     r#final: iroha_torii_shared::PipelineTransactionStatusResponse,
 }
 
-fn contract_submit_only_response(submit: norito::json::Value) -> norito::json::Value {
-    norito::json!({
-        "submit": submit,
-        "finalized": false,
-    })
+fn contract_submit_only_response(
+    submit: norito::json::Value,
+    trace: Option<norito::json::Value>,
+) -> norito::json::Value {
+    if let Some(trace) = trace {
+        norito::json!({
+            "submit": submit,
+            "trace": trace,
+            "finalized": false,
+        })
+    } else {
+        norito::json!({
+            "submit": submit,
+            "finalized": false,
+        })
+    }
 }
 
 fn extract_submitted_transaction_hash(
@@ -2159,6 +2187,9 @@ pub struct CallArgs {
     /// Simulate the contract call locally on Torii without submitting a transaction.
     #[arg(long, conflicts_with_all = ["scaffold_only", "private_key", "wait"])]
     pub simulate: bool,
+    /// Run Torii simulation first and include the server-side execution trace in the submit response.
+    #[arg(long, conflicts_with = "simulate")]
+    pub trace: bool,
     /// Optional contract entrypoint selector (defaults to `main`).
     #[arg(long)]
     pub entrypoint: Option<String>,
@@ -2218,6 +2249,20 @@ impl Run for CallArgs {
             context.print_data(&value)?;
             return Ok(());
         }
+        let trace = if self.trace {
+            Some(client.post_contract_call_simulate_json(
+                &authority,
+                target.contract_address.as_ref(),
+                target.contract_alias.as_ref(),
+                self.entrypoint.as_deref(),
+                payload.as_ref(),
+                self.gas_asset_id.as_deref(),
+                fee_sponsor.as_ref(),
+                self.gas_limit,
+            )?)
+        } else {
+            None
+        };
         let value = client.post_contract_call_json(
             &authority,
             private_key.as_ref(),
@@ -2236,6 +2281,7 @@ impl Run for CallArgs {
             let status = wait_for_transaction_status(&client, tx_hash, &self.wait)?;
             context.print_data(&ContractSubmissionWaitResponse {
                 submit: value,
+                trace,
                 terminal_kind: status.terminal_kind,
                 attempts: status.attempts,
                 elapsed_ms: status.elapsed_ms,
@@ -2243,10 +2289,13 @@ impl Run for CallArgs {
                 rejection_reason: status.rejection_reason,
                 scope: status.scope,
                 resolved_from: status.resolved_from,
+                summary: status.summary,
+                diagnostics: status.diagnostics,
+                trigger_completions: status.trigger_completions,
                 r#final: status.r#final,
             })?;
         } else {
-            context.print_data(&contract_submit_only_response(value))?;
+            context.print_data(&contract_submit_only_response(value, trace))?;
         }
         Ok(())
     }
@@ -3894,7 +3943,8 @@ mod tests {
 
     #[test]
     fn contract_submit_only_response_marks_unfinalized() {
-        let response = contract_submit_only_response(norito::json!({ "tx_hash_hex": "deadbeef" }));
+        let response =
+            contract_submit_only_response(norito::json!({ "tx_hash_hex": "deadbeef" }), None);
 
         assert_eq!(
             response
@@ -3918,9 +3968,9 @@ mod tests {
         assert_eq!(alias.to_string(), "router::is");
 
         let domain_alias =
-            resolve_deploy_contract_alias(None, Some("router"), Some("boi"), Some("is"))
+            resolve_deploy_contract_alias(None, Some("router"), Some("finance"), Some("alpha"))
                 .expect("domain-scoped alias");
-        assert_eq!(domain_alias.to_string(), "router::boi.is");
+        assert_eq!(domain_alias.to_string(), "router::finance.alpha");
     }
 
     #[test]
@@ -3935,14 +3985,14 @@ mod tests {
     #[test]
     fn resolve_deploy_contract_alias_preserves_legacy_contract_alias() {
         let alias = resolve_deploy_contract_alias(
-            Some("router::boi.is"),
+            Some("router::finance.alpha"),
             None,
             None,
             None,
         )
         .expect("legacy alias");
 
-        assert_eq!(alias.to_string(), "router::boi.is");
+        assert_eq!(alias.to_string(), "router::finance.alpha");
     }
 
     #[test]

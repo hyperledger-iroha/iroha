@@ -820,6 +820,16 @@ public enum PipelineStatusError: Error, LocalizedError {
     }
 
     private static func resolveRejectionReason(from payload: ToriiPipelineTransactionStatus) -> String? {
+        if let diagnostic = payload.primaryDiagnostic {
+            if let decoded = diagnostic.decodedReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !decoded.isEmpty {
+                return decoded
+            }
+            let message = diagnostic.message.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !message.isEmpty {
+                return message
+            }
+        }
         if let explicit = payload.content.status.rejectionReason?.trimmingCharacters(in: .whitespacesAndNewlines),
            !explicit.isEmpty {
             return explicit
@@ -1442,6 +1452,22 @@ public final class IrohaSDK: @unchecked Sendable {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.getPipelineRecovery(height: height)
+    }
+
+    public func getPipelinePreflight(completion: @Sendable @escaping (Result<ToriiPipelinePreflight, Error>) -> Void) {
+        guard let toriiRestClient else {
+            completion(.failure(Self.restUnavailableError()))
+            return
+        }
+        toriiRestClient.getPipelinePreflight(completion: completion)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func getPipelinePreflight() async throws -> ToriiPipelinePreflight {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.getPipelinePreflight()
     }
 
     public func getTimeNow(completion: @Sendable @escaping (Result<ToriiTimeSnapshot, Error>) -> Void) {

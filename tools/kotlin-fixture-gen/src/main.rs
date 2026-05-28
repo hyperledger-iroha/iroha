@@ -11,7 +11,7 @@ use std::env;
 use iroha_crypto::{PublicKey, default_bfv_programmed_hidden_program};
 use iroha_crypto::{RamLfeBackend, RamLfeVerificationMode};
 use iroha_data_model::account::{AccountId, NewAccount, OpaqueAccountId};
-use iroha_data_model::asset::{AssetDefinitionId, AssetId};
+use iroha_data_model::asset::{AssetBalanceScope, AssetDefinitionId, AssetId};
 use iroha_data_model::domain::DomainId;
 use iroha_data_model::identifier::{
     IdentifierPolicyId, IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
@@ -20,7 +20,7 @@ use iroha_data_model::isi::identifier::ClaimIdentifier;
 use iroha_data_model::isi::register::{Register, RegisterBox};
 use iroha_data_model::isi::transfer::{Transfer, TransferBox};
 use iroha_data_model::name::Name;
-use iroha_data_model::nexus::UniversalAccountId;
+use iroha_data_model::nexus::{DataSpaceId, UniversalAccountId};
 use iroha_data_model::prelude::Numeric;
 use iroha_data_model::ram_lfe::{
     RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
@@ -40,7 +40,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!(
-            "Usage: {} <register-account|transfer-asset|claim-identifier|hidden-ram-fhe-program>",
+            "Usage: {} <register-account|transfer-asset|transfer-asset-scoped|claim-identifier|hidden-ram-fhe-program>",
             args[0]
         );
         std::process::exit(1);
@@ -48,6 +48,7 @@ fn main() {
     match args[1].as_str() {
         "register-account" => emit_register_account(),
         "transfer-asset" => emit_transfer_asset(),
+        "transfer-asset-scoped" => emit_transfer_asset_scoped(),
         "claim-identifier" => emit_claim_identifier(),
         "hidden-ram-fhe-program" => emit_hidden_ram_fhe_program(),
         other => {
@@ -91,6 +92,29 @@ fn emit_transfer_asset() {
     // Line 3: amount
     println!("100");
     // Line 4: destination account I105
+    println!("{}", account_id);
+}
+
+fn emit_transfer_asset_scoped() {
+    let account_id = parity_account_id();
+    let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let name: Name = "rose".parse().unwrap();
+    let asset_def_id = AssetDefinitionId::new(domain, name);
+    let asset_id = AssetId::with_scope(
+        asset_def_id.clone(),
+        account_id.clone(),
+        AssetBalanceScope::Dataspace(DataSpaceId::new(42)),
+    );
+    let amount = Numeric::new(100_i64, 0);
+    let destination = account_id.clone();
+
+    let transfer = Transfer::asset_numeric(asset_id, amount, destination);
+    let transfer_box: TransferBox = transfer.into();
+    let encoded = norito::to_bytes(&transfer_box).expect("encode scoped TransferBox");
+
+    println!("{}", hex::encode(encoded));
+    println!("{}#{}#dataspace:42", asset_def_id, account_id);
+    println!("100");
     println!("{}", account_id);
 }
 

@@ -4,7 +4,7 @@ package org.hyperledger.iroha.sdk.offline
 object OfflineSettlementProofs {
 
     private const val BACKEND: String = "stark/fri/sha256-goldilocks"
-    private const val REDEEM_REQUEST_CIRCUIT_ID: String = "offline-bearer-redeem-request-v1"
+    private const val REDEEM_REQUEST_CIRCUIT_ID: String = "offline-bearer-redeem-request"
     private const val RECURSION_DEPTH: Int = 1
 
     /**

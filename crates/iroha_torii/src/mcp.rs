@@ -287,11 +287,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_time_now_tool());
     tools.push(iroha_time_status_tool());
     tools.push(iroha_api_versions_tool());
-    tools.push(iroha_offline_transfers_list_tool());
-    tools.push(iroha_offline_transfers_get_tool());
-    tools.push(iroha_offline_transfers_query_tool());
-    tools.push(iroha_offline_revocations_list_tool());
-    tools.push(iroha_offline_revocations_bundle_tool());
     tools.push(iroha_sumeragi_commit_certificates_tool());
     tools.push(iroha_sumeragi_validator_sets_list_tool());
     tools.push(iroha_sumeragi_validator_sets_get_tool());
@@ -626,8 +621,7 @@ fn is_manual_read_tool_name(name: &str) -> bool {
             | "iroha.sumeragi.rbc.sample"
             | "iroha.sumeragi.vrf.commit"
             | "iroha.sumeragi.vrf.reveal"
-    ) || is_offline_v2_compatibility_tool(name)
-        || name.ends_with(".get")
+    ) || name.ends_with(".get")
         || name.ends_with(".list")
         || name.ends_with(".query")
         || name.ends_with(".status")
@@ -684,17 +678,6 @@ fn is_manual_read_tool_name(name: &str) -> bool {
         || name.ends_with(".definitions")
         || name.ends_with(".chain.list")
         || name.ends_with(".wait")
-}
-
-fn is_offline_v2_compatibility_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "iroha.offline.transfers.list"
-            | "iroha.offline.transfers.get"
-            | "iroha.offline.transfers.query"
-            | "iroha.offline.revocations.list"
-            | "iroha.offline.revocations.bundle"
-    )
 }
 
 fn is_musubi_pre_signing_instruction_tool(name: &str) -> bool {
@@ -1026,32 +1009,6 @@ async fn handle_tools_call(
         }
         "iroha.api.versions" => {
             match dispatch_iroha_api_versions(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.offline.transfers.list" => match dispatch_iroha_offline_transfers_list(&arguments) {
-            Ok(result) => mcp_tool_success(result),
-            Err(err) => mcp_tool_error(err),
-        },
-        "iroha.offline.transfers.get" => match dispatch_iroha_offline_transfers_get(&arguments) {
-            Ok(result) => mcp_tool_success(result),
-            Err(err) => mcp_tool_error(err),
-        },
-        "iroha.offline.transfers.query" => {
-            match dispatch_iroha_offline_transfers_query(&arguments) {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.offline.revocations.list" => {
-            match dispatch_iroha_offline_revocations_list(&arguments) {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.offline.revocations.bundle" => {
-            match dispatch_iroha_offline_revocations_bundle(&arguments) {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -2302,7 +2259,7 @@ fn jsonrpc_error_response(
     message: &str,
     data: Option<Value>,
 ) -> Value {
-    let mut data_object = match data {
+    let input_data = match data {
         Some(Value::Object(map)) => map,
         Some(other) => {
             let mut map = Map::new();
@@ -2311,21 +2268,32 @@ fn jsonrpc_error_response(
         }
         None => Map::new(),
     };
-    let label = data_object
-        .remove("error_code")
+    let label = input_data
+        .get("error_code")
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| jsonrpc_error_code_label(code).to_owned());
-    if !data_object.contains_key("code") {
-        let details = if data_object.is_empty() {
+    let mut data_object = if input_data.contains_key("code") {
+        input_data.clone()
+    } else {
+        let mut details_object = input_data.clone();
+        details_object.remove("error_code");
+        let details = if details_object.is_empty() {
             Some(norito::json!({ "layer": "mcp" }))
         } else {
-            Some(Value::Object(data_object))
+            Some(Value::Object(details_object))
         };
-        data_object = match error_envelope_value(label.as_str(), message, details) {
+        let mut envelope = match error_envelope_value(label.as_str(), message, details) {
             Value::Object(map) => map,
             _ => Map::new(),
         };
-    }
+        for (key, value) in input_data {
+            envelope.entry(key).or_insert(value);
+        }
+        envelope
+    };
+    data_object
+        .entry("error_code".into())
+        .or_insert_with(|| Value::String(label));
 
     let mut err = Map::new();
     err.insert("code".into(), Value::from(code));
@@ -2654,6 +2622,12 @@ fn find_tool_spec_by_name<'a>(tools: &'a [ToolSpec], requested_name: &str) -> Op
     if let Some(tool) = tools.iter().find(|tool| tool.name == requested_name) {
         return Some(tool);
     }
+    if let Some(tool) = tools
+        .iter()
+        .find(|tool| is_legacy_torii_tool_alias(tool, requested_name))
+    {
+        return Some(tool);
+    }
     if !requested_name.starts_with("torii.") {
         return None;
     }
@@ -2662,6 +2636,12 @@ fn find_tool_spec_by_name<'a>(tools: &'a [ToolSpec], requested_name: &str) -> Op
     tools
         .iter()
         .find(|tool| openapi_operation_alias(tool, &spec).as_deref() == Some(requested_name))
+}
+
+fn is_legacy_torii_tool_alias(tool: &ToolSpec, requested_name: &str) -> bool {
+    requested_name == "torii.post_transaction"
+        && tool.method == Method::POST
+        && tool.path_template == iroha_torii_shared::uri::TRANSACTION
 }
 
 async fn dispatch_openapi_tool(
@@ -3328,134 +3308,6 @@ async fn dispatch_iroha_api_versions(
             .map(str::to_owned),
     )
     .await
-}
-
-fn dispatch_iroha_offline_transfers_list(arguments: &Map) -> Result<Value, String> {
-    let query = collect_query_map(arguments, &["query", "headers", "accept"])?;
-    let mut payload = Map::new();
-    payload.insert("items".into(), Value::Array(Vec::new()));
-    payload.insert("total".into(), Value::from(0_u64));
-    payload.insert("query".into(), Value::Object(query));
-    Ok(offline_v2_compat_structured(
-        StatusCode::OK,
-        "iroha.offline.transfers.list",
-        Value::Object(payload),
-    ))
-}
-
-fn dispatch_iroha_offline_transfers_get(arguments: &Map) -> Result<Value, String> {
-    let bundle = extract_offline_bundle_argument(arguments)?;
-    let mut payload = Map::new();
-    payload.insert(
-        "error_code".into(),
-        Value::String("legacy_offline_transfer_bundle_unavailable".to_owned()),
-    );
-    payload.insert(
-        "message".into(),
-        Value::String(
-            "legacy offline transfer bundles are no longer served by Torii HTTP routes; submit Offline V2 note instructions as transactions"
-                .to_owned(),
-        ),
-    );
-    payload.insert("bundle".into(), Value::String(bundle));
-    Ok(offline_v2_compat_structured(
-        StatusCode::NOT_FOUND,
-        "iroha.offline.transfers.get",
-        Value::Object(payload),
-    ))
-}
-
-fn dispatch_iroha_offline_transfers_query(arguments: &Map) -> Result<Value, String> {
-    let envelope = build_query_envelope_body(arguments)?;
-    let mut payload = Map::new();
-    payload.insert("items".into(), Value::Array(Vec::new()));
-    payload.insert("total".into(), Value::from(0_u64));
-    payload.insert("query_envelope".into(), envelope);
-    Ok(offline_v2_compat_structured(
-        StatusCode::OK,
-        "iroha.offline.transfers.query",
-        Value::Object(payload),
-    ))
-}
-
-fn dispatch_iroha_offline_revocations_list(arguments: &Map) -> Result<Value, String> {
-    let query = collect_query_map(arguments, &["query", "headers", "accept"])?;
-    let mut payload = Map::new();
-    payload.insert("items".into(), Value::Array(Vec::new()));
-    payload.insert("total".into(), Value::from(0_u64));
-    payload.insert("query".into(), Value::Object(query));
-    Ok(offline_v2_compat_structured(
-        StatusCode::OK,
-        "iroha.offline.revocations.list",
-        Value::Object(payload),
-    ))
-}
-
-fn dispatch_iroha_offline_revocations_bundle(arguments: &Map) -> Result<Value, String> {
-    let body = if let Some(body) = arguments.get("body") {
-        body.as_object()
-            .map(|_| body.clone())
-            .ok_or_else(|| "`body` must be an object".to_owned())?
-    } else if let Some(bundle) = arguments.get("bundle") {
-        if bundle.is_object() {
-            bundle.clone()
-        } else {
-            let mut payload = Map::new();
-            payload.insert("bundle".into(), bundle.clone());
-            Value::Object(payload)
-        }
-    } else {
-        Value::Object(Map::new())
-    };
-    let mut payload = Map::new();
-    payload.insert("accepted".into(), Value::Bool(false));
-    payload.insert("bundle".into(), body);
-    payload.insert(
-        "message".into(),
-        Value::String(
-            "legacy offline revocation bundles are no longer served by Torii HTTP routes; Offline V2 revocation state is enforced through note instructions and ledger state"
-                .to_owned(),
-        ),
-    );
-    Ok(offline_v2_compat_structured(
-        StatusCode::OK,
-        "iroha.offline.revocations.bundle",
-        Value::Object(payload),
-    ))
-}
-
-fn offline_v2_compat_structured(status: StatusCode, tool_name: &str, payload: Value) -> Value {
-    let mut body = Map::new();
-    body.insert("tool".into(), Value::String(tool_name.to_owned()));
-    body.insert("offline_note_v2".into(), Value::Bool(true));
-    body.insert("offline_one_use_keys".into(), Value::Bool(true));
-    body.insert("offline_recursive_note_proof".into(), Value::Bool(true));
-    body.insert("offline_fountain_qr_v1".into(), Value::Bool(true));
-    body.insert("offline_sync_optional".into(), Value::Bool(true));
-    body.insert("offline_telemetry".into(), Value::Bool(true));
-    body.insert(
-        "legacy_offline_http_routes".into(),
-        Value::String("removed".to_owned()),
-    );
-    body.insert(
-        "replacement".into(),
-        Value::String("/v1/offline/v2/readiness".to_owned()),
-    );
-    if let Some(payload_obj) = payload.as_object() {
-        for (key, value) in payload_obj {
-            body.entry(key.clone()).or_insert_with(|| value.clone());
-        }
-    }
-    body.insert("payload".into(), payload);
-    let mut structured = Map::new();
-    structured.insert("status".into(), Value::from(u64::from(status.as_u16())));
-    structured.insert("headers".into(), Value::Object(Map::new()));
-    structured.insert(
-        "content_type".into(),
-        Value::String("application/json".to_owned()),
-    );
-    structured.insert("body".into(), Value::Object(body));
-    Value::Object(structured)
 }
 
 async fn dispatch_iroha_sumeragi_commit_certificates(
@@ -7196,10 +7048,7 @@ async fn wait_for_terminal_transaction_status(
                 last_kind = Some(kind.to_owned());
             }
             if !retryable_http {
-                return Err(format!(
-                    "status polling failed with HTTP {status_code} for `{tx_hash}`; last_status={}",
-                    last_kind.as_deref().unwrap_or("not_observed")
-                ));
+                return Ok(status_result);
             }
         }
 
@@ -7875,34 +7724,6 @@ fn extract_bundle_id_hex_argument(arguments: &Map) -> Result<String, String> {
         .map(str::to_owned)
         .ok_or_else(|| {
             "`bundle_id_hex` is required (provide `bundle_id_hex`, `bundle_id`, or `path.bundle_id_hex`)".to_owned()
-        })
-}
-
-fn extract_offline_bundle_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(bundle) = path.get("bundle").and_then(Value::as_str)
-            && !bundle.is_empty()
-        {
-            return Ok(bundle.to_owned());
-        }
-        if let Some(bundle_id) = path.get("bundle_id").and_then(Value::as_str)
-            && !bundle_id.is_empty()
-        {
-            return Ok(bundle_id.to_owned());
-        }
-    }
-    arguments
-        .get("bundle")
-        .or_else(|| arguments.get("bundle_id"))
-        .or_else(|| arguments.get("id"))
-        .and_then(Value::as_str)
-        .filter(|bundle| !bundle.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`bundle` is required (provide `bundle`, `bundle_id`, `id`, `path.bundle`, or `path.bundle_id`)".to_owned()
         })
 }
 
@@ -9658,181 +9479,6 @@ fn iroha_api_versions_tool() -> ToolSpec {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_offline_transfers_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.offline.transfers.list".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.offline.transfers.list"),
-        description: "Compatibility alias for legacy offline transfer listings; returns Offline V2 readiness guidance with an empty listing shape.".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/offline/transfers".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "query": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "limit": { "type": "integer" },
-                "offset": { "type": "integer" },
-                "account_id": { "type": "string" },
-                "asset_id": { "type": "string" },
-                "bundle": { "type": "string" },
-                "status": { "type": "string" },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_offline_transfers_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.offline.transfers.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.offline.transfers.get"),
-        description: "Compatibility alias for legacy offline transfer bundle lookups (`bundle` shortcut supported); Offline V2 uses transaction instructions instead.".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/offline/transfers/{bundle}".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "bundle": {
-                    "type": "string",
-                    "description": "Convenience shortcut for `path.bundle`."
-                },
-                "bundle_id": {
-                    "type": "string",
-                    "description": "Alias for `bundle`."
-                },
-                "id": {
-                    "type": "string",
-                    "description": "Alias for `bundle`."
-                },
-                "path": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["bundle"],
-                    "properties": {
-                        "bundle": { "type": "string" },
-                        "bundle_id": { "type": "string" }
-                    }
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_offline_transfers_query_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.offline.transfers.query".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.offline.transfers.query"),
-        description: "Compatibility alias for legacy offline transfer query envelopes; returns Offline V2 readiness guidance with an empty result shape.".to_owned(),
-        method: Method::POST,
-        path_template: "/v1/offline/transfers/query".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw query envelope. If omitted, flat query-envelope fields are collected."
-                },
-                "query": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "filter": {},
-                "select": {},
-                "aggregate": {},
-                "sort": {},
-                "pagination": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "limit": { "type": "integer" },
-                "offset": { "type": "integer" },
-                "fetch_size": { "type": "integer" },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_offline_revocations_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.offline.revocations.list".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.offline.revocations.list"),
-        description: "Compatibility alias for legacy offline revocation listings; returns Offline V2 readiness guidance with an empty listing shape.".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/offline/revocations".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "query": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "limit": { "type": "integer" },
-                "offset": { "type": "integer" },
-                "account_id": { "type": "string" },
-                "asset_id": { "type": "string" },
-                "bundle": { "type": "string" },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_offline_revocations_bundle_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.offline.revocations.bundle".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.offline.revocations.bundle"),
-        description: "Compatibility alias for legacy offline revocation bundles; Offline V2 revocation state is represented by note instructions and ledger state.".to_owned(),
-        method: Method::POST,
-        path_template: "/v1/offline/revocations/bundle".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Legacy revocation bundle payload."
-                },
-                "bundle": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Alias payload copied into `body` when `body` is omitted."
-                },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -14641,6 +14287,36 @@ mod tests {
     }
 
     #[test]
+    fn jsonrpc_error_response_preserves_legacy_data_fields() {
+        let payload = jsonrpc_error_response(
+            None,
+            JSONRPC_INVALID_REQUEST,
+            "too large",
+            Some(norito::json!({
+                "error_code": "payload_too_large",
+                "max_request_bytes": 32
+            })),
+        );
+        let data = payload
+            .get("error")
+            .and_then(|err| err.get("data"))
+            .and_then(Value::as_object)
+            .expect("error data");
+        assert_eq!(
+            data.get("code").and_then(Value::as_str),
+            Some("payload_too_large")
+        );
+        assert_eq!(
+            data.get("error_code").and_then(Value::as_str),
+            Some("payload_too_large")
+        );
+        assert_eq!(
+            data.get("max_request_bytes").and_then(Value::as_u64),
+            Some(32)
+        );
+    }
+
+    #[test]
     fn read_only_policy_blocks_mutating_tools() {
         let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
         cfg.profile = ToriiMcpProfile::ReadOnly;
@@ -15719,6 +15395,17 @@ mod tests {
             .expect("operationId alias should resolve to the health tool");
         assert_eq!(tool.path_template, "/health");
         assert_eq!(tool.method, Method::GET);
+    }
+
+    #[test]
+    fn find_tool_spec_by_name_accepts_legacy_post_transaction_alias() {
+        let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        let tools = build_tool_specs(&cfg);
+
+        let tool = find_tool_spec_by_name(&tools, "torii.post_transaction")
+            .expect("legacy transaction alias should resolve to transaction submit");
+        assert_eq!(tool.path_template, iroha_torii_shared::uri::TRANSACTION);
+        assert_eq!(tool.method, Method::POST);
     }
 
     #[tokio::test]

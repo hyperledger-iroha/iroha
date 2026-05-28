@@ -66,6 +66,16 @@ fn next_port() -> u16 {
     }
 }
 
+/// Allocate a concrete local socket address for tests that advertise peer endpoints.
+fn next_addr() -> iroha_primitives::addr::SocketAddr {
+    iroha_primitives::addr::SocketAddr::from(([127, 0, 0, 1], next_port()))
+}
+
+#[test]
+fn next_addr_never_advertises_ephemeral_port() {
+    assert_ne!(next_addr().port(), 0);
+}
+
 mod p2p;
 mod p2p_caps;
 mod p2p_consensus_caps;

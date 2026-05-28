@@ -21,6 +21,11 @@ Download the Nexus config bundle, install each SDK’s dependencies, and ensure
 TLS certificates match the release profile (see
 `docs/source/sora_nexus_operator_onboarding.md`).
 
+For wallet-approved app transfers, start with the
+[Nexus App Facade](./nexus-app-facade). It wraps Connect approval, signable
+transfer payload construction, wallet signing, Torii submission, and final
+pipeline status waiting behind one SDK-native client.
+
 ## Rust
 
 ```bash

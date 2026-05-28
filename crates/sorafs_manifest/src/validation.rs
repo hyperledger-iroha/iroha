@@ -5,8 +5,8 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    GovernanceProofs, MANIFEST_VERSION_V1, ManifestV1, PinPolicy, ProfileId, StorageClass,
-    chunker_registry,
+    ChunkingProfileV1, GovernanceProofs, MANIFEST_VERSION_V1, ManifestV1, PinPolicy, ProfileId,
+    StorageClass, chunker_registry,
 };
 
 /// Constraints applied to the pin policy during manifest validation.
@@ -77,17 +77,73 @@ pub fn validate_manifest(
         });
     }
 
-    validate_chunker_handle(
-        manifest.chunking.profile_id,
-        &manifest.chunking.namespace,
-        &manifest.chunking.name,
-        &manifest.chunking.semver,
-        manifest.chunking.multihash_code,
-        Some(&manifest.chunking.aliases),
-    )?;
+    if manifest.chunking.profile_id == ProfileId(0) {
+        validate_inline_chunker_profile(&manifest.chunking)?;
+    } else {
+        validate_chunker_handle(
+            manifest.chunking.profile_id,
+            &manifest.chunking.namespace,
+            &manifest.chunking.name,
+            &manifest.chunking.semver,
+            manifest.chunking.multihash_code,
+            Some(&manifest.chunking.aliases),
+        )?;
+    }
     validate_pin_policy(&manifest.pin_policy, policy)?;
     validate_governance(&manifest.governance, policy.require_council_signatures)?;
 
+    Ok(())
+}
+
+fn validate_inline_chunker_profile(
+    profile: &ChunkingProfileV1,
+) -> Result<(), ManifestValidationError> {
+    if profile.namespace != "inline" {
+        return Err(ManifestValidationError::ChunkerDescriptorMismatch {
+            field: "namespace",
+            expected: "inline".to_owned(),
+            found: profile.namespace.clone(),
+        });
+    }
+    if profile.name != "inline" {
+        return Err(ManifestValidationError::ChunkerDescriptorMismatch {
+            field: "name",
+            expected: "inline".to_owned(),
+            found: profile.name.clone(),
+        });
+    }
+    if profile.semver != "0.0.0" {
+        return Err(ManifestValidationError::ChunkerDescriptorMismatch {
+            field: "semver",
+            expected: "0.0.0".to_owned(),
+            found: profile.semver.clone(),
+        });
+    }
+    if profile.min_size == 0 || profile.target_size == 0 || profile.max_size == 0 {
+        return Err(ManifestValidationError::ChunkerDescriptorMismatch {
+            field: "chunk_size",
+            expected: "non-zero sizes".to_owned(),
+            found: format!(
+                "{}/{}/{}",
+                profile.min_size, profile.target_size, profile.max_size
+            ),
+        });
+    }
+    if profile.min_size > profile.target_size || profile.target_size > profile.max_size {
+        return Err(ManifestValidationError::ChunkerDescriptorMismatch {
+            field: "chunk_size_order",
+            expected: "min_size <= target_size <= max_size".to_owned(),
+            found: format!(
+                "{}/{}/{}",
+                profile.min_size, profile.target_size, profile.max_size
+            ),
+        });
+    }
+
+    let canonical = "inline.inline@0.0.0".to_owned();
+    if !profile.aliases.iter().any(|alias| alias == &canonical) {
+        return Err(ManifestValidationError::MissingCanonicalAlias { canonical });
+    }
     Ok(())
 }
 
@@ -216,7 +272,8 @@ fn validate_governance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CouncilSignature, GovernanceProofs, ManifestBuilder};
+    use crate::{BLAKE3_256_MULTIHASH_CODE, CouncilSignature, GovernanceProofs, ManifestBuilder};
+    use sorafs_chunker::ChunkProfile;
 
     fn manifest_with_defaults() -> ManifestV1 {
         ManifestBuilder::new()
@@ -259,6 +316,44 @@ mod tests {
         let result = validate_manifest(&manifest, &constraints);
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validates_inline_chunker_profile_manifest() {
+        let mut manifest = manifest_with_defaults();
+        let profile = ChunkProfile {
+            min_size: 8,
+            target_size: 8,
+            max_size: 8,
+            break_mask: 1,
+        };
+        manifest.chunking =
+            crate::ChunkingProfileV1::from_profile(profile, BLAKE3_256_MULTIHASH_CODE);
+
+        let result = validate_manifest(&manifest, &default_constraints());
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rejects_inline_profile_without_canonical_alias() {
+        let mut manifest = manifest_with_defaults();
+        let profile = ChunkProfile {
+            min_size: 8,
+            target_size: 8,
+            max_size: 8,
+            break_mask: 1,
+        };
+        manifest.chunking =
+            crate::ChunkingProfileV1::from_profile(profile, BLAKE3_256_MULTIHASH_CODE);
+        manifest.chunking.aliases.clear();
+
+        let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
+
+        assert!(matches!(
+            err,
+            ManifestValidationError::MissingCanonicalAlias { .. }
+        ));
     }
 
     #[test]

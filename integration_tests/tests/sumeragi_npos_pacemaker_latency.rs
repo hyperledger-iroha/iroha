@@ -117,7 +117,7 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;
-    let http = reqwest::Client::new();
+    let http = integration_tests::http::client();
     let metrics = poll_metrics(&http, &metrics_url).await?;
 
     let view_target = metrics

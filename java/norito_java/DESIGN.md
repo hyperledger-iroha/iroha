@@ -109,7 +109,8 @@
   but the pure-Java implementation remains the source of truth.
 
 ## Maintenance Notes
-- The Norito Rust crate's `build.rs` invokes `scripts/check_norito_bindings_sync.sh`
-  (a thin shell wrapper around the Python helper) to ensure updates to the Rust codec are mirrored in both the Python and Java
-  bindings. Packaged builds without the sync script automatically skip the
-  guard; manual bypass hooks are intentionally unavailable.
+- Run `scripts/check_norito_bindings_sync.sh` (a thin shell wrapper around the
+  Python helper) to ensure updates to the Rust codec are mirrored in the Python,
+  Java, and Kotlin bindings. CI should invoke the script directly. The Norito
+  Rust crate's `build.rs` keeps ordinary Cargo builds lightweight and only runs
+  the sync guard when `NORITO_CHECK_BINDINGS_SYNC=1` is set.

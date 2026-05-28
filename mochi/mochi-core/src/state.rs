@@ -811,6 +811,7 @@ fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
         QueryOutputBatchBox::OracleDispute(_) => "OracleDispute",
         QueryOutputBatchBox::OracleChangeProposal(_) => "OracleChangeProposal",
         QueryOutputBatchBox::TwitterBindingRecord(_) => "TwitterBindingRecord",
+        QueryOutputBatchBox::DefiOracleAttestation(_) => "DefiOracleAttestation",
         QueryOutputBatchBox::AssetEscrowRecord(_) => "AssetEscrowRecord",
         QueryOutputBatchBox::AnonymousAssetEscrowRecord(_) => "AnonymousAssetEscrowRecord",
     }
@@ -1125,9 +1126,8 @@ mod tests {
             "TwitterBindingRecord"
         );
         assert_eq!(
-            batch_label(&QueryOutputBatchBox::RwaId(Vec::new())),
-            "RwaId"
+            batch_label(&QueryOutputBatchBox::DefiOracleAttestation(Vec::new())),
+            "DefiOracleAttestation"
         );
-        assert_eq!(batch_label(&QueryOutputBatchBox::Rwa(Vec::new())), "Rwa");
     }
 }

@@ -143,8 +143,8 @@ class OfflineSettlementProofsParityTest {
 
     private fun assertEnvelopeEquals(
         name: String,
-        expected: OfflineStarkVerifyEnvelopeV1,
-        actual: OfflineStarkVerifyEnvelopeV1,
+        expected: OfflineStarkVerifyEnvelope,
+        actual: OfflineStarkVerifyEnvelope,
     ) {
         assertEquals(expected.transcriptLabel, actual.transcriptLabel, "$name: transcript_label")
         assertParamsEquals(name, expected.params, actual.params)
@@ -153,8 +153,8 @@ class OfflineSettlementProofsParityTest {
 
     private fun assertParamsEquals(
         name: String,
-        expected: OfflineStarkFriParamsV1,
-        actual: OfflineStarkFriParamsV1,
+        expected: OfflineStarkFriParams,
+        actual: OfflineStarkFriParams,
     ) {
         assertEquals(expected.version, actual.version, "$name: params.version")
         assertEquals(expected.nLog2, actual.nLog2, "$name: params.n_log2")
@@ -168,8 +168,8 @@ class OfflineSettlementProofsParityTest {
 
     private fun assertProofObjectEquals(
         name: String,
-        expected: OfflineStarkProofV1,
-        actual: OfflineStarkProofV1,
+        expected: OfflineStarkProof,
+        actual: OfflineStarkProof,
     ) {
         assertEquals(expected.version, actual.version, "$name: proof.version")
         assertCommitmentsEquals(name, expected.commits, actual.commits)
@@ -201,8 +201,8 @@ class OfflineSettlementProofsParityTest {
 
     private fun assertCommitmentsEquals(
         name: String,
-        expected: OfflineStarkCommitmentsV1,
-        actual: OfflineStarkCommitmentsV1,
+        expected: OfflineStarkCommitments,
+        actual: OfflineStarkCommitments,
     ) {
         assertEquals(expected.version, actual.version, "$name: commits.version")
         assertEquals(expected.roots.size, actual.roots.size, "$name: commits.roots.size")
@@ -220,8 +220,8 @@ class OfflineSettlementProofsParityTest {
 
     private fun assertFoldEquals(
         label: String,
-        expected: OfflineFoldDecommitV1,
-        actual: OfflineFoldDecommitV1,
+        expected: OfflineFoldDecommit,
+        actual: OfflineFoldDecommit,
     ) {
         assertEquals(expected.j, actual.j, "$label.j")
         assertBigIntegerEquals("$label.y0", expected.y0, actual.y0)
@@ -234,8 +234,8 @@ class OfflineSettlementProofsParityTest {
 
     private fun assertCompValueEquals(
         label: String,
-        expected: OfflineStarkCompositionValueV1,
-        actual: OfflineStarkCompositionValueV1,
+        expected: OfflineStarkCompositionValue,
+        actual: OfflineStarkCompositionValue,
     ) {
         assertBigIntegerEquals("$label.leaf", expected.leaf, actual.leaf)
         assertBigIntegerEquals("$label.constant", expected.constant, actual.constant)
@@ -253,8 +253,8 @@ class OfflineSettlementProofsParityTest {
 
     private fun assertAirEquals(
         name: String,
-        expected: OfflineStarkAirProofV1,
-        actual: OfflineStarkAirProofV1,
+        expected: OfflineStarkAirProof,
+        actual: OfflineStarkAirProof,
     ) {
         assertEquals(expected.version, actual.version, "$name: air.version")
         assertEquals(expected.circuitId, actual.circuitId, "$name: air.circuit_id")

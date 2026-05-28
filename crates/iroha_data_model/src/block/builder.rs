@@ -194,6 +194,7 @@ impl BlockBuilder {
             transaction_results: self.results,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
+            trigger_completions: Vec::new(),
             axt_policy_snapshot: None,
         };
         let mut block = SignedBlock {

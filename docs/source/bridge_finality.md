@@ -65,9 +65,11 @@ justification wrapper for bridge protocols that prefer the separation.
    check it matches the recorded hash/version.
 5. Ensure `validator_set_pops` length matches the validator set and validate
    each PoP against its BLS public key.
-6. Verify signatures in the commit certificate against the header hash using
-   the referenced validator public keys and indices; enforce quorum
-   (`2f+1` when `n>3`, else `n`) and reject duplicate/out‑of‑range indices.
+6. Verify signatures in the commit certificate against the canonical Sumeragi
+   `Vote` v2 preimage, which binds the header hash, state roots, chain-order
+   hash, rechain sequence, height/view/epoch, phase, and mode tag; enforce
+   quorum (`2f+1` when `n>3`, else `n`) and reject duplicate/out‑of‑range
+   indices.
 7. Bind to a trusted validator-set hash anchor (weak-subjectivity anchor).
 8. Bind to an expected epoch anchor so proofs from older/newer epochs are
    rejected until the anchor is rotated intentionally.

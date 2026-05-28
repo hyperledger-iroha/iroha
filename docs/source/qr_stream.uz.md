@@ -19,7 +19,7 @@ and designed to be implemented across Swift, Android, and JavaScript with consis
 QR stream splits a binary payload into fixed-size chunks, adds optional XOR parity frames, and
 wraps each chunk in a CRC32-protected frame. A header frame carries the envelope metadata
 needed to reassemble the payload and verify its hash. Payloads are Norito-encoded structures
-(OfflineReceiveRequestV2, OfflinePaymentTokenV2, or OfflineReceiptAckV2) and the `payload_kind` tag binds the schema used to
+(OfflineReceiveRequest, OfflinePaymentToken, or OfflineReceiptAck) and the `payload_kind` tag binds the schema used to
 interpret the bytes.
 
 Key properties:
@@ -32,20 +32,19 @@ Key properties:
 
 ## 2. Envelope (`QrStreamEnvelope`)
 
-The envelope is encoded as a fixed 46-byte structure and is carried inside the header frame.
+The envelope is encoded as a fixed 47-byte structure and is carried inside the header frame.
 
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
-| 0 | 1 | `version` | Envelope version (`1`). |
-| 1 | 1 | `flags` | Reserved flags (set to `0` for v1). |
-| 2 | 1 | `encoding` | Payload encoding (`0` = binary). |
-| 3 | 1 | `parity_group` | Parity group size (`0` disables parity). |
-| 4 | 2 | `chunk_size` | Data chunk size in bytes (LE `u16`). |
-| 6 | 2 | `data_chunks` | Number of data chunks (LE `u16`). |
-| 8 | 2 | `parity_chunks` | Number of parity chunks (LE `u16`). |
-| 10 | 2 | `payload_kind` | Payload kind tag (LE `u16`). |
-| 12 | 4 | `payload_length` | Payload length in bytes (LE `u32`). |
-| 16 | 32 | `payload_hash` | Blake2b-256 of the payload (raw bytes, no LSB forcing). |
+| 0 | 1 | `flags` | Reserved flags (set to `0`). |
+| 1 | 1 | `encoding` | Payload encoding (`0` = binary). |
+| 2 | 1 | `parity_group` | Parity group size (`0` disables parity). |
+| 3 | 2 | `chunk_size` | Data chunk size in bytes (LE `u16`). |
+| 5 | 2 | `data_chunks` | Number of data chunks (LE `u16`). |
+| 7 | 2 | `parity_chunks` | Number of parity chunks (LE `u16`). |
+| 9 | 2 | `payload_kind` | Payload kind tag (LE `u16`). |
+| 11 | 4 | `payload_length` | Payload length in bytes (LE `u32`). |
+| 15 | 32 | `payload_hash` | Blake2b-256 of the payload (raw bytes, no LSB forcing). |
 
 `stream_id = payload_hash[0..16]` (first 16 bytes).
 
@@ -54,9 +53,9 @@ The envelope is encoded as a fixed 46-byte structure and is carried inside the h
 | Value | Meaning |
 |-------|---------|
 | `0` | `unspecified` |
-| `1` | `offline_receive_request_v2` |
-| `2` | `offline_payment_token_v2` |
-| `3` | `offline_receipt_ack_v2` |
+| `1` | `offline_receive_request` |
+| `2` | `offline_payment_token` |
+| `3` | `offline_receipt_ack` |
 
 ## 3. Frame (`QrStreamFrame`)
 
@@ -65,14 +64,13 @@ Each frame is encoded as:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 2 | `magic` | ASCII `IQ` (`0x49 0x51`). |
-| 2 | 1 | `version` | Frame version (`1`). |
-| 3 | 1 | `kind` | `0=header`, `1=data`, `2=parity`. |
-| 4 | 16 | `stream_id` | First 16 bytes of payload hash. |
-| 20 | 2 | `index` | Frame index (LE `u16`). |
-| 22 | 2 | `total` | Total frame count for this kind (LE `u16`). |
-| 24 | 2 | `payload_len` | Frame payload length (LE `u16`). |
-| 26 | N | `payload` | Frame payload bytes. |
-| 26+N | 4 | `crc32` | CRC32 over bytes `[version..payload]` (LE `u32`). |
+| 2 | 1 | `kind` | `0=header`, `1=data`, `2=parity`. |
+| 3 | 16 | `stream_id` | First 16 bytes of payload hash. |
+| 19 | 2 | `index` | Frame index (LE `u16`). |
+| 21 | 2 | `total` | Total frame count for this kind (LE `u16`). |
+| 23 | 2 | `payload_len` | Frame payload length (LE `u16`). |
+| 25 | N | `payload` | Frame payload bytes. |
+| 25+N | 4 | `crc32` | CRC32 over bytes `[kind..payload]` (LE `u32`). |
 
 The CRC32 uses the standard IEEE polynomial (`0xEDB88320`), initial value `0xFFFF_FFFF`,
 and final XOR `0xFFFF_FFFF`.
@@ -136,7 +134,7 @@ avoids text conversion overhead.
 Some scanners only expose decoded text. For those, wrap frame bytes as:
 
 ```
-iroha:qr1:<base64(frame_bytes)>
+iroha:qr:<base64(frame_bytes)>
 ```
 
 SDKs and the CLI accept this prefix and decode the base64 payload automatically.

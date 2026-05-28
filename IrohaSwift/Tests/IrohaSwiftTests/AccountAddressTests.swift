@@ -138,6 +138,55 @@ final class AccountAddressTests: XCTestCase {
         XCTAssertEqual(try parsedI105.canonicalBytes(), try address.canonicalBytes())
     }
 
+    func testSm2ExtendedSingleKeyPayloadUsesCanonicalTag() throws {
+        let distid = String(repeating: "d", count: 189)
+        let publicKey = Data(repeating: 0x31, count: Sm2Keypair.publicKeyLength)
+        let address = try AccountAddress.fromAccount(
+            publicKey: publicKey,
+            algorithm: "sm2",
+            distid: distid
+        )
+
+        let canonical = try address.canonicalBytes()
+        XCTAssertEqual(canonical[0], 0x02)
+        XCTAssertEqual(canonical[1], 0x02)
+        XCTAssertEqual(canonical[2], 0x0F)
+        XCTAssertEqual(Int((UInt16(canonical[3]) << 8) | UInt16(canonical[4])), 0x0100)
+
+        let payload = Data(canonical.dropFirst(5))
+        XCTAssertEqual(payload.count, 0x0100)
+        XCTAssertEqual(Data(payload.prefix(2)), Data([0x00, 0xBD]))
+        XCTAssertEqual(Data(payload.dropFirst(2).prefix(distid.utf8.count)), Data(distid.utf8))
+        XCTAssertEqual(Data(payload.suffix(publicKey.count)), publicKey)
+    }
+
+    func testSm2ExtendedSingleKeyRoundTripsThroughCanonicalAndI105() throws {
+        let distid = String(repeating: "d", count: 189)
+        let publicKey = Data(repeating: 0x31, count: Sm2Keypair.publicKeyLength)
+        let address = try AccountAddress.fromAccount(
+            publicKey: publicKey,
+            algorithm: "sm2",
+            distid: distid
+        )
+        let canonical = try address.canonicalBytes()
+
+        let decodedCanonical = try AccountAddress.fromCanonicalBytes(canonical)
+        XCTAssertEqual(try decodedCanonical.canonicalBytes(), canonical)
+
+        let i105 = try address.toI105(networkPrefix: 0x02F1)
+        let decodedI105 = try AccountAddress.fromI105(i105, expectedPrefix: 0x02F1)
+        XCTAssertEqual(try decodedI105.canonicalBytes(), canonical)
+    }
+
+    func testRejectsExtendedSingleKeyEncodingForShortPayload() {
+        var canonical = Data([0x02, 0x02, 0x01, 0x00, 0x20])
+        canonical.append(Data(repeating: 0x11, count: 32))
+
+        XCTAssertThrowsError(try AccountAddress.fromCanonicalBytes(canonical)) { error in
+            XCTAssertEqual(error as? AccountAddressError, .invalidLength)
+        }
+    }
+
     func testParseEncodedRejectsCanonicalHex() throws {
         let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x42, count: 32))
         let canonical = try address.canonicalHex()
@@ -200,6 +249,29 @@ final class AccountAddressTests: XCTestCase {
             }
             XCTAssertEqual(expected, 9)
             XCTAssertEqual(found, 5)
+        }
+    }
+
+    func testInspectI105NetworkPrefixReportsProfileWithoutRewriting() throws {
+        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 1, count: 32))
+        let minamoto = try address.toI105(networkPrefix: 0x02F1)
+        let prefix = try AccountAddress.inspectI105NetworkPrefix(minamoto, expectedPrefix: 0x02F1)
+        XCTAssertEqual(prefix.sentinel, "sora")
+        XCTAssertEqual(prefix.chainDiscriminant, 0x02F1)
+        XCTAssertEqual(prefix.profileName, "minamoto")
+
+        let custom = try address.toI105(networkPrefix: 42)
+        let customPrefix = try AccountAddress.inspectI105NetworkPrefix(custom)
+        XCTAssertEqual(customPrefix.sentinel, "n42")
+        XCTAssertEqual(customPrefix.chainDiscriminant, 42)
+        XCTAssertNil(customPrefix.profileName)
+
+        XCTAssertThrowsError(try AccountAddress.inspectI105NetworkPrefix(minamoto, expectedPrefix: 0x0171)) { error in
+            guard case let AccountAddressError.unexpectedNetworkPrefix(expected, found) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(expected, 0x0171)
+            XCTAssertEqual(found, 0x02F1)
         }
     }
 

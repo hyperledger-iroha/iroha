@@ -7672,8 +7672,8 @@ public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
     public let record: ToriiVerifyingKeyRecord
 }
 
-public struct ToriiOfflineV2Readiness: Decodable, Sendable, Equatable {
-    public let offlineNoteV2: Bool
+public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
+    public let offlineNote: Bool
     public let offlineOneUseKeys: Bool
     public let offlineRecursiveNoteProof: Bool
     public let offlineRecursiveNoteProofBackend: String?
@@ -7681,7 +7681,7 @@ public struct ToriiOfflineV2Readiness: Decodable, Sendable, Equatable {
     public let offlineRecursiveNoteProofPublicInputsSchemaHash: String?
     public let offlineRecursiveNoteProofPublicInstanceColumns: UInt64?
     public let offlineRecursiveNoteProofVerifierKeyId: ToriiVerifyingKeyId?
-    public let offlineFountainQrV1: Bool
+    public let offlineFountainQr: Bool
     public let offlineSyncOptional: Bool
     public let offlineTelemetry: Bool
 
@@ -7693,15 +7693,15 @@ public struct ToriiOfflineV2Readiness: Decodable, Sendable, Equatable {
             return false
         }
         return offlineRecursiveNoteProof
-            && offlineRecursiveNoteProofBackend == "halo2/ipa"
-            && offlineRecursiveNoteProofCircuitId == "offline-note-v2-recursive-v1"
+            && offlineRecursiveNoteProofBackend == OfflineNoteConstants.recursiveBackend
+            && offlineRecursiveNoteProofCircuitId == OfflineNoteConstants.recursiveVerifierName
             && offlineRecursiveNoteProofPublicInstanceColumns == 16
-            && offlineRecursiveNoteProofVerifierKeyId?.backend == "halo2/ipa"
-            && offlineRecursiveNoteProofVerifierKeyId?.name == "offline-note-v2-recursive-v1"
+            && offlineRecursiveNoteProofVerifierKeyId?.backend == OfflineNoteConstants.recursiveBackend
+            && offlineRecursiveNoteProofVerifierKeyId?.name == OfflineNoteConstants.recursiveVerifierName
     }
 
     private enum CodingKeys: String, CodingKey {
-        case offlineNoteV2 = "offline_note_v2"
+        case offlineNote = "offline_note"
         case offlineOneUseKeys = "offline_one_use_keys"
         case offlineRecursiveNoteProof = "offline_recursive_note_proof"
         case offlineRecursiveNoteProofBackend = "offline_recursive_note_proof_backend"
@@ -7709,7 +7709,7 @@ public struct ToriiOfflineV2Readiness: Decodable, Sendable, Equatable {
         case offlineRecursiveNoteProofPublicInputsSchemaHash = "offline_recursive_note_proof_public_inputs_schema_hash"
         case offlineRecursiveNoteProofPublicInstanceColumns = "offline_recursive_note_proof_public_instance_columns"
         case offlineRecursiveNoteProofVerifierKeyId = "offline_recursive_note_proof_verifier_key_id"
-        case offlineFountainQrV1 = "offline_fountain_qr_v1"
+        case offlineFountainQr = "offline_fountain_qr"
         case offlineSyncOptional = "offline_sync_optional"
         case offlineTelemetry = "offline_telemetry"
     }
@@ -8802,6 +8802,7 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
     public let dataspace: String
     public let deployNonce: UInt64
     public let txHashHex: String
+    public let pipelineStatus: ToriiPipelineTransactionStatus?
     public let codeHashHex: String
     public let abiHashHex: String
 
@@ -8814,6 +8815,7 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
         case dataspace
         case deployNonce = "deploy_nonce"
         case txHashHex = "tx_hash_hex"
+        case pipelineStatus = "pipeline_status"
         case codeHashHex = "code_hash_hex"
         case abiHashHex = "abi_hash_hex"
     }
@@ -8852,6 +8854,7 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
             field: "tx_hash_hex",
             codingPath: container.codingPath + [CodingKeys.txHashHex]
         )
+        self.pipelineStatus = try container.decodeIfPresent(ToriiPipelineTransactionStatus.self, forKey: .pipelineStatus)
         let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
         self.codeHashHex = try ToriiValidation.normalized32ByteHex(
             codeHashHex,
@@ -8985,6 +8988,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
     public let abiHashHex: String
     public let creationTimeMs: UInt64
     public let txHashHex: String?
+    public let pipelineStatus: ToriiPipelineTransactionStatus?
     public let transactionScaffoldB64: String?
     public let signedTransactionB64: String?
     public let signingMessageB64: String?
@@ -8999,6 +9003,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
         case abiHashHex = "abi_hash_hex"
         case creationTimeMs = "creation_time_ms"
         case txHashHex = "tx_hash_hex"
+        case pipelineStatus = "pipeline_status"
         case transactionScaffoldB64 = "transaction_scaffold_b64"
         case signedTransactionB64 = "signed_transaction_b64"
         case signingMessageB64 = "signing_message_b64"
@@ -9044,6 +9049,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
         } else {
             self.txHashHex = nil
         }
+        self.pipelineStatus = try container.decodeIfPresent(ToriiPipelineTransactionStatus.self, forKey: .pipelineStatus)
         if let transactionScaffoldB64 = try container.decodeIfPresent(String.self, forKey: .transactionScaffoldB64) {
             self.transactionScaffoldB64 = try ToriiValidation.normalizedBase64(
                 transactionScaffoldB64,
@@ -9870,7 +9876,11 @@ public extension ToriiJSONValue {
 public struct ToriiStatusMetrics: Sendable, Equatable {
     public let commitLatencyMs: Int
     public let queueSize: Int
+    public let queueQueued: Int
+    public let queueInflight: Int
     public let queueDelta: Int
+    public let timeSinceLastBlockMs: Int
+    public let timeSinceLastNonEmptyBlockMs: Int
     public let txApprovedDelta: Int
     public let txRejectedDelta: Int
     public let viewChangeDelta: Int
@@ -9884,7 +9894,11 @@ public struct ToriiStatusMetrics: Sendable, Equatable {
             return ToriiStatusMetrics(
                 commitLatencyMs: current.commitTimeMs,
                 queueSize: current.queueSize,
+                queueQueued: current.queueQueued,
+                queueInflight: current.queueInflight,
                 queueDelta: 0,
+                timeSinceLastBlockMs: current.timeSinceLastBlockMs,
+                timeSinceLastNonEmptyBlockMs: current.timeSinceLastNonEmptyBlockMs,
                 txApprovedDelta: 0,
                 txRejectedDelta: 0,
                 viewChangeDelta: 0
@@ -9893,7 +9907,11 @@ public struct ToriiStatusMetrics: Sendable, Equatable {
         return ToriiStatusMetrics(
             commitLatencyMs: current.commitTimeMs,
             queueSize: current.queueSize,
+            queueQueued: current.queueQueued,
+            queueInflight: current.queueInflight,
             queueDelta: current.queueSize - previous.queueSize,
+            timeSinceLastBlockMs: current.timeSinceLastBlockMs,
+            timeSinceLastNonEmptyBlockMs: current.timeSinceLastNonEmptyBlockMs,
             txApprovedDelta: max(0, current.txsApproved - previous.txsApproved),
             txRejectedDelta: max(0, current.txsRejected - previous.txsRejected),
             viewChangeDelta: max(0, current.viewChanges - previous.viewChanges)
@@ -9901,15 +9919,66 @@ public struct ToriiStatusMetrics: Sendable, Equatable {
     }
 }
 
+public struct ToriiDataspaceCatalogEntry: Decodable, Sendable, Equatable {
+    public let laneId: UInt64
+    public let laneAlias: String
+    public let dataspaceId: UInt64
+    public let alias: String
+    public let visibility: String
+    public let storageProfile: String
+    public let manifestRequired: Bool
+    public let manifestReady: Bool
+    public let sealed: Bool
+    public let manifestPath: String?
+    public let protectedNamespaces: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case laneId = "lane_id"
+        case laneAlias = "lane_alias"
+        case dataspaceId = "dataspace_id"
+        case alias
+        case visibility
+        case storageProfile = "storage_profile"
+        case manifestRequired = "manifest_required"
+        case manifestReady = "manifest_ready"
+        case sealed
+        case manifestPath = "manifest_path"
+        case protectedNamespaces = "protected_namespaces"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.laneId = try container.decode(UInt64.self, forKey: .laneId)
+        self.laneAlias = try container.decode(String.self, forKey: .laneAlias)
+        self.dataspaceId = try container.decode(UInt64.self, forKey: .dataspaceId)
+        self.alias = try container.decode(String.self, forKey: .alias)
+        self.visibility = try container.decode(String.self, forKey: .visibility)
+        self.storageProfile = try container.decode(String.self, forKey: .storageProfile)
+        self.manifestRequired = try container.decode(Bool.self, forKey: .manifestRequired)
+        self.manifestReady = try container.decode(Bool.self, forKey: .manifestReady)
+        self.sealed = try container.decodeIfPresent(Bool.self, forKey: .sealed) ?? (manifestRequired && !manifestReady)
+        self.manifestPath = try container.decodeIfPresent(String.self, forKey: .manifestPath)
+        self.protectedNamespaces = try container.decodeIfPresent([String].self, forKey: .protectedNamespaces) ?? []
+    }
+}
+
 public struct ToriiStatusPayload: Decodable, Sendable, Equatable {
+    public let observedAtMs: Int
     public let peers: Int
     public let queueSize: Int
+    public let queueQueued: Int
+    public let queueInflight: Int
+    public let lastBlockCommittedAtMs: Int
+    public let lastNonEmptyBlockCommittedAtMs: Int
+    public let timeSinceLastBlockMs: Int
+    public let timeSinceLastNonEmptyBlockMs: Int
     public let commitTimeMs: Int
     public let txsApproved: Int
     public let txsRejected: Int
     public let viewChanges: Int
     public let laneGovernanceSealedTotal: Int
     public let laneGovernanceSealedAliases: [String]
+    public let dataspaceCatalog: [ToriiDataspaceCatalogEntry]
     public let raw: [String: ToriiJSONValue]
 
     public init(from decoder: Decoder) throws {
@@ -9920,18 +9989,56 @@ public struct ToriiStatusPayload: Decodable, Sendable, Equatable {
 
     public init(raw: [String: ToriiJSONValue]) throws {
         self.raw = raw
+        self.observedAtMs = try Self.decodeInt(raw["observed_at_ms"], field: "observed_at_ms")
         self.peers = try Self.decodeInt(raw["peers"], field: "peers")
         self.queueSize = try Self.decodeInt(raw["queue_size"], field: "queue_size")
+        self.queueQueued = try Self.decodeInt(raw["queue_queued"], field: "queue_queued")
+        self.queueInflight = try Self.decodeInt(raw["queue_inflight"], field: "queue_inflight")
+        self.lastBlockCommittedAtMs = try Self.decodeInt(raw["last_block_committed_at_ms"], field: "last_block_committed_at_ms")
+        self.lastNonEmptyBlockCommittedAtMs = try Self.decodeInt(raw["last_non_empty_block_committed_at_ms"], field: "last_non_empty_block_committed_at_ms")
+        self.timeSinceLastBlockMs = try Self.decodeInt(raw["time_since_last_block_ms"], field: "time_since_last_block_ms")
+        self.timeSinceLastNonEmptyBlockMs = try Self.decodeInt(raw["time_since_last_non_empty_block_ms"], field: "time_since_last_non_empty_block_ms")
         self.commitTimeMs = try Self.decodeInt(raw["commit_time_ms"], field: "commit_time_ms")
         self.txsApproved = try Self.decodeInt(raw["txs_approved"], field: "txs_approved")
         self.txsRejected = try Self.decodeInt(raw["txs_rejected"], field: "txs_rejected")
         self.viewChanges = try Self.decodeInt(raw["view_changes"], field: "view_changes")
         self.laneGovernanceSealedTotal = try Self.decodeInt(raw["lane_governance_sealed_total"], field: "lane_governance_sealed_total")
         self.laneGovernanceSealedAliases = try Self.decodeStringArray(raw["lane_governance_sealed_aliases"], field: "lane_governance_sealed_aliases")
+        self.dataspaceCatalog = try Self.decodeArray(raw["dataspace_catalog"], field: "dataspace_catalog")
     }
 
     public subscript(field name: String) -> ToriiJSONValue? {
         raw[name]
+    }
+
+    public func dataspace(alias: String) -> ToriiDataspaceCatalogEntry? {
+        dataspaceCatalog.first { $0.alias == alias }
+    }
+
+    public func dataspace(id: UInt64) -> ToriiDataspaceCatalogEntry? {
+        dataspaceCatalog.first { $0.dataspaceId == id }
+    }
+
+    public func requireDataspace(alias: String) throws -> ToriiDataspaceCatalogEntry {
+        guard let entry = dataspace(alias: alias) else {
+            throw ToriiClientError.invalidPayload("dataspace not found in status catalog: \(alias)")
+        }
+        return entry
+    }
+
+    public func requireDataspace(id: UInt64) throws -> ToriiDataspaceCatalogEntry {
+        guard let entry = dataspace(id: id) else {
+            throw ToriiClientError.invalidPayload("dataspace not found in status catalog: \(id)")
+        }
+        return entry
+    }
+
+    public var livenessElapsedMs: Int {
+        timeSinceLastNonEmptyBlockMs > 0 ? timeSinceLastNonEmptyBlockMs : timeSinceLastBlockMs
+    }
+
+    public func isQueueStalled(stallThresholdMs: Int) -> Bool {
+        queueSize > 0 && livenessElapsedMs > stallThresholdMs
     }
 
     private static func decodeInt(_ value: ToriiJSONValue?, field: String) throws -> Int {
@@ -9981,12 +10088,150 @@ public struct ToriiStatusPayload: Decodable, Sendable, Equatable {
             throw ToriiClientError.invalidPayload("status field `\(field)` must be an array of strings")
         }
     }
+
+    private static func decodeArray<T: Decodable>(_ value: ToriiJSONValue?, field: String) throws -> [T] {
+        guard let value else { return [] }
+        if case .null = value {
+            return []
+        }
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(value)
+        do {
+            return try JSONDecoder().decode([T].self, from: data)
+        } catch {
+            throw ToriiClientError.invalidPayload("failed to decode status field `\(field)`: \(error.localizedDescription)")
+        }
+    }
 }
 
 public struct ToriiStatusSnapshot: Sendable, Equatable {
     public let timestamp: Date
     public let status: ToriiStatusPayload
     public let metrics: ToriiStatusMetrics
+}
+
+public struct ToriiPipelinePreflightSumeragi: Decodable, Sendable, Equatable {
+    public let blockTimeMs: Int
+    public let commitTimeMs: Int
+    public let stallThresholdMs: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case blockTimeMs = "block_time_ms"
+        case commitTimeMs = "commit_time_ms"
+        case stallThresholdMs = "stall_threshold_ms"
+    }
+}
+
+public struct ToriiPipelinePreflightAdmission: Decodable, Sendable, Equatable {
+    public let maxSignatures: Int
+    public let maxInstructions: Int
+    public let maxTxBytes: Int
+    public let maxDecompressedBytes: Int
+    public let maxMetadataDepth: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case maxSignatures = "max_signatures"
+        case maxInstructions = "max_instructions"
+        case maxTxBytes = "max_tx_bytes"
+        case maxDecompressedBytes = "max_decompressed_bytes"
+        case maxMetadataDepth = "max_metadata_depth"
+    }
+}
+
+public struct ToriiPipelinePreflightBlock: Decodable, Sendable, Equatable {
+    public let maxTransactions: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case maxTransactions = "max_transactions"
+    }
+}
+
+public struct ToriiPipelinePreflightPipeline: Decodable, Sendable, Equatable {
+    public let signatureBatchMax: Int
+    public let signatureBatchMaxEd25519: Int
+    public let signatureBatchMaxSecp256k1: Int
+    public let signatureBatchMaxPqc: Int
+    public let signatureBatchMaxBls: Int
+    public let overlayMaxInstructions: Int
+    public let ivmMaxDecodedInstructions: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case signatureBatchMax = "signature_batch_max"
+        case signatureBatchMaxEd25519 = "signature_batch_max_ed25519"
+        case signatureBatchMaxSecp256k1 = "signature_batch_max_secp256k1"
+        case signatureBatchMaxPqc = "signature_batch_max_pqc"
+        case signatureBatchMaxBls = "signature_batch_max_bls"
+        case overlayMaxInstructions = "overlay_max_instructions"
+        case ivmMaxDecodedInstructions = "ivm_max_decoded_instructions"
+    }
+}
+
+public struct ToriiPipelinePreflightQueue: Decodable, Sendable, Equatable {
+    public let size: Int
+    public let queued: Int
+    public let inflight: Int
+}
+
+public struct ToriiPipelinePreflightFees: Decodable, Sendable, Equatable {
+    public let feeAssetId: String
+    public let feeSinkAccountId: String
+    public let baseFee: ToriiJSONValue
+    public let perByteFee: ToriiJSONValue
+    public let perInstructionFee: ToriiJSONValue
+    public let perGasUnitFee: ToriiJSONValue
+    public let sponsorshipEnabled: Bool
+    public let sponsorMaxFee: ToriiJSONValue
+    public let sponsorVerifiedBalanceSafetyFloor: ToriiJSONValue
+    public let canonicalSponsorAccountId: String?
+    public let feeReceiptsActivationHeight: Int
+    public let externalSettlementEnabled: Bool
+    public let burnFromUnixTimestampMs: Int
+    public let settlementMode: String
+    public let successfulClaimFeeExemptAuthorities: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case feeAssetId = "fee_asset_id"
+        case feeSinkAccountId = "fee_sink_account_id"
+        case baseFee = "base_fee"
+        case perByteFee = "per_byte_fee"
+        case perInstructionFee = "per_instruction_fee"
+        case perGasUnitFee = "per_gas_unit_fee"
+        case sponsorshipEnabled = "sponsorship_enabled"
+        case sponsorMaxFee = "sponsor_max_fee"
+        case sponsorVerifiedBalanceSafetyFloor = "sponsor_verified_balance_safety_floor"
+        case canonicalSponsorAccountId = "canonical_sponsor_account_id"
+        case feeReceiptsActivationHeight = "fee_receipts_activation_height"
+        case externalSettlementEnabled = "external_settlement_enabled"
+        case burnFromUnixTimestampMs = "burn_from_unix_timestamp_ms"
+        case settlementMode = "settlement_mode"
+        case successfulClaimFeeExemptAuthorities = "successful_claim_fee_exempt_authorities"
+    }
+}
+
+public struct ToriiPipelinePreflight: Decodable, Sendable, Equatable {
+    public let schemaVersion: Int
+    public let chainHeight: Int
+    public let sumeragi: ToriiPipelinePreflightSumeragi
+    public let admission: ToriiPipelinePreflightAdmission
+    public let block: ToriiPipelinePreflightBlock
+    public let pipeline: ToriiPipelinePreflightPipeline
+    public let queue: ToriiPipelinePreflightQueue
+    public let fees: ToriiPipelinePreflightFees
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case chainHeight = "chain_height"
+        case sumeragi
+        case admission
+        case block
+        case pipeline
+        case queue
+        case fees
+    }
+
+    public func isStatusStalled(_ status: ToriiStatusPayload) -> Bool {
+        status.isQueueStalled(stallThresholdMs: sumeragi.stallThresholdMs)
+    }
 }
 
 struct ToriiStatusState {
@@ -10855,6 +11100,40 @@ public struct ToriiSubmitTransactionResponse: Decodable, Sendable {
     }
 }
 
+public struct ToriiPipelineDiagnostic: Decodable, Sendable {
+    public let category: String
+    public let code: String?
+    public let message: String
+    public let decodedReason: String?
+    public let contract: String?
+    public let entrypoint: String?
+    public let triggerId: String?
+    public let stepIndex: UInt32?
+    public let vmPc: UInt64?
+    public let function: String?
+    public let source: String?
+    public let opcode: String?
+    public let syscall: String?
+    public let rawReason: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case category
+        case code
+        case message
+        case decodedReason = "decoded_reason"
+        case contract
+        case entrypoint
+        case triggerId = "trigger_id"
+        case stepIndex = "step_index"
+        case vmPc = "vm_pc"
+        case function
+        case source
+        case opcode
+        case syscall
+        case rawReason = "raw_reason"
+    }
+}
+
 public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
     public struct Status: Decodable, Sendable {
         public let kind: String
@@ -10869,8 +11148,36 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
             case blockHeight = "block_height"
         }
 
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.kind = try container.decode(String.self, forKey: .kind)
+            self.content = try container.decodeIfPresent(String.self, forKey: .content)
+            self.blockHeight = try container.decodeIfPresent(UInt64.self, forKey: .blockHeight)
+            if !container.contains(.rejectionReason) {
+                self.rejectionReason = nil
+            } else if try container.decodeNil(forKey: .rejectionReason) {
+                self.rejectionReason = nil
+            } else if let reason = try? container.decode(String.self, forKey: .rejectionReason) {
+                let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.rejectionReason = trimmed.isEmpty ? nil : trimmed
+            } else {
+                let reason = try container.decode(ToriiJSONValue.self, forKey: .rejectionReason)
+                self.rejectionReason = try Self.compactJSONString(reason)
+            }
+        }
+
         public var state: PipelineTransactionState {
             PipelineTransactionState(kind: kind)
+        }
+
+        private static func compactJSONString(_ value: ToriiJSONValue) throws -> String? {
+            if case .null = value {
+                return nil
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(value)
+            return String(data: data, encoding: .utf8)
         }
     }
 
@@ -10886,12 +11193,20 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
 
     public let kind: String
     public let content: Content
+    public let summary: String?
+    public let diagnostics: [ToriiPipelineDiagnostic]
+    public let scope: String?
+    public let resolvedFrom: String?
 
     private enum CodingKeys: String, CodingKey {
         case kind
         case content
         case hash
         case status
+        case summary
+        case diagnostics
+        case scope
+        case resolvedFrom = "resolved_from"
     }
 
     public init(from decoder: Decoder) throws {
@@ -10900,6 +11215,10 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
         if container.contains(.content) {
             self.kind = try container.decode(String.self, forKey: .kind)
             self.content = try container.decode(Content.self, forKey: .content)
+            self.summary = try container.decodeIfPresent(String.self, forKey: .summary)
+            self.diagnostics = try container.decodeIfPresent([ToriiPipelineDiagnostic].self, forKey: .diagnostics) ?? []
+            self.scope = try container.decodeIfPresent(String.self, forKey: .scope)
+            self.resolvedFrom = try container.decodeIfPresent(String.self, forKey: .resolvedFrom)
             return
         }
 
@@ -10907,6 +11226,35 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
         let status = try container.decode(Status.self, forKey: .status)
         self.kind = "Transaction"
         self.content = Content(hash: hash, status: status)
+        self.summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        self.diagnostics = try container.decodeIfPresent([ToriiPipelineDiagnostic].self, forKey: .diagnostics) ?? []
+        self.scope = try container.decodeIfPresent(String.self, forKey: .scope)
+        self.resolvedFrom = try container.decodeIfPresent(String.self, forKey: .resolvedFrom)
+    }
+
+    public var state: PipelineTransactionState {
+        content.status.state
+    }
+
+    public var isTerminal: Bool {
+        switch state {
+        case .committed, .applied, .rejected, .expired:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var isCommitted: Bool {
+        state == .committed || state == .applied
+    }
+
+    public var isRejected: Bool {
+        state == .rejected
+    }
+
+    public var primaryDiagnostic: ToriiPipelineDiagnostic? {
+        diagnostics.first
     }
 }
 
@@ -12481,8 +12829,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getOfflineV2Readiness(completion: @escaping (Result<ToriiOfflineV2Readiness, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineV2Readiness() }
+    public func getOfflineReadiness(completion: @escaping (Result<ToriiOfflineReadiness, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getOfflineReadiness() }
     }
 
     @discardableResult
@@ -12716,6 +13064,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func getPipelineRecovery(height: UInt64, completion: @escaping (Result<ToriiPipelineRecovery?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.getPipelineRecovery(height: height) }
+    }
+
+    @discardableResult
+    public func getPipelinePreflight(completion: @escaping (Result<ToriiPipelinePreflight, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getPipelinePreflight() }
     }
 
     @discardableResult
@@ -14497,11 +14850,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeUTF8String(from: data, context: "health")
     }
 
-    public func getOfflineV2Readiness() async throws -> ToriiOfflineV2Readiness {
-        let request = try makeRequest(path: "/v1/offline/v2/readiness",
+    public func getOfflineReadiness() async throws -> ToriiOfflineReadiness {
+        let request = try makeRequest(path: "/v1/offline/readiness",
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineV2Readiness.self, from: data)
+        return try decodeJSON(ToriiOfflineReadiness.self, from: data)
     }
 
     public func getMetrics(asText: Bool = false) async throws -> ToriiMetricsResponse {
@@ -15462,6 +15815,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         try ensureStatus(response, in: 200..<300, responseBody: data)
         guard !data.isEmpty else { return nil }
         return try decodeJSON(ToriiPipelineRecovery.self, from: data)
+    }
+
+    public func getPipelinePreflight() async throws -> ToriiPipelinePreflight {
+        let request = try makeRequest(path: "/v1/pipeline/preflight",
+                                      headers: ["Accept": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiPipelinePreflight.self, from: data)
     }
 
     public func getTimeNow() async throws -> ToriiTimeSnapshot {

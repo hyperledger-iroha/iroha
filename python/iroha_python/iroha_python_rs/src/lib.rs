@@ -6860,6 +6860,62 @@ struct TransactionBuilder {
     attachments: Vec<ProofAttachment>,
 }
 
+impl TransactionBuilder {
+    fn to_model_builder(&self) -> ModelTransactionBuilder {
+        let mut builder =
+            ModelTransactionBuilder::new(self.chain_id.clone(), self.authority.clone());
+        if let Some(creation_time) = self.creation_time {
+            builder.set_creation_time(creation_time);
+        }
+        if let Some(ttl) = self.ttl {
+            builder.set_ttl(ttl);
+        }
+        if let Some(nonce) = self.nonce {
+            builder.set_nonce(nonce);
+        }
+
+        if let Some(ref executable) = self.executable_override {
+            builder = builder.with_executable(executable.clone());
+        } else if !self.instructions.is_empty() {
+            builder = builder.with_instructions(self.instructions.clone());
+        }
+
+        builder = builder.with_metadata(self.metadata.clone());
+        if !self.attachments.is_empty() {
+            builder = builder.with_attachments(ProofAttachmentList(self.attachments.clone()));
+        }
+        builder
+    }
+
+    fn envelope_from_signed(&self, signed: &SignedTransaction) -> SignedTransactionEnvelope {
+        let signature: Signature = signed.signature().payload().clone();
+        let signature_bytes = signature.payload().to_vec();
+
+        let hash: HashOf<SignedTransaction> = signed.hash();
+        let hash_bytes: [u8; Hash::LENGTH] = *hash.as_ref();
+
+        let signed_bytes = codec::encode_adaptive(signed);
+        let signed_versioned = signed.encode_versioned();
+
+        let (_, public_key_bytes) = signed.authority().signatory().to_bytes();
+        SignedTransactionEnvelope {
+            chain_id: self.chain_id.to_string(),
+            authority: self.authority.to_string(),
+            signed_transaction: signed_bytes,
+            signed_transaction_versioned: signed_versioned,
+            hash: hash_bytes,
+            signature: signature_bytes,
+            public_key: public_key_bytes.to_vec(),
+        }
+    }
+
+    fn clear_transaction_state(&mut self) {
+        self.instructions.clear();
+        self.executable_override = None;
+        self.attachments.clear();
+    }
+}
+
 #[pymethods]
 impl TransactionBuilder {
     #[new]
@@ -6998,6 +7054,23 @@ impl TransactionBuilder {
         self.instructions.push(instruction.inner.clone());
     }
 
+    /// Encode the canonical transaction payload bytes without signing.
+    fn encode_payload<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        let payload_bytes = self.to_model_builder().encode_payload();
+        PyBytes::new(py, &payload_bytes)
+    }
+
+    /// Return the canonical Iroha transaction payload prehash bytes.
+    fn payload_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        let payload_hash = self.to_model_builder().payload_hash_bytes();
+        PyBytes::new(py, &payload_hash)
+    }
+
+    /// Return the canonical Iroha transaction payload prehash as lowercase hex.
+    fn payload_hash_hex(&self) -> String {
+        hex_encode(self.to_model_builder().payload_hash_bytes())
+    }
+
     /// Override the executable with raw IVM bytecode (Norito-encoded hex string).
     fn set_bytecode_hex(&mut self, hex_payload: &str) -> PyResult<()> {
         let bytes = hex::decode(hex_payload)
@@ -7010,55 +7083,32 @@ impl TransactionBuilder {
     /// Sign the transaction, returning an envelope with Norito payloads and hash.
     fn sign(&mut self, private_key: &[u8]) -> PyResult<SignedTransactionEnvelope> {
         let private_key = parse_private_key(private_key)?;
-        let mut builder =
-            ModelTransactionBuilder::new(self.chain_id.clone(), self.authority.clone());
-        if let Some(creation_time) = self.creation_time {
-            builder.set_creation_time(creation_time);
-        }
-        if let Some(ttl) = self.ttl {
-            builder.set_ttl(ttl);
-        }
-        if let Some(nonce) = self.nonce {
-            builder.set_nonce(nonce);
-        }
-
-        if let Some(ref executable) = self.executable_override {
-            builder = builder.with_executable(executable.clone());
-        } else if !self.instructions.is_empty() {
-            builder = builder.with_instructions(self.instructions.clone());
-        }
-
-        builder = builder.with_metadata(self.metadata.clone());
-        if !self.attachments.is_empty() {
-            builder = builder.with_attachments(ProofAttachmentList(self.attachments.clone()));
-        }
-
-        let signed = builder.sign(&private_key);
-        let signature: Signature = signed.signature().payload().clone();
-        let signature_bytes = signature.payload().to_vec();
-
-        let hash: HashOf<SignedTransaction> = signed.hash();
-        let hash_bytes: [u8; Hash::LENGTH] = *hash.as_ref();
-
-        let signed_bytes = codec::encode_adaptive(&signed);
-        let signed_versioned = signed.encode_versioned();
-
-        let (_, public_key_bytes) = signed.authority().signatory().to_bytes();
-        let envelope = SignedTransactionEnvelope {
-            chain_id: self.chain_id.to_string(),
-            authority: self.authority.to_string(),
-            signed_transaction: signed_bytes,
-            signed_transaction_versioned: signed_versioned,
-            hash: hash_bytes,
-            signature: signature_bytes,
-            public_key: public_key_bytes.to_vec(),
-        };
+        let signed = self.to_model_builder().sign(&private_key);
+        let envelope = self.envelope_from_signed(&signed);
 
         // Reset instructions for the next transaction while keeping metadata.
-        self.instructions.clear();
-        self.executable_override = None;
-        self.attachments.clear();
+        self.clear_transaction_state();
 
+        Ok(envelope)
+    }
+
+    /// Finalize the transaction using a wallet-provided external signature.
+    fn build_with_signature(&mut self, signature: &[u8]) -> PyResult<SignedTransactionEnvelope> {
+        if signature.len() != 64 {
+            return Err(PyValueError::new_err(format!(
+                "Ed25519 signature must be 64 bytes, got {}",
+                signature.len()
+            )));
+        }
+
+        let signed = self
+            .to_model_builder()
+            .build_with_signature(Signature::from_bytes(signature));
+        signed.verify_signature().map_err(|err| {
+            PyValueError::new_err(format!("signature verification failed: {err}"))
+        })?;
+        let envelope = self.envelope_from_signed(&signed);
+        self.clear_transaction_state();
         Ok(envelope)
     }
 }

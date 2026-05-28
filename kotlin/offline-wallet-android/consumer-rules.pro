@@ -1,3 +1,3 @@
-# Iroha SDK Offline V2 consumer ProGuard/R8 rules.
+# Iroha SDK Offline consumer ProGuard/R8 rules.
 #
-# V1 JNI settlement helpers were removed with the first-release Offline V2 replacement.
+# Old JNI settlement helpers were removed with the first-release Offline replacement.

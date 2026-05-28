@@ -38,7 +38,11 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let sm2Keypair = try Sm2Keypair.deriveFromSeed(seed: seed)
         let signingKey = SigningKey.sm2(sm2Keypair)
         let chainId = "00000000-0000-0000-0000-000000000000"
-        guard let authority = try? AccountId.makeI105(publicKey: sm2Keypair.publicKey, algorithm: "sm2") else {
+        guard let authority = try? AccountId.makeI105(
+            publicKey: sm2Keypair.publicKey,
+            algorithm: "sm2",
+            distid: sm2Keypair.distid
+        ) else {
             throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
         }
         let request = TransferRequest(chainId: chainId,
@@ -62,7 +66,11 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let sm2Keypair = try Sm2Keypair.deriveFromSeed(seed: seed)
         let signingKey = SigningKey.sm2(sm2Keypair)
         let chainId = "00000000-0000-0000-0000-000000000000"
-        guard let authority = try? AccountId.makeI105(publicKey: sm2Keypair.publicKey, algorithm: "sm2") else {
+        guard let authority = try? AccountId.makeI105(
+            publicKey: sm2Keypair.publicKey,
+            algorithm: "sm2",
+            distid: sm2Keypair.distid
+        ) else {
             throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
         }
         let request = MintRequest(chainId: chainId,

@@ -47,7 +47,7 @@ object TransferWirePayloadEncoder {
 
     /** TransferBox enum discriminant for Asset variant. */
     private const val TRANSFER_BOX_ASSET_DISCRIMINANT = 2
-    private const val MULTISIG_POLICY_VERSION_V1 = 1
+    private const val MULTISIG_POLICY_VERSION = 1
 
     private val UINT8_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(8)
     private val UINT16_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(16)
@@ -433,7 +433,7 @@ object TransferWirePayloadEncoder {
     }
 
     private fun validateMultisigPolicySemantics(version: Int, threshold: Int, members: List<MultisigMemberPayload>) {
-        require(version == MULTISIG_POLICY_VERSION_V1) { "Invalid multisig policy: unsupported version $version" }
+        require(version == MULTISIG_POLICY_VERSION) { "Invalid multisig policy: unsupported version $version" }
         require(members.isNotEmpty()) { "Invalid multisig policy: zero members" }
         var totalWeight = 0L
         val sortKeys = mutableListOf<ByteArray>()
@@ -476,8 +476,12 @@ object TransferWirePayloadEncoder {
         if (scope.isGlobal) return globalScopePayload()
         val encoder = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
         UINT32_ADAPTER.encode(encoder, 1L)
-        writePayloadLength(encoder, 8)
-        encoder.writeUInt(scope.dataspaceId, 64)
+        val child = encoder.childEncoder()
+        writePayloadLength(child, 8)
+        child.writeUInt(scope.dataspaceId, 64)
+        val payload = child.toByteArray()
+        writePayloadLength(encoder, payload.size)
+        encoder.writeBytes(payload)
         return encoder.toByteArray()
     }
 

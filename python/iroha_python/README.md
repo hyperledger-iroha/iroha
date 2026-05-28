@@ -53,10 +53,10 @@ client = create_torii_client(
 )
 ```
 
-## Offline V2 readiness
+## Offline readiness
 
-Torii exposes only the Offline V2 readiness endpoint for offline HTTP discovery.
-Offline V2 note issuance, redemption, and audit payloads are submitted as
+Torii exposes only the Offline readiness endpoint for offline HTTP discovery.
+Offline note issuance, redemption, and audit payloads are submitted as
 transaction instructions.
 
 ```python
@@ -64,8 +64,8 @@ from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 
-readiness = client.get_offline_v2_readiness()
-print("offline notes", readiness.offline_note_v2)
+readiness = client.get_offline_readiness()
+print("offline notes", readiness.offline_note)
 ```
 
 ## Account addresses

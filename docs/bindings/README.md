@@ -11,8 +11,9 @@ gates (WP1-E/F/G) and the cross-SDK cadence council have a single reference.
   Swift, Python, and future bindings.
 - **Norito schema parity:** `scripts/check_norito_bindings_sync.py` (invoked via
   `scripts/check_norito_bindings_sync.sh` and gated in CI by
-  `ci/check_norito_bindings_sync.sh`) blocks builds when the Rust, Java, or Python
-  schema artefacts drift.
+  `ci/check_norito_bindings_sync.sh`) blocks CI when the Rust, Java, Kotlin, or
+  Python schema artefacts drift. Ordinary Cargo builds skip this multi-SDK guard
+  unless `NORITO_CHECK_BINDINGS_SYNC=1` is set.
 - **Cadence watchdog:** `scripts/check_fixture_cadence.py` reads the
   `artifacts/*_fixture_regen_state.json` files and enforces the Tue/Fri (Android,
   Python) and Wed (Swift) windows so roadmap gates have auditable timestamps.

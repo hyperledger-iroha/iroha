@@ -11,6 +11,7 @@ pub mod da;
 pub mod http;
 mod http_default;
 pub mod nexus;
+pub mod nexus_app;
 pub mod offline;
 pub mod query;
 pub mod secrecy;

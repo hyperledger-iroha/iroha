@@ -3785,11 +3785,11 @@ export interface SubscriptionActionResponse {
   tx_hash_hex: string;
 }
 
-export interface ToriiOfflineV2ReadinessResponse {
-  offline_note_v2: boolean;
+export interface ToriiOfflineReadinessResponse {
+  offline_note: boolean;
   offline_one_use_keys: boolean;
   offline_recursive_note_proof: boolean;
-  offline_fountain_qr_v1: boolean;
+  offline_fountain_qr: boolean;
   offline_sync_optional: boolean;
   offline_telemetry: boolean;
   [key: string]: unknown;
@@ -4354,6 +4354,27 @@ export interface ToriiPipelineRecoverySidecar {
   height: number;
   dag: ToriiPipelineDagSnapshot;
   txs: ReadonlyArray<ToriiPipelineTxSnapshot>;
+}
+
+export interface ToriiPipelineRecoveryFastpqProof {
+  entryHash: string;
+  batchIndex: number;
+  parameter: string;
+  transitionCount: number;
+  traceCommitment: string;
+  proofDigest: string;
+  batchBase64: string | null;
+  proofBase64: string | null;
+  batchCompact: boolean | null;
+  batchReconstructedFromBlock: boolean | null;
+  batchReconstructionError: string | null;
+  raw: Readonly<Record<string, unknown>>;
+}
+
+export interface ToriiPipelineRecoveryFastpqProofs {
+  height: number;
+  blockHashHex: string;
+  proofs: ReadonlyArray<ToriiPipelineRecoveryFastpqProof>;
 }
 
 export interface ToriiSumeragiStatus {
@@ -7437,6 +7458,14 @@ export declare class ToriiClient {
   getPipelineRecoveryTyped(
     height: number | string | bigint,
   ): Promise<ToriiPipelineRecoverySidecar | null>;
+  getPipelineRecoveryFastpqProofs(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<Record<string, unknown> | null>;
+  getPipelineRecoveryFastpqProofsTyped(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiPipelineRecoveryFastpqProofs | null>;
   getHealth(options?: { signal?: AbortSignal }): Promise<ToriiHealthStatus | null>;
   getConfiguration(): Promise<unknown | null>;
   getConfigurationTyped(): Promise<ToriiConfigurationSnapshot | null>;
@@ -7997,9 +8026,9 @@ export declare class ToriiClient {
     request: SubscriptionUsageRequest,
     options?: { signal?: AbortSignal },
   ): Promise<SubscriptionActionResponse>;
-  getOfflineV2Readiness(
+  getOfflineReadiness(
     options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineV2ReadinessResponse>;
+  ): Promise<ToriiOfflineReadinessResponse>;
 }
 
 export interface NoritoRpcClientOptions {
@@ -8421,9 +8450,9 @@ export const OfflineQrStreamFrameEncoding: Readonly<{
 
 export const OfflineQrPayloadKind: Readonly<{
   unspecified: number;
-  offlineReceiveRequestV2: number;
-  offlinePaymentTokenV2: number;
-  offlineReceiptAckV2: number;
+  offlineReceiveRequest: number;
+  offlinePaymentToken: number;
+  offlineReceiptAck: number;
 }>;
 
 export class OfflineQrStreamOptions {
@@ -8434,7 +8463,6 @@ export class OfflineQrStreamOptions {
 }
 
 export class OfflineQrStreamEnvelope {
-  readonly version: number;
   readonly flags: number;
   readonly encoding: number;
   readonly parityGroup: number;
@@ -9655,3 +9683,5 @@ export function buildSoracloudPrivateUploadedModelReceiptQuery(
 export function privateUploadedModelReceiptInstruction(
   response: Record<string, unknown>,
 ): SoracloudTxInstruction;
+
+export * from "./nexus-app";

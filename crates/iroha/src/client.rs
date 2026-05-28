@@ -42,7 +42,8 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 use iroha_torii_shared::{
-    AccountReadResponse, ErrorEnvelope, PipelineTransactionStatusResponse, uri as torii_uri,
+    AccountReadResponse, ErrorEnvelope, PipelineTransactionStatusResponse,
+    TriggerCompletionListResponse, uri as torii_uri,
 };
 use iroha_version::codec::EncodeVersioned;
 use norito::{
@@ -3870,6 +3871,7 @@ mod status_tests {
     fn decode_status_prefers_norito_bare() {
         let s = Status {
             build: BuildStatus::default(),
+            observed_at_ms: 0,
             peers: 1,
             blocks: 2,
             blocks_non_empty: 1,
@@ -3881,6 +3883,12 @@ mod status_tests {
             uptime: Uptime(Duration::from_millis(1234)),
             view_changes: 0,
             queue_size: 7,
+            queue_queued: 0,
+            queue_inflight: 0,
+            last_block_committed_at_ms: 0,
+            last_non_empty_block_committed_at_ms: 0,
+            time_since_last_block_ms: 0,
+            time_since_last_non_empty_block_ms: 0,
             da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             stack: StackStatus::default(),
@@ -3893,6 +3901,7 @@ mod status_tests {
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
+            dataspace_catalog: Vec::new(),
             sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
@@ -3916,6 +3925,7 @@ mod status_tests {
     fn decode_status_falls_back_to_json() {
         let s = Status {
             build: BuildStatus::default(),
+            observed_at_ms: 0,
             peers: 5,
             blocks: 6,
             blocks_non_empty: 4,
@@ -3927,6 +3937,12 @@ mod status_tests {
             uptime: Uptime(Duration::from_millis(5678)),
             view_changes: 1,
             queue_size: 9,
+            queue_queued: 0,
+            queue_inflight: 0,
+            last_block_committed_at_ms: 0,
+            last_non_empty_block_committed_at_ms: 0,
+            time_since_last_block_ms: 0,
+            time_since_last_non_empty_block_ms: 0,
             da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             stack: StackStatus::default(),
@@ -3939,6 +3955,7 @@ mod status_tests {
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
+            dataspace_catalog: Vec::new(),
             sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
@@ -3955,6 +3972,7 @@ mod status_tests {
     fn decode_status_json_defaults_missing_build_metadata() {
         let mut value = norito::json::to_value(&Status {
             build: BuildStatus::default(),
+            observed_at_ms: 0,
             peers: 2,
             blocks: 3,
             blocks_non_empty: 2,
@@ -3966,6 +3984,12 @@ mod status_tests {
             uptime: Uptime(Duration::from_millis(999)),
             view_changes: 0,
             queue_size: 1,
+            queue_queued: 0,
+            queue_inflight: 0,
+            last_block_committed_at_ms: 0,
+            last_non_empty_block_committed_at_ms: 0,
+            time_since_last_block_ms: 0,
+            time_since_last_non_empty_block_ms: 0,
             da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             stack: StackStatus::default(),
@@ -3978,6 +4002,7 @@ mod status_tests {
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
+            dataspace_catalog: Vec::new(),
             sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
@@ -6582,16 +6607,16 @@ mod evidence_http_tests {
             HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                 Hash::prehashed([0x44; Hash::LENGTH]),
             );
-        let payload = PipelineTransactionStatusResponse {
-            hash: hash.to_string(),
-            status: PipelineTransactionStatus {
+        let payload = PipelineTransactionStatusResponse::new(
+            hash.to_string(),
+            PipelineTransactionStatus {
                 kind: "Queued".to_owned(),
                 block_height: None,
                 rejection_reason: None,
             },
-            scope: "global".to_owned(),
-            resolved_from: "queue".to_owned(),
-        };
+            "global".to_owned(),
+            "queue".to_owned(),
+        );
         let body = norito::json::to_string(
             &norito::json::to_value(&payload).expect("status payload value"),
         )
@@ -6634,16 +6659,16 @@ mod evidence_http_tests {
             HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                 Hash::prehashed([0x45; Hash::LENGTH]),
             );
-        let payload = PipelineTransactionStatusResponse {
-            hash: hash.to_string(),
-            status: PipelineTransactionStatus {
+        let payload = PipelineTransactionStatusResponse::new(
+            hash.to_string(),
+            PipelineTransactionStatus {
                 kind: "Committed".to_owned(),
                 block_height: Some(7),
                 rejection_reason: None,
             },
-            scope: "global".to_owned(),
-            resolved_from: "state".to_owned(),
-        };
+            "global".to_owned(),
+            "state".to_owned(),
+        );
         let body = norito::json::to_string(
             &norito::json::to_value(&payload).expect("status payload value"),
         )
@@ -7293,6 +7318,12 @@ pub struct TransactionWaitOutcome {
     pub scope: String,
     /// Source used by Torii to resolve the terminal status.
     pub resolved_from: String,
+    /// One-line finality summary supplied by Torii.
+    pub summary: String,
+    /// Structured diagnostics supplied by Torii.
+    pub diagnostics: Vec<iroha_torii_shared::PipelineDiagnostic>,
+    /// Trigger completions supplied by Torii when available.
+    pub trigger_completions: Vec<iroha_torii_shared::TriggerCompletionSummary>,
     /// Final typed pipeline status payload returned by Torii.
     pub r#final: PipelineTransactionStatusResponse,
 }
@@ -8790,6 +8821,59 @@ impl Client {
         self.get_transaction_status_response_with_scope(hash, Some("global"))
     }
 
+    /// GET `/v1/triggers/completed` — list historical trigger completions from committed blocks.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response has an unexpected content type,
+    /// or the typed JSON payload cannot be decoded.
+    pub fn get_trigger_completions(
+        &self,
+        trigger_id: Option<&str>,
+        entrypoint_hash: Option<&str>,
+        outcome: Option<&str>,
+        from_height: Option<u64>,
+        to_height: Option<u64>,
+        limit: Option<u64>,
+        scan_limit_blocks: Option<u64>,
+    ) -> Result<TriggerCompletionListResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/triggers/completed");
+        let mut builder = self
+            .default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON);
+        if let Some(trigger_id) = trigger_id {
+            builder = builder.param("id", trigger_id);
+        }
+        if let Some(entrypoint_hash) = entrypoint_hash {
+            builder = builder.param("entrypoint_hash", entrypoint_hash);
+        }
+        if let Some(outcome) = outcome {
+            builder = builder.param("outcome", outcome);
+        }
+        if let Some(from_height) = from_height {
+            builder = builder.param("from_height", &from_height.to_string());
+        }
+        if let Some(to_height) = to_height {
+            builder = builder.param("to_height", &to_height.to_string());
+        }
+        if let Some(limit) = limit {
+            builder = builder.param("limit", &limit.to_string());
+        }
+        if let Some(scan_limit_blocks) = scan_limit_blocks {
+            builder = builder.param("scan_limit_blocks", &scan_limit_blocks.to_string());
+        }
+        let resp = self.send_builder(builder)?;
+        match resp.status() {
+            StatusCode::OK | StatusCode::ACCEPTED => {
+                Self::parse_typed_json_ok_response(&resp, "Failed to get trigger completions")
+            }
+            status => Err(eyre!(
+                "Failed to get trigger completions: {} {}",
+                status,
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            )),
+        }
+    }
+
     /// GET `/v1/pipeline/transactions/status` — convenience status lookup mapped to [`TxConfirmationStatus`].
     ///
     /// # Errors
@@ -8867,6 +8951,9 @@ impl Client {
                     let rejection_reason = response.status.rejection_reason.clone();
                     let scope = response.scope.clone();
                     let resolved_from = response.resolved_from.clone();
+                    let summary = response.summary.clone();
+                    let diagnostics = response.diagnostics.clone();
+                    let trigger_completions = response.trigger_completions.clone();
                     return Ok(TransactionWaitOutcome {
                         hash: response.hash.clone(),
                         terminal_kind: kind.to_owned(),
@@ -8876,6 +8963,9 @@ impl Client {
                         rejection_reason,
                         scope,
                         resolved_from,
+                        summary,
+                        diagnostics,
+                        trigger_completions,
                         r#final: response,
                     });
                 }
@@ -14009,16 +14099,16 @@ mod tx_hash_tests {
         let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "nope".to_string(),
         ));
-        let payload = PipelineTransactionStatusResponse {
-            hash: "deadbeef".to_owned(),
-            status: PipelineTransactionStatus {
+        let payload = PipelineTransactionStatusResponse::new(
+            "deadbeef".to_owned(),
+            PipelineTransactionStatus {
                 kind: "Rejected".to_owned(),
                 block_height: None,
                 rejection_reason: Some(reason.clone()),
             },
-            scope: "auto".to_owned(),
-            resolved_from: "state".to_owned(),
-        };
+            "auto".to_owned(),
+            "state".to_owned(),
+        );
 
         let status = super::tx_confirmation_status_from_pipeline_response(&payload);
         assert_eq!(
@@ -14031,26 +14121,26 @@ mod tx_hash_tests {
     fn tx_confirmation_status_from_pipeline_response_accepts_terminal_kinds() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
 
-        let committed_payload = PipelineTransactionStatusResponse {
-            hash: "deadbeef".to_owned(),
-            status: PipelineTransactionStatus {
+        let committed_payload = PipelineTransactionStatusResponse::new(
+            "deadbeef".to_owned(),
+            PipelineTransactionStatus {
                 kind: "Committed".to_owned(),
                 block_height: None,
                 rejection_reason: None,
             },
-            scope: "auto".to_owned(),
-            resolved_from: "state".to_owned(),
-        };
-        let applied_payload = PipelineTransactionStatusResponse {
-            hash: "deadbeef".to_owned(),
-            status: PipelineTransactionStatus {
+            "auto".to_owned(),
+            "state".to_owned(),
+        );
+        let applied_payload = PipelineTransactionStatusResponse::new(
+            "deadbeef".to_owned(),
+            PipelineTransactionStatus {
                 kind: "Applied".to_owned(),
                 block_height: None,
                 rejection_reason: None,
             },
-            scope: "auto".to_owned(),
-            resolved_from: "state".to_owned(),
-        };
+            "auto".to_owned(),
+            "state".to_owned(),
+        );
 
         assert_eq!(
             super::tx_confirmation_status_from_pipeline_response(&committed_payload),
@@ -14066,26 +14156,26 @@ mod tx_hash_tests {
     fn tx_confirmation_status_from_pipeline_response_accepts_non_terminal_kinds() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
 
-        let queued_payload = PipelineTransactionStatusResponse {
-            hash: "deadbeef".to_owned(),
-            status: PipelineTransactionStatus {
+        let queued_payload = PipelineTransactionStatusResponse::new(
+            "deadbeef".to_owned(),
+            PipelineTransactionStatus {
                 kind: "Queued".to_owned(),
                 block_height: None,
                 rejection_reason: None,
             },
-            scope: "auto".to_owned(),
-            resolved_from: "queue".to_owned(),
-        };
-        let approved_payload = PipelineTransactionStatusResponse {
-            hash: "deadbeef".to_owned(),
-            status: PipelineTransactionStatus {
+            "auto".to_owned(),
+            "queue".to_owned(),
+        );
+        let approved_payload = PipelineTransactionStatusResponse::new(
+            "deadbeef".to_owned(),
+            PipelineTransactionStatus {
                 kind: "Approved".to_owned(),
                 block_height: Some(7),
                 rejection_reason: None,
             },
-            scope: "auto".to_owned(),
-            resolved_from: "state".to_owned(),
-        };
+            "auto".to_owned(),
+            "state".to_owned(),
+        );
 
         assert_eq!(
             super::tx_confirmation_status_from_pipeline_response(&queued_payload),
@@ -18955,6 +19045,7 @@ mod tests {
         // Minimal JSON body with required fields
         let body = norito::json::to_vec(&S {
             build: BuildStatus::default(),
+            observed_at_ms: 0,
             peers: 0,
             blocks: 0,
             blocks_non_empty: 0,
@@ -18966,6 +19057,12 @@ mod tests {
             uptime: Uptime(Duration::from_secs(0)),
             view_changes: 0,
             queue_size: 0,
+            queue_queued: 0,
+            queue_inflight: 0,
+            last_block_committed_at_ms: 0,
+            last_non_empty_block_committed_at_ms: 0,
+            time_since_last_block_ms: 0,
+            time_since_last_non_empty_block_ms: 0,
             da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             crypto: CryptoStatus::default(),
@@ -18974,6 +19071,7 @@ mod tests {
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
+            dataspace_catalog: Vec::new(),
             sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),

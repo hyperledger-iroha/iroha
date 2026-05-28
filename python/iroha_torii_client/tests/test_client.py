@@ -30,6 +30,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     VpnSessionCreateRequest,
     canonical_request_signature_message,
     decode_pdp_commitment_header,
+    inspect_i105_network_prefix,
 )
 from iroha_torii_client.client import _decode_i105_string  # noqa: E402
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
@@ -43,6 +44,16 @@ def test_i105_decoder_rejects_out_of_range_numeric_discriminants() -> None:
     payload = CANONICAL_OWNER.removeprefix("sora")
 
     assert _decode_i105_string(f"n65535{payload}")
+    prefix = inspect_i105_network_prefix(CANONICAL_OWNER, expected_chain_discriminant=0x02F1)
+    assert prefix.sentinel == "sora"
+    assert prefix.chain_discriminant == 0x02F1
+    assert prefix.profile == "minamoto"
+    numeric_prefix = inspect_i105_network_prefix(f"n65535{payload}")
+    assert numeric_prefix.sentinel == "n65535"
+    assert numeric_prefix.chain_discriminant == 65535
+    assert numeric_prefix.profile is None
+    with pytest.raises(ValueError, match="discriminant mismatch"):
+        inspect_i105_network_prefix(CANONICAL_OWNER, expected_chain_discriminant=0x0171)
     for literal in (f"n65536{payload}", f"n70000{payload}"):
         with pytest.raises(ValueError, match="unsigned 16-bit"):
             _decode_i105_string(literal)
@@ -483,6 +494,18 @@ def test_deploy_contract_encodes_alias_first_payload_and_parses_response() -> No
                         "dataspace": "universal",
                         "deploy_nonce": 7,
                         "tx_hash_hex": "11" * 32,
+                        "pipeline_status": {
+                            "hash": "11" * 32,
+                            "status": {
+                                "kind": "Queued",
+                                "block_height": None,
+                                "rejection_reason": None,
+                            },
+                            "summary": "Queued",
+                            "diagnostics": [],
+                            "scope": "local",
+                            "resolved_from": "queue",
+                        },
                         "code_hash_hex": "22" * 32,
                         "abi_hash_hex": "33" * 32,
                         "status": "submitted",
@@ -508,6 +531,8 @@ def test_deploy_contract_encodes_alias_first_payload_and_parses_response() -> No
     assert result.bundle_digest == "mock-bundle-digest"
     assert result.contracts[0].contract_alias == "router::universal"
     assert result.contracts[0].deploy_nonce == 7
+    assert result.contracts[0].pipeline_status is not None
+    assert result.contracts[0].pipeline_status.status.kind == "Queued"
     assert len(session.calls) == 1
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"] == "http://node.test/v1/contracts/deploy"
@@ -535,6 +560,28 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
                 "creation_time_ms": 42,
                 "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                 "tx_hash_hex": "44" * 32,
+                "pipeline_status": {
+                    "hash": "44" * 32,
+                    "status": {
+                        "kind": "Rejected",
+                        "block_height": 12,
+                        "rejection_reason": {
+                            "Validation": "missing permission",
+                        },
+                    },
+                    "summary": "Rejected: missing permission",
+                    "diagnostics": [
+                        {
+                            "category": "validation",
+                            "code": "validation",
+                            "message": "missing permission",
+                            "decoded_reason": "missing permission",
+                            "raw_reason": "Validation(missing permission)",
+                        }
+                    ],
+                    "scope": "local",
+                    "resolved_from": "state",
+                },
                 "entrypoint": "ping",
                 "transaction_scaffold_b64": "AQID",
                 "signed_transaction_b64": "BAUG",
@@ -557,6 +604,10 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
     assert isinstance(result, ContractCallResponse)
     assert result.entrypoint == "ping"
     assert result.creation_time_ms == 42
+    assert result.pipeline_status is not None
+    assert result.pipeline_status.is_rejected
+    assert result.pipeline_status.primary_diagnostic is not None
+    assert result.pipeline_status.primary_diagnostic.decoded_reason == "missing permission"
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert payload == {
         "authority": CANONICAL_OWNER,
@@ -2696,12 +2747,20 @@ def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     second = client.get_status_snapshot()
 
     assert first.status.queue_size == 4
+    assert first.status.queue_queued == 2
+    assert first.status.queue_inflight == 2
+    assert first.metrics.time_since_last_non_empty_block_ms == 1_000
+    assert first.status.is_queue_stalled(999) is True
+    assert first.status.is_queue_stalled(1_000) is False
     assert first.metrics.queue_delta == 0
     assert first.metrics.has_activity is False
     assert first.status.lane_commitments[0].lane_id == 7
     assert first.status.dataspace_commitments[0].dataspace_id == 9
+    assert first.status.dataspace_catalog[0].alias == "alpha"
 
     assert second.status.queue_size == 9
+    assert second.metrics.queue_queued == 7
+    assert second.metrics.queue_inflight == 2
     assert second.metrics.queue_delta == 5
     assert second.metrics.da_reschedule_delta == 3
     assert second.metrics.tx_approved_delta == 2
@@ -2718,7 +2777,85 @@ def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
         == "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s"
     )
     assert second.status.lane_governance_sealed_aliases == ["sealed-one"]
+    assert second.status.require_dataspace("alpha").sealed is True
+    assert second.status.require_dataspace(9).manifest_required is True
     assert "peers" in second.status.raw
+
+
+def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "schema_version": 1,
+                "chain_height": 42,
+                "sumeragi": {
+                    "block_time_ms": 1_000,
+                    "commit_time_ms": 2_000,
+                    "stall_threshold_ms": 6_000,
+                },
+                "admission": {
+                    "max_signatures": 32,
+                    "max_instructions": 4096,
+                    "max_tx_bytes": 1_048_576,
+                    "max_decompressed_bytes": 1_048_576,
+                    "max_metadata_depth": 16,
+                },
+                "block": {"max_transactions": 512},
+                "pipeline": {
+                    "signature_batch_max": 0,
+                    "signature_batch_max_ed25519": 64,
+                    "signature_batch_max_secp256k1": 16,
+                    "signature_batch_max_pqc": 8,
+                    "signature_batch_max_bls": 16,
+                    "overlay_max_instructions": 0,
+                    "ivm_max_decoded_instructions": 1_048_576,
+                },
+                "queue": {"size": 2, "queued": 1, "inflight": 1},
+                "fees": {
+                    "fee_asset_id": "xor#sora",
+                    "fee_sink_account_id": "fees@system",
+                    "base_fee": "0",
+                    "per_byte_fee": "0",
+                    "per_instruction_fee": "0",
+                    "per_gas_unit_fee": "0",
+                    "sponsorship_enabled": False,
+                    "sponsor_max_fee": "0",
+                    "sponsor_verified_balance_safety_floor": "0",
+                    "canonical_sponsor_account_id": None,
+                    "fee_receipts_activation_height": 7,
+                    "external_settlement_enabled": False,
+                    "burn_from_unix_timestamp_ms": 0,
+                    "settlement_mode": "direct",
+                    "successful_claim_fee_exempt_authorities": ["authority@system"],
+                },
+            }
+        )
+    )
+    status_payload = _status_payload(
+        queue_size=2,
+        da_total=0,
+        approved=0,
+        rejected=0,
+        views=0,
+    )
+    status_payload["time_since_last_non_empty_block_ms"] = 6_001
+    session.queue(StubResponse(payload=status_payload))
+    client = ToriiClient("http://node.test", session=session)
+
+    preflight = client.get_pipeline_preflight()
+    status = client.get_status_snapshot().status
+
+    assert preflight.schema_version == 1
+    assert preflight.chain_height == 42
+    assert preflight.sumeragi.stall_threshold_ms == 6_000
+    assert preflight.admission.max_tx_bytes == 1_048_576
+    assert preflight.pipeline.signature_batch_max_ed25519 == 64
+    assert preflight.queue.queued == 1
+    assert preflight.fees.base_fee == "0"
+    assert preflight.fees.successful_claim_fee_exempt_authorities == ["authority@system"]
+    assert preflight.is_status_stalled(status) is True
+    assert session.calls[0]["url"].endswith("/v1/pipeline/preflight")
 
 
 def _status_payload(
@@ -2810,9 +2947,31 @@ def _status_payload(
             },
         }
     ]
+    dataspace_catalog = [
+        {
+            "lane_id": 7,
+            "lane_alias": "lane-alpha",
+            "dataspace_id": 9,
+            "alias": "alpha",
+            "visibility": "restricted",
+            "storage_profile": "balanced",
+            "manifest_required": True,
+            "manifest_ready": False,
+            "sealed": True,
+            "manifest_path": None,
+            "protected_namespaces": ["alpha"],
+        }
+    ]
     return {
+        "observed_at_ms": 10_000,
         "peers": 5,
         "queue_size": queue_size,
+        "queue_queued": max(0, queue_size - 2),
+        "queue_inflight": min(queue_size, 2),
+        "last_block_committed_at_ms": 9_900,
+        "last_non_empty_block_committed_at_ms": 9_000,
+        "time_since_last_block_ms": 100,
+        "time_since_last_non_empty_block_ms": 1_000,
         "commit_time_ms": 250,
         "da_reschedule_total": da_total,
         "txs_approved": approved,
@@ -2822,6 +2981,7 @@ def _status_payload(
         "lane_commitments": lane_commitments,
         "dataspace_commitments": dataspace_commitments,
         "lane_governance": lane_governance,
+        "dataspace_catalog": dataspace_catalog,
         "lane_governance_sealed_total": 1,
         "lane_governance_sealed_aliases": ["sealed-one"],
     }
@@ -3808,15 +3968,15 @@ def test_trigger_registration_deletion_and_query() -> None:
     }
 
 
-def test_get_offline_v2_readiness_parses_payload() -> None:
+def test_get_offline_readiness_parses_payload() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "offline_note_v2": True,
+                "offline_note": True,
                 "offline_one_use_keys": True,
                 "offline_recursive_note_proof": False,
-                "offline_fountain_qr_v1": True,
+                "offline_fountain_qr": True,
                 "offline_sync_optional": True,
                 "offline_telemetry": True,
             }
@@ -3824,17 +3984,17 @@ def test_get_offline_v2_readiness_parses_payload() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    readiness = client.get_offline_v2_readiness()
+    readiness = client.get_offline_readiness()
 
-    assert readiness.offline_note_v2 is True
+    assert readiness.offline_note is True
     assert readiness.offline_one_use_keys is True
     assert readiness.offline_recursive_note_proof is False
-    assert readiness.offline_fountain_qr_v1 is True
+    assert readiness.offline_fountain_qr is True
     assert readiness.offline_sync_optional is True
     assert readiness.offline_telemetry is True
     call = session.calls[0]
     assert call["method"] == "GET"
-    assert call["url"].endswith("/v1/offline/v2/readiness")
+    assert call["url"].endswith("/v1/offline/readiness")
 
 
 def test_status_snapshot_parses_mode_and_consensus_caps() -> None:

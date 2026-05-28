@@ -2593,6 +2593,19 @@ mod tests {
         let mut status = Status {
             teu_lane_commit: vec![sample_lane_teu_status()],
             teu_dataspace_backlog: vec![sample_dataspace_teu_status()],
+            dataspace_catalog: vec![NexusDataspaceCatalogStatus {
+                lane_id: 0,
+                lane_alias: "lane-x".into(),
+                dataspace_id: 0,
+                alias: "universal".into(),
+                visibility: "public".into(),
+                storage_profile: "full_replica".into(),
+                manifest_required: false,
+                manifest_ready: true,
+                sealed: false,
+                manifest_path: None,
+                protected_namespaces: Vec::new(),
+            }],
             da_receipt_cursors: vec![DaReceiptCursorStatus {
                 lane_id: 0,
                 epoch: 1,
@@ -2610,6 +2623,7 @@ mod tests {
 
         assert!(status.teu_lane_commit.is_empty());
         assert!(status.teu_dataspace_backlog.is_empty());
+        assert!(status.dataspace_catalog.is_empty());
         assert!(status.da_receipt_cursors.is_empty());
         let consensus = status.sumeragi.expect("consensus present");
         assert_eq!(consensus.lane_governance_sealed_total, 0);
@@ -3309,6 +3323,7 @@ mod serde_tests {
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
+            dataspace_catalog: Vec::new(),
             tx_gossip: TxGossipSnapshot::default(),
             da_reschedule_total: 0,
             sorafs_micropayments: Vec::new(),
@@ -4019,6 +4034,46 @@ impl<'a> DecodeFromSlice<'a> for NexusLaneRuntimeUpgradeHookStatus {
             used,
         ))
     }
+}
+
+/// Configured dataspace entry exposed through `/status` for preflight checks.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+pub struct NexusDataspaceCatalogStatus {
+    /// Numeric lane identifier that services this dataspace.
+    pub lane_id: u32,
+    /// Human-readable lane alias.
+    pub lane_alias: String,
+    /// Numeric dataspace identifier.
+    pub dataspace_id: u64,
+    /// Human-readable dataspace alias.
+    pub alias: String,
+    /// Declarative lane visibility.
+    pub visibility: String,
+    /// Storage profile configured for the lane.
+    pub storage_profile: String,
+    /// Whether the lane requires a governance manifest.
+    pub manifest_required: bool,
+    /// Whether the required governance manifest is loaded.
+    pub manifest_ready: bool,
+    /// Whether the lane is sealed because the manifest is not ready.
+    pub sealed: bool,
+    /// Source path of the active governance manifest, if available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub manifest_path: Option<String>,
+    /// Protected namespaces enforced by the lane manifest.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub protected_namespaces: Vec<String>,
 }
 
 /// Snapshot of per-dataspace scheduler state exposed via `/status`.
@@ -5224,6 +5279,9 @@ pub struct Status {
     /// Build metadata for the currently running node binary.
     #[norito(default)]
     pub build: BuildStatus,
+    /// Millisecond UNIX timestamp when this status snapshot was observed.
+    #[norito(default)]
+    pub observed_at_ms: u64,
     /// Number of currently connected peers excluding the reporting peer
     pub peers: u64,
     /// Number of committed blocks (blockchain height)
@@ -5249,6 +5307,24 @@ pub struct Status {
     pub view_changes: u32,
     /// Number of transactions tracked by the queue (queued + in-flight)
     pub queue_size: u64,
+    /// Number of transactions still queued for selection.
+    #[norito(default)]
+    pub queue_queued: u64,
+    /// Number of transactions in-flight after selection.
+    #[norito(default)]
+    pub queue_inflight: u64,
+    /// Millisecond UNIX timestamp when this peer last processed a committed block.
+    #[norito(default)]
+    pub last_block_committed_at_ms: u64,
+    /// Millisecond UNIX timestamp when this peer last processed a committed non-empty block.
+    #[norito(default)]
+    pub last_non_empty_block_committed_at_ms: u64,
+    /// Milliseconds since this peer last processed a committed block.
+    #[norito(default)]
+    pub time_since_last_block_ms: u64,
+    /// Milliseconds since this peer last processed a committed non-empty block.
+    #[norito(default)]
+    pub time_since_last_non_empty_block_ms: u64,
     /// Total number of DA deadline reschedules observed by this peer.
     #[norito(default)]
     pub da_reschedule_total: u64,
@@ -5267,6 +5343,10 @@ pub struct Status {
     pub teu_lane_commit: Vec<NexusLaneTeuStatus>,
     /// Nexus dataspace-level backlog snapshot
     pub teu_dataspace_backlog: Vec<NexusDataspaceTeuStatus>,
+    /// Configured Nexus dataspace catalog joined with lane metadata.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub dataspace_catalog: Vec<NexusDataspaceCatalogStatus>,
     /// Transaction gossip target/cap snapshots grouped by dataspace/plane.
     #[norito(default)]
     pub tx_gossip: TxGossipSnapshot,
@@ -5293,6 +5373,7 @@ impl Status {
     pub fn strip_nexus(&mut self) {
         self.teu_lane_commit.clear();
         self.teu_dataspace_backlog.clear();
+        self.dataspace_catalog.clear();
         self.da_receipt_cursors.clear();
         if let Some(consensus) = self.sumeragi.as_mut() {
             consensus.clear_nexus_fields();
@@ -5304,6 +5385,8 @@ impl Status {
 struct StatusPayload {
     #[norito(default)]
     build: BuildStatus,
+    #[norito(default)]
+    observed_at_ms: u64,
     peers: u64,
     blocks: u64,
     blocks_non_empty: u64,
@@ -5319,6 +5402,18 @@ struct StatusPayload {
     view_changes: u32,
     queue_size: u64,
     #[norito(default)]
+    queue_queued: u64,
+    #[norito(default)]
+    queue_inflight: u64,
+    #[norito(default)]
+    last_block_committed_at_ms: u64,
+    #[norito(default)]
+    last_non_empty_block_committed_at_ms: u64,
+    #[norito(default)]
+    time_since_last_block_ms: u64,
+    #[norito(default)]
+    time_since_last_non_empty_block_ms: u64,
+    #[norito(default)]
     da_reschedule_total: u64,
     #[norito(default)]
     crypto: CryptoStatus,
@@ -5329,6 +5424,9 @@ struct StatusPayload {
     governance: GovernanceStatus,
     teu_lane_commit: Vec<NexusLaneTeuStatus>,
     teu_dataspace_backlog: Vec<NexusDataspaceTeuStatus>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    dataspace_catalog: Vec<NexusDataspaceCatalogStatus>,
     #[norito(default)]
     tx_gossip: TxGossipSnapshot,
     #[norito(default)]
@@ -5346,6 +5444,7 @@ impl From<&Status> for StatusPayload {
     fn from(status: &Status) -> Self {
         Self {
             build: status.build.clone(),
+            observed_at_ms: status.observed_at_ms,
             peers: status.peers,
             blocks: status.blocks,
             blocks_non_empty: status.blocks_non_empty,
@@ -5357,6 +5456,12 @@ impl From<&Status> for StatusPayload {
             uptime: status.uptime,
             view_changes: status.view_changes,
             queue_size: status.queue_size,
+            queue_queued: status.queue_queued,
+            queue_inflight: status.queue_inflight,
+            last_block_committed_at_ms: status.last_block_committed_at_ms,
+            last_non_empty_block_committed_at_ms: status.last_non_empty_block_committed_at_ms,
+            time_since_last_block_ms: status.time_since_last_block_ms,
+            time_since_last_non_empty_block_ms: status.time_since_last_non_empty_block_ms,
             da_reschedule_total: status.da_reschedule_total,
             crypto: status.crypto.clone(),
             stack: status.stack,
@@ -5364,6 +5469,7 @@ impl From<&Status> for StatusPayload {
             governance: status.governance.clone(),
             teu_lane_commit: status.teu_lane_commit.clone(),
             teu_dataspace_backlog: status.teu_dataspace_backlog.clone(),
+            dataspace_catalog: status.dataspace_catalog.clone(),
             tx_gossip: status.tx_gossip.clone(),
             sorafs_micropayments: status.sorafs_micropayments.clone(),
             taikai_alias_rotations: status.taikai_alias_rotations.clone(),
@@ -5377,6 +5483,7 @@ impl From<StatusPayload> for Status {
     fn from(payload: StatusPayload) -> Self {
         Self {
             build: payload.build,
+            observed_at_ms: payload.observed_at_ms,
             peers: payload.peers,
             blocks: payload.blocks,
             blocks_non_empty: payload.blocks_non_empty,
@@ -5388,6 +5495,12 @@ impl From<StatusPayload> for Status {
             uptime: payload.uptime,
             view_changes: payload.view_changes,
             queue_size: payload.queue_size,
+            queue_queued: payload.queue_queued,
+            queue_inflight: payload.queue_inflight,
+            last_block_committed_at_ms: payload.last_block_committed_at_ms,
+            last_non_empty_block_committed_at_ms: payload.last_non_empty_block_committed_at_ms,
+            time_since_last_block_ms: payload.time_since_last_block_ms,
+            time_since_last_non_empty_block_ms: payload.time_since_last_non_empty_block_ms,
             da_reschedule_total: payload.da_reschedule_total,
             crypto: payload.crypto,
             stack: payload.stack,
@@ -5395,6 +5508,7 @@ impl From<StatusPayload> for Status {
             governance: payload.governance,
             teu_lane_commit: payload.teu_lane_commit,
             teu_dataspace_backlog: payload.teu_dataspace_backlog,
+            dataspace_catalog: payload.dataspace_catalog,
             tx_gossip: payload.tx_gossip,
             sorafs_micropayments: payload.sorafs_micropayments,
             taikai_alias_rotations: payload.taikai_alias_rotations,
@@ -6046,6 +6160,42 @@ fn collect_teu_lane_commit(metrics: &Metrics) -> Vec<NexusLaneTeuStatus> {
         .collect()
 }
 
+fn collect_dataspace_catalog(metrics: &Metrics) -> Vec<NexusDataspaceCatalogStatus> {
+    let mut entries: Vec<_> = metrics
+        .nexus_scheduler_lane_teu_status
+        .read()
+        .expect("lane TEU cache poisoned")
+        .values()
+        .map(|lane| {
+            let alias = lane
+                .dataspace_alias
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| format!("dataspace-{}", lane.dataspace_id));
+            let visibility = lane
+                .visibility
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "public".to_owned());
+            NexusDataspaceCatalogStatus {
+                lane_id: lane.lane_id,
+                lane_alias: lane.alias.clone(),
+                dataspace_id: lane.dataspace_id,
+                alias,
+                visibility,
+                storage_profile: lane.storage_profile.clone(),
+                manifest_required: lane.manifest_required,
+                manifest_ready: lane.manifest_ready,
+                sealed: lane.manifest_required && !lane.manifest_ready,
+                manifest_path: lane.manifest_path.clone(),
+                protected_namespaces: lane.manifest_protected_namespaces.clone(),
+            }
+        })
+        .collect();
+    entries.sort_by_key(|entry| (entry.lane_id, entry.dataspace_id));
+    entries
+}
+
 fn collect_teu_dataspace_backlog(metrics: &Metrics) -> Vec<NexusDataspaceTeuStatus> {
     metrics
         .nexus_scheduler_dataspace_teu_status
@@ -6063,8 +6213,21 @@ fn collect_da_receipt_cursors(metrics: &Metrics) -> Vec<DaReceiptCursorStatus> {
 impl From<&Metrics> for Status {
     fn from(value: &Metrics) -> Self {
         let now_ms = current_unix_time_ms();
+        let last_block_committed_at_ms = value.last_block_committed_at_ms.get();
+        let last_non_empty_block_committed_at_ms = value.last_non_empty_block_committed_at_ms.get();
+        let time_since_last_block_ms = if last_block_committed_at_ms == 0 {
+            0
+        } else {
+            now_ms.saturating_sub(last_block_committed_at_ms)
+        };
+        let time_since_last_non_empty_block_ms = if last_non_empty_block_committed_at_ms == 0 {
+            0
+        } else {
+            now_ms.saturating_sub(last_non_empty_block_committed_at_ms)
+        };
         Self {
             build: BuildStatus::current(),
+            observed_at_ms: now_ms,
             peers: value.connected_peers.get(),
             blocks: value.block_height.get(),
             blocks_non_empty: value.block_height_non_empty.get(),
@@ -6080,6 +6243,12 @@ impl From<&Metrics> for Status {
                 .try_into()
                 .expect("INTERNAL BUG: Number of view changes exceeds u32::MAX"),
             queue_size: value.queue_size.get(),
+            queue_queued: value.queue_queued.get(),
+            queue_inflight: value.queue_inflight.get(),
+            last_block_committed_at_ms,
+            last_non_empty_block_committed_at_ms,
+            time_since_last_block_ms,
+            time_since_last_non_empty_block_ms,
             da_reschedule_total: value.sumeragi_rbc_da_reschedule_total.get(),
             crypto: CryptoStatus {
                 sm_helpers_available: cfg!(feature = "sm"),
@@ -6095,6 +6264,7 @@ impl From<&Metrics> for Status {
             governance: build_governance_status(value),
             teu_lane_commit: collect_teu_lane_commit(value),
             teu_dataspace_backlog: collect_teu_dataspace_backlog(value),
+            dataspace_catalog: collect_dataspace_catalog(value),
             tx_gossip: TxGossipSnapshot {
                 caps: value
                     .tx_gossip_caps
@@ -6134,6 +6304,10 @@ pub struct Metrics {
     pub block_height_non_empty: IntCounter,
     /// Time (since block creation) it took for the latest block to reach _this_ peer
     pub last_commit_time_ms: GenericGauge<AtomicU64>,
+    /// Millisecond UNIX timestamp when this peer last processed a committed block.
+    pub last_block_committed_at_ms: GenericGauge<AtomicU64>,
+    /// Millisecond UNIX timestamp when this peer last processed a committed non-empty block.
+    pub last_non_empty_block_committed_at_ms: GenericGauge<AtomicU64>,
     /// Block commit time trends
     pub commit_time_ms: Histogram,
     /// Slot duration histogram for NX-18 1-second finality tracking (milliseconds).
@@ -6338,15 +6512,15 @@ pub struct Metrics {
     pub subscription_billing_attempts_total: IntCounterVec,
     /// Subscription billing outcomes grouped by pricing kind and result.
     pub subscription_billing_outcomes_total: IntCounterVec,
-    /// Offline V2 note lifecycle events grouped by event kind.
+    /// Offline note lifecycle events grouped by event kind.
     pub offline_note_events_total: IntCounterVec,
-    /// Aggregate Offline V2 receipt-ack counters grouped by event kind.
+    /// Aggregate Offline receipt-ack counters grouped by event kind.
     pub offline_note_receipts_total: IntCounterVec,
-    /// Distribution of redeemed Offline V2 note amounts.
+    /// Distribution of redeemed Offline note amounts.
     pub offline_note_settled_amount: Histogram,
     /// Offline note validation rejections grouped by platform and reason.
     pub offline_note_rejections_total: IntCounterVec,
-    /// Offline V2 note records pruned from hot storage.
+    /// Offline note records pruned from hot storage.
     pub offline_note_pruned_total: IntCounter,
     /// Offline attestation tokens processed grouped by integrity policy.
     pub offline_attestation_policy_total: IntCounterVec,
@@ -7838,6 +8012,16 @@ impl Default for Metrics {
         let last_commit_time_ms = GenericGauge::new(
             "last_commit_time_ms",
             "Time (since block creation) it took for the latest block to be committed by this peer",
+        )
+        .expect("Infallible");
+        let last_block_committed_at_ms = GenericGauge::new(
+            "last_block_committed_at_ms",
+            "Millisecond UNIX timestamp when this peer last processed a committed block",
+        )
+        .expect("Infallible");
+        let last_non_empty_block_committed_at_ms = GenericGauge::new(
+            "last_non_empty_block_committed_at_ms",
+            "Millisecond UNIX timestamp when this peer last processed a committed non-empty block",
         )
         .expect("Infallible");
         let commit_time_ms = Histogram::with_opts(
@@ -13740,6 +13924,8 @@ impl Default for Metrics {
             block_height,
             block_height_non_empty,
             last_commit_time_ms,
+            last_block_committed_at_ms,
+            last_non_empty_block_committed_at_ms,
             commit_time_ms,
             slot_duration_ms,
             slot_duration_ms_latest,
@@ -14290,6 +14476,8 @@ impl Default for Metrics {
             block_height,
             block_height_non_empty,
             last_commit_time_ms,
+            last_block_committed_at_ms,
+            last_non_empty_block_committed_at_ms,
             commit_time_ms,
             slot_duration_ms,
             slot_duration_ms_latest,
@@ -15970,7 +16158,7 @@ impl Metrics {
             .inc_by(u128_to_f64(haircut_micro) / 1_000_000.0);
     }
 
-    /// Record a settled offline V2 note bundle.
+    /// Record a settled offline note bundle.
     pub fn record_offline_note_settlement(&self, amount: f64, receipt_count: u32) {
         self.offline_note_events_total
             .with_label_values(&["settled"])
@@ -15993,7 +16181,7 @@ impl Metrics {
             .inc();
     }
 
-    /// Record an Offline V2 note record being pruned from hot storage.
+    /// Record an Offline note record being pruned from hot storage.
     pub fn inc_offline_note_pruned(&self) {
         self.offline_note_events_total
             .with_label_values(&["pruned"])
@@ -16001,7 +16189,7 @@ impl Metrics {
         self.offline_note_pruned_total.inc();
     }
 
-    /// Record a validation rejection for an Offline V2 note operation.
+    /// Record a validation rejection for an Offline note operation.
     pub fn record_offline_note_rejection(&self, platform: &str, reason: &str) {
         self.offline_note_rejections_total
             .with_label_values(&[platform, reason])
@@ -18354,6 +18542,7 @@ mod test {
                 cargo_features: "telemetry,zk-halo2".to_owned(),
                 target_triple: "aarch64-apple-darwin".to_owned(),
             },
+            observed_at_ms: 1_234_999,
             peers: 4,
             blocks: 5,
             blocks_non_empty: 3,
@@ -18366,6 +18555,12 @@ mod test {
             uptime: Uptime(Duration::new(5, 937_000_000)),
             view_changes: 2,
             queue_size: 18,
+            queue_queued: 11,
+            queue_inflight: 7,
+            last_block_committed_at_ms: 1_234_777,
+            last_non_empty_block_committed_at_ms: 1_234_555,
+            time_since_last_block_ms: 222,
+            time_since_last_non_empty_block_ms: 444,
             crypto: CryptoStatus {
                 sm_helpers_available: true,
                 sm_openssl_preview_enabled: false,
@@ -18479,6 +18674,7 @@ mod test {
             },
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
+            dataspace_catalog: Vec::new(),
             tx_gossip: TxGossipSnapshot {
                 caps: TxGossipCaps {
                     frame_cap_bytes: 0,
@@ -18528,6 +18724,7 @@ mod test {
                 "cargo_features": "telemetry,zk-halo2",
                 "target_triple": "aarch64-apple-darwin"
             },
+            "observed_at_ms": 1_234_999,
             "peers": 4,
             "blocks": 5,
             "blocks_non_empty": 3,
@@ -18543,6 +18740,12 @@ mod test {
             },
             "view_changes": 2,
             "queue_size": 18,
+            "queue_queued": 11,
+            "queue_inflight": 7,
+            "last_block_committed_at_ms": 1_234_777,
+            "last_non_empty_block_committed_at_ms": 1_234_555,
+            "time_since_last_block_ms": 222,
+            "time_since_last_non_empty_block_ms": 444,
             "crypto": {
                 "sm_helpers_available": true,
                 "sm_openssl_preview_enabled": false,
@@ -18694,6 +18897,7 @@ mod test {
                 "cargo_features": "telemetry,zk-halo2",
                 "target_triple": "aarch64-apple-darwin"
               },
+              "observed_at_ms": 1234999,
               "peers": 4,
               "blocks": 5,
               "blocks_non_empty": 3,
@@ -18708,6 +18912,12 @@ mod test {
               },
               "view_changes": 2,
               "queue_size": 18,
+              "queue_queued": 11,
+              "queue_inflight": 7,
+              "last_block_committed_at_ms": 1234777,
+              "last_non_empty_block_committed_at_ms": 1234555,
+              "time_since_last_block_ms": 222,
+              "time_since_last_non_empty_block_ms": 444,
               "da_reschedule_total": 7,
               "crypto": {
                 "sm_helpers_available": true,
@@ -18778,8 +18988,7 @@ mod test {
                 "view_change_suggest_total": 0,
                 "view_change_install_total": 0,
                 "lane_governance_sealed_total": 0,
-                "lane_governance_sealed_aliases": [
-              ]
+                "lane_governance_sealed_aliases": []
               },
               "governance": {
                 "proposals": {
@@ -18817,14 +19026,11 @@ mod test {
                   }
                 ],
                 "sealed_lanes_total": 0,
-                "sealed_lane_aliases": [
-              ],
+                "sealed_lane_aliases": [],
                 "citizens_total": 0
               },
-              "teu_lane_commit": [
-              ],
-              "teu_dataspace_backlog": [
-              ],
+              "teu_lane_commit": [],
+              "teu_dataspace_backlog": [],
               "tx_gossip": {
                 "caps": {
                   "frame_cap_bytes": 0,
@@ -18835,5 +19041,34 @@ mod test {
               }
             }"#]];
         expected.assert_eq(&actual);
+    }
+
+    #[test]
+    fn status_from_metrics_includes_queue_and_block_liveness() {
+        let metrics = Metrics::default();
+        let now = current_unix_time_ms();
+        metrics.queue_size.set(8);
+        metrics.queue_queued.set(5);
+        metrics.queue_inflight.set(3);
+        metrics
+            .last_block_committed_at_ms
+            .set(now.saturating_sub(250));
+        metrics
+            .last_non_empty_block_committed_at_ms
+            .set(now.saturating_sub(500));
+
+        let status = Status::from(&metrics);
+
+        assert!(status.observed_at_ms >= now);
+        assert_eq!(status.queue_size, 8);
+        assert_eq!(status.queue_queued, 5);
+        assert_eq!(status.queue_inflight, 3);
+        assert_eq!(status.last_block_committed_at_ms, now.saturating_sub(250));
+        assert_eq!(
+            status.last_non_empty_block_committed_at_ms,
+            now.saturating_sub(500)
+        );
+        assert!(status.time_since_last_block_ms >= 250);
+        assert!(status.time_since_last_non_empty_block_ms >= 500);
     }
 }

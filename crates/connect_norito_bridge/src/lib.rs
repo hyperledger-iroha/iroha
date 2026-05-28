@@ -27,7 +27,7 @@ use iroha_data_model::{
         AccountId,
         address::{AccountAddress, AccountAddressError},
     },
-    asset::id::{AssetDefinitionId, AssetId},
+    asset::id::{AssetBalanceScope, AssetDefinitionId, AssetId},
     confidential::{CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1, ConfidentialEncryptedPayload},
     da::manifest::DaManifestV1,
     domain::DomainId,
@@ -46,6 +46,7 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     name::Name,
+    nexus::DataSpaceId,
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
     ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
@@ -122,7 +123,7 @@ const ERR_FETCH_UNKNOWN_CHUNKER: c_int = -113;
 const ERR_ACCOUNT_ADDRESS: c_int = -200;
 const ERR_ASSET_ID_PARSE: c_int = -301;
 const ERR_JSON_SERIALIZE: c_int = -304;
-const ERR_OFFLINE_NOTE_V2_PROVE: c_int = -310;
+const ERR_OFFLINE_NOTE_PROVE: c_int = -310;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
@@ -152,7 +153,7 @@ enum BridgeError {
     InvalidRootHint,
     AssetId,
     JsonSerialize,
-    OfflineNoteV2Prove,
+    OfflineNoteProve,
     UnsupportedAlgorithm,
     MetadataTarget,
     MetadataKey,
@@ -191,7 +192,7 @@ impl BridgeError {
             BridgeError::InvalidRootHint => ERR_INVALID_ROOT_HINT,
             BridgeError::AssetId => ERR_ASSET_ID_PARSE,
             BridgeError::JsonSerialize => ERR_JSON_SERIALIZE,
-            BridgeError::OfflineNoteV2Prove => ERR_OFFLINE_NOTE_V2_PROVE,
+            BridgeError::OfflineNoteProve => ERR_OFFLINE_NOTE_PROVE,
             BridgeError::UnsupportedAlgorithm => ERR_UNSUPPORTED_ALGORITHM,
             BridgeError::MetadataTarget => ERR_METADATA_TARGET,
             BridgeError::MetadataKey => ERR_METADATA_KEY,
@@ -371,6 +372,28 @@ fn parse_asset_definition(value: String) -> BridgeResult<AssetDefinitionId> {
     }
 
     AssetDefinitionId::parse_address_literal(trimmed).map_err(|_| BridgeError::AssetDefinition)
+}
+
+fn parse_asset_definition_with_balance_scope(
+    value: String,
+) -> BridgeResult<(AssetDefinitionId, AssetBalanceScope)> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(BridgeError::AssetDefinition);
+    }
+    let Some((definition_literal, scope_literal)) = trimmed.split_once("#dataspace:") else {
+        return parse_asset_definition(trimmed.to_owned())
+            .map(|definition| (definition, AssetBalanceScope::Global));
+    };
+    if definition_literal.is_empty() || scope_literal.is_empty() || scope_literal.contains('#') {
+        return Err(BridgeError::AssetDefinition);
+    }
+    let definition = parse_asset_definition(definition_literal.to_owned())?;
+    let dataspace_id = scope_literal
+        .parse::<u64>()
+        .map(DataSpaceId::new)
+        .map_err(|_| BridgeError::AssetDefinition)?;
+    Ok((definition, AssetBalanceScope::Dataspace(dataspace_id)))
 }
 
 fn parse_quantity(value: String) -> BridgeResult<Numeric> {
@@ -1374,6 +1397,7 @@ struct AssetTxInputs {
     chain_id: ChainId,
     authority: AccountId,
     asset_definition: AssetDefinitionId,
+    asset_scope: AssetBalanceScope,
     destination: AccountId,
     quantity: Numeric,
     ttl: Option<NonZeroU64>,
@@ -1436,10 +1460,14 @@ where
     }
     let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
 
+    let (asset_definition, asset_scope) =
+        parse_asset_definition_with_balance_scope(asset_definition_str)?;
+
     Ok(AssetTxInputs {
         chain_id: chain.parse().map_err(|_| BridgeError::ChainId)?,
         authority: parse_account_id(authority_str)?,
-        asset_definition: parse_asset_definition(asset_definition_str)?,
+        asset_definition,
+        asset_scope,
         destination: parse_destination(destination_str)?,
         quantity: parse_quantity(quantity_str)?,
         ttl: parse_ttl(ttl_ms, ttl_present != 0)?,
@@ -3688,17 +3716,17 @@ pub unsafe extern "C" fn connect_norito_decode_ciphertext_frame(
     }
 }
 
-// ---------------- Offline Note V2 prover helpers ----------------
+// ---------------- Offline Note prover helpers ----------------
 
-/// Generate a recursive Halo2/IPA proof for an Offline V2 redemption.
+/// Generate a recursive Halo2/IPA proof for an Offline redemption.
 ///
 /// The input is Norito-archive bytes of
-/// `iroha_data_model::offline::OfflineNoteRedeemV2`. The existing
+/// `iroha_data_model::offline::OfflineNoteRedeem`. The existing
 /// `recursive_proof` field is ignored, so callers may pass a stub. The output
-/// is Norito-archive bytes of `OfflineNoteRecursiveProofV2`, ready to slot back
+/// is Norito-archive bytes of `OfflineNoteRecursiveProof`, ready to slot back
 /// into the redemption before transaction submission.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_prove_note_v2_redeem(
+pub unsafe extern "C" fn connect_norito_offline_prove_note_redeem(
     redeem_norito_ptr: *const c_uchar,
     redeem_norito_len: c_ulong,
     out_recursive_proof_ptr: *mut *mut c_uchar,
@@ -3712,23 +3740,23 @@ pub unsafe extern "C" fn connect_norito_offline_prove_note_v2_redeem(
             return Err(BridgeError::NullPtr);
         }
         let bytes = unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
-        let recursive = prove_offline_note_v2_redeem_recursive(bytes)?;
-        let archive = norito::to_bytes(&recursive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+        let recursive = prove_offline_note_redeem_recursive(bytes)?;
+        let archive = norito::to_bytes(&recursive).map_err(|_| BridgeError::OfflineNoteProve)?;
         unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
     })();
 
     bridge_result_to_code(result)
 }
 
-/// Generate a recursive Halo2/IPA proof for an Offline V2 audit bundle.
+/// Generate a recursive Halo2/IPA proof for an Offline audit bundle.
 ///
 /// The input is Norito-archive bytes of
-/// `iroha_data_model::offline::OfflineNoteAuditBundleV2`. The existing
+/// `iroha_data_model::offline::OfflineNoteAuditBundle`. The existing
 /// `recursive_proof` field is ignored, so callers may pass a stub. The output
-/// is Norito-archive bytes of `OfflineNoteRecursiveProofV2`, ready to slot back
+/// is Norito-archive bytes of `OfflineNoteRecursiveProof`, ready to slot back
 /// into the audit bundle before transaction submission.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_prove_note_v2_audit(
+pub unsafe extern "C" fn connect_norito_offline_prove_note_audit(
     audit_norito_ptr: *const c_uchar,
     audit_norito_len: c_ulong,
     out_recursive_proof_ptr: *mut *mut c_uchar,
@@ -3742,80 +3770,74 @@ pub unsafe extern "C" fn connect_norito_offline_prove_note_v2_audit(
             return Err(BridgeError::NullPtr);
         }
         let bytes = unsafe { slice::from_raw_parts(audit_norito_ptr, audit_norito_len as usize) };
-        let recursive = prove_offline_note_v2_audit_recursive(bytes)?;
-        let archive = norito::to_bytes(&recursive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+        let recursive = prove_offline_note_audit_recursive(bytes)?;
+        let archive = norito::to_bytes(&recursive).map_err(|_| BridgeError::OfflineNoteProve)?;
         unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
     })();
 
     bridge_result_to_code(result)
 }
 
-fn prove_offline_note_v2_redeem_recursive(
+fn prove_offline_note_redeem_recursive(
     redeem_archive: &[u8],
-) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProofV2> {
+) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProof> {
     use iroha_core::zk::{
-        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID, offline_note_v2_recursive_vk_box,
-        prove_offline_note_v2_redeem,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, offline_note_recursive_vk_box, prove_offline_note_redeem,
     };
     use iroha_data_model::{
-        offline::{OfflineNoteRecursiveProofV2, OfflineNoteRedeemV2},
+        offline::{OfflineNoteRecursiveProof, OfflineNoteRedeem},
         proof::VerifyingKeyId,
     };
 
-    let redemption: OfflineNoteRedeemV2 =
-        norito::decode_from_bytes(redeem_archive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
-    let vk_box = offline_note_v2_recursive_vk_box().map_err(|_| BridgeError::OfflineNoteV2Prove)?;
-    let proof_box = prove_offline_note_v2_redeem(
-        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+    let redemption: OfflineNoteRedeem =
+        norito::decode_from_bytes(redeem_archive).map_err(|_| BridgeError::OfflineNoteProve)?;
+    let vk_box = offline_note_recursive_vk_box().map_err(|_| BridgeError::OfflineNoteProve)?;
+    let proof_box = prove_offline_note_redeem(
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
         &vk_box,
         &redemption,
         None,
     )
-    .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    .map_err(|_| BridgeError::OfflineNoteProve)?;
     let public_inputs_hash = redemption
         .public_inputs_hash()
-        .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+        .map_err(|_| BridgeError::OfflineNoteProve)?;
 
-    Ok(OfflineNoteRecursiveProofV2 {
+    Ok(OfflineNoteRecursiveProof {
         verifier_key_id: VerifyingKeyId::new(
             vk_box.backend.clone(),
-            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
         ),
         public_inputs_hash,
         proof: proof_box,
     })
 }
 
-fn prove_offline_note_v2_audit_recursive(
+fn prove_offline_note_audit_recursive(
     audit_archive: &[u8],
-) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProofV2> {
+) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProof> {
     use iroha_core::zk::{
-        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID, offline_note_v2_recursive_vk_box,
-        prove_offline_note_v2_audit,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, offline_note_recursive_vk_box, prove_offline_note_audit,
     };
     use iroha_data_model::{
-        offline::{OfflineNoteAuditBundleV2, OfflineNoteRecursiveProofV2},
+        offline::{OfflineNoteAuditBundle, OfflineNoteRecursiveProof},
         proof::VerifyingKeyId,
     };
 
-    let audit: OfflineNoteAuditBundleV2 =
-        norito::decode_from_bytes(audit_archive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
-    let vk_box = offline_note_v2_recursive_vk_box().map_err(|_| BridgeError::OfflineNoteV2Prove)?;
-    let proof_box = prove_offline_note_v2_audit(
-        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
-        &vk_box,
-        &audit,
-        None,
-    )
-    .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let audit: OfflineNoteAuditBundle =
+        norito::decode_from_bytes(audit_archive).map_err(|_| BridgeError::OfflineNoteProve)?;
+    let vk_box = offline_note_recursive_vk_box().map_err(|_| BridgeError::OfflineNoteProve)?;
+    let proof_box =
+        prove_offline_note_audit(OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, &vk_box, &audit, None)
+            .map_err(|_| BridgeError::OfflineNoteProve)?;
     let public_inputs_hash = audit
         .public_inputs_hash()
-        .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+        .map_err(|_| BridgeError::OfflineNoteProve)?;
 
-    Ok(OfflineNoteRecursiveProofV2 {
+    Ok(OfflineNoteRecursiveProof {
         verifier_key_id: VerifyingKeyId::new(
             vk_box.backend.clone(),
-            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
         ),
         public_inputs_hash,
         proof: proof_box,
@@ -3832,16 +3854,16 @@ pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
 }
 
 #[cfg(test)]
-mod offline_note_v2_prover_tests {
+mod offline_note_prover_tests {
     use iroha_core::zk::{
-        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
-        offline_note_v2_recursive_vk_box, verify_backend,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, offline_note_recursive_vk_box,
+        verify_backend,
     };
     use iroha_data_model::{
         offline::{
-            OfflineNoteAuditBundleV2, OfflineNoteAuditOutputClaimV2, OfflineNoteIssueV2,
-            OfflineNoteIssuedClaimV2, OfflineNoteKeyCertificateV2, OfflineNoteRecursiveProofV2,
-            OfflineNoteRedeemV2,
+            OfflineNoteAuditBundle, OfflineNoteAuditOutputClaim, OfflineNoteIssue,
+            OfflineNoteIssuedClaim, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
+            OfflineNoteRedeem,
         },
         proof::VerifyingKeyId,
     };
@@ -3869,17 +3891,17 @@ mod offline_note_v2_prover_tests {
         AssetId::new(definition, account)
     }
 
-    fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificateV2 {
+    fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
         let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
-        OfflineNoteKeyCertificateV2 {
-            version: 2,
+        OfflineNoteKeyCertificate {
+            version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),
             key_id: format!("one-use-key-{seed}"),
             device_id: "device-1".to_owned(),
             account_id: account.clone(),
             public_key: public_key.to_vec(),
-            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_scheme: "apple-appattest-counter".to_owned(),
             assertion_key_algorithm: "app-attest-p256".to_owned(),
             assertion_public_key: vec![0x04; 65],
             assertion_usage_count_limit: None,
@@ -3888,23 +3910,23 @@ mod offline_note_v2_prover_tests {
         }
     }
 
-    fn placeholder_recursive_proof() -> OfflineNoteRecursiveProofV2 {
-        OfflineNoteRecursiveProofV2 {
+    fn placeholder_recursive_proof() -> OfflineNoteRecursiveProof {
+        OfflineNoteRecursiveProof {
             verifier_key_id: VerifyingKeyId::new(
                 ZK_BACKEND_HALO2_IPA,
-                OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+                OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
             ),
-            public_inputs_hash: Hash::new(b"placeholder-offline-note-v2-public-inputs"),
+            public_inputs_hash: Hash::new(b"placeholder-offline-note-public-inputs"),
             proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new()),
         }
     }
 
-    fn sample_redemption() -> OfflineNoteRedeemV2 {
+    fn sample_redemption() -> OfflineNoteRedeem {
         let account = sample_account(0xA1);
         let asset = sample_asset(account.clone());
-        OfflineNoteRedeemV2 {
-            source_note_commitment: Hash::new(b"offline-note-v2-source-note"),
-            input_nullifiers: vec![Hash::new(b"offline-note-v2-redeem-nullifier")],
+        OfflineNoteRedeem {
+            source_note_commitment: Hash::new(b"offline-note-source-note"),
+            input_nullifiers: vec![Hash::new(b"offline-note-redeem-nullifier")],
             sender_key_certificate: sample_certificate(&account, 0xB1),
             recipient: account,
             asset,
@@ -3913,24 +3935,24 @@ mod offline_note_v2_prover_tests {
         }
     }
 
-    fn sample_audit() -> OfflineNoteAuditBundleV2 {
+    fn sample_audit() -> OfflineNoteAuditBundle {
         let account = sample_account(0xC1);
         let asset = sample_asset(account.clone());
         let certificate = sample_certificate(&account, 0xD1);
-        let issue = OfflineNoteIssueV2 {
-            note_commitment: Hash::new(b"offline-note-v2-audit-input-note"),
+        let issue = OfflineNoteIssue {
+            note_commitment: Hash::new(b"offline-note-audit-input-note"),
             key_certificate: certificate.clone(),
             asset: asset.clone(),
             amount: Numeric::new(10, 0),
         };
-        OfflineNoteAuditBundleV2 {
-            token_id: Hash::new(b"offline-note-v2-audit-token"),
+        OfflineNoteAuditBundle {
+            token_id: Hash::new(b"offline-note-audit-token"),
             sender_key_certificate: certificate.clone(),
-            input_nullifiers: vec![Hash::new(b"offline-note-v2-audit-nullifier")],
-            input_claims: vec![OfflineNoteIssuedClaimV2::from_issue(&issue).expect("input claim")],
-            output_commitments: vec![Hash::new(b"offline-note-v2-audit-output-note")],
-            output_claims: vec![OfflineNoteAuditOutputClaimV2 {
-                note_commitment: Hash::new(b"offline-note-v2-audit-output-note"),
+            input_nullifiers: vec![Hash::new(b"offline-note-audit-nullifier")],
+            input_claims: vec![OfflineNoteIssuedClaim::from_issue(&issue).expect("input claim")],
+            output_commitments: vec![Hash::new(b"offline-note-audit-output-note")],
+            output_claims: vec![OfflineNoteAuditOutputClaim {
+                note_commitment: Hash::new(b"offline-note-audit-output-note"),
                 key_certificate: certificate,
                 asset,
                 amount: Numeric::new(10, 0),
@@ -3942,7 +3964,7 @@ mod offline_note_v2_prover_tests {
     fn decode_recursive_proof(
         out_ptr: *mut c_uchar,
         out_len: c_ulong,
-    ) -> OfflineNoteRecursiveProofV2 {
+    ) -> OfflineNoteRecursiveProof {
         assert!(!out_ptr.is_null(), "prover output pointer must be set");
         let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
         connect_norito_free(out_ptr);
@@ -3950,33 +3972,30 @@ mod offline_note_v2_prover_tests {
     }
 
     fn assert_recursive_proof_verifies(
-        recursive: &OfflineNoteRecursiveProofV2,
+        recursive: &OfflineNoteRecursiveProof,
         expected_public_inputs_hash: Hash,
     ) {
-        let vk_box = offline_note_v2_recursive_vk_box().expect("offline note v2 verifying key");
+        let vk_box = offline_note_recursive_vk_box().expect("offline note verifying key");
         assert_eq!(
             recursive.verifier_key_id,
-            VerifyingKeyId::new(
-                ZK_BACKEND_HALO2_IPA,
-                OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID
-            )
+            VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID)
         );
         assert_eq!(recursive.public_inputs_hash, expected_public_inputs_hash);
         assert!(
             verify_backend(ZK_BACKEND_HALO2_IPA, &recursive.proof, Some(&vk_box)),
-            "bridge output must verify against the canonical Offline V2 verifier"
+            "bridge output must verify against the canonical Offline verifier"
         );
     }
 
     #[test]
-    fn offline_note_v2_redeem_ffi_returns_verifying_recursive_proof() {
+    fn offline_note_redeem_ffi_returns_verifying_recursive_proof() {
         let redemption = sample_redemption();
         let archive = norito::to_bytes(&redemption).expect("encode redemption");
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
 
         let status = unsafe {
-            connect_norito_offline_prove_note_v2_redeem(
+            connect_norito_offline_prove_note_redeem(
                 archive.as_ptr(),
                 archive.len() as c_ulong,
                 &mut out_ptr,
@@ -3993,14 +4012,14 @@ mod offline_note_v2_prover_tests {
     }
 
     #[test]
-    fn offline_note_v2_audit_ffi_returns_verifying_recursive_proof() {
+    fn offline_note_audit_ffi_returns_verifying_recursive_proof() {
         let audit = sample_audit();
         let archive = norito::to_bytes(&audit).expect("encode audit bundle");
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
 
         let status = unsafe {
-            connect_norito_offline_prove_note_v2_audit(
+            connect_norito_offline_prove_note_audit(
                 archive.as_ptr(),
                 archive.len() as c_ulong,
                 &mut out_ptr,
@@ -4017,13 +4036,13 @@ mod offline_note_v2_prover_tests {
     }
 
     #[test]
-    fn offline_note_v2_prover_ffi_rejects_invalid_archive() {
+    fn offline_note_prover_ffi_rejects_invalid_archive() {
         let bad_archive = b"not a norito archive";
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
 
         let status = unsafe {
-            connect_norito_offline_prove_note_v2_redeem(
+            connect_norito_offline_prove_note_redeem(
                 bad_archive.as_ptr(),
                 bad_archive.len() as c_ulong,
                 &mut out_ptr,
@@ -4031,7 +4050,7 @@ mod offline_note_v2_prover_tests {
             )
         };
 
-        assert_eq!(status, ERR_OFFLINE_NOTE_V2_PROVE);
+        assert_eq!(status, ERR_OFFLINE_NOTE_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
     }
@@ -4562,6 +4581,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -4569,7 +4589,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
@@ -4649,6 +4670,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -4656,7 +4678,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
@@ -4736,6 +4759,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -4743,7 +4767,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
@@ -4827,6 +4852,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -4834,7 +4860,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
@@ -7209,6 +7236,7 @@ mod accel_tests {
     };
 
     use iroha_crypto::KeyPair;
+    use iroha_data_model::prelude::TransferBox;
 
     use super::*;
 
@@ -7558,6 +7586,81 @@ mod accel_tests {
         let expected = AssetDefinitionId::parse_address_literal(&canonical)
             .expect("canonical base58 should parse");
         assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn parse_asset_definition_accepts_dataspace_balance_scope_suffix() {
+        let canonical = asset_definition_literal("wonderland", "rose");
+        let (parsed, scope) =
+            parse_asset_definition_with_balance_scope(format!("{canonical}#dataspace:10"))
+                .expect("canonical base58 asset definition with dataspace scope should parse");
+        let expected = AssetDefinitionId::parse_address_literal(&canonical)
+            .expect("canonical base58 should parse");
+        assert_eq!(parsed, expected);
+        assert_eq!(scope, AssetBalanceScope::Dataspace(DataSpaceId::new(10)));
+    }
+
+    #[test]
+    fn encode_transfer_preserves_dataspace_balance_scope_suffix() {
+        let _reset = ChainDiscriminantReset::new(42);
+        let chain = cstring("00000042");
+        let authority = fixture_authority("wonderland");
+        let asset_definition = cstring(&format!(
+            "{}#dataspace:10",
+            asset_definition_literal("wonderland", "rose")
+        ));
+        let quantity = cstring("15.7500");
+        let destination = authority.clone();
+        let private_key = fixture_private_key();
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0u8; 32];
+        let result = unsafe {
+            connect_norito_encode_transfer_signed_transaction(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1_736_000_000_000,
+                3_500,
+                1,
+                17,
+                1,
+                asset_definition.as_ptr(),
+                asset_definition.as_bytes().len() as c_ulong,
+                quantity.as_ptr(),
+                quantity.as_bytes().len() as c_ulong,
+                destination.as_ptr(),
+                destination.as_bytes().len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_signed_ptr,
+                &mut out_signed_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(result, 0, "expected success");
+        let signed = decode_signed(out_signed_ptr, out_signed_len);
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                let transfer = instructions
+                    .first()
+                    .and_then(|instruction| instruction.as_any().downcast_ref::<TransferBox>())
+                    .expect("transfer instruction");
+                let TransferBox::Asset(transfer) = transfer else {
+                    panic!("expected asset transfer");
+                };
+                assert_eq!(
+                    transfer.source.scope(),
+                    &AssetBalanceScope::Dataspace(DataSpaceId::new(10))
+                );
+            }
+            other => panic!("unexpected executable: {other:?}"),
+        }
+        unsafe {
+            free(out_signed_ptr as *mut _);
+        }
     }
 
     #[test]
@@ -8745,6 +8848,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -8752,7 +8856,8 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), destination.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), destination.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
@@ -8831,6 +8936,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -8838,7 +8944,8 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition.clone(), destination.clone());
+        let asset_id =
+            AssetId::with_scope(asset_definition.clone(), destination.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
@@ -9036,6 +9143,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -9043,7 +9151,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition, destination.clone());
+        let asset_id = AssetId::with_scope(asset_definition, destination.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,
@@ -9236,6 +9344,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
             chain_id,
             authority,
             asset_definition,
+            asset_scope,
             destination,
             quantity,
             ttl,
@@ -9243,7 +9352,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
         } = inputs;
         let nonce = parse_nonce(nonce, nonce_present != 0)?;
 
-        let asset_id = AssetId::new(asset_definition, destination.clone());
+        let asset_id = AssetId::with_scope(asset_definition, destination.clone(), asset_scope);
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
             chain_id,
             authority,

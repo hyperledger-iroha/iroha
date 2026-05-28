@@ -7202,6 +7202,7 @@ pub(crate) mod valid {
                 state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
             let axt_envelopes = state_block.drain_axt_envelopes();
             let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
+            let trigger_completions = state_block.world.trigger_completions();
             block
                 .set_transaction_results_with_transcripts(
                     time_trgs,
@@ -7212,6 +7213,7 @@ pub(crate) mod valid {
                     axt_policy_snapshot,
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
+            block.set_trigger_completions(trigger_completions);
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
                 let elapsed = to_ms(start.elapsed());
                 timings.execution_tx_apply_ms = elapsed;
@@ -11265,6 +11267,7 @@ pub(crate) mod valid {
             let axt_start = timings.as_ref().map(|_| Instant::now());
             let axt_envelopes = state_block.drain_axt_envelopes();
             let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
+            let trigger_completions = state_block.world.trigger_completions();
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), axt_start) {
                 timings.execution_tx_finalize_axt_ms = to_ms(start.elapsed());
             }
@@ -11279,6 +11282,7 @@ pub(crate) mod valid {
                     axt_policy_snapshot,
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
+            block.set_trigger_completions(trigger_completions);
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), set_results_start) {
                 timings.execution_tx_finalize_set_results_ms = to_ms(start.elapsed());
             }

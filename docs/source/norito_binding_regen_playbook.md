@@ -33,8 +33,10 @@ fixture exporter change.
    python3 scripts/check_norito_bindings_sync.py
    ```
    The script flags pending updates under `crates/norito`, `python/norito_py`,
-   and `java/norito_java`. It is also executed automatically via
-   `ci/check_norito_bindings_sync.sh` and the `norito` crate's `build.rs`.
+   `java/norito_java`, and `kotlin/core-jvm`. CI executes it via
+   `ci/check_norito_bindings_sync.sh`. Ordinary Cargo builds skip this
+   multi-SDK guard; set `NORITO_CHECK_BINDINGS_SYNC=1` only when you explicitly
+   want `cargo build -p norito` to run the same check locally.
 2. **Update Rust fixtures if needed:** If the change depends on new Norito JSON
    goldens, regenerate them with `scripts/norito_regen.sh` before touching the
    SDKs.

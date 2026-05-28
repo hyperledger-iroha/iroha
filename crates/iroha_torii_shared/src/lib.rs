@@ -56,6 +56,8 @@ pub mod uri {
     pub const PROOF_RETENTION_STATUS: &str = "/v1/proofs/retention";
     /// URI used to fetch FASTPQ proof sidecars for a committed block height.
     pub const PIPELINE_FASTPQ_PROOFS: &str = "/v1/pipeline/recovery/{height}/fastpq-proofs";
+    /// URI used to list historical trigger completion records from committed blocks.
+    pub const TRIGGER_COMPLETIONS: &str = "/v1/triggers/completed";
     /// The web socket uri used to subscribe to blocks stream.
     pub const BLOCKS_STREAM: &str = "/v1/blocks/stream";
     /// Debug endpoint exposing cached AXT proof state per dataspace.
@@ -439,10 +441,136 @@ pub struct PipelineTransactionStatusResponse {
     pub hash: String,
     /// Current pipeline status details.
     pub status: PipelineTransactionStatus,
+    /// Human-readable one-line summary for CLI and operator diagnostics.
+    #[norito(default)]
+    pub summary: String,
+    /// Structured diagnostics decoded from rejection and execution failures.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<PipelineDiagnostic>,
+    /// Trigger completions associated with this status response when Torii can hydrate them.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub trigger_completions: Vec<TriggerCompletionSummary>,
     /// Read scope applied by Torii (`local`, `auto`, `global`).
     pub scope: String,
     /// Source used to resolve the status (`cache`, `queue`, `state`).
     pub resolved_from: String,
+}
+
+/// Structured pipeline diagnostic extracted from a rejection reason or execution failure.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct PipelineDiagnostic {
+    /// Stable broad category such as `validation`, `ivm_execution`, or `trigger_execution`.
+    pub category: String,
+    /// Stable machine-readable rejection code.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Human-readable diagnostic message.
+    pub message: String,
+    /// Decoded rejection reason text without transport encoding.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub decoded_reason: Option<String>,
+    /// Contract address or alias when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract: Option<String>,
+    /// Entrypoint name when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    /// Trigger identifier when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub trigger_id: Option<String>,
+    /// Trigger step index when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub step_index: Option<u32>,
+    /// VM program counter when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub vm_pc: Option<u64>,
+    /// VM function name when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
+    /// Source location or source fragment when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// VM opcode when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub opcode: Option<String>,
+    /// Host syscall when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub syscall: Option<String>,
+    /// Lossless raw rejection reason string.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub raw_reason: Option<String>,
+}
+
+/// Compact trigger completion included in status and smoke evidence.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct TriggerCompletionSummary {
+    /// Trigger identifier.
+    pub trigger_id: String,
+    /// Entrypoint hash for this trigger execution.
+    pub trigger_execution_hash: String,
+    /// Step index within the entrypoint execution.
+    pub step_index: u32,
+    /// `Success` or `Failure`.
+    pub outcome: String,
+    /// Failure message when present.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Historical trigger completion record returned by `/v1/triggers/completed`.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct TriggerCompletionRecord {
+    /// Block height containing this trigger completion.
+    pub block_height: u64,
+    /// Entrypoint/result index in the block when it can be resolved.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint_index: Option<u64>,
+    /// Compact completion payload.
+    pub completion: TriggerCompletionSummary,
+    /// Evidence source: `block_result` for persisted completion events or `reconstructed_result`
+    /// for legacy blocks reconstructed from transaction results.
+    pub source: String,
+}
+
+/// Historical trigger completion query response.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct TriggerCompletionListResponse {
+    /// Latest committed block height observed by the serving node.
+    pub latest_height: u64,
+    /// First block height scanned.
+    pub from_height: u64,
+    /// Last block height scanned.
+    pub to_height: u64,
+    /// Number of block heights inspected.
+    pub scanned_blocks: u64,
+    /// Maximum number of records requested.
+    pub limit: u64,
+    /// Matching completion records, newest block first.
+    pub completions: Vec<TriggerCompletionRecord>,
 }
 
 /// Status details embedded in [`PipelineTransactionStatusResponse`].
@@ -460,6 +588,118 @@ pub struct PipelineTransactionStatus {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub rejection_reason: Option<TransactionRejectionReason>,
+}
+
+impl PipelineTransactionStatusResponse {
+    /// Construct a status response and populate summary/diagnostics from the status payload.
+    #[must_use]
+    pub fn new(
+        hash: String,
+        status: PipelineTransactionStatus,
+        scope: String,
+        resolved_from: String,
+    ) -> Self {
+        let diagnostics = status
+            .rejection_reason
+            .as_ref()
+            .map(diagnostics_from_rejection_reason)
+            .unwrap_or_default();
+        let summary = pipeline_status_summary(&status, diagnostics.first());
+        Self {
+            hash,
+            status,
+            summary,
+            diagnostics,
+            trigger_completions: Vec::new(),
+            scope,
+            resolved_from,
+        }
+    }
+}
+
+fn pipeline_status_summary(
+    status: &PipelineTransactionStatus,
+    first_diagnostic: Option<&PipelineDiagnostic>,
+) -> String {
+    if let Some(diagnostic) = first_diagnostic {
+        return format!("{}: {}", status.kind, diagnostic.message);
+    }
+    status.kind.clone()
+}
+
+fn diagnostics_from_rejection_reason(
+    reason: &TransactionRejectionReason,
+) -> Vec<PipelineDiagnostic> {
+    let (category, code, message): (&str, &str, String) = match reason {
+        TransactionRejectionReason::AccountDoesNotExist(err) => (
+            "account",
+            "account_does_not_exist",
+            format!("account does not exist: {err}"),
+        ),
+        TransactionRejectionReason::LimitCheck(err) => {
+            ("limit_check", "limit_check", err.to_string())
+        }
+        TransactionRejectionReason::Validation(err) => {
+            ("validation", "validation", err.to_string())
+        }
+        TransactionRejectionReason::InstructionExecution(err) => (
+            "instruction_execution",
+            "instruction_execution",
+            err.to_string(),
+        ),
+        TransactionRejectionReason::IvmExecution(err) => {
+            ("ivm_execution", "ivm_execution", err.to_string())
+        }
+        TransactionRejectionReason::TriggerExecution(err) => {
+            ("trigger_execution", "trigger_execution", err.to_string())
+        }
+    };
+
+    let mut diagnostic = PipelineDiagnostic {
+        category: category.to_owned(),
+        code: Some(code.to_owned()),
+        message: message.clone(),
+        decoded_reason: Some(message.clone()),
+        contract: extract_labeled_value(&message, &["contract=", "contract: "]),
+        entrypoint: extract_labeled_value(&message, &["entrypoint=", "entrypoint: "]),
+        trigger_id: extract_labeled_value(&message, &["trigger=", "trigger_id="]),
+        step_index: extract_labeled_value(&message, &["step=", "step_index="])
+            .and_then(|value| value.parse::<u32>().ok()),
+        vm_pc: extract_labeled_value(&message, &["pc=", "vm_pc="])
+            .and_then(|value| value.parse::<u64>().ok()),
+        function: extract_labeled_value(&message, &["fn=", "function="]),
+        source: extract_labeled_value(&message, &["src=", "source="]),
+        opcode: extract_labeled_value(&message, &["opcode="]),
+        syscall: extract_labeled_value(&message, &["syscall="]),
+        raw_reason: Some(reason.to_string()),
+    };
+    if diagnostic.message.is_empty() {
+        diagnostic.message = diagnostic
+            .raw_reason
+            .clone()
+            .unwrap_or_else(|| "transaction rejected".to_owned());
+        diagnostic.decoded_reason = Some(diagnostic.message.clone());
+    }
+    vec![diagnostic]
+}
+
+fn extract_labeled_value(message: &str, labels: &[&str]) -> Option<String> {
+    for label in labels {
+        let Some(offset) = message.find(label) else {
+            continue;
+        };
+        let start = offset + label.len();
+        let rest = &message[start..];
+        let token = rest
+            .split(|ch: char| ch.is_whitespace() || ch == ',' || ch == ';')
+            .next()
+            .unwrap_or_default()
+            .trim_matches(['"', '\'', '`', '[', ']']);
+        if !token.is_empty() {
+            return Some(token.to_owned());
+        }
+    }
+    None
 }
 
 /// Canonical account-read payload returned by `GET /v1/accounts/{account_id}`.
@@ -606,23 +846,56 @@ mod tests {
 
     #[test]
     fn pipeline_transaction_status_roundtrip_preserves_typed_rejection_reason() {
-        let payload = PipelineTransactionStatusResponse {
-            hash: "ab".repeat(32),
-            status: PipelineTransactionStatus {
+        let payload = PipelineTransactionStatusResponse::new(
+            "ab".repeat(32),
+            PipelineTransactionStatus {
                 kind: "Rejected".to_owned(),
                 block_height: Some(42),
                 rejection_reason: Some(TransactionRejectionReason::Validation(
                     ValidationFail::NotPermitted("denied".to_owned()),
                 )),
             },
-            scope: "auto".to_owned(),
-            resolved_from: "state".to_owned(),
-        };
+            "auto".to_owned(),
+            "state".to_owned(),
+        );
 
         let encoded = norito::to_bytes(&payload).expect("encode status payload");
         let decoded: PipelineTransactionStatusResponse =
             norito::decode_from_bytes(&encoded).expect("decode status payload");
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn pipeline_transaction_status_populates_diagnostics_from_rejection_reason() {
+        let payload = PipelineTransactionStatusResponse::new(
+            "cd".repeat(32),
+            PipelineTransactionStatus {
+                kind: "Rejected".to_owned(),
+                block_height: Some(77),
+                rejection_reason: Some(TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted("missing permission".to_owned()),
+                )),
+            },
+            "global".to_owned(),
+            "state".to_owned(),
+        );
+
+        assert!(payload.summary.contains("Rejected"));
+        assert_eq!(payload.diagnostics.len(), 1);
+        assert_eq!(payload.diagnostics[0].category, "validation");
+        assert_eq!(payload.diagnostics[0].code.as_deref(), Some("validation"));
+        assert!(
+            payload.diagnostics[0]
+                .message
+                .contains("missing permission")
+        );
+        assert!(
+            payload.diagnostics[0]
+                .decoded_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("missing permission"))
+        );
+        assert!(payload.diagnostics[0].raw_reason.is_some());
     }
 
     #[test]

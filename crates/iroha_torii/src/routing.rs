@@ -27,7 +27,7 @@ use hex::ToHex;
 use iroha_config::{
     client_api::ConfigUpdateDTO,
     parameters::{
-        actual::{ConsensusMode, TelemetryProfile},
+        actual::{ConsensusMode, NexusFeeSettlementMode, TelemetryProfile},
         defaults,
     },
 };
@@ -53,7 +53,7 @@ use iroha_core::{
         },
     },
     query::store::LiveQueryStoreHandle,
-    queue::{RoutingDecision, RoutingPlan},
+    queue::{Queue, RoutingDecision, RoutingPlan},
     sns::{
         LeaseQuote, SnsNamespace, get_name_record,
         quote_account_alias_registration_with_fee_asset_fallback,
@@ -426,6 +426,126 @@ struct SumeragiParamsResponse {
     next_mode: Option<&'static str>,
     mode_activation_height: Option<u64>,
     chain_height: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightSumeragi {
+    pub block_time_ms: u64,
+    pub commit_time_ms: u64,
+    pub stall_threshold_ms: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightAdmission {
+    pub max_signatures: u64,
+    pub max_instructions: u64,
+    pub max_tx_bytes: u64,
+    pub max_decompressed_bytes: u64,
+    pub max_metadata_depth: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightBlock {
+    pub max_transactions: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightPipeline {
+    pub signature_batch_max: u64,
+    pub signature_batch_max_ed25519: u64,
+    pub signature_batch_max_secp256k1: u64,
+    pub signature_batch_max_pqc: u64,
+    pub signature_batch_max_bls: u64,
+    pub overlay_max_instructions: u64,
+    pub ivm_max_decoded_instructions: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightQueue {
+    pub size: u64,
+    pub queued: u64,
+    pub inflight: u64,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightFees {
+    pub fee_asset_id: String,
+    pub fee_sink_account_id: String,
+    pub base_fee: iroha_primitives::numeric::Numeric,
+    pub per_byte_fee: iroha_primitives::numeric::Numeric,
+    pub per_instruction_fee: iroha_primitives::numeric::Numeric,
+    pub per_gas_unit_fee: iroha_primitives::numeric::Numeric,
+    pub sponsorship_enabled: bool,
+    pub sponsor_max_fee: iroha_primitives::numeric::Numeric,
+    pub sponsor_verified_balance_safety_floor: iroha_primitives::numeric::Numeric,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub canonical_sponsor_account_id: Option<String>,
+    pub fee_receipts_activation_height: u64,
+    pub external_settlement_enabled: bool,
+    pub burn_from_unix_timestamp_ms: u64,
+    pub settlement_mode: String,
+    pub successful_claim_fee_exempt_authorities: Vec<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub(crate) struct PipelinePreflightResponse {
+    pub schema_version: u64,
+    pub chain_height: u64,
+    pub sumeragi: PipelinePreflightSumeragi,
+    pub admission: PipelinePreflightAdmission,
+    pub block: PipelinePreflightBlock,
+    pub pipeline: PipelinePreflightPipeline,
+    pub queue: PipelinePreflightQueue,
+    pub fees: PipelinePreflightFees,
 }
 
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
@@ -886,7 +1006,8 @@ impl AppCountMode {
 fn app_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
     match raw {
         Some("exact") => AppCountMode::Exact,
-        Some("bounded") | None => AppCountMode::Bounded,
+        Some("bounded") => AppCountMode::Bounded,
+        None => AppCountMode::Exact,
         Some(other) => {
             iroha_logger::warn!(
                 endpoint,
@@ -896,6 +1017,15 @@ fn app_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
             AppCountMode::Bounded
         }
     }
+}
+
+#[cfg(feature = "app_api")]
+fn normalize_app_generic_count_mode(
+    envelope: &mut crate::filter::QueryEnvelope,
+    endpoint: &'static str,
+) {
+    let count_mode = app_count_mode(envelope.count_mode.as_deref(), endpoint);
+    envelope.count_mode = Some(count_mode.label().to_owned());
 }
 
 #[cfg(feature = "app_api")]
@@ -5203,7 +5333,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
         view_timeout_target_ms: m.sumeragi_pacemaker_view_timeout_target_ms.get(),
         view_timeout_remaining_ms: m.sumeragi_pacemaker_view_timeout_remaining_ms.get(),
     };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5214,7 +5344,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
     let snap = sumeragi::status_snapshot();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5274,7 +5404,7 @@ pub async fn handle_v1_sumeragi_checkpoints(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let checkpoints: Vec<ValidatorSetCheckpoint> = sumeragi::status::validator_checkpoint_history();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5310,7 +5440,7 @@ pub async fn handle_v1_sumeragi_consensus_keys(
             .then_with(|| a.id.cmp(&b.id))
     });
 
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5345,7 +5475,7 @@ pub async fn handle_v1_sumeragi_commit_qcs(
         COMMIT_CERT_PAGE_CAP,
         |cert| cert.height,
     );
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -7803,7 +7933,7 @@ pub async fn handle_v1_sumeragi_validator_sets(
         COMMIT_CERT_PAGE_CAP,
         |snap| snap.height,
     );
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8221,6 +8351,91 @@ pub async fn handle_v1_sumeragi_params(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn pipeline_stall_threshold_ms(block_time_ms: u64, commit_time_ms: u64) -> u64 {
+    commit_time_ms
+        .saturating_mul(3)
+        .max(block_time_ms.saturating_add(commit_time_ms))
+}
+
+pub(crate) fn build_pipeline_preflight_response(
+    state: &CoreState,
+    queue: &Queue,
+) -> PipelinePreflightResponse {
+    let world = state.world_view();
+    let params = world.parameters();
+    let sumeragi_params = params.sumeragi();
+    let transaction_params = params.transaction();
+    let block_params = params.block();
+    let pipeline = state.pipeline_snapshot();
+    let nexus = state.nexus_snapshot();
+    let queued = usize_to_u64(queue.queued_len());
+    let size = usize_to_u64(queue.active_len());
+
+    PipelinePreflightResponse {
+        schema_version: 1,
+        chain_height: usize_to_u64(state.committed_height()),
+        sumeragi: PipelinePreflightSumeragi {
+            block_time_ms: sumeragi_params.block_time_ms,
+            commit_time_ms: sumeragi_params.commit_time_ms,
+            stall_threshold_ms: pipeline_stall_threshold_ms(
+                sumeragi_params.block_time_ms,
+                sumeragi_params.commit_time_ms,
+            ),
+        },
+        admission: PipelinePreflightAdmission {
+            max_signatures: transaction_params.max_signatures().get(),
+            max_instructions: transaction_params.max_instructions().get(),
+            max_tx_bytes: transaction_params.max_tx_bytes().get(),
+            max_decompressed_bytes: transaction_params.max_decompressed_bytes().get(),
+            max_metadata_depth: u64::from(transaction_params.max_metadata_depth().get()),
+        },
+        block: PipelinePreflightBlock {
+            max_transactions: block_params.max_transactions().get(),
+        },
+        pipeline: PipelinePreflightPipeline {
+            signature_batch_max: usize_to_u64(pipeline.signature_batch_max),
+            signature_batch_max_ed25519: usize_to_u64(pipeline.signature_batch_max_ed25519),
+            signature_batch_max_secp256k1: usize_to_u64(pipeline.signature_batch_max_secp256k1),
+            signature_batch_max_pqc: usize_to_u64(pipeline.signature_batch_max_pqc),
+            signature_batch_max_bls: usize_to_u64(pipeline.signature_batch_max_bls),
+            overlay_max_instructions: usize_to_u64(pipeline.overlay_max_instructions),
+            ivm_max_decoded_instructions: pipeline.ivm_max_decoded_instructions,
+        },
+        queue: PipelinePreflightQueue {
+            size,
+            queued,
+            inflight: size.saturating_sub(queued),
+        },
+        fees: PipelinePreflightFees {
+            fee_asset_id: nexus.fees.fee_asset_id,
+            fee_sink_account_id: nexus.fees.fee_sink_account_id,
+            base_fee: nexus.fees.base_fee,
+            per_byte_fee: nexus.fees.per_byte_fee,
+            per_instruction_fee: nexus.fees.per_instruction_fee,
+            per_gas_unit_fee: nexus.fees.per_gas_unit_fee,
+            sponsorship_enabled: nexus.fees.sponsorship_enabled,
+            sponsor_max_fee: nexus.fees.sponsor_max_fee,
+            sponsor_verified_balance_safety_floor: nexus.fees.sponsor_verified_balance_safety_floor,
+            canonical_sponsor_account_id: nexus.fees.canonical_sponsor_account_id,
+            fee_receipts_activation_height: nexus.fees.fee_receipts_activation_height,
+            external_settlement_enabled: nexus.fees.external_settlement_enabled,
+            burn_from_unix_timestamp_ms: nexus.fees.burn_from_unix_timestamp_ms,
+            settlement_mode: match nexus.fees.settlement_mode {
+                NexusFeeSettlementMode::Direct => "direct",
+                NexusFeeSettlementMode::LaneRelayBurn => "lane_relay_burn",
+            }
+            .to_owned(),
+            successful_claim_fee_exempt_authorities: nexus
+                .fees
+                .successful_claim_fee_exempt_authorities,
+        },
+    }
+}
+
 #[cfg(feature = "app_api")]
 /// POST /v1/zk/submit-proof — minimal demo endpoint that accepts either Norito
 /// (`application/x-norito`) or JSON and returns `{ "ok": true|false, "id": "<hex>" }`.
@@ -8563,7 +8778,7 @@ pub async fn handle_v1_zk_roots(
         // For convenience, report the total number of roots recorded for this asset.
         height: roots_all.len() as u32,
     };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -13006,7 +13221,8 @@ async fn submit_contract_call_request(
             code_hash_hex,
             abi_hash_hex,
             creation_time_ms,
-            tx_hash_hex: Some(tx_hash_hex),
+            tx_hash_hex: Some(tx_hash_hex.clone()),
+            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
             entrypoint_hash_hex: Some(entrypoint_hash_hex),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
@@ -13072,7 +13288,8 @@ async fn submit_contract_call_request(
             code_hash_hex,
             abi_hash_hex,
             creation_time_ms,
-            tx_hash_hex: Some(tx_hash_hex),
+            tx_hash_hex: Some(tx_hash_hex.clone()),
+            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
             entrypoint_hash_hex: Some(entrypoint_hash_hex),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
@@ -13100,12 +13317,29 @@ async fn submit_contract_call_request(
         abi_hash_hex,
         creation_time_ms,
         tx_hash_hex: None,
+        pipeline_status: None,
         entrypoint_hash_hex: Some(entrypoint_hash_hex),
         transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
         signed_transaction_b64: Some(signed_transaction_b64),
         signing_message_b64: Some(signing_message_b64),
         entrypoint: response_entrypoint,
     })
+}
+
+#[cfg(feature = "app_api")]
+fn queued_pipeline_status_response(
+    tx_hash_hex: String,
+) -> iroha_torii_shared::PipelineTransactionStatusResponse {
+    iroha_torii_shared::PipelineTransactionStatusResponse::new(
+        tx_hash_hex,
+        iroha_torii_shared::PipelineTransactionStatus {
+            kind: "Queued".to_owned(),
+            block_height: None,
+            rejection_reason: None,
+        },
+        "local".to_owned(),
+        "queue".to_owned(),
+    )
 }
 
 #[cfg(feature = "app_api")]
@@ -15035,13 +15269,15 @@ fn build_multisig_contract_call_instructions(
     )
     .with_metadata(trigger_metadata);
     let trigger = iroha_data_model::trigger::Trigger::new(trigger_id.clone(), action);
+    let execute_trigger = payload.cloned().map_or_else(
+        || iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone()),
+        |payload| iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone()).with_args(payload),
+    );
     let instructions = vec![
         iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Register::trigger(
             trigger,
         )),
-        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
-            trigger_id.clone(),
-        )),
+        iroha_data_model::isi::InstructionBox::from(execute_trigger),
     ];
     let instructions_hash = HashOf::new(&instructions);
     Ok((instructions, instructions_hash))
@@ -16600,6 +16836,14 @@ mod multisig_contract_call_tests {
 
         assert_eq!(instructions.len(), 2);
         assert_eq!(instructions_hash, HashOf::new(&instructions));
+        let execute_trigger = instructions[1]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
+            .expect("second instruction should execute the registered trigger");
+        assert_eq!(
+            execute_trigger.args, payload,
+            "contract-call trigger execution must carry the normalized payload because the trigger host receives ExecuteTrigger args"
+        );
     }
 
     #[test]
@@ -22554,6 +22798,9 @@ pub struct DeployContractBundleContractReceiptDto {
     /// Transaction hash for the deployment transaction, when submitted.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
+    /// Pipeline status envelope for the submitted deployment transaction, when available.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pipeline_status: Option<iroha_torii_shared::PipelineTransactionStatusResponse>,
     /// Current deployment status (`submitted` after queue admission, `deployed`
     /// once a waiting bundle observes the live alias binding).
     pub status: String,
@@ -22580,6 +22827,9 @@ pub struct DeployContractBundleCallReceiptDto {
     /// Transaction hash for the submitted call, when any.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
+    /// Pipeline status envelope for the submitted call transaction, when available.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pipeline_status: Option<iroha_torii_shared::PipelineTransactionStatusResponse>,
     /// Final call status.
     pub status: String,
 }
@@ -23171,6 +23421,7 @@ fn plan_contract_bundle(
             code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
             abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
             tx_hash_hex: None,
+            pipeline_status: None,
             status: "planned".to_owned(),
         });
     }
@@ -23192,6 +23443,7 @@ fn plan_contract_bundle(
                 contract_alias: call.contract_alias.clone(),
                 entrypoint: call.entrypoint.clone(),
                 tx_hash_hex: None,
+                pipeline_status: None,
                 status: "pending".to_owned(),
             })
             .collect(),
@@ -23351,6 +23603,10 @@ pub struct ContractCallResponseDto {
     /// Hex-encoded transaction hash submitted to the queue.
     #[norito(default)]
     pub tx_hash_hex: Option<String>,
+    /// Pipeline status envelope for the submitted transaction, when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pipeline_status: Option<iroha_torii_shared::PipelineTransactionStatusResponse>,
     /// Hex-encoded transaction entrypoint hash used by committed transaction queries.
     #[norito(default)]
     pub entrypoint_hash_hex: Option<String>,
@@ -25589,7 +25845,8 @@ async fn submit_contract_deploy_request(
         upgraded: previous_contract_address.is_some(),
         dataspace: dataspace_alias,
         deploy_nonce,
-        tx_hash_hex: Some(tx_hash_hex),
+        tx_hash_hex: Some(tx_hash_hex.clone()),
+        pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
         code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
         abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
         status: "submitted".to_owned(),
@@ -25631,6 +25888,7 @@ fn invalidate_completed_deploy_stage_if_contracts_drifted(
         }
 
         contract.tx_hash_hex = None;
+        contract.pipeline_status = None;
         contract.status = "planned".to_owned();
         true
     });
@@ -25645,6 +25903,7 @@ fn invalidate_completed_deploy_stage_if_contracts_drifted(
 
     for call in &mut receipt.init_calls {
         call.tx_hash_hex = None;
+        call.pipeline_status = None;
         call.status = "pending".to_owned();
     }
 
@@ -25773,6 +26032,7 @@ async fn execute_contract_bundle_request(
         .collect::<BTreeMap<_, _>>();
 
     if !bundle_stage_completed(&receipt, "deploy") {
+        let requires_active_contracts = !req.init_calls.is_empty() || !req.assertions.is_empty();
         for index in 0..receipt.contracts.len() {
             let contract_name = receipt.contracts[index].name.clone();
             let contract_alias = receipt.contracts[index].contract_alias.clone();
@@ -25832,23 +26092,25 @@ async fn execute_contract_bundle_request(
             receipt.contracts[index] = response;
             persist_contract_bundle_receipt(&receipt)?;
 
-            if let Err(err) = wait_for_contract_alias_target(
-                state.clone(),
-                &response_contract_alias,
-                &response_contract_address,
-            )
-            .await
-            {
-                mark_bundle_failure(
-                    &mut receipt,
-                    format!("activate contract `{contract_name}`: {err}"),
-                );
-                persist_contract_bundle_receipt(&receipt)?;
-                return Err(err);
-            }
+            if requires_active_contracts {
+                if let Err(err) = wait_for_contract_alias_target(
+                    state.clone(),
+                    &response_contract_alias,
+                    &response_contract_address,
+                )
+                .await
+                {
+                    mark_bundle_failure(
+                        &mut receipt,
+                        format!("activate contract `{contract_name}`: {err}"),
+                    );
+                    persist_contract_bundle_receipt(&receipt)?;
+                    return Err(err);
+                }
 
-            receipt.contracts[index].status = "deployed".to_owned();
-            persist_contract_bundle_receipt(&receipt)?;
+                receipt.contracts[index].status = "deployed".to_owned();
+                persist_contract_bundle_receipt(&receipt)?;
+            }
         }
 
         record_bundle_stage(&mut receipt, "deploy");
@@ -25898,6 +26160,7 @@ async fn execute_contract_bundle_request(
                 }
             };
             receipt.init_calls[index].tx_hash_hex = response.tx_hash_hex;
+            receipt.init_calls[index].pipeline_status = response.pipeline_status;
             receipt.init_calls[index].status = if response.submitted {
                 "submitted".to_owned()
             } else {
@@ -25981,6 +26244,7 @@ const SINGLE_CONTRACT_DEPLOY_COMPAT_FIELDS: &[&str] = &[
     "code_hash_hex",
     "abi_hash_hex",
     "tx_hash_hex",
+    "pipeline_status",
     "status",
 ];
 
@@ -26292,6 +26556,7 @@ mod contract_bundle_tests {
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
                 tx_hash_hex: Some("tx".to_owned()),
+                pipeline_status: None,
                 status: "deployed".to_owned(),
             }],
             init_calls: vec![DeployContractBundleCallReceiptDto {
@@ -26299,6 +26564,7 @@ mod contract_bundle_tests {
                 contract_alias: sample_alias("greeter::universal"),
                 entrypoint: Some("init".to_owned()),
                 tx_hash_hex: Some("tx-init".to_owned()),
+                pipeline_status: None,
                 status: "submitted".to_owned(),
             }],
             assertions: vec![DeployContractBundleAssertionReceiptDto {
@@ -26349,6 +26615,7 @@ mod contract_bundle_tests {
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
                 tx_hash_hex: Some("tx".to_owned()),
+                pipeline_status: Some(queued_pipeline_status_response("tx".to_owned())),
                 status: "deployed".to_owned(),
             }],
             init_calls: Vec::new(),
@@ -26375,6 +26642,25 @@ mod contract_bundle_tests {
                 .get("tx_hash_hex")
                 .and_then(norito::json::Value::as_str),
             Some("tx")
+        );
+        assert_eq!(
+            value
+                .get("pipeline_status")
+                .and_then(|pipeline_status| pipeline_status.get("status"))
+                .and_then(|status| status.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("Queued")
+        );
+        assert_eq!(
+            value
+                .get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("pipeline_status"))
+                .and_then(|pipeline_status| pipeline_status.get("status"))
+                .and_then(|status| status.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("Queued")
         );
         assert!(
             value
@@ -26407,6 +26693,7 @@ mod contract_bundle_tests {
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
                 tx_hash_hex: Some("tx".to_owned()),
+                pipeline_status: None,
                 status: "deployed".to_owned(),
             }],
             init_calls: Vec::new(),
@@ -44225,6 +44512,108 @@ mod governance_stream_tests {
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
+fn respond_kaigi_json_document_with_format<T>(
+    value: &T,
+    format: crate::utils::ResponseFormat,
+) -> Response
+where
+    T: json::JsonSerialize,
+{
+    match format {
+        crate::utils::ResponseFormat::Json => match norito::json::to_vec(value) {
+            Ok(bytes) => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(bytes))
+                .expect("build Kaigi JSON response"),
+            Err(err) => {
+                iroha_logger::error!(?err, "failed to serialise Kaigi response payload");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to serialise response",
+                )
+                    .into_response()
+            }
+        },
+        crate::utils::ResponseFormat::Norito => match norito::json::to_string(value) {
+            Ok(json) => crate::NoritoBody(json).into_response(),
+            Err(err) => {
+                iroha_logger::error!(?err, "failed to serialise Kaigi response payload");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to serialise response",
+                )
+                    .into_response()
+            }
+        },
+    }
+}
+
+#[cfg(all(test, feature = "app_api", feature = "telemetry"))]
+mod kaigi_response_format_tests {
+    use axum::http::header::CONTENT_TYPE;
+    use http_body_util::BodyExt as _;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn kaigi_json_document_response_renders_json() {
+        let payload = KaigiRelaySummaryListDto {
+            total: 1,
+            items: Vec::new(),
+        };
+
+        let response =
+            respond_kaigi_json_document_with_format(&payload, crate::utils::ResponseFormat::Json);
+
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect JSON body")
+            .to_bytes();
+        let decoded: norito::json::Value =
+            norito::json::from_slice(&bytes).expect("decode JSON body");
+        assert_eq!(decoded["total"].as_u64(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn kaigi_json_document_response_wraps_json_string_as_norito() {
+        let payload = KaigiRelaySummaryListDto {
+            total: 1,
+            items: Vec::new(),
+        };
+
+        let response =
+            respond_kaigi_json_document_with_format(&payload, crate::utils::ResponseFormat::Norito);
+
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect Norito body")
+            .to_bytes();
+        let json: String = norito::decode_from_bytes(&bytes).expect("decode Norito JSON string");
+        let decoded: norito::json::Value = norito::json::from_str(&json).expect("decode JSON body");
+        assert_eq!(decoded["total"].as_u64(), Some(1));
+    }
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
 /// GET `/v1/kaigi/relays` — summary snapshot of registered relays and health indicators.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_kaigi_relays(
@@ -44271,7 +44660,7 @@ pub async fn handle_v1_kaigi_relays(
         total: items.len() as u64,
         items,
     };
-    Ok(crate::utils::respond_with_format(payload, format))
+    Ok(respond_kaigi_json_document_with_format(&payload, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -44380,7 +44769,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
         notes,
         metrics,
     };
-    Ok(crate::utils::respond_with_format(detail, format))
+    Ok(respond_kaigi_json_document_with_format(&detail, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -44448,7 +44837,7 @@ pub async fn handle_v1_kaigi_relays_health(
         failovers_total,
         domains,
     };
-    Ok(crate::utils::respond_with_format(snapshot, format))
+    Ok(respond_kaigi_json_document_with_format(&snapshot, format))
 }
 
 #[cfg(feature = "app_api")]
@@ -48369,7 +48758,7 @@ pub async fn handle_v1_sumeragi_status(
     if !nexus_enabled {
         snap = snap.strip_lane_details();
     }
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -49835,7 +50224,7 @@ pub async fn handle_v1_sumeragi_commit_qc(
     let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
     let world = state.world_view();
     let qc_opt = world.commit_qcs().get(&typed).cloned();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -57117,6 +57506,8 @@ pub struct AccountFaucetResponseDto {
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct AccountFaucetPuzzleDto {
     pub algorithm: &'static str,
+    pub chain_id: String,
+    pub chain_discriminant: u16,
     pub difficulty_bits: u8,
     pub anchor_height: u64,
     pub anchor_block_hash_hex: String,
@@ -57370,9 +57761,43 @@ fn onboarding_error_metadata(reason: &str) -> (&'static str, Option<&'static str
 #[cfg(feature = "app_api")]
 fn faucet_invalid_request(reason: &str) -> Error {
     iroha_logger::warn!(target: "torii.faucet", reason, "Account faucet request rejected");
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        QueryExecutionFail::InvalidSingularParameters,
-    ))
+    let normalized = reason.to_ascii_lowercase();
+    let code = if normalized.contains("account_id must not be empty") {
+        "missing_account_id"
+    } else if normalized.contains("account id literal") {
+        "invalid_account_id"
+    } else if normalized.contains("pow anchor height required") {
+        "faucet_pow_anchor_required"
+    } else if normalized.contains("pow anchor height out of range")
+        || normalized.contains("invalid faucet pow anchor height")
+    {
+        "faucet_pow_anchor_out_of_range"
+    } else if normalized.contains("unknown faucet pow anchor height") {
+        "faucet_pow_anchor_unknown"
+    } else if normalized.contains("pow anchor is stale") {
+        "faucet_pow_anchor_stale"
+    } else if normalized.contains("pow nonce required") {
+        "faucet_pow_nonce_required"
+    } else if normalized.contains("invalid faucet pow nonce") {
+        "faucet_pow_nonce_invalid"
+    } else if normalized.contains("invalid faucet pow solution") {
+        "faucet_pow_solution_invalid"
+    } else if normalized.contains("pow vrf seed unavailable") {
+        "faucet_pow_vrf_seed_unavailable"
+    } else if normalized.contains("pow scrypt configuration") {
+        "faucet_pow_config_invalid"
+    } else if normalized.contains("out of funds") {
+        return Error::AppServiceUnavailable {
+            code: "faucet_out_of_funds",
+            message: reason.to_owned(),
+        };
+    } else {
+        "faucet_invalid_request"
+    };
+    Error::AppQueryValidation {
+        code,
+        message: reason.to_owned(),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -57689,6 +58114,18 @@ mod faucet_pow_tests {
         assert_eq!(adaptive_faucet_pow_extra_bits(999, 4, 6), 6);
         assert_eq!(adaptive_faucet_pow_extra_bits(10, 0, 6), 0);
         assert_eq!(adaptive_faucet_pow_extra_bits(10, 4, 0), 0);
+    }
+
+    #[test]
+    fn faucet_invalid_request_returns_specific_app_error() {
+        let err = super::faucet_invalid_request("invalid account id literal");
+        match err {
+            crate::Error::AppQueryValidation { code, message } => {
+                assert_eq!(code, "invalid_account_id");
+                assert_eq!(message, "invalid account id literal");
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
     }
 
     #[test]
@@ -58470,6 +58907,8 @@ pub async fn handle_v1_accounts_faucet_puzzle(
     };
     let response = AccountFaucetPuzzleDto {
         algorithm: FAUCET_POW_ALGORITHM,
+        chain_id: app.chain_id.to_string(),
+        chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         difficulty_bits,
         anchor_height,
         anchor_block_hash_hex: hex::encode(anchor_hash.as_ref()),
@@ -71185,6 +71624,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
         .clamp_fetch_size(fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
     let count_mode = app_count_mode(count_mode.as_deref(), ENDPOINT_ASSET_HOLDERS_QUERY);
+    normalize_app_generic_count_mode(&mut generic_envelope, ENDPOINT_ASSET_HOLDERS_QUERY);
     let mut filter = filter;
     // Optional filtering via JSON DSL over projected fields
     if let Some(ref mut expr) = filter {
@@ -71917,13 +72357,14 @@ fn generic_query_snapshot(
 fn execute_generic_resource_query<I>(
     state: &CoreState,
     resource_id: &str,
-    envelope: crate::filter::QueryEnvelope,
+    mut envelope: crate::filter::QueryEnvelope,
     rows: I,
     query_source: &'static str,
 ) -> Result<Response, Error>
 where
     I: IntoIterator<Item = norito::json::Map>,
 {
+    normalize_app_generic_count_mode(&mut envelope, "generic_resource_query");
     let resource = crate::generic_query::registered_resource(resource_id).ok_or_else(|| {
         Error::AppQueryValidation {
             code: "unsupported_query_resource",
@@ -73828,6 +74269,7 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
     let mut segments = tail.split('/').filter(|s| !s.is_empty());
     let field = segments.next()?;
     match field {
+        "observed_at_ms" if segments.next().is_none() => Some(status.observed_at_ms.into()),
         "peers" if segments.next().is_none() => Some(status.peers.into()),
         "blocks" if segments.next().is_none() => Some(status.blocks.into()),
         "blocks_non_empty" if segments.next().is_none() => Some(status.blocks_non_empty.into()),
@@ -73870,6 +74312,20 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
         ),
         "view_changes" if segments.next().is_none() => Some(status.view_changes.into()),
         "queue_size" if segments.next().is_none() => Some(status.queue_size.into()),
+        "queue_queued" if segments.next().is_none() => Some(status.queue_queued.into()),
+        "queue_inflight" if segments.next().is_none() => Some(status.queue_inflight.into()),
+        "last_block_committed_at_ms" if segments.next().is_none() => {
+            Some(status.last_block_committed_at_ms.into())
+        }
+        "last_non_empty_block_committed_at_ms" if segments.next().is_none() => {
+            Some(status.last_non_empty_block_committed_at_ms.into())
+        }
+        "time_since_last_block_ms" if segments.next().is_none() => {
+            Some(status.time_since_last_block_ms.into())
+        }
+        "time_since_last_non_empty_block_ms" if segments.next().is_none() => {
+            Some(status.time_since_last_non_empty_block_ms.into())
+        }
         "crypto" => match segments.next() {
             None => norito::json::to_value(&status.crypto).ok(),
             Some("sm_helpers_available") if segments.next().is_none() => {
@@ -73882,6 +74338,9 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
         },
         "governance" if segments.next().is_none() => {
             norito::json::to_value(&status.governance).ok()
+        }
+        "dataspace_catalog" if segments.next().is_none() => {
+            norito::json::to_value(&status.dataspace_catalog).ok()
         }
         "sorafs_micropayments" => match segments.next() {
             None => norito::json::to_value(&status.sorafs_micropayments).ok(),
@@ -73935,7 +74394,13 @@ fn is_nexus_status_segment(tail: &str) -> bool {
     let mut segments = tail.split('/').filter(|s| !s.is_empty());
     matches!(
         segments.next(),
-        Some("teu_lane_commit" | "teu_dataspace_backlog" | "tx_gossip" | "da_receipt_cursors")
+        Some(
+            "teu_lane_commit"
+                | "teu_dataspace_backlog"
+                | "dataspace_catalog"
+                | "tx_gossip"
+                | "da_receipt_cursors"
+        )
     )
 }
 
@@ -74007,6 +74472,13 @@ mod tests {
     fn status_tail_accesses_field() {
         let metrics = Metrics::default();
         let mut status = Status::from(&metrics);
+        status.observed_at_ms = 1_000;
+        status.queue_queued = 3;
+        status.queue_inflight = 2;
+        status.last_block_committed_at_ms = 900;
+        status.last_non_empty_block_committed_at_ms = 800;
+        status.time_since_last_block_ms = 100;
+        status.time_since_last_non_empty_block_ms = 200;
         status.last_rejection_at_ms = Some(1_234);
         status.txs_rejected_recent_5m = 7;
         status.sorafs_micropayments = vec![MicropaymentSampleStatus {
@@ -74027,6 +74499,29 @@ mod tests {
 
         let peers = status_value_by_path(&status, "peers").unwrap();
         assert_eq!(peers, json_value(&0u64));
+
+        let observed = status_value_by_path(&status, "observed_at_ms").unwrap();
+        assert_eq!(observed, json_value(&1_000u64));
+
+        let queued = status_value_by_path(&status, "queue_queued").unwrap();
+        assert_eq!(queued, json_value(&3u64));
+
+        let inflight = status_value_by_path(&status, "queue_inflight").unwrap();
+        assert_eq!(inflight, json_value(&2u64));
+
+        let last_block = status_value_by_path(&status, "last_block_committed_at_ms").unwrap();
+        assert_eq!(last_block, json_value(&900u64));
+
+        let last_non_empty =
+            status_value_by_path(&status, "last_non_empty_block_committed_at_ms").unwrap();
+        assert_eq!(last_non_empty, json_value(&800u64));
+
+        let since_block = status_value_by_path(&status, "time_since_last_block_ms").unwrap();
+        assert_eq!(since_block, json_value(&100u64));
+
+        let since_non_empty =
+            status_value_by_path(&status, "time_since_last_non_empty_block_ms").unwrap();
+        assert_eq!(since_non_empty, json_value(&200u64));
 
         let last_rejection = status_value_by_path(&status, "last_rejection_at_ms").unwrap();
         assert_eq!(last_rejection, json_value(&Some(1_234u64)));

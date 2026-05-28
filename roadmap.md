@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-05-23
+Last updated: 2026-05-27
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -16,6 +16,20 @@ and completed history lives in [`status.md`](./status.md).
 - Keep focused validation green for the core transaction pipeline, Torii query
   APIs, Norito wire formats, and SDK fixtures before broader workspace test
   runs.
+- Complete the first-release Offline Bearer Cash pilot over the ZK note and
+  nullifier engine. Swift, Kotlin, and Java Android now expose the Bearer Cash
+  v1 wallet, note, receive-request, payment-token, ACK, text-codec, and policy
+  names; QR/NFC/Nearby app payloads use only the
+  `wallet-offline-bearer-cash-*` prefixes; and shared fixtures publish
+  `offline_bearer_cash_v1` policy defaults for custody hops, lineage steps,
+  QR/stream payload limits, and Android one-use-key pool sizing. Torii no
+  longer carries legacy offline transfer/revocation compatibility routes or
+  MCP aliases.
+  Current release evidence covers physical iOS App Attest/HCE/CardSession
+  availability and Android StrongBox/KeyMint one-use-key validation. The open
+  physical gap is the end-to-end cross-platform NFC/HCE payment
+  exchange with both devices unlocked and ready; lineage/privacy proof
+  compression remains follow-up work for a later version.
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 

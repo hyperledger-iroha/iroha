@@ -339,6 +339,31 @@ public struct ToriiOfflineRevocationBundle: Codable, Sendable, Equatable {
         nowMs >= expiresAtMs
     }
 
+    public func blacklistsAccount(_ accountId: String) -> Bool {
+        let normalized = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return false }
+        return blacklistedAccountIds.contains {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines) == normalized
+        }
+    }
+
+    public func revokesVerdict(_ verdictId: String?) -> Bool {
+        let normalized = verdictId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalized.isEmpty else { return false }
+        return verdictIds.contains {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(normalized) == .orderedSame
+        }
+    }
+
+    public func sendLimit(assetDefinitionId: String) -> ToriiOfflineAssetSendLimit? {
+        let normalized = assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        return assetSendLimits.first {
+            $0.assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare(normalized) == .orderedSame
+        }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case issuedAtMs = "issued_at_ms"
         case expiresAtMs = "expires_at_ms"
