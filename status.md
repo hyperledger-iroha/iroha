@@ -2,6 +2,19 @@
 
 Last updated: 2026-05-28
 
+## 2026-05-28 Queue-aware Torii status and pipeline preflight
+
+- `/status` now exposes queue split counts plus last committed block and
+  non-empty block observation timestamps. Operators should treat `queue_size`
+  as the primary liveness gate and only classify stalls when queued work exists
+  and elapsed block time exceeds the advertised threshold.
+- Added `GET /v1/pipeline/preflight` for JSON/Norito clients to discover
+  Sumeragi timing, admission limits, block limits, pipeline decode/batch caps,
+  queue occupancy, and Nexus fee settings before submitting transactions.
+- Python, Swift, and JavaScript SDKs now parse the new status fields, expose
+  typed preflight helpers, and surface optional `pipeline_status` diagnostics on
+  contract deploy/call responses where Torii includes them.
+
 ## 2026-05-28 Swift SM2 I105 and Torii deploy status fixes
 
 - Swift account-address canonical encoding now uses the Rust-compatible

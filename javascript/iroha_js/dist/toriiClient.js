@@ -4078,6 +4078,25 @@ export class ToriiClient {
   }
 
   /**
+   * Fetch pipeline preflight diagnostics (`GET /v1/pipeline/preflight`).
+   * @param {{ signal?: AbortSignal }} [options]
+   * @returns {Promise<ToriiPipelinePreflight>}
+   */
+  async getPipelinePreflight(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getPipelinePreflight");
+    const response = await this._request("GET", "/v1/pipeline/preflight", {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("pipeline preflight endpoint returned no payload");
+    }
+    return normalizePipelinePreflight(payload);
+  }
+
+  /**
    * Fetch committed FASTPQ proof batches for a block height
    * (`GET /v1/pipeline/recovery/{height}/fastpq-proofs`).
    * Returns null when the node has no recovery artefacts for the requested height.
@@ -11562,8 +11581,27 @@ function normalizeTimeStatusResponse(payload) {
 
 function parseStatusPayload(payload) {
   return {
+    observed_at_ms: coerceStatusInt(payload.observed_at_ms, "status.observed_at_ms"),
     peers: coerceStatusInt(payload.peers, "status.peers"),
     queue_size: coerceStatusInt(payload.queue_size, "status.queue_size"),
+    queue_queued: coerceStatusInt(payload.queue_queued, "status.queue_queued"),
+    queue_inflight: coerceStatusInt(payload.queue_inflight, "status.queue_inflight"),
+    last_block_committed_at_ms: coerceStatusInt(
+      payload.last_block_committed_at_ms,
+      "status.last_block_committed_at_ms",
+    ),
+    last_non_empty_block_committed_at_ms: coerceStatusInt(
+      payload.last_non_empty_block_committed_at_ms,
+      "status.last_non_empty_block_committed_at_ms",
+    ),
+    time_since_last_block_ms: coerceStatusInt(
+      payload.time_since_last_block_ms,
+      "status.time_since_last_block_ms",
+    ),
+    time_since_last_non_empty_block_ms: coerceStatusInt(
+      payload.time_since_last_non_empty_block_ms,
+      "status.time_since_last_non_empty_block_ms",
+    ),
     commit_time_ms: coerceStatusInt(payload.commit_time_ms, "status.commit_time_ms"),
     da_reschedule_total: coerceStatusInt(
       payload.da_reschedule_total,
@@ -11576,6 +11614,7 @@ function parseStatusPayload(payload) {
     lane_commitments: parseLaneCommitments(payload.lane_commitments),
     dataspace_commitments: parseDataspaceCommitments(payload.dataspace_commitments),
     lane_governance: parseLaneGovernance(payload.lane_governance),
+    dataspace_catalog: parseDataspaceCatalog(payload.dataspace_catalog),
     lane_governance_sealed_total: coerceStatusInt(
       payload.lane_governance_sealed_total,
       "status.lane_governance_sealed_total",
@@ -11862,6 +11901,64 @@ function parseDataspaceCommitments(payload) {
         record.block_hash === undefined || record.block_hash === null
           ? ""
           : String(record.block_hash),
+    };
+  });
+}
+
+function parseDataspaceCatalog(payload) {
+  if (payload == null) {
+    return [];
+  }
+  if (!Array.isArray(payload)) {
+    throw new TypeError("status.dataspace_catalog must be an array");
+  }
+  return payload.map((entry, index) => {
+    const record = ensureRecord(entry, `status.dataspace_catalog[${index}]`);
+    const manifestRequired = coerceBoolean(
+      record.manifest_required,
+      `status.dataspace_catalog[${index}].manifest_required`,
+    );
+    const manifestReady = coerceBoolean(
+      record.manifest_ready,
+      `status.dataspace_catalog[${index}].manifest_ready`,
+    );
+    return {
+      lane_id: coerceNestedInt(record, "lane_id", `status.dataspace_catalog[${index}]`),
+      lane_alias:
+        record.lane_alias === undefined || record.lane_alias === null
+          ? ""
+          : String(record.lane_alias),
+      dataspace_id: coerceNestedInt(
+        record,
+        "dataspace_id",
+        `status.dataspace_catalog[${index}]`,
+      ),
+      alias:
+        record.alias === undefined || record.alias === null
+          ? ""
+          : String(record.alias),
+      visibility:
+        record.visibility === undefined || record.visibility === null
+          ? ""
+          : String(record.visibility),
+      storage_profile:
+        record.storage_profile === undefined || record.storage_profile === null
+          ? ""
+          : String(record.storage_profile),
+      manifest_required: manifestRequired,
+      manifest_ready: manifestReady,
+      sealed:
+        record.sealed === undefined || record.sealed === null
+          ? manifestRequired && !manifestReady
+          : coerceBoolean(record.sealed, `status.dataspace_catalog[${index}].sealed`),
+      manifest_path: optionalString(
+        record.manifest_path,
+        `status.dataspace_catalog[${index}].manifest_path`,
+      ),
+      protected_namespaces: parseStringArray(
+        record.protected_namespaces,
+        `status.dataspace_catalog[${index}].protected_namespaces`,
+      ),
     };
   });
 }
@@ -16695,7 +16792,12 @@ function computeStatusMetrics(previous, current) {
   const metrics = {
     commit_latency_ms: current.commit_time_ms,
     queue_size: current.queue_size,
+    queue_queued: current.queue_queued,
+    queue_inflight: current.queue_inflight,
     queue_delta: previous ? current.queue_size - previous.queue_size : 0,
+    time_since_last_block_ms: current.time_since_last_block_ms,
+    time_since_last_non_empty_block_ms:
+      current.time_since_last_non_empty_block_ms,
     da_reschedule_delta: previous
       ? Math.max(0, current.da_reschedule_total - previous.da_reschedule_total)
       : 0,
@@ -16717,6 +16819,31 @@ function computeStatusMetrics(previous, current) {
       metrics.view_change_delta,
   );
   return metrics;
+}
+
+export function statusLivenessElapsedMs(status) {
+  const record = ensureRecord(status, "status");
+  const nonEmptyElapsed = coerceStatusInt(
+    record.time_since_last_non_empty_block_ms,
+    "status.time_since_last_non_empty_block_ms",
+  );
+  if (nonEmptyElapsed > 0) {
+    return nonEmptyElapsed;
+  }
+  return coerceStatusInt(
+    record.time_since_last_block_ms,
+    "status.time_since_last_block_ms",
+  );
+}
+
+export function isStatusQueueStalled(status, stallThresholdMs) {
+  const record = ensureRecord(status, "status");
+  const queueSize = coerceStatusInt(record.queue_size, "status.queue_size");
+  const threshold = coerceIntegerLike(
+    stallThresholdMs,
+    "stallThresholdMs",
+  );
+  return queueSize > 0 && statusLivenessElapsedMs(record) > threshold;
 }
 
 function monotonicTimestamp() {
@@ -18539,7 +18666,15 @@ function normalizeDeployContractResponse(payload) {
     record.tx_hash_hex === undefined || record.tx_hash_hex === null
       ? null
       : normalizeHex32String(record.tx_hash_hex, "deployContract.response.tx_hash_hex");
-  return {
+  const hasPipelineStatus = record.pipeline_status !== undefined;
+  const pipelineStatus =
+    !hasPipelineStatus || record.pipeline_status === null
+      ? null
+      : normalizePipelineTransactionStatus(
+          record.pipeline_status,
+          "deployContract.response.pipeline_status",
+        );
+  const normalized = {
     ok: Boolean(record.ok),
     contract_alias: contractAlias,
     contract_address: contractAddress,
@@ -18557,6 +18692,10 @@ function normalizeDeployContractResponse(payload) {
       "deployContract.response.abi_hash_hex",
     ),
   };
+  if (hasPipelineStatus) {
+    normalized.pipeline_status = pipelineStatus;
+  }
+  return normalized;
 }
 
 function normalizeSetContractAliasRequest(input) {
@@ -19493,6 +19632,15 @@ function normalizeContractCallResponse(payload) {
           record.signing_message_b64,
           "contractCall response.signing_message_b64",
         );
+  if (record.pipeline_status !== undefined) {
+    normalized.pipeline_status =
+      record.pipeline_status === null
+        ? null
+        : normalizePipelineTransactionStatus(
+            record.pipeline_status,
+            "contractCall response.pipeline_status",
+          );
+  }
   return normalized;
 }
 
@@ -21849,6 +21997,146 @@ function normalizePipelineTransactionStatus(
     kind,
     content: normalizedContent,
   };
+}
+
+function normalizePipelinePreflight(payload, context = "pipeline preflight response") {
+  const record = ensureRecord(payload ?? {}, context);
+  const sumeragi = ensureRecord(record.sumeragi, `${context}.sumeragi`);
+  const admission = ensureRecord(record.admission, `${context}.admission`);
+  const block = ensureRecord(record.block, `${context}.block`);
+  const pipeline = ensureRecord(record.pipeline, `${context}.pipeline`);
+  const queue = ensureRecord(record.queue, `${context}.queue`);
+  const fees = ensureRecord(record.fees, `${context}.fees`);
+  const normalized = {
+    schema_version: coerceNestedInt(record, "schema_version", context),
+    chain_height: coerceNestedInt(record, "chain_height", context),
+    sumeragi: {
+      block_time_ms: coerceNestedInt(sumeragi, "block_time_ms", `${context}.sumeragi`),
+      commit_time_ms: coerceNestedInt(sumeragi, "commit_time_ms", `${context}.sumeragi`),
+      stall_threshold_ms: coerceNestedInt(
+        sumeragi,
+        "stall_threshold_ms",
+        `${context}.sumeragi`,
+      ),
+    },
+    admission: {
+      max_signatures: coerceNestedInt(admission, "max_signatures", `${context}.admission`),
+      max_instructions: coerceNestedInt(admission, "max_instructions", `${context}.admission`),
+      max_tx_bytes: coerceNestedInt(admission, "max_tx_bytes", `${context}.admission`),
+      max_decompressed_bytes: coerceNestedInt(
+        admission,
+        "max_decompressed_bytes",
+        `${context}.admission`,
+      ),
+      max_metadata_depth: coerceNestedInt(
+        admission,
+        "max_metadata_depth",
+        `${context}.admission`,
+      ),
+    },
+    block: {
+      max_transactions: coerceNestedInt(block, "max_transactions", `${context}.block`),
+    },
+    pipeline: {
+      signature_batch_max: coerceNestedInt(
+        pipeline,
+        "signature_batch_max",
+        `${context}.pipeline`,
+      ),
+      signature_batch_max_ed25519: coerceNestedInt(
+        pipeline,
+        "signature_batch_max_ed25519",
+        `${context}.pipeline`,
+      ),
+      signature_batch_max_secp256k1: coerceNestedInt(
+        pipeline,
+        "signature_batch_max_secp256k1",
+        `${context}.pipeline`,
+      ),
+      signature_batch_max_pqc: coerceNestedInt(
+        pipeline,
+        "signature_batch_max_pqc",
+        `${context}.pipeline`,
+      ),
+      signature_batch_max_bls: coerceNestedInt(
+        pipeline,
+        "signature_batch_max_bls",
+        `${context}.pipeline`,
+      ),
+      overlay_max_instructions: coerceNestedInt(
+        pipeline,
+        "overlay_max_instructions",
+        `${context}.pipeline`,
+      ),
+      ivm_max_decoded_instructions: coerceNestedInt(
+        pipeline,
+        "ivm_max_decoded_instructions",
+        `${context}.pipeline`,
+      ),
+    },
+    queue: {
+      size: coerceNestedInt(queue, "size", `${context}.queue`),
+      queued: coerceNestedInt(queue, "queued", `${context}.queue`),
+      inflight: coerceNestedInt(queue, "inflight", `${context}.queue`),
+    },
+    fees: {
+      fee_asset_id:
+        fees.fee_asset_id === undefined || fees.fee_asset_id === null
+          ? ""
+          : String(fees.fee_asset_id),
+      fee_sink_account_id:
+        fees.fee_sink_account_id === undefined || fees.fee_sink_account_id === null
+          ? ""
+          : String(fees.fee_sink_account_id),
+      base_fee: fees.base_fee,
+      per_byte_fee: fees.per_byte_fee,
+      per_instruction_fee: fees.per_instruction_fee,
+      per_gas_unit_fee: fees.per_gas_unit_fee,
+      sponsorship_enabled: coerceBoolean(
+        fees.sponsorship_enabled,
+        `${context}.fees.sponsorship_enabled`,
+      ),
+      sponsor_max_fee: fees.sponsor_max_fee,
+      sponsor_verified_balance_safety_floor:
+        fees.sponsor_verified_balance_safety_floor,
+      canonical_sponsor_account_id: optionalString(
+        fees.canonical_sponsor_account_id,
+        `${context}.fees.canonical_sponsor_account_id`,
+      ),
+      fee_receipts_activation_height: coerceNestedInt(
+        fees,
+        "fee_receipts_activation_height",
+        `${context}.fees`,
+      ),
+      external_settlement_enabled: coerceBoolean(
+        fees.external_settlement_enabled,
+        `${context}.fees.external_settlement_enabled`,
+      ),
+      burn_from_unix_timestamp_ms: coerceNestedInt(
+        fees,
+        "burn_from_unix_timestamp_ms",
+        `${context}.fees`,
+      ),
+      settlement_mode:
+        fees.settlement_mode === undefined || fees.settlement_mode === null
+          ? ""
+          : String(fees.settlement_mode),
+      successful_claim_fee_exempt_authorities: parseStringArray(
+        fees.successful_claim_fee_exempt_authorities,
+        `${context}.fees.successful_claim_fee_exempt_authorities`,
+      ),
+    },
+    raw: Object.freeze({ ...record }),
+  };
+  return Object.freeze({
+    ...normalized,
+    isStatusStalled(status) {
+      return isStatusQueueStalled(
+        status,
+        normalized.sumeragi.stall_threshold_ms,
+      );
+    },
+  });
 }
 
 function normalizePipelineRecoverySidecar(payload, context = "pipeline recovery response") {

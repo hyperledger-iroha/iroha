@@ -39183,7 +39183,7 @@ fn commit_quorum_timeout_for_params(
 }
 
 /// Derive the commit quorum timeout from block/commit times.
-pub(super) fn commit_quorum_timeout_from_durations(
+pub(crate) fn commit_quorum_timeout_from_durations(
     block_time: Duration,
     commit_time: Duration,
     da_enabled: bool,

@@ -6013,6 +6013,58 @@ async fn handler_offline_note_audit(
 }
 
 #[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_policy_update(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/policy").await?;
+    offline_issuer::handle_policy_update(app, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_revocations_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/revocations").await?;
+    offline_issuer::handle_revocations_list(app).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_revocation_register(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/revocations").await?;
+    offline_issuer::handle_revocation_register(app, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_revocation_bundle(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/revocations/bundle",
+    )
+    .await?;
+    offline_issuer::handle_revocation_bundle(app).await
+}
+
+#[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 struct ExplorerAccountsQuery {
     #[norito(flatten)]
@@ -35415,7 +35467,16 @@ impl Torii {
                     "/v1/offline/notes/redeem",
                     post(handler_offline_note_notes_redeem),
                 )
-                .route("/v1/offline/audit", post(handler_offline_note_audit));
+                .route("/v1/offline/audit", post(handler_offline_note_audit))
+                .route("/v1/offline/policy", post(handler_offline_policy_update))
+                .route(
+                    "/v1/offline/revocations",
+                    get(handler_offline_revocations_list).post(handler_offline_revocation_register),
+                )
+                .route(
+                    "/v1/offline/revocations/bundle",
+                    get(handler_offline_revocation_bundle),
+                );
             #[cfg(feature = "push")]
             let router = router.route(
                 "/v1/notify/devices",
@@ -46621,8 +46682,9 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn pipeline_preflight_handler_returns_json_snapshot() {
         let app = mk_app_state_for_tests();
-        let params = app.state.world.view().parameters().clone();
-        let sumeragi = params.sumeragi();
+        let expected_stall_threshold_ms =
+            u64::try_from(app.state.sumeragi_commit_quorum_timeout().as_millis())
+                .unwrap_or(u64::MAX);
 
         let resp = super::handler_pipeline_preflight(
             State(app),
@@ -46645,17 +46707,10 @@ pub(crate) mod tests_runtime_handlers {
             payload
                 .get("sumeragi")
                 .and_then(|value| value.get("stall_threshold_ms")),
-            Some(&norito::json::Value::from(
-                sumeragi
-                    .commit_time_ms
-                    .saturating_mul(3)
-                    .max(sumeragi.block_time_ms.saturating_add(sumeragi.commit_time_ms))
-            ))
+            Some(&norito::json::Value::from(expected_stall_threshold_ms))
         );
         assert_eq!(
-            payload
-                .get("queue")
-                .and_then(|value| value.get("size")),
+            payload.get("queue").and_then(|value| value.get("size")),
             Some(&norito::json::Value::from(0_u64))
         );
         assert!(
@@ -46670,6 +46725,9 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn pipeline_preflight_handler_returns_typed_norito_when_requested() {
         let app = mk_app_state_for_tests();
+        let expected_stall_threshold_ms =
+            u64::try_from(app.state.sumeragi_commit_quorum_timeout().as_millis())
+                .unwrap_or(u64::MAX);
         let resp = super::handler_pipeline_preflight(
             State(app),
             HeaderMap::new(),
@@ -46696,16 +46754,7 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(payload.queue.size, 0);
         assert_eq!(
             payload.sumeragi.stall_threshold_ms,
-            payload
-                .sumeragi
-                .commit_time_ms
-                .saturating_mul(3)
-                .max(
-                    payload
-                        .sumeragi
-                        .block_time_ms
-                        .saturating_add(payload.sumeragi.commit_time_ms)
-                )
+            expected_stall_threshold_ms
         );
     }
 

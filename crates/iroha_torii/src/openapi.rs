@@ -669,6 +669,46 @@ fn offline_paths() -> Map {
             Vec::new(),
         )),
     );
+    paths.insert(
+        "/v1/offline/policy".to_owned(),
+        Value::Object(json_post_operation(
+            "Offline",
+            "Synchronize Offline policy.",
+            "POST the current Offline revocation policy snapshot used by Torii to build signed revocation bundles.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    let mut revocation_operations = json_get_operation(
+        "Offline",
+        "List Offline revocations.",
+        "Returns the current Offline revocation policy snapshot held by Torii.",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    );
+    revocation_operations.extend(json_post_operation(
+        "Offline",
+        "Register an Offline revocation.",
+        "POST account, verdict, or asset-limit revocation material into the Torii Offline policy snapshot.",
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        Vec::new(),
+    ));
+    paths.insert(
+        "/v1/offline/revocations".to_owned(),
+        Value::Object(revocation_operations),
+    );
+    paths.insert(
+        "/v1/offline/revocations/bundle".to_owned(),
+        Value::Object(json_get_operation(
+            "Offline",
+            "Fetch signed Offline revocation bundle.",
+            "Returns issuer-signed Offline revocation state for wallet fail-closed send policy.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
     for (path, summary, description) in [
         (
             "/v1/offline/keys/refill",
@@ -1214,6 +1254,30 @@ fn system_paths() -> Map {
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
+    );
+    let mut pipeline_preflight = json_get_operation(
+        "System",
+        "Fetch pipeline preflight diagnostics.",
+        "Return transaction admission, queue, fee, and consensus liveness budgets used by clients before submitting transactions. Defaults to application/x-norito when Accept is omitted or */*; application/json returns the same typed payload encoded as JSON.",
+        "#/components/schemas/PipelinePreflightResponse",
+        Vec::new(),
+    );
+    if let Some(Value::Object(get_op)) = pipeline_preflight.get_mut("get") {
+        if let Some(Value::Object(responses)) = get_op.get_mut("responses") {
+            responses.insert(
+                "200".to_owned(),
+                Value::Object(single_dual_format_response(
+                    "#/components/schemas/PipelinePreflightResponse",
+                ))
+                .get("200")
+                .cloned()
+                .expect("200 response present"),
+            );
+        }
+    }
+    paths.insert(
+        "/v1/pipeline/preflight".to_owned(),
+        Value::Object(pipeline_preflight),
     );
     paths.insert(
         "/v1/pipeline/recovery/{height}".to_owned(),
@@ -7991,6 +8055,102 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "PipelinePreflightResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema_version", "chain_height", "sumeragi", "admission", "block", "pipeline", "queue", "fees"],
+            "additionalProperties": false,
+            "properties": {
+                "schema_version": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "chain_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "sumeragi": {
+                    "type": "object",
+                    "required": ["block_time_ms", "commit_time_ms", "stall_threshold_ms"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "block_time_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "commit_time_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "stall_threshold_ms": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 1,
+                            "description": "Effective Sumeragi commit-quorum timeout used before clients classify queued transactions as stalled."
+                        }
+                    }
+                },
+                "admission": {
+                    "type": "object",
+                    "required": ["max_signatures", "max_instructions", "max_tx_bytes", "max_decompressed_bytes", "max_metadata_depth"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "max_signatures": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "max_instructions": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "max_tx_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "max_decompressed_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "max_metadata_depth": { "type": "integer", "format": "uint64", "minimum": 0 }
+                    }
+                },
+                "block": {
+                    "type": "object",
+                    "required": ["max_transactions"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "max_transactions": { "type": "integer", "format": "uint64", "minimum": 0 }
+                    }
+                },
+                "pipeline": {
+                    "type": "object",
+                    "required": ["signature_batch_max", "signature_batch_max_ed25519", "signature_batch_max_secp256k1", "signature_batch_max_pqc", "signature_batch_max_bls", "overlay_max_instructions", "ivm_max_decoded_instructions"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signature_batch_max": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "signature_batch_max_ed25519": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "signature_batch_max_secp256k1": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "signature_batch_max_pqc": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "signature_batch_max_bls": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "overlay_max_instructions": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "ivm_max_decoded_instructions": { "type": "integer", "format": "uint64", "minimum": 0 }
+                    }
+                },
+                "queue": {
+                    "type": "object",
+                    "required": ["size", "queued", "inflight"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "size": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "queued": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "inflight": { "type": "integer", "format": "uint64", "minimum": 0 }
+                    }
+                },
+                "fees": {
+                    "type": "object",
+                    "required": ["fee_asset_id", "fee_sink_account_id", "base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee", "sponsorship_enabled", "sponsor_max_fee", "sponsor_verified_balance_safety_floor", "fee_receipts_activation_height", "external_settlement_enabled", "burn_from_unix_timestamp_ms", "settlement_mode", "successful_claim_fee_exempt_authorities"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "fee_asset_id": { "type": "string" },
+                        "fee_sink_account_id": { "type": "string" },
+                        "base_fee": { "$ref": "#/components/schemas/JsonValue" },
+                        "per_byte_fee": { "$ref": "#/components/schemas/JsonValue" },
+                        "per_instruction_fee": { "$ref": "#/components/schemas/JsonValue" },
+                        "per_gas_unit_fee": { "$ref": "#/components/schemas/JsonValue" },
+                        "sponsorship_enabled": { "type": "boolean" },
+                        "sponsor_max_fee": { "$ref": "#/components/schemas/JsonValue" },
+                        "sponsor_verified_balance_safety_floor": { "$ref": "#/components/schemas/JsonValue" },
+                        "canonical_sponsor_account_id": { "type": ["string", "null"] },
+                        "fee_receipts_activation_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "external_settlement_enabled": { "type": "boolean" },
+                        "burn_from_unix_timestamp_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "settlement_mode": { "type": "string" },
+                        "successful_claim_fee_exempt_authorities": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "VersionedSignedTransactionJson".to_owned(),
         versioned_json_payload_schema(
             "Canonical Norito JSON representation of `SignedTransaction`.",
@@ -11366,6 +11526,7 @@ mod tests {
         assert!(paths.contains_key("/v1/nexus/public_lanes/{lane_id}/stake"));
         assert!(paths.contains_key("/v1/repo/agreements"));
         assert!(paths.contains_key("/v1/repo/agreements/query"));
+        assert!(paths.contains_key("/v1/pipeline/preflight"));
         assert!(paths.contains_key(uri::TRANSACTION));
         assert!(paths.contains_key(uri::TRANSACTION_ENTRYPOINT));
         assert!(paths.contains_key(uri::TRANSACTIONS_BATCH));
@@ -11452,6 +11613,9 @@ mod tests {
         assert!(paths.contains_key("/v1/offline/notes/issue"));
         assert!(paths.contains_key("/v1/offline/notes/redeem"));
         assert!(paths.contains_key("/v1/offline/audit"));
+        assert!(paths.contains_key("/v1/offline/policy"));
+        assert!(paths.contains_key("/v1/offline/revocations"));
+        assert!(paths.contains_key("/v1/offline/revocations/bundle"));
         let refill_post = paths
             .get("/v1/offline/keys/refill")
             .and_then(Value::as_object)
@@ -12089,6 +12253,55 @@ mod tests {
             has_scope,
             "pipeline status should document scope query hint"
         );
+    }
+
+    #[test]
+    fn pipeline_preflight_documents_typed_response() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let preflight = paths
+            .get("/v1/pipeline/preflight")
+            .and_then(Value::as_object)
+            .expect("pipeline preflight path");
+        let get = preflight
+            .get("get")
+            .and_then(Value::as_object)
+            .expect("get op");
+        let responses = get
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("responses");
+        let response_200 = responses
+            .get("200")
+            .and_then(Value::as_object)
+            .expect("200 response");
+        let content = response_200
+            .get("content")
+            .and_then(Value::as_object)
+            .expect("pipeline preflight content");
+        assert!(content.contains_key("application/json"));
+        assert!(content.contains_key("application/x-norito"));
+        let schema_ref = content
+            .get("application/json")
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            schema_ref,
+            Some("#/components/schemas/PipelinePreflightResponse")
+        );
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas section");
+        assert!(schemas.contains_key("PipelinePreflightResponse"));
     }
 
     #[test]

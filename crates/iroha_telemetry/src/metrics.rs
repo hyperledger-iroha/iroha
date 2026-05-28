@@ -3313,6 +3313,13 @@ mod serde_tests {
             uptime: Uptime(Duration::new(9, 0)),
             view_changes: 4,
             queue_size: 5,
+            observed_at_ms: 1_000,
+            queue_queued: 3,
+            queue_inflight: 2,
+            last_block_committed_at_ms: 900,
+            last_non_empty_block_committed_at_ms: 800,
+            time_since_last_block_ms: 100,
+            time_since_last_non_empty_block_ms: 200,
             crypto: CryptoStatus {
                 sm_helpers_available: true,
                 sm_openssl_preview_enabled: false,
@@ -6214,8 +6221,7 @@ impl From<&Metrics> for Status {
     fn from(value: &Metrics) -> Self {
         let now_ms = current_unix_time_ms();
         let last_block_committed_at_ms = value.last_block_committed_at_ms.get();
-        let last_non_empty_block_committed_at_ms =
-            value.last_non_empty_block_committed_at_ms.get();
+        let last_non_empty_block_committed_at_ms = value.last_non_empty_block_committed_at_ms.get();
         let time_since_last_block_ms = if last_block_committed_at_ms == 0 {
             0
         } else {

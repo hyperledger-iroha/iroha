@@ -597,9 +597,8 @@ mod tests {
 
     #[test]
     fn asset_balance_scope_dataspace_encoding_shape() {
-        let encoded = norito::codec::encode_adaptive(&AssetBalanceScope::Dataspace(
-            DataSpaceId::new(42),
-        ));
+        let encoded =
+            norito::codec::encode_adaptive(&AssetBalanceScope::Dataspace(DataSpaceId::new(42)));
         assert_eq!(hex::encode(encoded), "0100000009082a00000000000000");
     }
 
