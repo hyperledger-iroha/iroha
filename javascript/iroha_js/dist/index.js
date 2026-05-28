@@ -34,6 +34,7 @@ export {
   openConnectWebSocket,
   verifyIdentifierResolutionReceipt,
 } from "./toriiClient.js";
+export { ToriiBrowserClient, ToriiBrowserHttpError } from "./toriiBrowserClient.js";
 export { NoritoRpcClient, NoritoRpcError } from "./noritoRpcClient.js";
 export {
   CRYPTO_ALGORITHMS,
