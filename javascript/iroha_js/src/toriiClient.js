@@ -853,8 +853,11 @@ function sortJsonForErrorMessage(value) {
 
 /**
  * @typedef {Object} BlockListOptions
- * @property {number} [offsetHeight]
+ * @property {number} [page]
+ * @property {number} [perPage]
+ * @property {number} [per_page]
  * @property {number} [limit]
+ * @property {AbortSignal} [signal]
  *
  * @typedef {Object} EventStreamOptions
  * @property {string | Record<string, unknown>} [filter]
@@ -1567,12 +1570,33 @@ export class ToriiClient {
       "listAccountAssets",
     );
     this._assertPermissionRequirement(requirePermissions, "listAccountAssets");
-    return this._listIterable(
-      `/v1/accounts/${encodedId}/assets`,
+    const optionContext = `options for /v1/accounts/${encodedId}/assets`;
+    const normalizedOptions = normalizeIterableListOptions(
       rest,
-      normalizeAccountAssetListResponse,
+      optionContext,
       ASSET_ID_LIST_OPTION_KEYS,
     );
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
+    const { signal, canonicalAuth: _ignoredCanonical, ...listOptions } = normalizedOptions;
+    const params = ToriiClient._encodeIterableListParams(
+      listOptions,
+      optionContext,
+      ASSET_ID_LIST_OPTION_KEYS,
+    ) ?? {};
+    if (listOptions.assetId !== undefined && listOptions.assetId !== null) {
+      params.asset = ToriiClient._normalizeAssetId(listOptions.assetId, "assetId");
+      delete params.asset_id;
+    }
+    const response = await this._request("GET", `/v1/accounts/${encodedId}/assets`, {
+      params: Object.keys(params).length > 0 ? params : undefined,
+      headers: { Accept: "application/json" },
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    const base = ToriiClient._validateIterablePayload(payload);
+    return normalizeAccountAssetListResponse(base);
   }
 
   /**
@@ -6305,20 +6329,17 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch a block by height (`GET /v1/blocks/{height}`).
-   * @param {number | string | bigint} height
+   * Fetch an Explorer block by height or hash (`GET /v1/explorer/blocks/{identifier}`).
+   * @param {number | string | bigint} identifier
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<any>}
    */
-  async getBlock(height, options = {}) {
-    const normalized = ToriiClient._normalizeUnsignedInteger(
-      height,
-      "getBlock.height",
-      { allowZero: true },
-    );
+  async getBlock(identifier, options = {}) {
+    const normalized = requireNonEmptyString(String(identifier), "getBlock.identifier");
     const { signal } = normalizeSignalOnlyOption(options, "getBlock");
-    const response = await this._request("GET", `/v1/blocks/${normalized}`, {
+    const response = await this._request("GET", `/v1/explorer/blocks/${encodeURIComponent(normalized)}`, {
       signal,
+      headers: { Accept: "application/json" },
     });
     if (response.status === 404) {
       return null;
@@ -6332,21 +6353,23 @@ export class ToriiClient {
   }
 
   /**
-   * List blocks with optional pagination (`GET /v1/blocks`).
+   * List Explorer blocks with optional pagination (`GET /v1/explorer/blocks`).
    * @param {BlockListOptions} [options]
    * @returns {Promise<any>}
    */
   async listBlocks(options) {
     const normalizedOptions = ToriiClient._normalizeBlockListOptions(options);
     const params = {};
-    if (normalizedOptions.offsetHeight !== undefined) {
-      params.offset_height = normalizedOptions.offsetHeight;
+    if (normalizedOptions.page !== undefined) {
+      params.page = normalizedOptions.page;
     }
-    if (normalizedOptions.limit !== undefined) {
-      params.limit = normalizedOptions.limit;
+    if (normalizedOptions.perPage !== undefined) {
+      params.per_page = normalizedOptions.perPage;
     }
-    const response = await this._request("GET", "/v1/blocks", {
+    const response = await this._request("GET", "/v1/explorer/blocks", {
       params: Object.keys(params).length > 0 ? params : undefined,
+      headers: { Accept: "application/json" },
+      signal: normalizedOptions.signal,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -9907,21 +9930,27 @@ export class ToriiClient {
 
   static _normalizeBlockListOptions(options) {
     if (options === undefined || options === null) {
-      return {};
+      return { page: 1, perPage: DEFAULT_PAGE_SIZE, signal: undefined };
     }
     const record = requirePlainObjectOption(options, "block list options");
-    assertSupportedOptionKeys(record, new Set(["offsetHeight", "limit"]), "block list options");
+    assertSupportedOptionKeys(
+      record,
+      new Set(["page", "page_number", "perPage", "per_page", "limit", "signal"]),
+      "block list options",
+    );
+    const { signal } = normalizeSignalOption(record, "listBlocks");
     const normalized = {};
-    if (record.offsetHeight !== undefined && record.offsetHeight !== null) {
-      normalized.offsetHeight = ToriiClient._normalizeUnsignedInteger(
-        record.offsetHeight,
-        "offsetHeight",
-        { allowZero: true },
-      );
-    }
-    if (record.limit !== undefined && record.limit !== null) {
-      normalized.limit = ToriiClient._normalizeUnsignedInteger(record.limit, "limit");
-    }
+    normalized.page = ToriiClient._normalizeUnsignedInteger(
+      record.page ?? record.page_number ?? 1,
+      "page",
+      { allowZero: false },
+    );
+    normalized.perPage = ToriiClient._normalizeUnsignedInteger(
+      record.perPage ?? record.per_page ?? record.limit ?? DEFAULT_PAGE_SIZE,
+      "perPage",
+      { allowZero: false },
+    );
+    normalized.signal = signal;
     return normalized;
   }
 
@@ -25204,8 +25233,8 @@ function normalizeAccountAssetListItem(value, context) {
   const record = ensureRecord(value, context);
   rejectAliasField(record, context, "assetId", "asset_id");
   const assetId = requireNonEmptyString(
-    record.asset_id,
-    `${context}.asset_id`,
+    record.asset_id ?? record.asset,
+    `${context}.asset`,
   );
   if (typeof record.quantity !== "string") {
     throw new TypeError(`${context}.quantity must be a string`);
@@ -25213,6 +25242,7 @@ function normalizeAccountAssetListItem(value, context) {
   const quantity = requireNonEmptyString(record.quantity, `${context}.quantity`);
   const normalized = {
     ...record,
+    asset: record.asset ?? assetId,
     asset_id: assetId,
     quantity,
   };

@@ -898,8 +898,12 @@ export function extractConfidentialGasConfig(
 ): ConfidentialGasSchedule | null;
 
 export interface BlockListOptions {
-  offsetHeight?: NumericLike;
+  page?: NumericLike;
+  page_number?: NumericLike;
+  perPage?: NumericLike;
+  per_page?: NumericLike;
   limit?: NumericLike;
+  signal?: AbortSignal;
 }
 
 export interface EventStreamOptions {
@@ -1344,6 +1348,7 @@ export interface ToriiRwaListItem {
   id: string;
 }
 export interface ToriiAccountAssetItem {
+  asset: string;
   asset_id: string;
   quantity: string;
 }
@@ -7054,6 +7059,55 @@ export interface InstructionBuilders {
       destination: string;
     };
   };
+}
+
+export interface ToriiBrowserClientOptions {
+  fetchImpl?: typeof fetch;
+  defaultHeaders?: Record<string, string>;
+}
+
+export declare class ToriiBrowserHttpError extends Error {
+  readonly response: Response;
+  readonly status: number;
+  readonly bodyText: string;
+}
+
+export declare class ToriiBrowserClient {
+  constructor(baseUrl: string | URL, options?: ToriiBrowserClientOptions);
+  listExplorerAccounts(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerAccount(accountId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerDomains(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerDomain(domainId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerAssets(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerAsset(assetId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listAccountAssets(accountId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listAssetHolders(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listAssetDefinitions(options?: Record<string, unknown>): Promise<unknown>;
+  getAssetDefinition(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerAssetDefinitions(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerAssetDefinitionEconometrics(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerAssetDefinitionSnapshot(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerNfts(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerNft(nftId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerRwas(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerRwa(rwaId: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerBlocks(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerBlock(identifier: string | number | bigint, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerMetrics(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerHealth(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerTransactions(options?: Record<string, unknown>): Promise<unknown>;
+  listLatestExplorerTransactions(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerTransaction(hash: string, options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerInstructions(options?: Record<string, unknown>): Promise<unknown>;
+  listLatestExplorerInstructions(options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerInstruction(transactionHash: string, index: number, options?: Record<string, unknown>): Promise<unknown>;
+  getExplorerInstructionContractView(transactionHash: string, index: number, options?: Record<string, unknown>): Promise<unknown>;
+  getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
+  getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
+  listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
+  getKaigiRelay(relayId: string, options?: Record<string, unknown>): Promise<unknown>;
+  getKaigiRelaysHealth(options?: Record<string, unknown>): Promise<unknown>;
+  deployContract(request: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
 }
 
 export declare class ToriiClient {

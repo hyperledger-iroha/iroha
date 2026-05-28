@@ -1138,7 +1138,10 @@ fn try_read_snapshot_bundle(
             kura_height: block_count,
         });
     }
-    if snapshot_height > 0 && !has_offline_note_replay_keys {
+    if snapshot_height > 0
+        && !has_offline_note_replay_keys
+        && !hard_fork_snapshot_bootstrap_enabled()
+    {
         return Err(TryReadError::MissingOfflineNoteReplayKeys { snapshot_height });
     }
     for (idx, snapshot_block_hash) in snapshot_hashes.into_iter().enumerate() {

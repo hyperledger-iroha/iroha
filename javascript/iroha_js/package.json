@@ -19,6 +19,11 @@
       "types": "./index.d.ts"
     },
     "./torii": "./dist/toriiClient.js",
+    "./torii-browser": {
+      "import": "./dist/toriiBrowserClient.js",
+      "browser": "./dist/toriiBrowserClient.js",
+      "types": "./index.d.ts"
+    },
     "./norito": "./dist/norito.js",
     "./canonical-request": {
       "import": "./dist/canonicalRequest.js",
@@ -51,6 +56,9 @@
         "./index.d.ts"
       ],
       "torii": [
+        "./index.d.ts"
+      ],
+      "torii-browser": [
         "./index.d.ts"
       ],
       "norito": [

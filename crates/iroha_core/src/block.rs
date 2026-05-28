@@ -5655,7 +5655,10 @@ pub(crate) mod valid {
                     if block.header().creation_time() <= prev_block_time {
                         return Err(BlockValidationError::BlockInThePast);
                     }
-                } else if allow_missing_legacy_context {
+                } else if expected_prev_block_hash == actual_prev_block_hash
+                    && actual_prev_block_hash.is_some()
+                    && state_height > 0
+                {
                     iroha_logger::warn!(
                         block_height = block.header().height().get(),
                         block_hash = ?block.hash(),

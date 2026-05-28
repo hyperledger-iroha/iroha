@@ -13379,7 +13379,7 @@ test("getMetrics forwards AbortSignal", async () => {
 
 test("getBlock fetches block by height", async () => {
   const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/blocks/42`);
+    assert.equal(url, `${BASE_URL}/v1/explorer/blocks/42`);
     return createResponse({
       status: 200,
       jsonData: {
@@ -13410,7 +13410,7 @@ test("getBlock fetches block by height", async () => {
 test("getBlock forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/blocks/7`);
+    assert.equal(url, `${BASE_URL}/v1/explorer/blocks/7`);
     assert.strictEqual(init.signal, controller.signal);
     return createResponse({
       status: 200,
@@ -13446,7 +13446,7 @@ test("getBlock returns null when Torii replies 404", async () => {
 
 test("listBlocks encodes pagination parameters", async () => {
   const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/blocks?offset_height=10&limit=5`);
+    assert.equal(url, `${BASE_URL}/v1/explorer/blocks?page=2&per_page=5`);
     return createResponse({
       status: 200,
       jsonData: {
@@ -13472,7 +13472,7 @@ test("listBlocks encodes pagination parameters", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listBlocks({ offsetHeight: 10, limit: 5 });
+  const result = await client.listBlocks({ page: 2, perPage: 5 });
   assert.deepEqual(result, {
     pagination: {
       page: 1,
@@ -13494,14 +13494,14 @@ test("listBlocks encodes pagination parameters", async () => {
   });
 });
 
-test("getBlock rejects invalid heights", async () => {
+test("getBlock rejects empty identifiers", async () => {
   const fetchImpl = async () => {
     throw new Error("should not fetch");
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getBlock(-1),
-    /non-negative integer/,
+    () => client.getBlock("  "),
+    /must not be empty/,
   );
 });
 
@@ -13526,8 +13526,8 @@ test("listBlocks validates pagination bounds", async () => {
     /positive integer/,
   );
   await assert.rejects(
-    () => client.listBlocks({ offsetHeight: -5 }),
-    /non-negative integer/,
+    () => client.listBlocks({ page: -5 }),
+    /positive integer/,
   );
 });
 
@@ -14642,16 +14642,17 @@ test("listAccountAssets encodes assetId filters", async () => {
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/assets"));
-    assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
+    assert.equal(parsed.searchParams.get("asset"), normalizedAssetId);
     return createResponse({
       status: 200,
-      jsonData: { items: [{ asset_id: normalizedAssetId, quantity: "10" }], total: 1 },
+      jsonData: { items: [{ asset: normalizedAssetId, quantity: "10" }], total: 1 },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.listAccountAssets(FIXTURE_ALICE_ID, { assetId });
   assert.equal(payload.items[0].asset_id, normalizedAssetId);
+  assert.equal(payload.items[0].asset, normalizedAssetId);
 });
 
 test("listAccountAssets rejects malformed asset filters", async () => {
