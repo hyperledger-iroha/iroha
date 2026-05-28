@@ -7098,6 +7098,8 @@ pub struct State {
     pub oracle: iroha_config::parameters::actual::Oracle,
     /// Deterministic pacing governor configuration snapshot.
     pub pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor,
+    /// Runtime DA quorum timeout multiplier used for Sumeragi liveness budgets.
+    sumeragi_da_quorum_timeout_multiplier: u32,
     /// Streaming configuration snapshot (spool paths, codec defaults).
     streaming: iroha_config::parameters::actual::Streaming,
     /// Cryptography configuration (enabled algorithms, defaults).
@@ -9407,6 +9409,47 @@ mod accounts_snapshot_tests {
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(first.len(), 1);
         assert_eq!(&first[0], &account_id);
+    }
+}
+
+#[cfg(test)]
+mod sumeragi_timing_tests {
+    use std::{sync::Arc, time::Duration};
+
+    use super::*;
+
+    #[test]
+    fn sumeragi_commit_quorum_timeout_uses_runtime_da_multiplier() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+
+        assert_eq!(
+            state.sumeragi_commit_quorum_timeout(),
+            Duration::from_millis(400)
+        );
+
+        let config = SumeragiPolicyConfig {
+            collectors_k: usize::from(iroha_config::parameters::defaults::sumeragi::COLLECTORS_K),
+            collectors_redundant_send_r:
+                iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
+            policy_flags: SumeragiPolicyFlags::new(true, false),
+            da_quorum_timeout_multiplier: 3,
+            key_activation_lead_blocks:
+                iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
+            key_overlap_grace_blocks:
+                iroha_config::parameters::defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
+            key_expiry_grace_blocks:
+                iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
+            key_allowed_algorithms: BTreeSet::new(),
+            key_allowed_hsm_providers: BTreeSet::new(),
+        };
+        state.set_sumeragi_parameters(config);
+
+        assert_eq!(
+            state.sumeragi_commit_quorum_timeout(),
+            Duration::from_millis(600)
+        );
     }
 }
 
@@ -17908,6 +17951,8 @@ pub struct SumeragiPolicyConfig {
     pub collectors_redundant_send_r: u8,
     /// Boolean policy toggles.
     pub policy_flags: SumeragiPolicyFlags,
+    /// Multiplier applied to DA commit-quorum timeout budgets.
+    pub da_quorum_timeout_multiplier: u32,
     /// Lead-time (in blocks) required before a new consensus key activates.
     pub key_activation_lead_blocks: u64,
     /// Overlap/grace window (in blocks) permitting dual-signing during rotation.
@@ -17926,6 +17971,7 @@ impl From<&iroha_config::parameters::actual::Sumeragi> for SumeragiPolicyConfig 
             collectors_k: cfg.collectors.k,
             collectors_redundant_send_r: cfg.collectors.redundant_send_r,
             policy_flags: SumeragiPolicyFlags::new(cfg.da.enabled, cfg.keys.require_hsm),
+            da_quorum_timeout_multiplier: cfg.da.quorum_timeout_multiplier.max(1),
             key_activation_lead_blocks: cfg.keys.activation_lead_blocks,
             key_overlap_grace_blocks: cfg.keys.overlap_grace_blocks,
             key_expiry_grace_blocks: cfg.keys.expiry_grace_blocks,
@@ -17941,6 +17987,8 @@ impl From<&iroha_data_model::parameter::system::SumeragiParameters> for Sumeragi
             collectors_k: usize::from(cfg.collectors_k),
             collectors_redundant_send_r: cfg.collectors_redundant_send_r,
             policy_flags: SumeragiPolicyFlags::new(cfg.da_enabled, cfg.key_require_hsm),
+            da_quorum_timeout_multiplier:
+                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
             key_activation_lead_blocks: cfg.key_activation_lead_blocks,
             key_overlap_grace_blocks: cfg.key_overlap_grace_blocks,
             key_expiry_grace_blocks: cfg.key_expiry_grace_blocks,
@@ -19526,6 +19574,8 @@ impl State {
             )),
             oracle: default_oracle(),
             pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
+            sumeragi_da_quorum_timeout_multiplier:
+                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
             streaming,
             nexus: parking_lot::RwLock::new(nexus),
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
@@ -21031,6 +21081,20 @@ impl State {
             .view()
             .sumeragi()
             .effective_block_time()
+    }
+
+    /// Effective Sumeragi commit-quorum timeout from current chain parameters and runtime config.
+    #[track_caller]
+    #[must_use]
+    pub fn sumeragi_commit_quorum_timeout(&self) -> Duration {
+        let params = self.world.parameters.view();
+        let sumeragi = params.sumeragi();
+        crate::sumeragi::main_loop::commit_quorum_timeout_from_durations(
+            sumeragi.effective_block_time(),
+            sumeragi.effective_commit_time(),
+            sumeragi.da_enabled(),
+            self.sumeragi_da_quorum_timeout_multiplier.max(1),
+        )
     }
 
     /// Return whether the canonical account exists in current world state.
@@ -22758,6 +22822,7 @@ impl State {
     /// Update consensus policy parameters sourced from configuration.
     pub fn set_sumeragi_parameters(&mut self, sumeragi: impl Into<self::SumeragiPolicyConfig>) {
         let policy = sumeragi.into();
+        self.sumeragi_da_quorum_timeout_multiplier = policy.da_quorum_timeout_multiplier.max(1);
         let mut params_block = self.world.parameters.block();
         let mut sys = params_block.sumeragi.clone();
         // Keep collector topology (`collectors_k`, `collectors_redundant_send_r`) anchored to
@@ -34628,6 +34693,8 @@ pub(crate) mod deserialize {
             query_handle,
             oracle: default_oracle(),
             pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
+            sumeragi_da_quorum_timeout_multiplier:
+                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
             pipeline,
             pipeline_parallelism,
             soracloud_runtime: parking_lot::RwLock::new(None),

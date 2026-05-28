@@ -1,6 +1,6 @@
 use std::{
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -38,6 +38,7 @@ const PATH_KEYS_REFILL: &str = "/v1/offline/keys/refill";
 const PATH_NOTES_ISSUE: &str = "/v1/offline/notes/issue";
 const PATH_NOTES_REDEEM: &str = "/v1/offline/notes/redeem";
 const PATH_AUDIT: &str = "/v1/offline/audit";
+const OFFLINE_REVOCATION_BUNDLE_TTL_MS: u64 = 5 * 60 * 1_000;
 
 #[derive(Debug, Clone)]
 pub(crate) struct OfflineIssuerRuntime {
@@ -49,6 +50,21 @@ pub(crate) struct OfflineIssuerRuntime {
     certificate_ttl: Duration,
     authorization_refresh: Duration,
     authorization_ttl: Duration,
+    policy: Arc<RwLock<OfflinePolicyState>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct OfflinePolicyState {
+    verdict_ids: Vec<String>,
+    blacklisted_account_ids: Vec<String>,
+    asset_send_limits: Vec<OfflineAssetSendLimitState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OfflineAssetSendLimitState {
+    asset_definition_id: String,
+    daily_send_limit: String,
+    monthly_send_limit: String,
 }
 
 impl OfflineIssuerRuntime {
@@ -62,6 +78,7 @@ impl OfflineIssuerRuntime {
             certificate_ttl: config.certificate_ttl,
             authorization_refresh: config.authorization_refresh,
             authorization_ttl: config.authorization_ttl,
+            policy: Arc::new(RwLock::new(OfflinePolicyState::default())),
         }
     }
 
@@ -409,6 +426,81 @@ pub(crate) async fn handle_audit(
     ]))
 }
 
+pub(crate) async fn handle_policy_update(
+    app: SharedAppState,
+    body: Bytes,
+) -> Result<AxResponse, Error> {
+    let issuer = require_issuer(&app)?;
+    let value: Value = json::from_slice(body.as_ref()).map_err(|err| {
+        validation_owned(
+            "OFFLINE_INVALID_JSON",
+            format!("Offline policy payload is not valid JSON: {err}"),
+        )
+    })?;
+    let policy = parse_policy_snapshot(&value)?;
+    replace_policy_state(&issuer, policy.clone())?;
+    json_ok(policy_response(policy))
+}
+
+pub(crate) async fn handle_revocations_list(app: SharedAppState) -> Result<AxResponse, Error> {
+    let issuer = require_issuer(&app)?;
+    let policy = policy_state_snapshot(&issuer)?;
+    json_ok(policy_response(policy))
+}
+
+pub(crate) async fn handle_revocation_register(
+    app: SharedAppState,
+    body: Bytes,
+) -> Result<AxResponse, Error> {
+    let issuer = require_issuer(&app)?;
+    let value: Value = json::from_slice(body.as_ref()).map_err(|err| {
+        validation_owned(
+            "OFFLINE_INVALID_JSON",
+            format!("Offline revocation payload is not valid JSON: {err}"),
+        )
+    })?;
+    let mut policy = policy_state_snapshot(&issuer)?;
+    let mut changed = false;
+
+    for verdict_id in collect_string_fields(&value, &["verdict_id", "verdict_ids"])? {
+        if insert_sorted_unique(&mut policy.verdict_ids, verdict_id) {
+            changed = true;
+        }
+    }
+    for account_id in collect_string_fields(
+        &value,
+        &[
+            "account_id",
+            "account_ids",
+            "blacklisted_account_id",
+            "blacklisted_account_ids",
+        ],
+    )? {
+        if insert_sorted_unique(&mut policy.blacklisted_account_ids, account_id) {
+            changed = true;
+        }
+    }
+    if let Some(asset_send_limits) = value.get("asset_send_limits") {
+        policy.asset_send_limits = parse_asset_send_limits(asset_send_limits)?;
+        changed = true;
+    }
+    if !changed {
+        return Err(validation(
+            "OFFLINE_REVOCATION_EMPTY",
+            "Offline revocation payload must include account_id, verdict_id, or asset_send_limits.",
+        ));
+    }
+
+    replace_policy_state(&issuer, policy.clone())?;
+    json_ok(policy_response(policy))
+}
+
+pub(crate) async fn handle_revocation_bundle(app: SharedAppState) -> Result<AxResponse, Error> {
+    let issuer = require_issuer(&app)?;
+    let bundle = build_revocation_bundle(&issuer, now_ms())?;
+    json_ok(bundle)
+}
+
 fn verify_ed25519_signature(
     public_key: &[u8],
     payload: &[u8],
@@ -455,6 +547,277 @@ fn require_issuer(app: &AppState) -> Result<Arc<OfflineIssuerRuntime>, Error> {
             code: "OFFLINE_ISSUER_DISABLED",
             message: "Offline Notes issuer is not configured on this Torii node.".to_string(),
         })
+}
+
+fn policy_lock_unavailable() -> Error {
+    Error::AppServiceUnavailable {
+        code: "OFFLINE_POLICY_UNAVAILABLE",
+        message: "Offline Notes policy state is unavailable.".to_string(),
+    }
+}
+
+fn policy_state_snapshot(issuer: &OfflineIssuerRuntime) -> Result<OfflinePolicyState, Error> {
+    issuer
+        .policy
+        .read()
+        .map_err(|_| policy_lock_unavailable())
+        .map(|policy| policy.clone())
+}
+
+fn replace_policy_state(
+    issuer: &OfflineIssuerRuntime,
+    mut policy: OfflinePolicyState,
+) -> Result<(), Error> {
+    canonicalize_policy_state(&mut policy);
+    let mut guard = issuer
+        .policy
+        .write()
+        .map_err(|_| policy_lock_unavailable())?;
+    *guard = policy;
+    Ok(())
+}
+
+fn canonicalize_policy_state(policy: &mut OfflinePolicyState) {
+    policy.verdict_ids.sort();
+    policy.verdict_ids.dedup();
+    policy.blacklisted_account_ids.sort();
+    policy.blacklisted_account_ids.dedup();
+    policy
+        .asset_send_limits
+        .sort_by(|left, right| left.asset_definition_id.cmp(&right.asset_definition_id));
+    policy
+        .asset_send_limits
+        .dedup_by(|left, right| left.asset_definition_id == right.asset_definition_id);
+}
+
+fn parse_policy_snapshot(value: &Value) -> Result<OfflinePolicyState, Error> {
+    let _ = value_object_ref(value, "OFFLINE_POLICY_INVALID")?;
+    Ok(OfflinePolicyState {
+        verdict_ids: parse_string_array_field(value, "verdict_ids")?,
+        blacklisted_account_ids: parse_string_array_field(value, "blacklisted_account_ids")?,
+        asset_send_limits: value
+            .get("asset_send_limits")
+            .map(parse_asset_send_limits)
+            .transpose()?
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_string_array_field(value: &Value, field: &'static str) -> Result<Vec<String>, Error> {
+    let Some(field_value) = value.get(field) else {
+        return Ok(Vec::new());
+    };
+    let items = field_value.as_array().ok_or_else(|| {
+        validation_owned(
+            "OFFLINE_POLICY_INVALID",
+            format!("Offline policy field {field} must be an array."),
+        )
+    })?;
+    normalize_string_values(items.iter().map(|item| {
+        item.as_str().ok_or_else(|| {
+            validation_owned(
+                "OFFLINE_POLICY_INVALID",
+                format!("Offline policy field {field} must contain only strings."),
+            )
+        })
+    }))
+}
+
+fn collect_string_fields(value: &Value, fields: &[&'static str]) -> Result<Vec<String>, Error> {
+    let _ = value_object_ref(value, "OFFLINE_REVOCATION_INVALID")?;
+    let mut values = Vec::new();
+    for field in fields {
+        let Some(field_value) = value.get(*field) else {
+            continue;
+        };
+        match field_value {
+            Value::String(item) => {
+                values.extend(normalize_string_values(std::iter::once(Ok(item.as_str())))?);
+            }
+            Value::Array(items) => {
+                values.extend(normalize_string_values(items.iter().map(|item| {
+                    item.as_str().ok_or_else(|| {
+                        validation_owned(
+                            "OFFLINE_REVOCATION_INVALID",
+                            format!("Offline revocation field {field} must contain only strings."),
+                        )
+                    })
+                }))?);
+            }
+            _ => {
+                return Err(validation_owned(
+                    "OFFLINE_REVOCATION_INVALID",
+                    format!("Offline revocation field {field} must be a string or string array."),
+                ));
+            }
+        }
+    }
+    values.sort();
+    values.dedup();
+    Ok(values)
+}
+
+#[allow(single_use_lifetimes)]
+fn normalize_string_values<T: AsRef<str>>(
+    values: impl Iterator<Item = Result<T, Error>>,
+) -> Result<Vec<String>, Error> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = value?;
+        let value = value.as_ref().trim();
+        if !value.is_empty() {
+            normalized.push(value.to_string());
+        }
+    }
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
+fn parse_asset_send_limits(value: &Value) -> Result<Vec<OfflineAssetSendLimitState>, Error> {
+    let items = value.as_array().ok_or_else(|| {
+        validation(
+            "OFFLINE_POLICY_INVALID",
+            "Offline policy field asset_send_limits must be an array.",
+        )
+    })?;
+    let mut limits = Vec::with_capacity(items.len());
+    for item in items {
+        let _ = value_object_ref(item, "OFFLINE_POLICY_INVALID")?;
+        let asset_definition_id = required_string(item, "asset_definition_id")?
+            .trim()
+            .to_string();
+        if asset_definition_id.is_empty() {
+            return Err(validation(
+                "OFFLINE_POLICY_INVALID",
+                "Offline policy asset_definition_id must not be empty.",
+            ));
+        }
+        let daily_send_limit = normalize_policy_amount(required_string(item, "daily_send_limit")?)?;
+        let monthly_send_limit =
+            normalize_policy_amount(required_string(item, "monthly_send_limit")?)?;
+        limits.push(OfflineAssetSendLimitState {
+            asset_definition_id,
+            daily_send_limit,
+            monthly_send_limit,
+        });
+    }
+    limits.sort_by(|left, right| left.asset_definition_id.cmp(&right.asset_definition_id));
+    limits.dedup_by(|left, right| left.asset_definition_id == right.asset_definition_id);
+    Ok(limits)
+}
+
+fn normalize_policy_amount(value: &str) -> Result<String, Error> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(validation(
+            "OFFLINE_POLICY_INVALID",
+            "Offline policy amount must not be empty.",
+        ));
+    }
+    let amount = Numeric::from_str(value).map_err(|err| {
+        validation_owned(
+            "OFFLINE_POLICY_INVALID",
+            format!("Offline policy amount is invalid: {err}"),
+        )
+    })?;
+    if amount <= Numeric::from(0_u32) {
+        return Err(validation(
+            "OFFLINE_POLICY_INVALID",
+            "Offline policy amount must be greater than zero.",
+        ));
+    }
+    Ok(amount.to_string())
+}
+
+fn insert_sorted_unique(values: &mut Vec<String>, value: String) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    if values.iter().any(|existing| existing == value) {
+        return false;
+    }
+    values.push(value.to_string());
+    values.sort();
+    true
+}
+
+fn asset_send_limit_value(limit: &OfflineAssetSendLimitState) -> Value {
+    json_object(vec![
+        (
+            "asset_definition_id",
+            string_value(&limit.asset_definition_id),
+        ),
+        ("daily_send_limit", string_value(&limit.daily_send_limit)),
+        (
+            "monthly_send_limit",
+            string_value(&limit.monthly_send_limit),
+        ),
+    ])
+}
+
+fn asset_send_limits_value(limits: &[OfflineAssetSendLimitState]) -> Value {
+    Value::Array(limits.iter().map(asset_send_limit_value).collect())
+}
+
+fn policy_response(policy: OfflinePolicyState) -> Value {
+    json_object(vec![
+        (
+            "verdict_ids",
+            Value::Array(policy.verdict_ids.into_iter().map(string_value).collect()),
+        ),
+        (
+            "blacklisted_account_ids",
+            Value::Array(
+                policy
+                    .blacklisted_account_ids
+                    .into_iter()
+                    .map(string_value)
+                    .collect(),
+            ),
+        ),
+        (
+            "asset_send_limits",
+            asset_send_limits_value(&policy.asset_send_limits),
+        ),
+    ])
+}
+
+fn build_revocation_bundle(issuer: &OfflineIssuerRuntime, now_ms: u64) -> Result<Value, Error> {
+    let policy = policy_state_snapshot(issuer)?;
+    let unsigned = json_object(vec![
+        ("issued_at_ms", number_value(now_ms)),
+        (
+            "expires_at_ms",
+            number_value(now_ms.saturating_add(OFFLINE_REVOCATION_BUNDLE_TTL_MS)),
+        ),
+        (
+            "verdict_ids",
+            Value::Array(policy.verdict_ids.into_iter().map(string_value).collect()),
+        ),
+        (
+            "blacklisted_account_ids",
+            Value::Array(
+                policy
+                    .blacklisted_account_ids
+                    .into_iter()
+                    .map(string_value)
+                    .collect(),
+            ),
+        ),
+        (
+            "asset_send_limits",
+            asset_send_limits_value(&policy.asset_send_limits),
+        ),
+    ]);
+    let signature = issuer.sign_json_base64(&unsigned, "offline_revocation_bundle")?;
+    let mut map = value_object(unsigned)?;
+    map.insert(
+        "issuer_signature_base64".to_string(),
+        string_value(signature),
+    );
+    Ok(Value::Object(map))
 }
 
 fn parse_and_authorize(
@@ -1690,6 +2053,7 @@ mod tests {
                 certificate_ttl: Duration::from_secs(300),
                 authorization_refresh: Duration::from_secs(60),
                 authorization_ttl: Duration::from_secs(600),
+                policy: Arc::new(RwLock::new(OfflinePolicyState::default())),
             },
             verifier_key_pair,
         )
@@ -1751,6 +2115,118 @@ mod tests {
             asset_definition_literal,
             device_binding,
         }
+    }
+
+    #[test]
+    fn revocation_bundle_is_issuer_signed_and_sorted() {
+        let (issuer, _) = sample_issuer();
+        replace_policy_state(
+            &issuer,
+            OfflinePolicyState {
+                verdict_ids: vec!["verdict-b".to_string(), "verdict-a".to_string()],
+                blacklisted_account_ids: vec!["i105b".to_string(), "i105a".to_string()],
+                asset_send_limits: vec![
+                    OfflineAssetSendLimitState {
+                        asset_definition_id: "usd#offline".to_string(),
+                        daily_send_limit: "25".to_string(),
+                        monthly_send_limit: "100".to_string(),
+                    },
+                    OfflineAssetSendLimitState {
+                        asset_definition_id: "eur#offline".to_string(),
+                        daily_send_limit: "10".to_string(),
+                        monthly_send_limit: "50".to_string(),
+                    },
+                ],
+            },
+        )
+        .expect("policy update");
+
+        let bundle = build_revocation_bundle(&issuer, NOW_MS).expect("revocation bundle");
+        let mut unsigned = value_object(bundle).expect("bundle object");
+        let signature = unsigned
+            .remove("issuer_signature_base64")
+            .and_then(|value| value.as_str().map(ToOwned::to_owned))
+            .expect("signature");
+        assert_eq!(unsigned.get("issued_at_ms"), Some(&number_value(NOW_MS)));
+        assert_eq!(
+            unsigned.get("expires_at_ms"),
+            Some(&number_value(NOW_MS + OFFLINE_REVOCATION_BUNDLE_TTL_MS))
+        );
+        assert_eq!(
+            unsigned.get("verdict_ids"),
+            Some(&Value::Array(vec![
+                string_value("verdict-a"),
+                string_value("verdict-b")
+            ]))
+        );
+        assert_eq!(
+            unsigned.get("blacklisted_account_ids"),
+            Some(&Value::Array(vec![
+                string_value("i105a"),
+                string_value("i105b")
+            ]))
+        );
+        let limits = unsigned
+            .get("asset_send_limits")
+            .and_then(Value::as_array)
+            .expect("asset limits");
+        assert_eq!(
+            limits
+                .first()
+                .and_then(|value| value.get("asset_definition_id"))
+                .and_then(Value::as_str),
+            Some("eur#offline")
+        );
+        verify_json_signature(
+            issuer.key_pair.public_key(),
+            &Value::Object(unsigned),
+            &signature,
+            "offline_revocation_bundle_test",
+            "OFFLINE_REVOCATION_SIGNATURE_INVALID",
+            "invalid revocation signature",
+        )
+        .expect("revocation bundle signature");
+    }
+
+    #[test]
+    fn policy_snapshot_normalizes_amounts_and_rejects_empty_revocation_registers() {
+        let payload = json_object(vec![
+            (
+                "blacklisted_account_ids",
+                Value::Array(vec![string_value(" i105b "), string_value("i105a")]),
+            ),
+            (
+                "asset_send_limits",
+                Value::Array(vec![json_object(vec![
+                    ("asset_definition_id", string_value("usd#offline")),
+                    ("daily_send_limit", string_value("10.00")),
+                    ("monthly_send_limit", string_value("100.00")),
+                ])]),
+            ),
+        ]);
+
+        let policy = parse_policy_snapshot(&payload).expect("policy snapshot");
+        assert_eq!(
+            policy.blacklisted_account_ids,
+            vec!["i105a".to_string(), "i105b".to_string()]
+        );
+        assert_eq!(policy.asset_send_limits[0].daily_send_limit, "10.00");
+        assert_eq!(policy.asset_send_limits[0].monthly_send_limit, "100.00");
+        assert_eq!(
+            validation_code(
+                collect_string_fields(&json_object(vec![]), &["account_id"]).and_then(|values| {
+                    if values.is_empty() {
+                        Err(validation(
+                            "OFFLINE_REVOCATION_EMPTY",
+                            "Offline revocation payload must include account_id.",
+                        ))
+                    } else {
+                        Ok(values)
+                    }
+                },)
+            ),
+            "OFFLINE_REVOCATION_EMPTY"
+        );
     }
 
     fn signed_attestation_receipt(

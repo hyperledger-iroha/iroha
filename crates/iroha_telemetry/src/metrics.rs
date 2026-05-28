@@ -3313,6 +3313,13 @@ mod serde_tests {
             uptime: Uptime(Duration::new(9, 0)),
             view_changes: 4,
             queue_size: 5,
+            observed_at_ms: 1_000,
+            queue_queued: 3,
+            queue_inflight: 2,
+            last_block_committed_at_ms: 900,
+            last_non_empty_block_committed_at_ms: 800,
+            time_since_last_block_ms: 100,
+            time_since_last_non_empty_block_ms: 200,
             crypto: CryptoStatus {
                 sm_helpers_available: true,
                 sm_openssl_preview_enabled: false,

@@ -8355,10 +8355,8 @@ fn usize_to_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
-fn pipeline_stall_threshold_ms(block_time_ms: u64, commit_time_ms: u64) -> u64 {
-    commit_time_ms
-        .saturating_mul(3)
-        .max(block_time_ms.saturating_add(commit_time_ms))
+fn duration_ms_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 pub(crate) fn build_pipeline_preflight_response(
@@ -8381,10 +8379,7 @@ pub(crate) fn build_pipeline_preflight_response(
         sumeragi: PipelinePreflightSumeragi {
             block_time_ms: sumeragi_params.block_time_ms,
             commit_time_ms: sumeragi_params.commit_time_ms,
-            stall_threshold_ms: pipeline_stall_threshold_ms(
-                sumeragi_params.block_time_ms,
-                sumeragi_params.commit_time_ms,
-            ),
+            stall_threshold_ms: duration_ms_u64(state.sumeragi_commit_quorum_timeout()),
         },
         admission: PipelinePreflightAdmission {
             max_signatures: transaction_params.max_signatures().get(),

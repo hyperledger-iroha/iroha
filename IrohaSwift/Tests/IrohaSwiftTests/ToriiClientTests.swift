@@ -6608,7 +6608,8 @@ final class ToriiClientTests: XCTestCase {
 
         let status = try await sdk.getTransactionStatus(hashHex: "deadbeef")
         XCTAssertEqual(status?.kind, "Transaction")
-        XCTAssertEqual(status?.content.status.kind, "Committed")
+        XCTAssertEqual(status?.content.status.kind, "Rejected")
+        XCTAssertEqual(status?.primaryDiagnostic?.message, "missing permission")
     }
 
     @available(iOS 15.0, macOS 12.0, *)

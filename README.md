@@ -99,9 +99,16 @@ For daemon-specific native deployment steps, see [`crates/irohad/README.md`](./c
 Torii exposes both Norito and JSON APIs. Common operator endpoints:
 
 - `GET /status`
+- `GET /v1/pipeline/preflight`
 - `GET /metrics`
 - `GET /v1/parameters`
 - `GET /v1/events/sse`
+
+For liveness checks, prefer the queue-aware fields in `/status`: use
+`queue_size` as the gate and compare `time_since_last_block_ms` or
+`time_since_last_non_empty_block_ms` against the
+`/v1/pipeline/preflight.sumeragi.stall_threshold_ms` value. An old block
+timestamp alone is not a stall when the queue is empty.
 
 See the full endpoint reference in:
 

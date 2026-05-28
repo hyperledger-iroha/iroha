@@ -17968,6 +17968,8 @@ pub mod isi {
                     iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
                     false,
                 ),
+                da_quorum_timeout_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -18210,6 +18212,8 @@ pub mod isi {
                     iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
                     false,
                 ),
+                da_quorum_timeout_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -18326,6 +18330,8 @@ pub mod isi {
                     iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
                     true,
                 ),
+                da_quorum_timeout_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:

@@ -18695,14 +18695,15 @@ function normalizeDeployContractResponse(payload) {
     record.tx_hash_hex === undefined || record.tx_hash_hex === null
       ? null
       : normalizeHex32String(record.tx_hash_hex, "deployContract.response.tx_hash_hex");
+  const hasPipelineStatus = record.pipeline_status !== undefined;
   const pipelineStatus =
-    record.pipeline_status === undefined || record.pipeline_status === null
+    !hasPipelineStatus || record.pipeline_status === null
       ? null
       : normalizePipelineTransactionStatus(
           record.pipeline_status,
           "deployContract.response.pipeline_status",
         );
-  return {
+  const normalized = {
     ok: Boolean(record.ok),
     contract_alias: contractAlias,
     contract_address: contractAddress,
@@ -18711,7 +18712,6 @@ function normalizeDeployContractResponse(payload) {
     dataspace,
     deploy_nonce: deployNonce,
     tx_hash_hex: txHashHex,
-    pipeline_status: pipelineStatus,
     code_hash_hex: normalizeHex32String(
       record.code_hash_hex,
       "deployContract.response.code_hash_hex",
@@ -18721,6 +18721,10 @@ function normalizeDeployContractResponse(payload) {
       "deployContract.response.abi_hash_hex",
     ),
   };
+  if (hasPipelineStatus) {
+    normalized.pipeline_status = pipelineStatus;
+  }
+  return normalized;
 }
 
 function normalizeSetContractAliasRequest(input) {
@@ -19657,13 +19661,15 @@ function normalizeContractCallResponse(payload) {
           record.signing_message_b64,
           "contractCall response.signing_message_b64",
         );
-  normalized.pipeline_status =
-    record.pipeline_status === undefined || record.pipeline_status === null
-      ? null
-      : normalizePipelineTransactionStatus(
-          record.pipeline_status,
-          "contractCall response.pipeline_status",
-        );
+  if (record.pipeline_status !== undefined) {
+    normalized.pipeline_status =
+      record.pipeline_status === null
+        ? null
+        : normalizePipelineTransactionStatus(
+            record.pipeline_status,
+            "contractCall response.pipeline_status",
+          );
+  }
   return normalized;
 }
 

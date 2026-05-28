@@ -1967,7 +1967,7 @@ export type ToriiPipelineEvent =
 
 export interface ToriiPipelineTransactionStatusStatus {
   kind: string;
-  content: string | null;
+  content: unknown;
   [key: string]: unknown;
 }
 
@@ -3801,8 +3801,15 @@ export interface ToriiOfflineReadinessResponse {
 }
 
 export interface ToriiStatusPayload {
+  observed_at_ms: number;
   peers: number;
   queue_size: number;
+  queue_queued: number;
+  queue_inflight: number;
+  last_block_committed_at_ms: number;
+  last_non_empty_block_committed_at_ms: number;
+  time_since_last_block_ms: number;
+  time_since_last_non_empty_block_ms: number;
   commit_time_ms: number;
   da_reschedule_total: number;
   txs_approved: number;
@@ -3812,6 +3819,7 @@ export interface ToriiStatusPayload {
   lane_commitments: ToriiLaneCommitmentSnapshot[];
   dataspace_commitments: ToriiDataspaceCommitmentSnapshot[];
   lane_governance: ToriiLaneGovernanceSnapshot[];
+  dataspace_catalog: ToriiDataspaceCatalogEntry[];
   lane_governance_sealed_total: number;
   lane_governance_sealed_aliases: ReadonlyArray<string>;
   raw: Record<string, unknown>;
@@ -3820,7 +3828,11 @@ export interface ToriiStatusPayload {
 export interface ToriiStatusMetrics {
   commit_latency_ms: number;
   queue_size: number;
+  queue_queued: number;
+  queue_inflight: number;
   queue_delta: number;
+  time_since_last_block_ms: number;
+  time_since_last_non_empty_block_ms: number;
   da_reschedule_delta: number;
   tx_approved_delta: number;
   tx_rejected_delta: number;
@@ -3828,11 +3840,87 @@ export interface ToriiStatusMetrics {
   has_activity: boolean;
 }
 
+export interface ToriiDataspaceCatalogEntry {
+  lane_id: number;
+  lane_alias: string;
+  dataspace_id: number;
+  alias: string;
+  visibility: string;
+  storage_profile: string;
+  manifest_required: boolean;
+  manifest_ready: boolean;
+  sealed: boolean;
+  manifest_path: string | null;
+  protected_namespaces: string[];
+}
+
 export interface ToriiStatusSnapshot {
   timestamp: number;
   status: ToriiStatusPayload;
   metrics: ToriiStatusMetrics;
 }
+
+export interface ToriiPipelinePreflight {
+  schema_version: number;
+  chain_height: number;
+  sumeragi: {
+    block_time_ms: number;
+    commit_time_ms: number;
+    stall_threshold_ms: number;
+  };
+  admission: {
+    max_signatures: number;
+    max_instructions: number;
+    max_tx_bytes: number;
+    max_decompressed_bytes: number;
+    max_metadata_depth: number;
+  };
+  block: {
+    max_transactions: number;
+  };
+  pipeline: {
+    signature_batch_max: number;
+    signature_batch_max_ed25519: number;
+    signature_batch_max_secp256k1: number;
+    signature_batch_max_pqc: number;
+    signature_batch_max_bls: number;
+    overlay_max_instructions: number;
+    ivm_max_decoded_instructions: number;
+  };
+  queue: {
+    size: number;
+    queued: number;
+    inflight: number;
+  };
+  fees: {
+    fee_asset_id: string;
+    fee_sink_account_id: string;
+    base_fee: unknown;
+    per_byte_fee: unknown;
+    per_instruction_fee: unknown;
+    per_gas_unit_fee: unknown;
+    sponsorship_enabled: boolean;
+    sponsor_max_fee: unknown;
+    sponsor_verified_balance_safety_floor: unknown;
+    canonical_sponsor_account_id: string | null;
+    fee_receipts_activation_height: number;
+    external_settlement_enabled: boolean;
+    burn_from_unix_timestamp_ms: number;
+    settlement_mode: string;
+    successful_claim_fee_exempt_authorities: string[];
+  };
+  raw: Readonly<Record<string, unknown>>;
+  isStatusStalled(status: ToriiStatusPayload | Record<string, unknown>): boolean;
+}
+
+export function statusLivenessElapsedMs(
+  status: ToriiStatusPayload | Record<string, unknown>,
+): number;
+
+export function isStatusQueueStalled(
+  status: ToriiStatusPayload | Record<string, unknown>,
+  stallThresholdMs: number | string | bigint,
+): boolean;
 
 export interface ToriiNetworkTimeNow {
   timestampMs: number;
@@ -5716,6 +5804,7 @@ export interface DeployContractResponse {
   dataspace: string | null;
   deploy_nonce: number | null;
   tx_hash_hex: string | null;
+  pipeline_status?: ToriiPipelineTransactionStatus | null;
   code_hash_hex: string;
   abi_hash_hex: string;
 }
@@ -5757,6 +5846,7 @@ export interface ContractCallResponse {
   abi_hash_hex: string;
   creation_time_ms: number;
   tx_hash_hex: string | null;
+  pipeline_status?: ToriiPipelineTransactionStatus | null;
   entrypoint: string | null;
   transaction_scaffold_b64: string | null;
   signed_transaction_b64: string | null;
@@ -7512,6 +7602,7 @@ export declare class ToriiClient {
   getPipelineRecoveryTyped(
     height: number | string | bigint,
   ): Promise<ToriiPipelineRecoverySidecar | null>;
+  getPipelinePreflight(options?: { signal?: AbortSignal }): Promise<ToriiPipelinePreflight>;
   getPipelineRecoveryFastpqProofs(
     height: number | string | bigint,
     options?: { signal?: AbortSignal },
