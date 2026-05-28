@@ -386,6 +386,7 @@
     "display_ttl_ms": 60000,
     "generated_at_ms": 1706000000000,
     "invoice_id": "invoice-fixture-1",
+    "output_commitment_hex": "a81723d9eb3cc3400b805bf10063c434c7ec870735046072afbba39611e9770d",
     "recipient_key_certificate": {
       "account_id": "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L",
       "assertion_key_algorithm": "app-attest-p256",
@@ -401,7 +402,8 @@
       "public_key": "XiEsCYDks5/AlyETSqAhCTdO39JgwNPQPLUByNZUV6k=",
       "version": 1
     },
-    "type": "offline_receive_request"
+    "type": "offline_receive_request",
+    "version": 1
   },
   "sdk_interop": {
     "payment_token_envelope_schema": "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelope",

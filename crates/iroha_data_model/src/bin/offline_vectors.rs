@@ -325,6 +325,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         proof_bytes_base64: &proof_bytes_base64,
     });
     let receive_request = object(vec![
+        ("version", Value::from(1_u64)),
         ("type", Value::from("offline_receive_request")),
         ("invoice_id", Value::from(INVOICE_ID)),
         (
@@ -336,6 +337,10 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
             Value::from(asset_definition_id_string.clone()),
         ),
         ("amount", Value::from(AMOUNT)),
+        (
+            "output_commitment_hex",
+            Value::from(recipient_commitment_string.clone()),
+        ),
         (
             "recipient_key_certificate",
             mobile_certificate_json(&recipient_certificate),
@@ -1307,6 +1312,19 @@ mod tests {
         assert_eq!(
             string(field(prefixes, "receipt_ack")),
             OFFLINE_BEARER_CASH_ACK_PREFIX
+        );
+
+        let receive_request = field(&fixture, "receive_request");
+        assert_eq!(
+            string(field(receive_request, "type")),
+            "offline_receive_request"
+        );
+        assert_eq!(
+            string(field(receive_request, "output_commitment_hex")),
+            string(field(
+                field(field(&fixture, "chain_vectors"), "derivation"),
+                "recipient_output_commitment"
+            ))
         );
 
         let token = field(&fixture, "payment_token");

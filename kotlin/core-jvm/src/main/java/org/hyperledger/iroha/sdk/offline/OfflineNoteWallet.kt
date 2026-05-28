@@ -384,8 +384,18 @@ class OfflineNoteReceiveRequest(
     val amount: String,
     val keyCertificate: OfflineNote.KeyCertificate,
     outputCommitment: ByteArray,
+    val displayTtlMs: Long = 60_000,
+    val generatedAtMs: Long = 0,
 ) {
     private val _outputCommitment = outputCommitment.copyOf()
+
+    init {
+        require(_outputCommitment.size == 32) { "outputCommitment must be exactly 32 bytes" }
+        require(keyCertificate.accountId == accountId) {
+            "receive request accountId does not match key certificate"
+        }
+    }
+
     val canonicalAmount: String = OfflineNote.AuditOutputClaim(
         noteCommitment = _outputCommitment,
         keyCertificate = keyCertificate,
@@ -397,12 +407,161 @@ class OfflineNoteReceiveRequest(
     fun outputCommitmentHex(): String = hexLower(_outputCommitment)
 }
 
-/** QR/Norito handoff codec for Offline Note receive requests. */
+/** QR/Norito/JSON handoff codec for Offline Note receive requests. */
 object OfflineNoteReceiveRequestCodec {
     const val TYPE: String = "offline_receive_request"
+    const val VERSION: Long = 1
     const val TEXT_PREFIX: String = "wallet-offline-bearer-cash-receive:"
     private const val RECEIVE_REQUEST_ENVELOPE_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteReceiveRequestEnvelope"
+
+    @JvmStatic
+    fun encodeJson(request: OfflineNoteReceiveRequest): ByteArray {
+        val payload = linkedMapOf<String, Any?>(
+            "version" to VERSION,
+            "type" to TYPE,
+            "invoice_id" to request.paymentRequestId,
+            "account_id" to request.accountId,
+            "asset_definition_id" to request.assetDefinitionId,
+            "amount" to request.canonicalAmount,
+            "output_commitment_hex" to request.outputCommitmentHex(),
+            "recipient_key_certificate" to encodeCertificateObject(request.keyCertificate),
+            "display_ttl_ms" to request.displayTtlMs,
+            "generated_at_ms" to request.generatedAtMs,
+        )
+        return JsonEncoder.encode(payload).toByteArray(StandardCharsets.UTF_8)
+    }
+
+    @JvmStatic
+    fun decodeJson(payload: ByteArray, chainId: String): OfflineNoteReceiveRequest {
+        val obj = parseJsonRoot(payload)
+        val version = asLong(obj["version"], "version")
+        require(version == VERSION) { "Offline Note receive request JSON version must be $VERSION" }
+        require(asString(obj["type"], "type") == TYPE) {
+            "Offline Note receive request JSON type mismatch"
+        }
+        val keyCertificate = decodeCertificateObject(
+            asObject(obj["recipient_key_certificate"], "recipient_key_certificate"),
+            "recipient_key_certificate",
+        )
+        val accountId = asString(obj["account_id"], "account_id")
+        require(keyCertificate.accountId == accountId) {
+            "Offline Note receive request account_id does not match key certificate"
+        }
+        val assetDefinitionId = asString(obj["asset_definition_id"], "asset_definition_id")
+        return OfflineNoteReceiveRequest(
+            chainId = chainId,
+            paymentRequestId = asString(obj["invoice_id"], "invoice_id"),
+            accountId = accountId,
+            assetDefinitionId = assetDefinitionId,
+            assetId = walletAssetId(assetDefinitionId, accountId),
+            amount = asString(obj["amount"], "amount"),
+            keyCertificate = keyCertificate,
+            outputCommitment = parseHexBytes(
+                asString(obj["output_commitment_hex"], "output_commitment_hex"),
+                "output_commitment_hex",
+            ),
+            displayTtlMs = asLong(obj["display_ttl_ms"], "display_ttl_ms"),
+            generatedAtMs = asLong(obj["generated_at_ms"], "generated_at_ms"),
+        )
+    }
+
+    private fun encodeCertificateObject(certificate: OfflineNote.KeyCertificate): Map<String, Any?> =
+        linkedMapOf(
+            "version" to certificate.version,
+            "platform" to certificate.platform,
+            "key_id" to certificate.keyId,
+            "device_id" to certificate.deviceId,
+            "account_id" to certificate.accountId,
+            "public_key" to Base64.getEncoder().encodeToString(certificate.publicKey()),
+            "assertion_scheme" to certificate.assertionScheme,
+            "assertion_key_algorithm" to certificate.assertionKeyAlgorithm,
+            "assertion_public_key" to Base64.getEncoder().encodeToString(certificate.assertionPublicKey()),
+            "assertion_usage_count_limit" to certificate.assertionUsageCountLimit,
+            "one_use" to certificate.oneUse,
+            "issuer_signature_base64" to Base64.getEncoder().encodeToString(certificate.issuerSignature()),
+            "issuer_signature_payload_base64" to Base64.getEncoder().encodeToString(certificate.signingBytes()),
+        )
+
+    private fun decodeCertificateObject(
+        obj: Map<String, Any?>,
+        field: String,
+    ): OfflineNote.KeyCertificate {
+        val certificate = OfflineNote.KeyCertificate(
+            version = asLong(obj["version"], "$field.version").toInt(),
+            platform = asString(obj["platform"], "$field.platform"),
+            keyId = asString(obj["key_id"], "$field.key_id"),
+            deviceId = asString(obj["device_id"], "$field.device_id"),
+            accountId = asString(obj["account_id"], "$field.account_id"),
+            publicKey = Base64.getDecoder().decode(asString(obj["public_key"], "$field.public_key")),
+            assertionScheme = asString(obj["assertion_scheme"], "$field.assertion_scheme"),
+            assertionKeyAlgorithm = asString(obj["assertion_key_algorithm"], "$field.assertion_key_algorithm"),
+            assertionPublicKey = Base64.getDecoder()
+                .decode(asString(obj["assertion_public_key"], "$field.assertion_public_key")),
+            assertionUsageCountLimit = asOptionalInt(
+                obj["assertion_usage_count_limit"],
+                "$field.assertion_usage_count_limit",
+            ),
+            oneUse = asBoolean(obj["one_use"], "$field.one_use"),
+            issuerSignature = Base64.getDecoder()
+                .decode(asString(obj["issuer_signature_base64"], "$field.issuer_signature_base64")),
+        )
+        val signingPayload = Base64.getDecoder().decode(
+            asString(obj["issuer_signature_payload_base64"], "$field.issuer_signature_payload_base64"),
+        )
+        require(signingPayload.contentEquals(certificate.signingBytes())) {
+            "Offline Note receive request certificate signing payload mismatch"
+        }
+        return certificate
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun parseJsonRoot(payload: ByteArray): Map<String, Any?> {
+        val parsed = JsonParser.parse(String(payload, StandardCharsets.UTF_8))
+        require(parsed is Map<*, *>) { "Offline Note receive request JSON root must be an object" }
+        return parsed as Map<String, Any?>
+    }
+
+    private fun asString(value: Any?, field: String): String {
+        require(value is String && value.isNotBlank()) { "$field must be a non-empty string" }
+        return value
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun asObject(value: Any?, field: String): Map<String, Any?> {
+        require(value is Map<*, *>) { "$field must be an object" }
+        return value as Map<String, Any?>
+    }
+
+    private fun asBoolean(value: Any?, field: String): Boolean {
+        require(value is Boolean) { "$field must be a boolean" }
+        return value
+    }
+
+    private fun asOptionalInt(value: Any?, field: String): Int? {
+        if (value == null) return null
+        require(value is Number) { "$field must be an integer or null" }
+        return value.toInt()
+    }
+
+    private fun asLong(value: Any?, field: String): Long = when (value) {
+        is Number -> value.toLong()
+        is String -> value.toLong()
+        else -> throw IllegalArgumentException("$field must be an integer")
+    }
+
+    private fun parseHexBytes(value: String, field: String): ByteArray {
+        val normalized = value.lowercase(Locale.ROOT)
+        require(normalized.length % 2 == 0) { "$field must have an even hex length" }
+        val out = ByteArray(normalized.length / 2)
+        for (index in out.indices) {
+            val hi = Character.digit(normalized[index * 2], 16)
+            val lo = Character.digit(normalized[index * 2 + 1], 16)
+            require(hi >= 0 && lo >= 0) { "$field must be hex" }
+            out[index] = ((hi shl 4) or lo).toByte()
+        }
+        return out
+    }
 
     @JvmStatic
     fun encodeNorito(request: OfflineNoteReceiveRequest): ByteArray =
@@ -1478,6 +1637,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
             noteSecret = noteSecret,
             origin = origin,
         )
+        val now = clock.getAsLong()
         val pending = OfflineNoteWalletNote(
             chainId = chainId,
             accountId = accountId,
@@ -1488,8 +1648,8 @@ class OfflineNoteWallet @JvmOverloads constructor(
             noteSecret = noteSecret,
             origin = origin,
             state = OfflineNoteWalletNoteState.RECEIVE_PENDING,
-            createdAtMs = clock.getAsLong(),
-            updatedAtMs = clock.getAsLong(),
+            createdAtMs = now,
+            updatedAtMs = now,
         )
         store.upsert(pending)
         return OfflineNoteReceiveRequest(
@@ -1501,6 +1661,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
             amount = pending.canonicalAmount,
             keyCertificate = keyCertificate,
             outputCommitment = outputCommitment,
+            generatedAtMs = now,
         )
     }
 

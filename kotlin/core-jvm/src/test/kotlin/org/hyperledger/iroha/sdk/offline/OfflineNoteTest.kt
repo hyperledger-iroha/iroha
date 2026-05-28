@@ -1287,6 +1287,133 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun receiveRequestCodecRoundTripsJson() {
+        val request = fixtureReceiveRequest()
+        val encodedJson = OfflineNoteReceiveRequestCodec.encodeJson(request)
+        val encodedObject = parseJsonObject(encodedJson)
+        assertEquals(OfflineNoteReceiveRequestCodec.TYPE, string(encodedObject, "type"))
+        assertEquals(request.paymentRequestId, string(encodedObject, "invoice_id"))
+        assertTrue(encodedObject["recipient_key_certificate"] is Map<*, *>)
+        assertEquals(request.outputCommitmentHex(), string(encodedObject, "output_commitment_hex"))
+        assertEquals(request.displayTtlMs, long(encodedObject, "display_ttl_ms"))
+        assertEquals(request.generatedAtMs, long(encodedObject, "generated_at_ms"))
+        assertFalse(encodedObject.containsKey("chain_id"))
+        assertFalse(encodedObject.containsKey("asset_id"))
+        assertFalse(encodedObject.containsKey("payment_request_id"))
+
+        val decoded = OfflineNoteReceiveRequestCodec.decodeJson(encodedJson, request.chainId)
+        assertEquals(request.chainId, decoded.chainId)
+        assertEquals(request.paymentRequestId, decoded.paymentRequestId)
+        assertEquals(request.accountId, decoded.accountId)
+        assertEquals(request.assetDefinitionId, decoded.assetDefinitionId)
+        assertEquals(request.assetId, decoded.assetId)
+        assertEquals(request.canonicalAmount, decoded.canonicalAmount)
+        assertEquals(request.outputCommitmentHex(), decoded.outputCommitmentHex())
+        assertEquals(request.displayTtlMs, decoded.displayTtlMs)
+        assertEquals(request.generatedAtMs, decoded.generatedAtMs)
+        assertEquals(
+            base64(request.keyCertificate.noritoEncoded()),
+            base64(decoded.keyCertificate.noritoEncoded()),
+        )
+    }
+
+    @Test
+    fun receiveRequestCodecDecodesFixtureReceiveRequest() {
+        val fixture = loadFixture()
+        val challenge = obj(fixture, "receive_request")
+        val derivation = obj(obj(fixture, "chain_vectors"), "derivation")
+        val chainId = string(derivation, "chain_id")
+
+        val decoded = OfflineNoteReceiveRequestCodec.decodeJson(
+            JsonEncoder.encode(challenge).toByteArray(StandardCharsets.UTF_8),
+            chainId,
+        )
+
+        assertEquals(chainId, decoded.chainId)
+        assertEquals(string(challenge, "invoice_id"), decoded.paymentRequestId)
+        assertEquals(string(challenge, "account_id"), decoded.accountId)
+        assertEquals(string(challenge, "asset_definition_id"), decoded.assetDefinitionId)
+        assertEquals(string(obj(obj(fixture, "chain_vectors"), "redeem"), "asset_id"), decoded.assetId)
+        assertEquals(string(challenge, "amount"), decoded.canonicalAmount)
+        assertEquals(string(challenge, "output_commitment_hex"), decoded.outputCommitmentHex())
+        assertEquals(long(challenge, "display_ttl_ms"), decoded.displayTtlMs)
+        assertEquals(long(challenge, "generated_at_ms"), decoded.generatedAtMs)
+        assertEquals(
+            base64(certificate(obj(challenge, "recipient_key_certificate")).noritoEncoded()),
+            base64(decoded.keyCertificate.noritoEncoded()),
+        )
+    }
+
+    @Test
+    fun receiveRequestCodecRejectsAccountCertificateMismatch() {
+        val request = fixtureReceiveRequest()
+        val encoded = String(
+            OfflineNoteReceiveRequestCodec.encodeJson(request),
+            StandardCharsets.UTF_8,
+        ).replaceFirst(
+            """"account_id":"${request.accountId}"""",
+            """"account_id":"mallory"""",
+        )
+
+        val err = assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiveRequestCodec.decodeJson(
+                encoded.toByteArray(StandardCharsets.UTF_8),
+                request.chainId,
+            )
+        }
+        assertTrue(
+            err.message?.contains("account_id does not match key certificate") == true,
+            "unexpected error message: ${err.message}",
+        )
+    }
+
+    @Test
+    fun receiveRequestCodecRejectsInvalidOutputCommitmentLength() {
+        val request = fixtureReceiveRequest()
+        val encoded = String(
+            OfflineNoteReceiveRequestCodec.encodeJson(request),
+            StandardCharsets.UTF_8,
+        ).replaceFirst(
+            """"output_commitment_hex":"${request.outputCommitmentHex()}"""",
+            """"output_commitment_hex":"abcd"""",
+        )
+
+        val err = assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiveRequestCodec.decodeJson(
+                encoded.toByteArray(StandardCharsets.UTF_8),
+                request.chainId,
+            )
+        }
+        assertTrue(
+            err.message?.contains("32 bytes") == true,
+            "unexpected error message: ${err.message}",
+        )
+    }
+
+    @Test
+    fun receiveRequestCodecRejectsWrongType() {
+        val request = fixtureReceiveRequest()
+        val encoded = String(
+            OfflineNoteReceiveRequestCodec.encodeJson(request),
+            StandardCharsets.UTF_8,
+        ).replaceFirst(
+            """"type":"${OfflineNoteReceiveRequestCodec.TYPE}"""",
+            """"type":"offline_receive_challenge_v2"""",
+        )
+
+        val err = assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiveRequestCodec.decodeJson(
+                encoded.toByteArray(StandardCharsets.UTF_8),
+                request.chainId,
+            )
+        }
+        assertTrue(
+            err.message?.contains("type mismatch") == true,
+            "unexpected error message: ${err.message}",
+        )
+    }
+
+    @Test
     fun receiptAckCodecRoundTripsNoritoTextAndQrFrames() {
         val fixture = loadFixture()
         val payment = obj(fixture, "payment_token")
@@ -3204,18 +3331,17 @@ class OfflineNoteTest {
             assetDefinitionId = assetDefinitionId,
             amount = receiveAmount,
         )
-        val accountSubstitution = OfflineNoteReceiveRequest(
-            chainId = receiveRequest.chainId,
-            paymentRequestId = receiveRequest.paymentRequestId,
-            accountId = senderAccountId,
-            assetDefinitionId = receiveRequest.assetDefinitionId,
-            assetId = receiveRequest.assetId,
-            amount = receiveRequest.amount,
-            keyCertificate = receiveRequest.keyCertificate,
-            outputCommitment = receiveRequest.outputCommitment(),
-        )
         assertFailsWith<IllegalArgumentException> {
-            senderWallet.pay(accountSubstitution)
+            OfflineNoteReceiveRequest(
+                chainId = receiveRequest.chainId,
+                paymentRequestId = receiveRequest.paymentRequestId,
+                accountId = senderAccountId,
+                assetDefinitionId = receiveRequest.assetDefinitionId,
+                assetId = receiveRequest.assetId,
+                amount = receiveRequest.amount,
+                keyCertificate = receiveRequest.keyCertificate,
+                outputCommitment = receiveRequest.outputCommitment(),
+            )
         }
         val chainSubstitution = OfflineNoteReceiveRequest(
             chainId = "${receiveRequest.chainId}-evil",
@@ -4818,6 +4944,33 @@ class OfflineNoteTest {
     private fun loadFixture(): Map<String, Any?> {
         val path = Paths.get("..", "..", "fixtures", "offline", "interop_contract.json")
         val parsed = JsonParser.parse(String(Files.readAllBytes(path), Charsets.UTF_8))
+        @Suppress("UNCHECKED_CAST")
+        return parsed as Map<String, Any?>
+    }
+
+    private fun fixtureReceiveRequest(): OfflineNoteReceiveRequest {
+        val fixture = loadFixture()
+        val challenge = obj(fixture, "receive_request")
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val assetDefinitionId = string(challenge, "asset_definition_id")
+        val accountId = string(challenge, "account_id")
+        return OfflineNoteReceiveRequest(
+            chainId = string(derivation, "chain_id"),
+            paymentRequestId = string(challenge, "invoice_id"),
+            accountId = accountId,
+            assetDefinitionId = assetDefinitionId,
+            assetId = string(obj(chain, "redeem"), "asset_id"),
+            amount = string(challenge, "amount"),
+            keyCertificate = certificate(obj(challenge, "recipient_key_certificate")),
+            outputCommitment = hexBytes(string(challenge, "output_commitment_hex")),
+            displayTtlMs = long(challenge, "display_ttl_ms"),
+            generatedAtMs = long(challenge, "generated_at_ms"),
+        )
+    }
+
+    private fun parseJsonObject(payload: ByteArray): Map<String, Any?> {
+        val parsed = JsonParser.parse(String(payload, StandardCharsets.UTF_8))
         @Suppress("UNCHECKED_CAST")
         return parsed as Map<String, Any?>
     }
