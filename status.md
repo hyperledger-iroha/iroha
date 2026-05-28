@@ -2,6 +2,17 @@
 
 Last updated: 2026-05-28
 
+## 2026-05-28 Torii public transaction decode errors
+
+- Public `/v1/pipeline/transactions` Norito decode failures now return the
+  structured `invalid_transaction_payload` error envelope even when the generic
+  versioned extractor rejects the body before the handler runs. Query decode
+  rejection behavior remains unchanged.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib utils::extractors::tests -- --nocapture`
+  - `cargo test -p iroha_torii --test norito_ingress -- --nocapture`
+
 ## 2026-05-28 Torii Nexus lifecycle response negotiation
 
 - `/v1/nexus/lifecycle` now honors the current Torii response negotiation for

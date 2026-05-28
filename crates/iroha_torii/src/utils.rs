@@ -825,6 +825,21 @@ pub mod extractors {
     #[derive(Clone, Copy, Debug)]
     pub struct JsonOrNoritoVersioned<T>(pub T);
 
+    fn versioned_decode_rejection<T: 'static>(versioned_err: impl std::fmt::Display) -> Response {
+        let message = format!("Could not decode versioned request: {versioned_err}");
+        if TypeId::of::<T>() == TypeId::of::<SignedTransaction>() {
+            return super::respond_with_status_and_format(
+                StatusCode::BAD_REQUEST,
+                iroha_torii_shared::ErrorEnvelope::new(
+                    "invalid_transaction_payload",
+                    format!("transaction payload could not be decoded: {message}"),
+                ),
+                super::current_response_format(),
+            );
+        }
+        (StatusCode::BAD_REQUEST, message).into_response()
+    }
+
     impl<S, T> FromRequest<S> for JsonOrNoritoVersioned<T>
     where
         Bytes: FromRequest<S>,
@@ -860,13 +875,7 @@ pub mod extractors {
             if super::is_norito_media_type(raw) {
                 return <T as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&body)
                     .map(JsonOrNoritoVersioned)
-                    .map_err(|versioned_err| {
-                        (
-                            StatusCode::BAD_REQUEST,
-                            format!("Could not decode versioned request: {versioned_err}"),
-                        )
-                            .into_response()
-                    });
+                    .map_err(versioned_decode_rejection::<T>);
             }
 
             if super::is_json_media_type(raw) {
@@ -1224,7 +1233,7 @@ pub mod extractors {
     mod tests {
         use axum::{
             body::Body,
-            http::{Request, StatusCode, header::CONTENT_TYPE},
+            http::{HeaderValue, Request, StatusCode, header::CONTENT_TYPE},
         };
         use http_body_util::BodyExt as _;
         use iroha_version::{RawVersioned, UnsupportedVersion, Version};
@@ -1306,6 +1315,36 @@ pub mod extractors {
             assert!(
                 body_text.to_ascii_lowercase().contains("version"),
                 "body should mention versioned decode reason: {body_text}"
+            );
+        }
+
+        #[tokio::test]
+        async fn signed_transaction_versioned_decode_error_returns_error_envelope() {
+            let req = Request::builder()
+                .header(CONTENT_TYPE, super::super::NORITO_MIME_TYPE)
+                .body(Body::from(Vec::<u8>::new()))
+                .expect("request");
+            let err = JsonOrNoritoVersioned::<SignedTransaction>::from_request(req, &())
+                .await
+                .expect_err("should fail");
+            assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                err.headers().get(CONTENT_TYPE),
+                Some(&HeaderValue::from_static(super::super::NORITO_MIME_TYPE))
+            );
+
+            let body = http_body_util::BodyExt::collect(err.into_body())
+                .await
+                .expect("collect error body")
+                .to_bytes();
+            let envelope: iroha_torii_shared::ErrorEnvelope =
+                norito::decode_from_bytes(&body).expect("decode error envelope");
+            assert_eq!(envelope.code(), "invalid_transaction_payload");
+            assert!(
+                envelope
+                    .message()
+                    .contains("transaction payload could not be decoded"),
+                "unexpected error envelope: {envelope:?}"
             );
         }
 
