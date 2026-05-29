@@ -998,7 +998,7 @@ pub async fn handle_v1_sumeragi_params(
         mode_activation_height: sp.mode_activation_height,
         chain_height: u64::try_from(state.committed_height()).unwrap_or(u64::MAX),
     };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
