@@ -2,6 +2,17 @@
 
 Last updated: 2026-05-29
 
+## 2026-05-29 Torii proof query fixture
+
+- `routing::query_endpoint_tests::proofs_roundtrip_and_query_via_torii`
+  now uses a supported transparent Halo2 IPA `OpenVerifyEnvelope` fixture and
+  matching `Halo2IpaPasta` verifier record instead of a trusted-setup
+  Groth16/BN254 proof label. This keeps Torii proof-query roundtrip coverage
+  aligned with the production trusted-setup rejection guardrail.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii proofs_roundtrip_and_query_via_torii --lib -- --nocapture`
+
 ## 2026-05-29 Kagemusha SDK bridge exposure
 
 - Swift, Kotlin/JVM, and Java Android now expose record-backed Kagemusha
