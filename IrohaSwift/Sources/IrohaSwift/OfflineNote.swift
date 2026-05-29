@@ -34,7 +34,11 @@ public enum OfflineNoteError: Error, LocalizedError, Equatable {
     case invalidRandomBytesLength(field: String, expected: Int, actual: Int)
     case unsupportedDerivationDomain(field: String, expected: String, actual: String)
     case auditInputCountMismatch(nullifiers: Int, claims: Int)
+    case auditOutputCountMismatch(commitments: Int, claims: Int)
+    case auditOutputClaimOrderMismatch(index: Int)
     case auditOutputClaimNotCommitted(String)
+    case unsupportedRecursiveVerifierKey(expectedBackend: String, expectedName: String, actualBackend: String, actualName: String)
+    case unsupportedRecursiveProofBackend(expected: String, actual: String)
     case proofPublicInputsHashMismatch(expected: String, actual: String)
 
     public var errorDescription: String? {
@@ -69,8 +73,16 @@ public enum OfflineNoteError: Error, LocalizedError, Equatable {
             return "\(field) must be \(expected), got \(actual)."
         case let .auditInputCountMismatch(nullifiers, claims):
             return "Offline audit input nullifier count \(nullifiers) must match input claim count \(claims)."
+        case let .auditOutputCountMismatch(commitments, claims):
+            return "Offline audit output commitment count \(commitments) must match output claim count \(claims)."
+        case let .auditOutputClaimOrderMismatch(index):
+            return "Offline audit output claim at index \(index) must match the output commitment at the same index."
         case let .auditOutputClaimNotCommitted(commitment):
             return "Offline audit output claim \(commitment) is not listed in output commitments."
+        case let .unsupportedRecursiveVerifierKey(expectedBackend, expectedName, actualBackend, actualName):
+            return "Offline recursive proof verifier key must be \(expectedBackend):\(expectedName), got \(actualBackend):\(actualName)."
+        case let .unsupportedRecursiveProofBackend(expected, actual):
+            return "Offline recursive proof backend must be \(expected), got \(actual)."
         case let .proofPublicInputsHashMismatch(expected, actual):
             return "Offline recursive proof public input hash mismatch: expected \(expected), got \(actual)."
         }
@@ -116,6 +128,24 @@ public struct OfflineNoteRecursiveProof: Equatable, Sendable {
         let verifierKeyId = try VerifyingKeyIdReference(backend: verifierBackend, name: verifierName)
         let proof = try OfflineNoteProofBox(backend: proofBackend, bytes: proofBytes)
         try self.init(verifierKeyId: verifierKeyId, publicInputsHash: publicInputsHash, proof: proof)
+    }
+
+    public func validateCanonicalMetadata() throws {
+        guard verifierKeyId.backend == OfflineNoteConstants.recursiveBackend,
+              verifierKeyId.name == OfflineNoteConstants.recursiveVerifierName else {
+            throw OfflineNoteError.unsupportedRecursiveVerifierKey(
+                expectedBackend: OfflineNoteConstants.recursiveBackend,
+                expectedName: OfflineNoteConstants.recursiveVerifierName,
+                actualBackend: verifierKeyId.backend,
+                actualName: verifierKeyId.name
+            )
+        }
+        guard proof.backend == OfflineNoteConstants.recursiveBackend else {
+            throw OfflineNoteError.unsupportedRecursiveProofBackend(
+                expected: OfflineNoteConstants.recursiveBackend,
+                actual: proof.backend
+            )
+        }
     }
 }
 
@@ -659,6 +689,7 @@ public struct OfflineNoteRedeem: Equatable, Sendable {
     }
 
     public func validateProofBinding() throws {
+        try recursiveProof.validateCanonicalMetadata()
         let expected = try publicInputsHash()
         guard recursiveProof.publicInputsHash == expected else {
             throw OfflineNoteError.proofPublicInputsHashMismatch(
@@ -722,8 +753,23 @@ public struct OfflineNoteAuditPublicInputs: Equatable, Sendable {
         guard !inputClaims.isEmpty else {
             throw OfflineNoteError.emptyInputClaims
         }
+        guard inputClaims.count == inputNullifiers.count else {
+            throw OfflineNoteError.auditInputCountMismatch(
+                nullifiers: inputNullifiers.count,
+                claims: inputClaims.count
+            )
+        }
         guard !outputClaims.isEmpty else {
             throw OfflineNoteError.emptyOutputClaims
+        }
+        guard outputClaims.count == outputCommitments.count else {
+            throw OfflineNoteError.auditOutputCountMismatch(
+                commitments: outputCommitments.count,
+                claims: outputClaims.count
+            )
+        }
+        for (index, pair) in zip(outputCommitments, outputClaims).enumerated() where pair.0 != pair.1.noteCommitment {
+            throw OfflineNoteError.auditOutputClaimOrderMismatch(index: index)
         }
         self.domain = domain
         self.tokenId = tokenId
@@ -797,11 +843,15 @@ public struct OfflineNoteAuditBundle: Equatable, Sendable {
         guard !outputClaims.isEmpty else {
             throw OfflineNoteError.emptyOutputClaims
         }
-        let committed = Set(outputCommitments.map { $0.hexLowercased() })
-        for claim in outputClaims {
-            let commitment = claim.noteCommitment.hexLowercased()
-            guard committed.contains(commitment) else {
-                throw OfflineNoteError.auditOutputClaimNotCommitted(commitment)
+        guard outputClaims.count == outputCommitments.count else {
+            throw OfflineNoteError.auditOutputCountMismatch(
+                commitments: outputCommitments.count,
+                claims: outputClaims.count
+            )
+        }
+        for (index, pair) in zip(outputCommitments, outputClaims).enumerated() {
+            guard pair.0 == pair.1.noteCommitment else {
+                throw OfflineNoteError.auditOutputClaimOrderMismatch(index: index)
             }
         }
         self.tokenId = tokenId
@@ -842,6 +892,7 @@ public struct OfflineNoteAuditBundle: Equatable, Sendable {
     }
 
     public func validateProofBinding() throws {
+        try recursiveProof.validateCanonicalMetadata()
         let expected = try publicInputsHash()
         guard recursiveProof.publicInputsHash == expected else {
             throw OfflineNoteError.proofPublicInputsHashMismatch(

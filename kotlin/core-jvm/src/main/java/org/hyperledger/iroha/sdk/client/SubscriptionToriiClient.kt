@@ -122,10 +122,15 @@ class SubscriptionToriiClient private constructor(builder: Builder) {
     private fun notifyResponse(request: TransportRequest, response: ClientResponse) { for (observer in observers) observer.onResponse(request, response) }
     private fun notifyFailure(request: TransportRequest, error: Throwable) { for (observer in observers) observer.onFailure(request, error) }
 
-    private fun <T> unsupportedServerSideSigning(endpoint: String): CompletableFuture<T> =
-        throw UnsupportedOperationException(
-            "$endpoint no longer accepts server-side signing inputs; submit a locally signed transaction instead.",
+    private fun <T> unsupportedServerSideSigning(endpoint: String): CompletableFuture<T> {
+        val future = CompletableFuture<T>()
+        future.completeExceptionally(
+            SubscriptionToriiException(
+                "$endpoint no longer accepts server-side signing inputs; submit a locally signed transaction instead.",
+            ),
         )
+        return future
+    }
 
     private fun <T> executeHttpRequest(request: TransportRequest, parser: (ByteArray) -> T): CompletableFuture<T> {
         val future = CompletableFuture<T>()

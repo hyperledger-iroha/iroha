@@ -8062,6 +8062,13 @@ pub struct Offline {
     pub escrow_required: bool,
     /// Escrow accounts keyed by asset definition for Offline notes.
     pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
+    /// Whether Kagemusha shielded offline-offline payments are active.
+    ///
+    /// `KagemushaTransfer` enforces this gate before forwarding to the shared
+    /// shielded ZK asset accumulator.
+    pub kagemusha_enabled: bool,
+    /// Whether nodes force legacy bearer-audit lineage during migration.
+    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -8073,6 +8080,8 @@ impl Default for Offline {
             prune_batch_size: defaults::settlement::offline::PRUNE_BATCH_SIZE,
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
+            kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
+            kagemusha_force_legacy: defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY,
         }
     }
 }
@@ -9218,6 +9227,19 @@ impl Default for FraudMonitoring {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offline_defaults_keep_kagemusha_enabled_without_legacy_fallback() {
+        let offline = Offline::default();
+        assert!(
+            offline.kagemusha_enabled,
+            "Kagemusha must remain enabled by default"
+        );
+        assert!(
+            !offline.kagemusha_force_legacy,
+            "legacy Kagemusha fallback must remain opt-in"
+        );
+    }
 
     #[test]
     fn nexus_storage_budget_component_from_str_matches_persisted_labels() {

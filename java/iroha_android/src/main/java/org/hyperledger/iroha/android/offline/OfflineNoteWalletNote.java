@@ -21,6 +21,7 @@ public final class OfflineNoteWalletNote {
   private final OfflineNoteWalletNoteState state;
   private final long createdAtMs;
   private final long updatedAtMs;
+  private final String spentPaymentRequestId;
 
   public OfflineNoteWalletNote(
       final String chainId,
@@ -46,7 +47,8 @@ public final class OfflineNoteWalletNote {
         Collections.emptyList(),
         state,
         createdAtMs,
-        updatedAtMs);
+        updatedAtMs,
+        null);
   }
 
   public OfflineNoteWalletNote(
@@ -62,6 +64,36 @@ public final class OfflineNoteWalletNote {
       final OfflineNoteWalletNoteState state,
       final long createdAtMs,
       final long updatedAtMs) {
+    this(
+        chainId,
+        accountId,
+        assetId,
+        amount,
+        keyCertificate,
+        noteCommitment,
+        noteSecret,
+        origin,
+        bearerAuditTrail,
+        state,
+        createdAtMs,
+        updatedAtMs,
+        null);
+  }
+
+  public OfflineNoteWalletNote(
+      final String chainId,
+      final String accountId,
+      final String assetId,
+      final String amount,
+      final OfflineNote.KeyCertificate keyCertificate,
+      final byte[] noteCommitment,
+      final byte[] noteSecret,
+      final OfflineNote.CommitmentOrigin origin,
+      final List<OfflineNote.AuditBundle> bearerAuditTrail,
+      final OfflineNoteWalletNoteState state,
+      final long createdAtMs,
+      final long updatedAtMs,
+      final String spentPaymentRequestId) {
     this.chainId = Objects.requireNonNull(chainId, "chainId");
     this.accountId = Objects.requireNonNull(accountId, "accountId");
     this.assetId = Objects.requireNonNull(assetId, "assetId");
@@ -77,6 +109,7 @@ public final class OfflineNoteWalletNote {
     this.state = Objects.requireNonNull(state, "state");
     this.createdAtMs = createdAtMs;
     this.updatedAtMs = updatedAtMs;
+    this.spentPaymentRequestId = normalizeOptionalString(spentPaymentRequestId);
     this.canonicalAmount =
         new OfflineNote.IssuedClaim(
                 this.noteCommitment, keyCertificate.payloadHash(), assetId, amount)
@@ -139,6 +172,10 @@ public final class OfflineNoteWalletNote {
     return updatedAtMs;
   }
 
+  public String spentPaymentRequestId() {
+    return spentPaymentRequestId;
+  }
+
   public OfflineNote.IssuedClaim issuedClaim() {
     return new OfflineNote.IssuedClaim(
         noteCommitment(), keyCertificate.payloadHash(), assetId, canonicalAmount);
@@ -158,7 +195,8 @@ public final class OfflineNoteWalletNote {
         bearerAuditTrail,
         state,
         createdAtMs,
-        updatedAtMs);
+        updatedAtMs,
+        spentPaymentRequestId);
   }
 
   public OfflineNoteWalletNote withBearerAuditTrail(
@@ -175,6 +213,33 @@ public final class OfflineNoteWalletNote {
         bearerAuditTrail,
         state,
         createdAtMs,
-        updatedAtMs);
+        updatedAtMs,
+        spentPaymentRequestId);
+  }
+
+  public OfflineNoteWalletNote withSpentPaymentRequestId(
+      final String spentPaymentRequestId, final long updatedAtMs) {
+    return new OfflineNoteWalletNote(
+        chainId,
+        accountId,
+        assetId,
+        canonicalAmount,
+        keyCertificate,
+        noteCommitment(),
+        noteSecret(),
+        origin,
+        bearerAuditTrail,
+        state,
+        createdAtMs,
+        updatedAtMs,
+        spentPaymentRequestId);
+  }
+
+  private static String normalizeOptionalString(final String value) {
+    if (value == null) {
+      return null;
+    }
+    final String trimmed = value.trim();
+    return trimmed.isEmpty() ? null : trimmed;
   }
 }

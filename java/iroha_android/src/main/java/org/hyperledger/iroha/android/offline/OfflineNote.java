@@ -413,6 +413,21 @@ public final class OfflineNote {
     public ProofBox proof() {
       return proof;
     }
+
+    public void validateCanonicalMetadata() {
+      if (!RECURSIVE_BACKEND.equals(verifierKeyId.backend())
+          || !RECURSIVE_VERIFIER_NAME.equals(verifierKeyId.name())) {
+        throw new IllegalArgumentException(
+            "recursive proof verifier key must be "
+                + RECURSIVE_BACKEND
+                + ":"
+                + RECURSIVE_VERIFIER_NAME);
+      }
+      if (!RECURSIVE_BACKEND.equals(proof.backend())) {
+        throw new IllegalArgumentException(
+            "recursive proof backend must be " + RECURSIVE_BACKEND);
+      }
+    }
   }
 
   public static final class KeyCertificatePayload {
@@ -1322,6 +1337,7 @@ public final class OfflineNote {
     }
 
     public void validateProofBinding() {
+      recursiveProof.validateCanonicalMetadata();
       if (!Arrays.equals(recursiveProof.publicInputsHash(), publicInputsHash())) {
         throw new IllegalArgumentException("recursive proof public inputs hash mismatch");
       }
@@ -1401,13 +1417,14 @@ public final class OfflineNote {
       if (this.outputClaims.isEmpty()) {
         throw new IllegalArgumentException("output claims must not be empty");
       }
-      final List<String> committed = new ArrayList<>();
-      for (final byte[] commitment : this.outputCommitments) {
-        committed.add(hexLower(commitment));
+      if (this.outputClaims.size() != this.outputCommitments.size()) {
+        throw new IllegalArgumentException(
+            "output claim count must match output commitment count");
       }
-      for (final IssuedClaim claim : this.outputClaims) {
-        if (!committed.contains(hexLower(claim.noteCommitment()))) {
-          throw new IllegalArgumentException("audit output claim is not listed in output commitments");
+      for (int i = 0; i < this.outputCommitments.size(); i++) {
+        if (!Arrays.equals(this.outputClaims.get(i).noteCommitment(), this.outputCommitments.get(i))) {
+          throw new IllegalArgumentException(
+              "audit output claims must be ordered one-to-one with output commitments");
         }
       }
     }
@@ -1489,6 +1506,16 @@ public final class OfflineNote {
       if (this.outputClaims.isEmpty()) {
         throw new IllegalArgumentException("output claims must not be empty");
       }
+      if (this.outputClaims.size() != this.outputCommitments.size()) {
+        throw new IllegalArgumentException(
+            "output claim count must match output commitment count");
+      }
+      for (int i = 0; i < this.outputCommitments.size(); i++) {
+        if (!Arrays.equals(this.outputClaims.get(i).noteCommitment(), this.outputCommitments.get(i))) {
+          throw new IllegalArgumentException(
+              "audit output claims must be ordered one-to-one with output commitments");
+        }
+      }
     }
 
     public byte[] tokenId() {
@@ -1538,6 +1565,7 @@ public final class OfflineNote {
     }
 
     public void validateProofBinding() {
+      recursiveProof.validateCanonicalMetadata();
       if (!Arrays.equals(recursiveProof.publicInputsHash(), publicInputsHash())) {
         throw new IllegalArgumentException("recursive proof public inputs hash mismatch");
       }
@@ -1652,6 +1680,37 @@ public final class OfflineNote {
       if (audit.inputNullifiers().size() != audit.inputClaims().size()) {
         throw new IllegalArgumentException(
             "audit input nullifier count must match input claim count");
+      }
+      if (audit.outputCommitments().size() != audit.outputClaims().size()) {
+        throw new IllegalArgumentException(
+            "audit output claim count must match output commitment count");
+      }
+      for (int i = 0; i < audit.outputCommitments().size(); i++) {
+        if (!Arrays.equals(audit.outputClaims().get(i).noteCommitment(), audit.outputCommitments().get(i))) {
+          throw new IllegalArgumentException(
+              "audit output claims must be ordered one-to-one with output commitments");
+        }
+      }
+      final byte[] senderCertificateHash = audit.senderKeyCertificate().payloadHash();
+      for (final IssuedClaim claim : audit.inputClaims()) {
+        if (!Arrays.equals(claim.keyCertificatePayloadHash(), senderCertificateHash)) {
+          throw new IllegalArgumentException(
+              "audit input claims must match sender key certificate");
+        }
+      }
+      final byte[] inputDefinition =
+          parseAssetId(audit.inputClaims().get(0).assetId()).definitionBytes;
+      for (final IssuedClaim claim : audit.inputClaims()) {
+        if (!Arrays.equals(parseAssetId(claim.assetId()).definitionBytes, inputDefinition)) {
+          throw new IllegalArgumentException(
+              "audit input and output asset definitions must match");
+        }
+      }
+      for (final AuditOutputClaim claim : audit.outputClaims()) {
+        if (!Arrays.equals(parseAssetId(claim.assetId()).definitionBytes, inputDefinition)) {
+          throw new IllegalArgumentException(
+              "audit input and output asset definitions must match");
+        }
       }
 
       final List<byte[]> inputClaimHashes = new ArrayList<>();

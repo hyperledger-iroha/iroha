@@ -246,7 +246,7 @@ export class ConnectJournalRecord {
     frame.set(SCHEMA_HASH, 6);
     frame[22] = NORITO_COMPRESSION_NONE;
     writeUint64LE(frame, 23, BigInt(payloadLen));
-    // checksum placeholder (filled later)
+    // Header checksum is written after the payload bytes are available.
     frame[39] = NORITO_FLAGS_NONE;
     const payloadStart = NORITO_HEADER_LEN;
     let cursor = payloadStart;

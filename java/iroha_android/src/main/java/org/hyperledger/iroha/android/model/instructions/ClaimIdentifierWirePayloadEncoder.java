@@ -49,6 +49,45 @@ public final class ClaimIdentifierWirePayloadEncoder {
     return InstructionBox.fromWirePayload(WIRE_NAME, wirePayload);
   }
 
+  /** Decodes a Norito-framed {@code ClaimIdentifier} payload. */
+  static DecodedClaimIdentifierPayload decodePayload(final byte[] wirePayload) {
+    Objects.requireNonNull(wirePayload, "wirePayload");
+    final ClaimIdentifierPayload payload =
+        NoritoCodec.decode(wirePayload, new ClaimIdentifierPayloadAdapter(), SCHEMA_PATH);
+    return new DecodedClaimIdentifierPayload(
+        TransferWirePayloadEncoder.decodeAccountIdPayload(payload.accountPayload),
+        payload.receiptPayload,
+        payload.attestationPayload);
+  }
+
+  /** Decoded claim identifier payload with canonical account text and raw receipt bytes. */
+  static final class DecodedClaimIdentifierPayload {
+    private final String accountId;
+    private final byte[] receiptPayloadBytes;
+    private final byte[] attestationPayloadBytes;
+
+    private DecodedClaimIdentifierPayload(
+        final String accountId,
+        final byte[] receiptPayloadBytes,
+        final byte[] attestationPayloadBytes) {
+      this.accountId = accountId;
+      this.receiptPayloadBytes = receiptPayloadBytes.clone();
+      this.attestationPayloadBytes = attestationPayloadBytes.clone();
+    }
+
+    String accountId() {
+      return accountId;
+    }
+
+    byte[] receiptPayloadBytes() {
+      return receiptPayloadBytes.clone();
+    }
+
+    byte[] attestationPayloadBytes() {
+      return attestationPayloadBytes.clone();
+    }
+  }
+
   private static final class ClaimIdentifierPayload {
     private final byte[] accountPayload;
     private final byte[] receiptPayload;
@@ -79,7 +118,12 @@ public final class ClaimIdentifierWirePayloadEncoder {
     @Override
     public ClaimIdentifierPayload decode(
         final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding ClaimIdentifier is not supported");
+      final byte[] accountPayload =
+          decodeSizedField(decoder, PASSTHROUGH_ADAPTER, "ClaimIdentifier.account_id");
+      final ReceiptPayload receipt =
+          decodeSizedField(decoder, RECEIPT_ADAPTER, "ClaimIdentifier.receipt");
+      return new ClaimIdentifierPayload(
+          accountPayload, receipt.payloadBytes, receipt.attestationBytes);
     }
   }
 
@@ -104,7 +148,11 @@ public final class ClaimIdentifierWirePayloadEncoder {
 
     @Override
     public ReceiptPayload decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding identifier receipts is not supported");
+      final byte[] payloadBytes =
+          decodeSizedField(decoder, PASSTHROUGH_ADAPTER, "IdentifierReceipt.payload");
+      final byte[] attestationBytes =
+          decodeSizedField(decoder, PASSTHROUGH_ADAPTER, "IdentifierReceipt.attestation");
+      return new ReceiptPayload(payloadBytes, attestationBytes);
     }
   }
 
@@ -119,7 +167,11 @@ public final class ClaimIdentifierWirePayloadEncoder {
 
     @Override
     public byte[] decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding passthrough payloads is not supported");
+      final byte[] payload = decoder.readBytes(decoder.remaining());
+      if (payload.length == 0) {
+        throw new IllegalArgumentException("payload bytes must not be empty");
+      }
+      return payload;
     }
   }
 
@@ -131,6 +183,25 @@ public final class ClaimIdentifierWirePayloadEncoder {
     final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
     encoder.writeLength(payload.length, compact);
     encoder.writeBytes(payload);
+  }
+
+  private static <T> T decodeSizedField(
+      final org.hyperledger.iroha.norito.NoritoDecoder decoder,
+      final TypeAdapter<T> adapter,
+      final String fieldName) {
+    final long length = decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0);
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(fieldName + " payload too large");
+    }
+    final byte[] payload = decoder.readBytes((int) length);
+    final org.hyperledger.iroha.norito.NoritoDecoder child =
+        new org.hyperledger.iroha.norito.NoritoDecoder(
+            payload, decoder.flags(), decoder.flagsHint());
+    final T value = adapter.decode(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after " + fieldName + " payload");
+    }
+    return value;
   }
 
   private static String requireNonBlank(final String value, final String field) {

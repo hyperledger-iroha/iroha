@@ -1,8 +1,16 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+
 /** Pilot policy defaults for Offline Bearer Cash v1 handoffs. */
 public final class OfflineBearerCashPolicyV1 {
-  // TODO: Enforce custody and lineage limits when note audit payloads carry those counters.
   public static final OfflineBearerCashPolicyV1 DEFAULT = new OfflineBearerCashPolicyV1();
 
   private final int maxCustodyHops;
@@ -89,9 +97,133 @@ public final class OfflineBearerCashPolicyV1 {
     return OfflineBearerCashTransport.FRAMED_BYTE_TRANSPORT;
   }
 
+  public AuditTrailMetrics auditTrailMetrics(final List<OfflineNote.AuditBundle> audits) {
+    return auditTrailMetrics(audits, null);
+  }
+
+  public AuditTrailMetrics auditTrailMetrics(
+      final List<OfflineNote.AuditBundle> audits,
+      final OfflineNote.AuditBundle terminalAudit) {
+    Objects.requireNonNull(audits, "audits");
+    if (terminalAudit != null
+        && (audits.isEmpty()
+            || !Arrays.equals(
+                audits.get(audits.size() - 1).noritoEncoded(), terminalAudit.noritoEncoded()))) {
+      throw new IllegalArgumentException("bearer audit trail must end with terminal audit");
+    }
+    if (audits.isEmpty()) {
+      return new AuditTrailMetrics(0, 0);
+    }
+
+    final Set<String> tokenIds = new LinkedHashSet<>();
+    final Set<String> nullifiers = new LinkedHashSet<>();
+    final Map<String, Integer> outputProducerIndex = new LinkedHashMap<>();
+    for (int index = 0; index < audits.size(); index++) {
+      final OfflineNote.AuditBundle audit = audits.get(index);
+      final String tokenId = OfflineNoteWallet.hexLower(audit.tokenId());
+      if (!tokenIds.add(tokenId)) {
+        throw new IllegalArgumentException("bearer audit trail has duplicate token id: " + tokenId);
+      }
+      for (final byte[] nullifier : audit.inputNullifiers()) {
+        final String key = OfflineNoteWallet.hexLower(nullifier);
+        if (!nullifiers.add(key)) {
+          throw new IllegalArgumentException(
+              "bearer audit trail has duplicate input nullifier: " + key);
+        }
+      }
+      final Set<String> committed = new LinkedHashSet<>();
+      for (final byte[] output : audit.outputCommitments()) {
+        committed.add(OfflineNoteWallet.hexLower(output));
+      }
+      for (final OfflineNote.AuditOutputClaim claim : audit.outputClaims()) {
+        final String key = OfflineNoteWallet.hexLower(claim.noteCommitment());
+        if (!committed.contains(key)) {
+          throw new IllegalArgumentException(
+              "bearer audit trail output claim is not committed: " + key);
+        }
+      }
+      for (final byte[] output : audit.outputCommitments()) {
+        final String key = OfflineNoteWallet.hexLower(output);
+        if (outputProducerIndex.containsKey(key)) {
+          throw new IllegalArgumentException(
+              "bearer audit trail has duplicate output commitment: " + key);
+        }
+        outputProducerIndex.put(key, index);
+      }
+    }
+
+    final List<Integer> depths = new ArrayList<>(audits.size());
+    int maxDepth = 0;
+    for (int index = 0; index < audits.size(); index++) {
+      final OfflineNote.AuditBundle audit = audits.get(index);
+      int parentDepth = 0;
+      for (final OfflineNote.IssuedClaim claim : audit.inputClaims()) {
+        final String key = OfflineNoteWallet.hexLower(claim.noteCommitment());
+        final Integer producerIndex = outputProducerIndex.get(key);
+        if (producerIndex == null) {
+          continue;
+        }
+        if (producerIndex >= index) {
+          throw new IllegalArgumentException(
+              "bearer audit trail input claim is out of order: " + key);
+        }
+        parentDepth = Math.max(parentDepth, depths.get(producerIndex));
+      }
+      final int depth = parentDepth + 1;
+      depths.add(depth);
+      maxDepth = Math.max(maxDepth, depth);
+    }
+
+    return new AuditTrailMetrics(maxDepth, audits.size());
+  }
+
+  public AuditTrailMetrics validateAuditTrail(final List<OfflineNote.AuditBundle> audits) {
+    return validateAuditTrail(audits, null);
+  }
+
+  public AuditTrailMetrics validateAuditTrail(
+      final List<OfflineNote.AuditBundle> audits,
+      final OfflineNote.AuditBundle terminalAudit) {
+    final AuditTrailMetrics metrics = auditTrailMetrics(audits, terminalAudit);
+    if (metrics.custodyHops() > maxCustodyHops) {
+      throw new IllegalArgumentException(
+          "bearer audit trail custody hops "
+              + metrics.custodyHops()
+              + " exceed maxCustodyHops "
+              + maxCustodyHops);
+    }
+    if (metrics.lineageSteps() > maxLineageSteps) {
+      throw new IllegalArgumentException(
+          "bearer audit trail lineage steps "
+              + metrics.lineageSteps()
+              + " exceed maxLineageSteps "
+              + maxLineageSteps);
+    }
+    return metrics;
+  }
+
   private static void requirePositive(final int value, final String field) {
     if (value <= 0) {
       throw new IllegalArgumentException(field + " must be positive");
+    }
+  }
+
+  /** Derived policy metrics for an ordered Offline Bearer Cash audit trail. */
+  public static final class AuditTrailMetrics {
+    private final int custodyHops;
+    private final int lineageSteps;
+
+    public AuditTrailMetrics(final int custodyHops, final int lineageSteps) {
+      this.custodyHops = custodyHops;
+      this.lineageSteps = lineageSteps;
+    }
+
+    public int custodyHops() {
+      return custodyHops;
+    }
+
+    public int lineageSteps() {
+      return lineageSteps;
     }
   }
 }

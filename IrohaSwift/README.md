@@ -595,8 +595,8 @@ Swift exposes `OfflineNoteIssue`, `OfflineNoteRedeem`, and `OfflineNoteAuditBund
 models plus `buildIssueOfflineNote`, `buildRedeemOfflineNote`,
 `buildAuditOfflineNote`, and `buildDefundOfflineNote` transaction builders on
 `IrohaSDK`. Redeem and audit builders verify that the recursive proof's public-input hash
-matches the canonical Swift/Rust Norito payload before signing, so callers pass real prover
-output instead of mock-proof placeholders.
+matches the canonical Swift/Rust Norito payload before signing, so callers pass prover output
+that is bound to the exact public inputs being submitted.
 
 `buildRedeemOfflineNote` signs a single redeem instruction. It is only appropriate when the
 source note's issued claim is already recorded on-chain, such as issuer-loaded notes or outputs
@@ -623,6 +623,11 @@ generation/verification, transaction submission, and persistent storage.
 redeem-pending note records after redeem finality. The SDK includes an in-memory store, a
 `ToriiOfflineNoteIssuerClient` for body-signed key-refill plus note-issue
 loads, and a direct `IrohaSDK` audit/redeem/defund submitter.
+`KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
+token prover for shielded offline-offline payments. Pass a Norito-encoded
+`KagemushaVerifiedFoldRecordBundle`; the bridge verifies each private hop proof
+against its verifier record and returns a Norito-encoded
+`KagemushaCompactPaymentToken` when an ABI 4 `NoritoBridge` is available.
 
 `OfflineBearerCashWallet` is the app-facing Offline Bearer Cash surface. It is
 the Offline Note wallet under the cash naming layer, so value is represented by
@@ -1158,9 +1163,14 @@ directory, mirrors the contents into `IrohaSwift/Fixtures`, and records the arch
 path, digest, and `source_kind=archive` in `artifacts/swift_fixture_regen_state.json`
 so CI cadence checks and dashboards continue to track ownership.
 
-### Connect (WalletConnect-style relay, scaffold)
+### Connect (WalletConnect-style relay)
 
-The SDK ships an early `ConnectClient` wrapper that manages the raw WebSocket session. Frame encoding/decoding flows through `ConnectCodec`, which now requires the Norito bridge (throws `ConnectCodecError.bridgeUnavailable` when the XCFramework is absent). Use `ConnectCrypto` to generate Connect X25519 key pairs and derive directional session keys from the bridge:
+The SDK ships `ConnectClient` and `ConnectSession` helpers for WebSocket
+session management, typed frame exchange, and encrypted envelope handling.
+Frame encoding/decoding flows through `ConnectCodec`, which requires the Norito
+bridge (throws `ConnectCodecError.bridgeUnavailable` when the XCFramework is
+absent). Use `ConnectCrypto` to generate Connect X25519 key pairs and derive
+directional session keys from the bridge:
 
 ```swift
 let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sid)&role=app")!

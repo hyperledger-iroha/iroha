@@ -2264,6 +2264,17 @@ mod tests {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
 
+    fn mutate_open_verify_envelope_proof_box(
+        mut proof: iroha_data_model::proof::ProofBox,
+        mutate: impl FnOnce(&mut ZkOpenVerifyEnvelope),
+    ) -> iroha_data_model::proof::ProofBox {
+        let mut envelope: ZkOpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode OpenVerifyEnvelope fixture");
+        mutate(&mut envelope);
+        proof.bytes = norito::to_bytes(&envelope).expect("encode mutated OpenVerifyEnvelope");
+        proof
+    }
+
     #[test]
     fn empty_overlay_is_noop() {
         let ovl = TxOverlay::default();
@@ -3065,18 +3076,21 @@ mod tests {
         );
 
         let build_tx =
-            |events_commitment: Hash, gas_policy_commitment: Hash| -> SignedTransaction {
+            |events_commitment: Hash,
+             gas_policy_commitment: Hash,
+             mutate_envelope: Option<fn(&mut ZkOpenVerifyEnvelope)>| {
                 let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
                     code_hash,
                     overlay_hash,
                     events_commitment,
                     gas_policy_commitment,
                 );
-                let attachment = ProofAttachment::new_ref(
-                    "halo2/ipa".into(),
-                    fixture.proof_box("halo2/ipa"),
-                    vk_id.clone(),
-                );
+                let mut proof_box = fixture.proof_box("halo2/ipa");
+                if let Some(mutate) = mutate_envelope {
+                    proof_box = mutate_open_verify_envelope_proof_box(proof_box, mutate);
+                }
+                let attachment =
+                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
                 let attachments = ProofAttachmentList(vec![attachment]);
                 TransactionBuilder::new(state.chain_id.clone(), authority.clone())
                     .with_metadata(metadata.clone())
@@ -3090,7 +3104,43 @@ mod tests {
                     .sign(kp.private_key())
             };
 
-        let bad_events_tx = build_tx(Hash::new(b"bad-events"), expected_gas_policy_commitment);
+        let zero_vk_hash_tx = build_tx(
+            expected_events_commitment,
+            expected_gas_policy_commitment,
+            Some(|env| env.vk_hash = [0u8; 32]),
+        );
+        let err = build_overlay_for_transaction(&zero_vk_hash_tx, &state.view())
+            .expect_err("zero verifier-key hash must be rejected");
+        assert!(
+            matches!(
+                &err,
+                OverlayBuildError::ZkProof(msg)
+                    if msg.contains("verifying key commitment mismatch")
+            ),
+            "unexpected error: {err:?}"
+        );
+
+        let aux_tx = build_tx(
+            expected_events_commitment,
+            expected_gas_policy_commitment,
+            Some(|env| env.aux = b"ignored-hint".to_vec()),
+        );
+        let err = build_overlay_for_transaction(&aux_tx, &state.view())
+            .expect_err("auxiliary bytes must be rejected");
+        assert!(
+            matches!(
+                &err,
+                OverlayBuildError::ZkProof(msg)
+                    if msg.contains("proof envelope auxiliary bytes must be empty")
+            ),
+            "unexpected error: {err:?}"
+        );
+
+        let bad_events_tx = build_tx(
+            Hash::new(b"bad-events"),
+            expected_gas_policy_commitment,
+            None,
+        );
         let err = build_overlay_for_transaction(&bad_events_tx, &state.view())
             .expect_err("events commitment mismatch must be rejected");
         assert!(
@@ -3101,7 +3151,11 @@ mod tests {
             "unexpected error: {err:?}"
         );
 
-        let bad_gas_policy_tx = build_tx(expected_events_commitment, Hash::new(b"bad-gas-policy"));
+        let bad_gas_policy_tx = build_tx(
+            expected_events_commitment,
+            Hash::new(b"bad-gas-policy"),
+            None,
+        );
         let err = build_overlay_for_transaction(&bad_gas_policy_tx, &state.view())
             .expect_err("gas policy commitment mismatch must be rejected");
         assert!(
@@ -5423,6 +5477,11 @@ where
                 .to_owned(),
         ));
     }
+    if !env.aux.is_empty() {
+        return Err(OverlayBuildError::ZkProof(
+            "proof envelope auxiliary bytes must be empty".to_owned(),
+        ));
+    }
     let expected_schema_hash = crate::zk::ivm_execution_public_inputs_schema_hash();
     if vk_record.public_inputs_schema_hash != expected_schema_hash {
         return Err(OverlayBuildError::ZkProof(
@@ -5435,7 +5494,7 @@ where
             "proof public input schema hash mismatch".to_owned(),
         ));
     }
-    if env.vk_hash != [0u8; 32] && env.vk_hash != vk_record.commitment {
+    if env.vk_hash != vk_record.commitment {
         return Err(OverlayBuildError::ZkProof(
             "verifying key commitment mismatch".to_owned(),
         ));

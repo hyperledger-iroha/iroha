@@ -11,10 +11,10 @@ use iroha::{
             verifying_keys,
         },
         offline::{
-            OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineNoteAuditBundle,
-            OfflineNoteAuditOutputClaim, OfflineNoteIssue, OfflineNoteIssuedClaim,
-            OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
-            offline_escrow_account_id,
+            OFFLINE_ASSET_ENABLED_METADATA_KEY, OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
+            OfflineNoteAuditBundle, OfflineNoteAuditOutputClaim, OfflineNoteIssue,
+            OfflineNoteIssuedClaim, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
+            OfflineNoteRedeem, offline_escrow_account_id,
         },
         prelude::*,
         proof::{ProofBox, VerifyingKeyId},
@@ -205,7 +205,7 @@ fn signed_certificate(seed: u8, key_id: &str) -> Result<OfflineNoteKeyCertificat
     let note_key = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
     let (_algorithm, public_key) = note_key.public_key().to_bytes();
     let mut certificate = OfflineNoteKeyCertificate {
-        version: 2,
+        version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
         platform: "integration-test".to_owned(),
         key_id: key_id.to_owned(),
         device_id: "four-peer-offline".to_owned(),

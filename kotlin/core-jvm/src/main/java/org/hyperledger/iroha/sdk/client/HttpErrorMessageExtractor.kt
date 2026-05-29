@@ -16,7 +16,10 @@ internal object HttpErrorMessageExtractor {
     private val STRING_ADAPTER = NoritoAdapters.stringAdapter()
     private val DETAILS_ADAPTER = object : TypeAdapter<ErrorDetailsSummary> {
         override fun encode(encoder: NoritoEncoder, value: ErrorDetailsSummary) {
-            throw UnsupportedOperationException("error detail encoding is not supported")
+            NoritoAdapters.option(STRING_ADAPTER).encode(
+                encoder,
+                Optional.ofNullable(value.rejectCode),
+            )
         }
 
         override fun decode(decoder: NoritoDecoder): ErrorDetailsSummary {

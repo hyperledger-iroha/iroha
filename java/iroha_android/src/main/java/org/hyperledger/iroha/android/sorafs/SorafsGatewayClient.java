@@ -22,8 +22,8 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
  * Minimal HTTP client that posts orchestrator fetch requests to a SoraFS gateway endpoint.
  *
  * <p>The client mirrors the CLI/SDK JSON schema and routes requests through {@link
- * HttpTransportExecutor} so tests can provide deterministic stubs. Responses surface the raw HTTP
- * payload allowing callers to parse orchestrator summaries or binary artefacts as needed.
+ * HttpTransportExecutor} so tests can provide deterministic transport fakes. Responses surface the
+ * raw HTTP payload allowing callers to parse orchestrator summaries or binary artefacts as needed.
  */
 public final class SorafsGatewayClient {
 

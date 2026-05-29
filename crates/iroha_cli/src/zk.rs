@@ -927,7 +927,7 @@ pub enum IvmCommand {
     Get(IvmProveGetArgs),
     /// Delete a prove job via `/v1/zk/ivm/prove/{job_id}`
     Delete(IvmProveDeleteArgs),
-    /// Derive a proving key (.pk) from verifying key bytes (.vk) for the Halo2 IPA IVM bind circuit
+    /// Derive a circuit/vk-bound proving key archive (.pk) from verifying key bytes (.vk) for the Halo2 IPA IVM bind circuit
     DerivePk(IvmDerivePkArgs),
 }
 
@@ -1061,7 +1061,7 @@ pub struct IvmDerivePkArgs {
     /// Path to verifying key bytes (`.vk`) in Halo2 "processed" format
     #[arg(long, value_name = "PATH")]
     vk: std::path::PathBuf,
-    /// Output path for proving key bytes (`.pk`)
+    /// Output path for circuit/vk-bound Norito proving key archive (`.pk`)
     #[arg(long, value_name = "PATH")]
     out: std::path::PathBuf,
 }

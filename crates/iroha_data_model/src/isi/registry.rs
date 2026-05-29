@@ -49,6 +49,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<offline::IssueOfflineNote>,
     InstructionRegistry::register_slice::<offline::RedeemOfflineNote>,
     InstructionRegistry::register_slice::<offline::AuditOfflineNote>,
+    InstructionRegistry::register_slice::<offline::KagemushaTransfer>,
     InstructionRegistry::register_slice::<asset_alias::SetAssetDefinitionBalancePolicy>,
     InstructionRegistry::register_slice::<crate::isi::staking::RegisterPublicLaneValidator>,
     InstructionRegistry::register_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>,

@@ -44,6 +44,7 @@ public final class OfflineNoteWallet {
   private final OfflineNoteRandomSource randomSource;
   private final OfflineNoteIdGenerator idGenerator;
   private final LongSupplier clock;
+  private final OfflineBearerCashPolicyV1 bearerCashPolicy;
 
   public OfflineNoteWallet(
       final String chainId,
@@ -220,6 +221,38 @@ public final class OfflineNoteWallet {
       final OfflineNoteRandomSource randomSource,
       final OfflineNoteIdGenerator idGenerator,
       final LongSupplier clock) {
+    this(
+        chainId,
+        accountId,
+        attestationProvider,
+        store,
+        issuerClient,
+        transactionSubmitter,
+        syncResolver,
+        proofProvider,
+        proofVerifier,
+        certificateVerifier,
+        randomSource,
+        idGenerator,
+        clock,
+        OfflineBearerCashPolicyV1.DEFAULT);
+  }
+
+  public OfflineNoteWallet(
+      final String chainId,
+      final String accountId,
+      final OfflineNoteAttestationProvider attestationProvider,
+      final OfflineNoteStore store,
+      final OfflineNoteIssuerClient issuerClient,
+      final OfflineNoteTransactionSubmitter transactionSubmitter,
+      final OfflineNoteSyncResolver syncResolver,
+      final OfflineNoteProofProvider proofProvider,
+      final OfflineNoteProofVerifier proofVerifier,
+      final OfflineNoteCertificateVerifier certificateVerifier,
+      final OfflineNoteRandomSource randomSource,
+      final OfflineNoteIdGenerator idGenerator,
+      final LongSupplier clock,
+      final OfflineBearerCashPolicyV1 bearerCashPolicy) {
     this.chainId = requireNonBlank(chainId, "chainId");
     this.accountId = requireNonBlank(accountId, "accountId");
     this.attestationProvider = Objects.requireNonNull(attestationProvider, "attestationProvider");
@@ -233,6 +266,7 @@ public final class OfflineNoteWallet {
     this.randomSource = Objects.requireNonNull(randomSource, "randomSource");
     this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
     this.clock = Objects.requireNonNull(clock, "clock");
+    this.bearerCashPolicy = Objects.requireNonNull(bearerCashPolicy, "bearerCashPolicy");
   }
 
   public List<OfflineNoteWalletNote> listNotes() {
@@ -471,6 +505,18 @@ public final class OfflineNoteWallet {
                 senderCertificateHash,
                 inputNullifiers,
                 outputCommitments));
+    final List<OfflineNote.IssuedClaim> outputIssuedClaims = new ArrayList<>();
+    for (final OfflineNote.AuditOutputClaim claim : outputClaims) {
+      outputIssuedClaims.add(claim.issuedClaim());
+    }
+    final OfflineNote.AuditPublicInputs auditPublicInputs =
+        new OfflineNote.AuditPublicInputs(
+            tokenId,
+            senderCertificateHash,
+            inputNullifiers,
+            inputClaims,
+            outputCommitments,
+            outputIssuedClaims);
     final OfflineNote.AuditBundle draft =
         new OfflineNote.AuditBundle(
             tokenId,
@@ -479,7 +525,7 @@ public final class OfflineNoteWallet {
             inputClaims,
             outputCommitments,
             outputClaims,
-            placeholderProof());
+            draftPlaceholderProof(auditPublicInputs.publicInputsHash()));
     final OfflineNote.AuditBundle audit =
         draft.replacingRecursiveProof(proofProvider.proveAudit(draft));
     audit.validateProofBinding();
@@ -489,6 +535,7 @@ public final class OfflineNoteWallet {
     }
     final List<OfflineNote.AuditBundle> outputBearerAuditTrail =
         bearerAuditTrail(selected, audit);
+    bearerCashPolicy.validateAuditTrail(outputBearerAuditTrail, audit);
     final OfflineNoteWalletNote finalChangeNote = changeNote;
     store.mutateNotes(notes -> {
       for (final OfflineNoteWalletNote note : selected) {
@@ -501,7 +548,10 @@ public final class OfflineNoteWallet {
         throw new IllegalArgumentException("Offline Note change note already exists");
       }
       for (final OfflineNoteWalletNote note : selected) {
-        notes.put(note.noteCommitmentHex(), note.withState(OfflineNoteWalletNoteState.SPENT, createdAtMs));
+        notes.put(
+            note.noteCommitmentHex(),
+            note.withState(OfflineNoteWalletNoteState.SPENT, createdAtMs)
+                .withSpentPaymentRequestId(receiveRequest.paymentRequestId(), createdAtMs));
       }
       if (finalChangeNote != null) {
         notes.put(
@@ -522,6 +572,10 @@ public final class OfflineNoteWallet {
 
   private void rejectReusedReceiveRequest(final String paymentRequestId) {
     for (final OfflineNoteWalletNote note : store.listNotes()) {
+      if (paymentRequestId.equals(note.spentPaymentRequestId())) {
+        throw new IllegalArgumentException(
+            "Offline Note receive request has already been used locally");
+      }
       if (note.state() == OfflineNoteWalletNoteState.RECEIVE_PENDING) {
         continue;
       }
@@ -638,6 +692,14 @@ public final class OfflineNoteWallet {
     final List<OfflineNote.AuditBundle> bearerAuditTrail = bearerAuditTrail(current);
     requireTrustedCertificate(current.keyCertificate(), current.accountId());
     final byte[] inputNullifier = deriveInputNullifier(current);
+    final OfflineNote.RedeemPublicInputs redeemPublicInputs =
+        new OfflineNote.RedeemPublicInputs(
+            current.noteCommitment(),
+            Collections.singletonList(inputNullifier),
+            current.keyCertificate().payloadHash(),
+            recipient,
+            current.assetId(),
+            current.canonicalAmount());
     final OfflineNote.Redeem draft =
         new OfflineNote.Redeem(
             current.noteCommitment(),
@@ -646,7 +708,7 @@ public final class OfflineNoteWallet {
             recipient,
             current.assetId(),
             current.canonicalAmount(),
-            placeholderProof());
+            draftPlaceholderProof(redeemPublicInputs.publicInputsHash()));
     final OfflineNote.Redeem redemption =
         draft.replacingRecursiveProof(proofProvider.proveRedeem(draft));
     redemption.validateProofBinding();
@@ -803,6 +865,7 @@ public final class OfflineNoteWallet {
       throw new IllegalArgumentException(
           "Offline Note bearer audit trail must end with the payment token audit");
     }
+    bearerCashPolicy.validateAuditTrail(audits, terminalAudit);
     final LinkedHashSet<String> tokenIds = new LinkedHashSet<>();
     final LinkedHashSet<String> nullifiers = new LinkedHashSet<>();
     final LinkedHashSet<String> outputs = new LinkedHashSet<>();
@@ -896,10 +959,12 @@ public final class OfflineNoteWallet {
     return bytes;
   }
 
-  private static OfflineNote.RecursiveProof placeholderProof() {
+  private static OfflineNote.RecursiveProof draftPlaceholderProof(final byte[] publicInputsHash) {
     return new OfflineNote.RecursiveProof(
-        OfflineNote.hash("offline-note-draft-proof".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-        new OfflineNote.ProofBox(OfflineNote.RECURSIVE_BACKEND, new byte[] {1}));
+        publicInputsHash,
+        new OfflineNote.ProofBox(
+            "offline-note/draft-placeholder",
+            new byte[] {0}));
   }
 
   private static void ensureSuccess(final ClientResponse response) {

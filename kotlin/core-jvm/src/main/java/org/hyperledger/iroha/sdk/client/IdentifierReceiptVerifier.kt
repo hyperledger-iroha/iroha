@@ -4,6 +4,8 @@ import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 
 /** Client-side verification helper for identifier-resolution receipts. */
 object IdentifierReceiptVerifier {
@@ -26,15 +28,7 @@ object IdentifierReceiptVerifier {
             ?: throw IllegalArgumentException("resolverPublicKey is not a valid multihash literal")
         return when (keyPayload.curveId) {
             0x01 -> verifyEd25519(keyPayload.keyBytes, message, signatureBytes)
-            0x0F -> throw UnsupportedOperationException(
-                "SM2 receipt verification is not available in the SDK"
-            )
-            0x02 -> throw UnsupportedOperationException(
-                "ML-DSA receipt verification is not available in the SDK"
-            )
-            else -> throw UnsupportedOperationException(
-                "Unsupported resolver key curve id: ${keyPayload.curveId}"
-            )
+            else -> verifyNativeBacked(keyPayload.curveId, keyPayload.keyBytes, message, signatureBytes)
         }
     }
 
@@ -49,6 +43,35 @@ object IdentifierReceiptVerifier {
                 "failed to verify Ed25519 identifier receipt", ex
             )
         }
+    }
+
+    private fun verifyNativeBacked(
+        curveId: Int,
+        publicKey: ByteArray,
+        message: ByteArray,
+        signature: ByteArray,
+    ): Boolean {
+        val algorithm = signingAlgorithmForCurveId(curveId) ?: return false
+        if (!NativeSignerBridge.isNativeAvailable()) return false
+        return try {
+            NativeSignerBridge.verifyDetached(algorithm, publicKey, message, signature)
+        } catch (_: RuntimeException) {
+            false
+        }
+    }
+
+    private fun signingAlgorithmForCurveId(curveId: Int): SigningAlgorithm? = when (curveId) {
+        0x02 -> SigningAlgorithm.ML_DSA
+        0x03 -> SigningAlgorithm.BLS_NORMAL
+        0x04 -> SigningAlgorithm.SECP256K1
+        0x05 -> SigningAlgorithm.BLS_SMALL
+        0x0A -> SigningAlgorithm.GOST_2012_256_A
+        0x0B -> SigningAlgorithm.GOST_2012_256_B
+        0x0C -> SigningAlgorithm.GOST_2012_256_C
+        0x0D -> SigningAlgorithm.GOST_2012_512_A
+        0x0E -> SigningAlgorithm.GOST_2012_512_B
+        0x0F -> SigningAlgorithm.SM2
+        else -> null
     }
 
     private fun hexToBytes(hex: String): ByteArray {

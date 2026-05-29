@@ -1,8 +1,10 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.util.Base64
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
@@ -25,6 +27,32 @@ object IdentifierReceiptCanonicalEncoder {
         encodeSizedField(writer, PassthroughBytesAdapter, encodeOpaqueHash(payload.uaid, "uaid:", "payload.uaid"))
         encodeSizedField(writer, PassthroughBytesAdapter, TransferWirePayloadEncoder.encodeAccountIdPayload(payload.accountId))
         return writer.toByteArray()
+    }
+
+    @JvmStatic
+    internal fun decodePayload(encoded: ByteArray): IdentifierResolutionPayload {
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val policyId = decodePolicyId(decodeSizedField(decoder, PassthroughBytesAdapter, "payload.policy_id"))
+        val execution = decodeExecution(decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution"))
+        val opening = decodeOutputOpening(decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opening"))
+        val opaqueId = decodeOpaqueHash(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opaque_id"),
+            "opaque:",
+            "payload.opaque_id",
+        )
+        val receiptHash = hashHex(decodeSizedField(decoder, PassthroughBytesAdapter, "payload.receipt_hash"))
+        val uaid = decodeOpaqueHash(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.uaid"),
+            "uaid:",
+            "payload.uaid",
+        )
+        val accountId = TransferWirePayloadEncoder.decodeAccountIdPayload(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.account_id"),
+            decoder.flags,
+            decoder.flagsHint,
+        )
+        require(decoder.remaining() == 0) { "Trailing bytes after identifier receipt payload" }
+        return IdentifierResolutionPayload(policyId, execution, opening, opaqueId, receiptHash, uaid, accountId)
     }
 
     @JvmStatic
@@ -55,6 +83,30 @@ object IdentifierReceiptCanonicalEncoder {
         return writer.toByteArray()
     }
 
+    @JvmStatic
+    internal fun decodeAttestation(encoded: ByteArray): IdentifierReceiptAttestation {
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val tag = decoder.readUInt(32)
+        val attestation = when (tag) {
+            0L -> {
+                val signature = decodeSizedField(decoder, SIGNATURE_ADAPTER, "attestation.signature")
+                IdentifierReceiptAttestation("signed", hexLower(signature), null, null)
+            }
+            1L -> {
+                val proof = decodeSizedField(decoder, ProofBoxAdapter, "attestation.proof")
+                IdentifierReceiptAttestation(
+                    "proof",
+                    null,
+                    proof.backend,
+                    Base64.getEncoder().encodeToString(proof.bytes),
+                )
+            }
+            else -> throw IllegalArgumentException("Unsupported identifier attestation tag: $tag")
+        }
+        require(decoder.remaining() == 0) { "Trailing bytes after identifier receipt attestation" }
+        return attestation
+    }
+
     private fun encodePolicyId(raw: String): ByteArray {
         val parts = raw.trim().split("#", limit = 2)
         require(parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) {
@@ -64,6 +116,14 @@ object IdentifierReceiptCanonicalEncoder {
         encodeSizedField(writer, STRING_ADAPTER, parts[0].trim())
         encodeSizedField(writer, STRING_ADAPTER, parts[1].trim())
         return writer.toByteArray()
+    }
+
+    private fun decodePolicyId(encoded: ByteArray): String {
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val kind = decodeSizedField(decoder, STRING_ADAPTER, "payload.policy_id.kind")
+        val rule = decodeSizedField(decoder, STRING_ADAPTER, "payload.policy_id.rule")
+        require(decoder.remaining() == 0) { "Trailing bytes after payload.policy_id" }
+        return "$kind#$rule"
     }
 
     private fun encodeExecution(execution: IdentifierResolutionExecutionPayload): ByteArray {
@@ -83,11 +143,72 @@ object IdentifierReceiptCanonicalEncoder {
         return writer.toByteArray()
     }
 
+    private fun decodeExecution(encoded: ByteArray): IdentifierResolutionExecutionPayload {
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val programId = decodeProgramId(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution.program_id")
+        )
+        val programDigest = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution.program_digest")
+        )
+        val backend = backendName(
+            Math.toIntExact(decodeSizedField(decoder, U32Adapter, "payload.execution.backend"))
+        )
+        val verificationMode = verificationModeName(
+            Math.toIntExact(decodeSizedField(decoder, U32Adapter, "payload.execution.verification_mode"))
+        )
+        val inputCiphertextHash = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution.input_ciphertext_hash")
+        )
+        val outputCiphertextHash = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution.output_ciphertext_hash")
+        )
+        val parameterDigest = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution.parameter_digest")
+        )
+        val evaluationKeyDigest = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution.evaluation_key_digest")
+        )
+        val outputHash = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution.output_hash")
+        )
+        val associatedDataHash = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution.associated_data_hash")
+        )
+        val executedAtMs = decodeSizedField(decoder, U64_ADAPTER, "payload.execution.executed_at_ms")
+        val expiresAtMs = decodeSizedField(decoder, OptionalU64Adapter, "payload.execution.expires_at_ms")
+        require(decoder.remaining() == 0) { "Trailing bytes after payload.execution" }
+        return IdentifierResolutionExecutionPayload(
+            programId,
+            programDigest,
+            backend,
+            verificationMode,
+            inputCiphertextHash,
+            outputCiphertextHash,
+            parameterDigest,
+            evaluationKeyDigest,
+            outputHash,
+            associatedDataHash,
+            executedAtMs,
+            expiresAtMs,
+        )
+    }
+
     private fun encodeOutputOpening(opening: RamLfeOutputOpening): ByteArray {
         val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
         encodeSizedField(writer, PassthroughBytesAdapter, encodeOutputOpeningPayload(opening.payload))
         encodeSizedField(writer, SIGNATURE_ADAPTER, decodeHex(opening.signature, "payload.opening.signature"))
         return writer.toByteArray()
+    }
+
+    private fun decodeOutputOpening(encoded: ByteArray): RamLfeOutputOpening {
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val payload = decodeOutputOpeningPayload(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opening.payload")
+        )
+        val signature = hexLower(decodeSizedField(decoder, SIGNATURE_ADAPTER, "payload.opening.signature"))
+        require(decoder.remaining() == 0) { "Trailing bytes after payload.opening" }
+        return RamLfeOutputOpening(payload, signature)
     }
 
     private fun encodeOutputOpeningPayload(payload: RamLfeOutputOpeningPayload): ByteArray {
@@ -103,10 +224,52 @@ object IdentifierReceiptCanonicalEncoder {
         return writer.toByteArray()
     }
 
+    private fun decodeOutputOpeningPayload(encoded: ByteArray): RamLfeOutputOpeningPayload {
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val programId = decodeProgramId(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opening.payload.program_id")
+        )
+        val inputCiphertextHash = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opening.payload.input_ciphertext_hash")
+        )
+        val outputCiphertextHash = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opening.payload.output_ciphertext_hash")
+        )
+        val parameterDigest = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opening.payload.parameter_digest")
+        )
+        val evaluationKeyDigest = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opening.payload.evaluation_key_digest")
+        )
+        val openedOutputHash = hashHex(
+            decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opening.payload.opened_output_hash")
+        )
+        val openedAtMs = decodeSizedField(decoder, U64_ADAPTER, "payload.opening.payload.opened_at_ms")
+        val expiresAtMs = decodeSizedField(decoder, OptionalU64Adapter, "payload.opening.payload.expires_at_ms")
+        require(decoder.remaining() == 0) { "Trailing bytes after payload.opening.payload" }
+        return RamLfeOutputOpeningPayload(
+            programId,
+            inputCiphertextHash,
+            outputCiphertextHash,
+            parameterDigest,
+            evaluationKeyDigest,
+            openedOutputHash,
+            openedAtMs,
+            expiresAtMs,
+        )
+    }
+
     private fun encodeProgramId(raw: String): ByteArray {
         val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
         encodeSizedField(writer, STRING_ADAPTER, requireNonBlank(raw, "payload.execution.program_id"))
         return writer.toByteArray()
+    }
+
+    private fun decodeProgramId(encoded: ByteArray): String {
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val programId = decodeSizedField(decoder, STRING_ADAPTER, "program_id")
+        require(decoder.remaining() == 0) { "Trailing bytes after program_id" }
+        return programId
     }
 
     private fun backendTag(raw: String): Int = when (raw.trim().lowercase()) {
@@ -122,6 +285,19 @@ object IdentifierReceiptCanonicalEncoder {
         else -> error("unsupported RAM-LFE verification mode: $raw")
     }
 
+    private fun backendName(tag: Int): String = when (tag) {
+        0 -> "hkdf-sha3-512-prf-v1"
+        1 -> "bfv-affine-sha3-256-v1"
+        2 -> "bfv-programmed-sha3-256-v1"
+        else -> throw IllegalArgumentException("unsupported RAM-LFE backend tag: $tag")
+    }
+
+    private fun verificationModeName(tag: Int): String = when (tag) {
+        0 -> "signed"
+        1 -> "proof"
+        else -> throw IllegalArgumentException("unsupported RAM-LFE verification mode tag: $tag")
+    }
+
     private fun encodePrefixedHash(raw: String, prefix: String, field: String): ByteArray {
         val normalized = raw.trim().lowercase()
         val body = if (normalized.startsWith(prefix)) normalized.substring(prefix.length) else normalized
@@ -135,6 +311,15 @@ object IdentifierReceiptCanonicalEncoder {
         writer.writeLength(hash.size.toLong(), compact)
         writer.writeBytes(hash)
         return writer.toByteArray()
+    }
+
+    private fun decodeOpaqueHash(encoded: ByteArray, prefix: String, field: String): String {
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val length = decoder.readLength((decoder.flags and NoritoHeader.COMPACT_LEN) != 0)
+        require(length == 32L) { "$field must contain 32 bytes" }
+        val hash = decoder.readBytes(32)
+        require(decoder.remaining() == 0) { "Trailing bytes after $field" }
+        return prefix + hashHex(hash)
     }
 
     private fun decodeHash(raw: String, field: String): ByteArray {
@@ -180,12 +365,32 @@ object IdentifierReceiptCanonicalEncoder {
         encoder.writeBytes(payload)
     }
 
+    private fun <T> decodeSizedField(decoder: NoritoDecoder, adapter: TypeAdapter<T>, fieldName: String): T {
+        val length = decoder.readLength((decoder.flags and NoritoHeader.COMPACT_LEN) != 0)
+        require(length <= Int.MAX_VALUE) { "$fieldName payload too large" }
+        val payload = decoder.readBytes(length.toInt())
+        val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+        val value = adapter.decode(child)
+        require(child.remaining() == 0) { "Trailing bytes after $fieldName payload" }
+        return value
+    }
+
+    private fun hashHex(bytes: ByteArray): String {
+        require(bytes.size == 32) { "hash value must contain 32 bytes" }
+        return hexLower(bytes)
+    }
+
+    private fun hexLower(bytes: ByteArray): String = buildString(bytes.size * 2) {
+        for (byte in bytes) {
+            append("%02x".format(byte.toInt() and 0xFF))
+        }
+    }
+
     private object U32Adapter : TypeAdapter<Long> {
         override fun encode(encoder: NoritoEncoder, value: Long) {
             encoder.writeUInt(value, 32)
         }
-        override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): Long =
-            throw UnsupportedOperationException("decode not supported")
+        override fun decode(decoder: NoritoDecoder): Long = decoder.readUInt(32)
     }
 
     private object OptionalU64Adapter : TypeAdapter<Long?> {
@@ -197,16 +402,19 @@ object IdentifierReceiptCanonicalEncoder {
                 encodeSizedField(encoder, U64_ADAPTER, value)
             }
         }
-        override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): Long? =
-            throw UnsupportedOperationException("decode not supported")
+        override fun decode(decoder: NoritoDecoder): Long? {
+            val tag = decoder.readByte()
+            if (tag == 0) return null
+            require(tag == 1) { "Invalid optional u64 tag: $tag" }
+            return decodeSizedField(decoder, U64_ADAPTER, "optional u64")
+        }
     }
 
     private object PassthroughBytesAdapter : TypeAdapter<ByteArray> {
         override fun encode(encoder: NoritoEncoder, value: ByteArray) {
             encoder.writeBytes(value)
         }
-        override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): ByteArray =
-            throw UnsupportedOperationException("decode not supported")
+        override fun decode(decoder: NoritoDecoder): ByteArray = decoder.readBytes(decoder.remaining())
     }
 
     private data class ProofBoxPayload(val backend: String, val bytes: ByteArray)
@@ -216,7 +424,10 @@ object IdentifierReceiptCanonicalEncoder {
             encodeSizedField(encoder, STRING_ADAPTER, value.backend)
             encodeSizedField(encoder, RAW_BYTE_VEC_ADAPTER, value.bytes)
         }
-        override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): ProofBoxPayload =
-            throw UnsupportedOperationException("decode not supported")
+        override fun decode(decoder: NoritoDecoder): ProofBoxPayload {
+            val backend = decodeSizedField(decoder, STRING_ADAPTER, "proof.backend")
+            val bytes = decodeSizedField(decoder, RAW_BYTE_VEC_ADAPTER, "proof.bytes")
+            return ProofBoxPayload(backend, bytes)
+        }
     }
 }

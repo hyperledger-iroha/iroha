@@ -59,6 +59,7 @@ const CREATED_AT_MS: u64 = 1_706_000_000_123;
 const ACCEPTED_AT_MS: u64 = 1_706_000_000_333;
 const PAYMENT_TOKEN_ENVELOPE_SCHEMA: &str =
     "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelope";
+const PAYMENT_TOKEN_ENVELOPE_VERSION: u64 = 2;
 const OFFLINE_BEARER_CASH_RECEIVE_PREFIX: &str = "wallet-offline-bearer-cash-receive:";
 const OFFLINE_BEARER_CASH_PAYMENT_PREFIX: &str = "wallet-offline-bearer-cash-payment:";
 const OFFLINE_BEARER_CASH_ACK_PREFIX: &str = "wallet-offline-bearer-cash-ack:";
@@ -1000,6 +1001,7 @@ impl NoritoSerialize for MobilePaymentTokenWire<'_> {
     }
 
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+        write_field(&mut writer, &PAYMENT_TOKEN_ENVELOPE_VERSION.to_le_bytes())?;
         write_string_field(&mut writer, self.fields.chain_id)?;
         write_string_field(&mut writer, self.fields.payment_request_id)?;
         write_field(&mut writer, &self.fields.created_at_ms.to_le_bytes())?;

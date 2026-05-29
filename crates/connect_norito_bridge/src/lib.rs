@@ -73,7 +73,7 @@ use sorafs_car::{
     },
 };
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 2;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 4;
 
 const ERR_NULL_PTR: c_int = -1;
 const ERR_UTF8: c_int = -2;
@@ -124,6 +124,7 @@ const ERR_ACCOUNT_ADDRESS: c_int = -200;
 const ERR_ASSET_ID_PARSE: c_int = -301;
 const ERR_JSON_SERIALIZE: c_int = -304;
 const ERR_OFFLINE_NOTE_PROVE: c_int = -310;
+const ERR_KAGEMUSHA_PROVE: c_int = -311;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
@@ -154,6 +155,7 @@ enum BridgeError {
     AssetId,
     JsonSerialize,
     OfflineNoteProve,
+    KagemushaProve,
     UnsupportedAlgorithm,
     MetadataTarget,
     MetadataKey,
@@ -193,6 +195,7 @@ impl BridgeError {
             BridgeError::AssetId => ERR_ASSET_ID_PARSE,
             BridgeError::JsonSerialize => ERR_JSON_SERIALIZE,
             BridgeError::OfflineNoteProve => ERR_OFFLINE_NOTE_PROVE,
+            BridgeError::KagemushaProve => ERR_KAGEMUSHA_PROVE,
             BridgeError::UnsupportedAlgorithm => ERR_UNSUPPORTED_ALGORITHM,
             BridgeError::MetadataTarget => ERR_METADATA_TARGET,
             BridgeError::MetadataKey => ERR_METADATA_KEY,
@@ -3844,6 +3847,118 @@ fn prove_offline_note_audit_recursive(
     })
 }
 
+/// Verify private Kagemusha hop proofs and generate a compact folded-token proof.
+///
+/// The input is Norito-archive bytes of
+/// `iroha_data_model::offline::KagemushaVerifiedFoldBundle`. The bridge verifies
+/// every bundled hop proof before deriving folded public inputs, then returns
+/// Norito-archive bytes of `KagemushaCompactPaymentToken`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_compact_payment_token(
+    verified_bundle_norito_ptr: *const c_uchar,
+    verified_bundle_norito_len: c_ulong,
+    out_compact_token_ptr: *mut *mut c_uchar,
+    out_compact_token_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if verified_bundle_norito_ptr.is_null()
+            || out_compact_token_ptr.is_null()
+            || out_compact_token_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes = unsafe {
+            slice::from_raw_parts(
+                verified_bundle_norito_ptr,
+                verified_bundle_norito_len as usize,
+            )
+        };
+        let token = prove_verified_kagemusha_compact_token_from_bundle(bytes)?;
+        let archive = norito::to_bytes(&token).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_bytes_bridge(out_compact_token_ptr, out_compact_token_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+/// Verify private Kagemusha hop proofs against supplied verifier records and generate a compact token.
+///
+/// The input is Norito-archive bytes of
+/// `iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle`. The bridge
+/// enforces verifier-record metadata for every bundled hop before deriving
+/// folded public inputs, then returns Norito-archive bytes of
+/// `KagemushaCompactPaymentToken`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+    verified_record_bundle_norito_ptr: *const c_uchar,
+    verified_record_bundle_norito_len: c_ulong,
+    out_compact_token_ptr: *mut *mut c_uchar,
+    out_compact_token_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if verified_record_bundle_norito_ptr.is_null()
+            || out_compact_token_ptr.is_null()
+            || out_compact_token_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes = unsafe {
+            slice::from_raw_parts(
+                verified_record_bundle_norito_ptr,
+                verified_record_bundle_norito_len as usize,
+            )
+        };
+        let token = prove_verified_kagemusha_compact_token_from_record_bundle(bytes)?;
+        let archive = norito::to_bytes(&token).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_bytes_bridge(out_compact_token_ptr, out_compact_token_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+fn prove_verified_kagemusha_compact_token_from_bundle(
+    verified_bundle_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::KagemushaCompactPaymentToken> {
+    use iroha_core::zk::{
+        KAGEMUSHA_FOLDED_CIRCUIT_ID, kagemusha_folded_vk_box,
+        prove_verified_kagemusha_compact_payment_token_from_bundle,
+    };
+    use iroha_data_model::offline::KagemushaVerifiedFoldBundle;
+
+    let bundle: KagemushaVerifiedFoldBundle = norito::decode_from_bytes(verified_bundle_archive)
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let vk_box = kagemusha_folded_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
+    prove_verified_kagemusha_compact_payment_token_from_bundle(
+        &bundle,
+        KAGEMUSHA_FOLDED_CIRCUIT_ID,
+        &vk_box,
+        None,
+    )
+    .map_err(|_| BridgeError::KagemushaProve)
+}
+
+fn prove_verified_kagemusha_compact_token_from_record_bundle(
+    verified_record_bundle_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::KagemushaCompactPaymentToken> {
+    use iroha_core::zk::{
+        KAGEMUSHA_FOLDED_CIRCUIT_ID, kagemusha_folded_vk_box,
+        prove_verified_kagemusha_compact_payment_token_from_record_bundle,
+    };
+    use iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle;
+
+    let record_bundle: KagemushaVerifiedFoldRecordBundle =
+        norito::decode_from_bytes(verified_record_bundle_archive)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+    let vk_box = kagemusha_folded_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
+    prove_verified_kagemusha_compact_payment_token_from_record_bundle(
+        &record_bundle,
+        KAGEMUSHA_FOLDED_CIRCUIT_ID,
+        &vk_box,
+        None,
+    )
+    .map_err(|_| BridgeError::KagemushaProve)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
     if !ptr_.is_null() {
@@ -3855,15 +3970,23 @@ pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
 
 #[cfg(test)]
 mod offline_note_prover_tests {
+    use std::sync::OnceLock;
+
     use iroha_core::zk::{
-        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, offline_note_recursive_vk_box,
-        verify_backend,
+        KAGEMUSHA_FOLDED_CIRCUIT_ID, KAGEMUSHA_HOP_MAX_PROOF_BYTES,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, confidential_v2, hash_vk,
+        kagemusha_folded_vk_box, kagemusha_verified_folded_public_inputs_from_bundle,
+        kagemusha_verified_folded_public_inputs_from_record_bundle, offline_note_recursive_vk_box,
+        verify_backend, verify_kagemusha_compact_payment_token,
     };
     use iroha_data_model::{
+        confidential::ConfidentialStatus,
         offline::{
-            OfflineNoteAuditBundle, OfflineNoteAuditOutputClaim, OfflineNoteIssue,
-            OfflineNoteIssuedClaim, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
-            OfflineNoteRedeem,
+            KagemushaCompactPaymentToken, KagemushaVerifiedFoldBundle,
+            KagemushaVerifiedFoldRecordBundle, KagemushaVerifiedFoldStep,
+            KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
+            OfflineNoteAuditOutputClaim, OfflineNoteIssue, OfflineNoteIssuedClaim,
+            OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
         },
         proof::VerifyingKeyId,
     };
@@ -3961,6 +4084,106 @@ mod offline_note_prover_tests {
         }
     }
 
+    fn sample_kagemusha_verified_bundle() -> KagemushaVerifiedFoldBundle {
+        sample_kagemusha_verified_record_bundle().bundle
+    }
+
+    fn sample_kagemusha_verified_record_bundle() -> KagemushaVerifiedFoldRecordBundle {
+        static BUNDLE: OnceLock<KagemushaVerifiedFoldRecordBundle> = OnceLock::new();
+        BUNDLE
+            .get_or_init(|| {
+                let chain_id: ChainId = "kagemusha-bridge-chain".parse().expect("chain id");
+                let asset = AssetDefinitionId::new(
+                    DomainId::try_new("offline", "universal").expect("domain id"),
+                    "kgm".parse().expect("asset definition name"),
+                );
+                let record =
+                    confidential_v2::confidential_transfer_v2_vk_record("offline_kagemusha", 3)
+                        .expect("confidential transfer v2 verifier record");
+                let verifier_key = record.key.clone().expect("inline transfer verifier key");
+                let spend_key = [0x11_u8; Hash::LENGTH];
+                let input_rho = [0x21_u8; Hash::LENGTH];
+                let input_diversifier =
+                    confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-bridge-input");
+                let input_owner_tag =
+                    confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                        &spend_key,
+                        input_diversifier,
+                    )
+                    .expect("input owner tag");
+                let input_commitment = confidential_v2::derive_confidential_note_v2(
+                    &asset.to_string(),
+                    7,
+                    input_rho,
+                    input_owner_tag,
+                )
+                .expect("input commitment");
+                let tree_commitments = vec![input_commitment];
+                let root_before = confidential_v2::compute_confidential_root_v2(&tree_commitments)
+                    .expect("root before");
+                let output_owner_tag =
+                    confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                        &[0x41_u8; Hash::LENGTH],
+                        confidential_v2::derive_confidential_diversifier_v2(
+                            b"kagemusha-bridge-output",
+                        ),
+                    )
+                    .expect("output owner tag");
+                let proof = confidential_v2::build_confidential_transfer_proof_v2(
+                    &chain_id,
+                    &asset.to_string(),
+                    &spend_key,
+                    &tree_commitments,
+                    &[confidential_v2::ConfidentialTransferInputV2 {
+                        amount: 7,
+                        rho: input_rho,
+                        diversifier: input_diversifier,
+                        leaf_index: 0,
+                    }],
+                    &[confidential_v2::ConfidentialTransferOutputV2 {
+                        amount: 7,
+                        rho: [0x31_u8; Hash::LENGTH],
+                        owner_tag: output_owner_tag,
+                    }],
+                    root_before,
+                    &record.circuit_id,
+                    &verifier_key,
+                )
+                .expect("confidential transfer v2 proof");
+                let mut next_tree = tree_commitments;
+                next_tree.extend(proof.output_commitments.iter().copied());
+                let root_after =
+                    confidential_v2::compute_confidential_root_v2(&next_tree).expect("root after");
+                let mut attachment = ProofAttachment::new_ref(
+                    ZK_BACKEND_HALO2_IPA.into(),
+                    proof.proof,
+                    VerifyingKeyId::new(
+                        ZK_BACKEND_HALO2_IPA,
+                        "kagemusha-bridge-confidential-transfer-v2",
+                    ),
+                );
+                attachment.vk_commitment = Some(hash_vk(&verifier_key));
+                let step = KagemushaVerifiedFoldStep {
+                    root_before,
+                    input_nullifiers: proof.nullifiers,
+                    output_commitments: proof.output_commitments,
+                    root_after,
+                    attachment,
+                    verifier_key,
+                };
+                let id = step.attachment.vk_ref.clone();
+                KagemushaVerifiedFoldRecordBundle {
+                    bundle: KagemushaVerifiedFoldBundle {
+                        chain_id,
+                        asset,
+                        steps: vec![step],
+                    },
+                    verifier_records: vec![KagemushaVerifiedFoldVerifierRecord { id, record }],
+                }
+            })
+            .clone()
+    }
+
     fn decode_recursive_proof(
         out_ptr: *mut c_uchar,
         out_len: c_ulong,
@@ -3969,6 +4192,28 @@ mod offline_note_prover_tests {
         let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
         connect_norito_free(out_ptr);
         norito::decode_from_bytes(&out).expect("decode recursive proof")
+    }
+
+    fn decode_kagemusha_compact_token(
+        out_ptr: *mut c_uchar,
+        out_len: c_ulong,
+    ) -> KagemushaCompactPaymentToken {
+        assert!(!out_ptr.is_null(), "prover output pointer must be set");
+        let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        connect_norito_free(out_ptr);
+        norito::decode_from_bytes(&out).expect("decode Kagemusha compact token")
+    }
+
+    fn mutate_kagemusha_bundle_hop_envelope(
+        bundle: &mut KagemushaVerifiedFoldBundle,
+        mutate: impl FnOnce(&mut iroha_data_model::zk::OpenVerifyEnvelope),
+    ) {
+        let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&bundle.steps[0].attachment.proof.bytes)
+                .expect("Kagemusha hop proof should be an OpenVerifyEnvelope");
+        mutate(&mut envelope);
+        bundle.steps[0].attachment.proof.bytes =
+            norito::to_bytes(&envelope).expect("encode mutated OpenVerifyEnvelope");
     }
 
     fn assert_recursive_proof_verifies(
@@ -3985,6 +4230,501 @@ mod offline_note_prover_tests {
             verify_backend(ZK_BACKEND_HALO2_IPA, &recursive.proof, Some(&vk_box)),
             "bridge output must verify against the canonical Offline verifier"
         );
+    }
+
+    #[test]
+    fn bridge_abi_version_advertises_kagemusha_compact_prover() {
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 4);
+    }
+
+    #[test]
+    fn kagemusha_verified_compact_token_ffi_returns_verifying_token() {
+        let bundle = sample_kagemusha_verified_bundle();
+        let expected_public_inputs = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect("verified folded public inputs");
+        let archive = norito::to_bytes(&bundle).expect("encode verified fold bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, 0);
+        let token = decode_kagemusha_compact_token(out_ptr, out_len);
+        assert_eq!(token.public_inputs, expected_public_inputs);
+        assert_eq!(
+            token.folded_proof.verifier_key_id,
+            VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, KAGEMUSHA_FOLDED_CIRCUIT_ID)
+        );
+        let vk_box = kagemusha_folded_vk_box().expect("Kagemusha folded verifying key");
+        assert!(
+            verify_kagemusha_compact_payment_token(&token, &vk_box),
+            "bridge output must verify against the canonical Kagemusha verifier"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_record_compact_token_ffi_returns_verifying_token() {
+        let record_bundle = sample_kagemusha_verified_record_bundle();
+        let expected_public_inputs =
+            kagemusha_verified_folded_public_inputs_from_record_bundle(&record_bundle)
+                .expect("record-backed verified folded public inputs");
+        let archive =
+            norito::to_bytes(&record_bundle).expect("encode record-backed verified fold bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, 0);
+        let token = decode_kagemusha_compact_token(out_ptr, out_len);
+        assert_eq!(token.public_inputs, expected_public_inputs);
+        let vk_box = kagemusha_folded_vk_box().expect("Kagemusha folded verifying key");
+        assert!(
+            verify_kagemusha_compact_payment_token(&token, &vk_box),
+            "record-backed bridge output must verify against the canonical Kagemusha verifier"
+        );
+    }
+
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
+    #[test]
+    fn kagemusha_verified_record_compact_token_jni_helper_uses_record_checks() {
+        let record_bundle = sample_kagemusha_verified_record_bundle();
+        let expected_public_inputs =
+            kagemusha_verified_folded_public_inputs_from_record_bundle(&record_bundle)
+                .expect("record-backed verified folded public inputs");
+        let archive =
+            norito::to_bytes(&record_bundle).expect("encode record-backed verified fold bundle");
+
+        let token_archive =
+            java_kagemusha_prove_verified_compact_payment_token_with_records(&archive)
+                .expect("JNI helper should produce compact token archive");
+        let token: KagemushaCompactPaymentToken =
+            norito::decode_from_bytes(&token_archive).expect("decode compact token");
+
+        assert_eq!(token.public_inputs, expected_public_inputs);
+        let vk_box = kagemusha_folded_vk_box().expect("Kagemusha folded verifying key");
+        assert!(
+            verify_kagemusha_compact_payment_token(&token, &vk_box),
+            "JNI helper output must verify against the canonical Kagemusha verifier"
+        );
+
+        let mut inactive = record_bundle;
+        inactive.verifier_records[0].record.status = ConfidentialStatus::Withdrawn;
+        let inactive_archive = norito::to_bytes(&inactive).expect("encode inactive-record bundle");
+        assert!(
+            java_kagemusha_prove_verified_compact_payment_token_with_records(&inactive_archive)
+                .is_err(),
+            "JNI helper must reject inactive verifier records"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_record_compact_token_ffi_rejects_bad_records() {
+        let mut missing = sample_kagemusha_verified_record_bundle();
+        missing.verifier_records.clear();
+        let archive = norito::to_bytes(&missing).expect("encode missing-record bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let mut extra = sample_kagemusha_verified_record_bundle();
+        extra
+            .verifier_records
+            .push(KagemushaVerifiedFoldVerifierRecord {
+                id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "unused-kagemusha-hop-vk"),
+                record: extra.verifier_records[0].record.clone(),
+            });
+        let archive = norito::to_bytes(&extra).expect("encode extra-record bundle");
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let mut inactive = sample_kagemusha_verified_record_bundle();
+        inactive.verifier_records[0].record.status = ConfidentialStatus::Withdrawn;
+        let archive = norito::to_bytes(&inactive).expect("encode inactive-record bundle");
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let mut wrong_schema = sample_kagemusha_verified_record_bundle();
+        wrong_schema.verifier_records[0]
+            .record
+            .public_inputs_schema_hash = [0x33; Hash::LENGTH];
+        let archive = norito::to_bytes(&wrong_schema).expect("encode wrong-schema bundle");
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let mut too_small = sample_kagemusha_verified_record_bundle();
+        too_small.verifier_records[0].record.max_proof_bytes = u32::try_from(
+            too_small.bundle.steps[0]
+                .attachment
+                .proof
+                .bytes
+                .len()
+                .saturating_sub(1),
+        )
+        .expect("proof length fits u32");
+        let archive = norito::to_bytes(&too_small).expect("encode proof-cap bundle");
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_verified_record_compact_token_ffi_rejects_forged_envelope_hash_metadata() {
+        let mut record_bundle = sample_kagemusha_verified_record_bundle();
+        record_bundle.bundle.steps[0].attachment.envelope_hash = Some([0xA7; Hash::LENGTH]);
+        let archive =
+            norito::to_bytes(&record_bundle).expect("encode forged-envelope-hash record bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_verified_record_compact_token_ffi_rejects_hop_envelope_aux_substitution() {
+        let mut record_bundle = sample_kagemusha_verified_record_bundle();
+        mutate_kagemusha_bundle_hop_envelope(&mut record_bundle.bundle, |envelope| {
+            envelope.aux = b"kagemusha-forged-record-hop-aux".to_vec();
+        });
+        let archive =
+            norito::to_bytes(&record_bundle).expect("encode forged-hop-aux record bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_verified_compact_token_ffi_rejects_missing_trust_anchor_metadata() {
+        let cases: [(&str, fn(&mut KagemushaVerifiedFoldBundle)); 2] = [
+            ("missing verifier-key commitment", |bundle| {
+                bundle.steps[0].attachment.vk_commitment = None;
+            }),
+            ("empty verifier-key id name", |bundle| {
+                bundle.steps[0].attachment.vk_ref.name = "   ".to_owned();
+            }),
+        ];
+
+        for (case, mutate) in cases {
+            let mut bundle = sample_kagemusha_verified_bundle();
+            mutate(&mut bundle);
+            let archive = norito::to_bytes(&bundle).expect("encode mutated trust-anchor bundle");
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let status = unsafe {
+                connect_norito_kagemusha_prove_verified_compact_payment_token(
+                    archive.as_ptr(),
+                    archive.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+
+            assert_eq!(status, ERR_KAGEMUSHA_PROVE, "{case} must reject");
+            assert!(out_ptr.is_null(), "{case} must not return an output buffer");
+            assert_eq!(out_len, 0, "{case} must not return output bytes");
+        }
+    }
+
+    #[test]
+    fn kagemusha_verified_compact_token_ffi_rejects_invalid_archive() {
+        let bad_archive = b"not a norito archive";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token(
+                bad_archive.as_ptr(),
+                bad_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_verified_compact_token_ffi_rejects_tampered_hop_proof() {
+        let mut bundle = sample_kagemusha_verified_bundle();
+        let last = bundle.steps[0]
+            .attachment
+            .proof
+            .bytes
+            .last_mut()
+            .expect("proof bytes");
+        *last ^= 0x01;
+        let archive = norito::to_bytes(&bundle).expect("encode tampered bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_verified_compact_token_ffi_rejects_forged_envelope_hash_metadata() {
+        let mut bundle = sample_kagemusha_verified_bundle();
+        bundle.steps[0].attachment.envelope_hash = Some([0xA7; Hash::LENGTH]);
+        let archive = norito::to_bytes(&bundle).expect("encode forged-envelope-hash bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_verified_compact_token_ffi_rejects_hop_envelope_aux_substitution() {
+        let mut bundle = sample_kagemusha_verified_bundle();
+        mutate_kagemusha_bundle_hop_envelope(&mut bundle, |envelope| {
+            envelope.aux = b"kagemusha-forged-hop-aux".to_vec();
+        });
+        let archive = norito::to_bytes(&bundle).expect("encode forged-hop-aux bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_verified_compact_token_ffi_rejects_oversized_hop_proof() {
+        let mut bundle = sample_kagemusha_verified_bundle();
+        bundle.steps[0]
+            .attachment
+            .proof
+            .bytes
+            .resize(KAGEMUSHA_HOP_MAX_PROOF_BYTES as usize + 1, 0xA7);
+        let archive = norito::to_bytes(&bundle).expect("encode oversized-hop bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_verified_compact_token_ffi_rejects_oversized_bundle_before_proof_decode() {
+        let mut bundle = sample_kagemusha_verified_bundle();
+        bundle.steps[0].attachment.proof.bytes = vec![0xA7];
+        bundle.steps = vec![
+            bundle.steps[0].clone();
+            iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1
+        ];
+        let archive = norito::to_bytes(&bundle).expect("encode oversized-hop-count bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_verified_compact_token_ffi_rejects_bad_hop_shape_before_proof_decode() {
+        let mut bundle = sample_kagemusha_verified_bundle();
+        bundle.steps[0].input_nullifiers.clear();
+        bundle.steps[0].attachment.proof.bytes = vec![0xA7];
+        let archive = norito::to_bytes(&bundle).expect("encode bad-shape bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_verified_compact_token_ffi_rejects_root_discontinuity_before_proof_decode() {
+        let mut bundle = sample_kagemusha_verified_bundle();
+        bundle.steps[0].attachment.proof.bytes = vec![0xA7];
+        bundle.steps.push(bundle.steps[0].clone());
+        let archive = norito::to_bytes(&bundle).expect("encode root-discontinuous bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_verified_compact_token_ffi_rejects_vk_commitment_mismatch() {
+        let mut bundle = sample_kagemusha_verified_bundle();
+        bundle.steps[0].attachment.vk_commitment = Some([0xA5; Hash::LENGTH]);
+        let archive = norito::to_bytes(&bundle).expect("encode mismatched bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
     }
 
     #[test]
@@ -10012,6 +10752,51 @@ fn java_native_verify_detached(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_kagemusha_prove_verified_compact_payment_token_with_records(
+    record_bundle_archive: &[u8],
+) -> Result<Vec<u8>, String> {
+    let token = prove_verified_kagemusha_compact_token_from_record_bundle(record_bundle_archive)
+        .map_err(|_| "invalid Kagemusha verified fold record bundle".to_string())?;
+    norito::to_bytes(&token)
+        .map_err(|err| format!("failed to encode Kagemusha compact token: {err}"))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_kagemusha_prove_verified_compact_payment_token_with_records(
+    env: &mut jni::JNIEnv<'_>,
+    record_bundle_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let archive_bytes =
+            read_java_byte_array(env, &record_bundle_archive, "recordBundleArchive")
+                .ok_or_else(|| "invalid Kagemusha verified fold record bundle bytes".to_string())?;
+        let token_archive =
+            java_kagemusha_prove_verified_compact_payment_token_with_records(&archive_bytes)?;
+        let array = env
+            .byte_array_from_slice(&token_archive)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativePublicKeyFromPrivate(
@@ -10146,6 +10931,44 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     signature: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
     java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCompactPaymentTokenProver_nativeProveVerifiedCompactPaymentTokenWithRecords(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    record_bundle_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_prove_verified_compact_payment_token_with_records(
+        &mut env,
+        record_bundle_archive,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaCompactPaymentTokenProver_nativeProveVerifiedCompactPaymentTokenWithRecords(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    record_bundle_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_prove_verified_compact_payment_token_with_records(
+        &mut env,
+        record_bundle_archive,
+    )
 }
 
 #[cfg(any(

@@ -44,7 +44,9 @@ public final class OfflineNoteReceiveRequestCodec {
     if (!trimmed.startsWith(TEXT_PREFIX)) {
       throw new IllegalArgumentException("Offline Note receive request prefix missing");
     }
-    return decodeNorito(Base64.getUrlDecoder().decode(trimmed.substring(TEXT_PREFIX.length())));
+    return decodeNorito(
+        OfflineBase64Url.decodeUnpadded(
+            trimmed.substring(TEXT_PREFIX.length()), "Offline Note receive request payload"));
   }
 
   public static List<byte[]> encodeQrFrameBytes(final OfflineNoteReceiveRequest request) {

@@ -6,12 +6,10 @@ import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
 
 /**
- * Placeholder backend that lives alongside the desktop JVM sources. The real Android implementation
- * will replace this class at build time with bindings that talk to {@code android.security.keystore}.
+ * Desktop fallback backend used when {@code android.security.keystore} is not available at runtime.
  *
- * <p>The stub advertises zero hardware capability and fails generation calls so application code can
- * detect the absence of the Android runtime. Tests rely on {@link KeystoreBackend} fakes instead of
- * this stub.
+ * <p>The backend advertises zero hardware capability and fails generation calls so application code
+ * can detect that it is not running on an Android Keystore runtime.
  */
 public final class AndroidKeystoreStubBackend implements KeystoreBackend {
 

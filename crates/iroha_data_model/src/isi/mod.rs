@@ -1097,6 +1097,12 @@ impl From<crate::isi::offline::AuditOfflineNote> for InstructionBox {
     }
 }
 
+impl From<crate::isi::offline::KagemushaTransfer> for InstructionBox {
+    fn from(i: crate::isi::offline::KagemushaTransfer) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 // Allow direct boxing of oracle feed instructions.
 impl From<crate::isi::oracle::RegisterOracleFeed> for InstructionBox {
     fn from(i: crate::isi::oracle::RegisterOracleFeed) -> Self {
@@ -4673,7 +4679,7 @@ mod tests {
             OfflineNoteAuditBundle, OfflineNoteIssue, OfflineNoteIssuedClaim,
             OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
         };
-        use crate::proof::{ProofBox, VerifyingKeyId};
+        use crate::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
         use iroha_crypto::{Hash, Signature};
 
         let registry = crate::instruction_registry::default();
@@ -4738,6 +4744,17 @@ mod tests {
             }],
             recursive_proof: proof,
         });
+        let kagemusha = crate::isi::offline::KagemushaTransfer::new(
+            issue.issue.asset.definition().clone(),
+            vec![[0x11; 32]],
+            vec![[0x22; 32], [0x33; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
+            ),
+            Some([0x44; 32]),
+        );
 
         let cases: Vec<(&'static str, InstructionBox, Vec<u8>)> = vec![
             (
@@ -4754,6 +4771,11 @@ mod tests {
                 std::any::type_name::<crate::isi::offline::AuditOfflineNote>(),
                 audit.clone().into(),
                 norito::to_bytes(&audit).expect("encode audit instruction"),
+            ),
+            (
+                std::any::type_name::<crate::isi::offline::KagemushaTransfer>(),
+                kagemusha.clone().into(),
+                norito::to_bytes(&kagemusha).expect("encode kagemusha instruction"),
             ),
         ];
 

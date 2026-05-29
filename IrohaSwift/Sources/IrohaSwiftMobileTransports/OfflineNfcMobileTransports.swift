@@ -239,6 +239,7 @@ public struct IrohaOfflineNfcConfiguration: Equatable, Sendable {
 
 private enum IrohaOfflineDeviceTransferTextPayload {
     private static let boundaryWhitespace = CharacterSet(charactersIn: " \t\r\n")
+    private static let legacyTextNfcPayloadMaxBytes = 12 * 1024
 
     static func normalize(
         _ payload: String,
@@ -248,10 +249,47 @@ private enum IrohaOfflineDeviceTransferTextPayload {
         guard !trimmedPayload.isEmpty else {
             throw IrohaOfflineNfcExchangeError.invalidPayload
         }
-        return try OfflineNoteTransferHandoff.normalizeTextTransportPayload(
-            trimmedPayload,
+        switch expectedKind {
+        case .receiveRequest:
+            _ = try OfflineNoteTransferTextPayloadCodec.decodeReceiveRequestPayload(trimmedPayload)
+        case .paymentToken:
+            if (try? OfflineNoteTransferTextPayloadCodec.decodeNativePaymentToken(trimmedPayload)) == nil {
+                _ = try OfflineNoteTransferTextPayloadCodec.decodePaymentToken(trimmedPayload)
+            }
+        case .receiptAck:
+            _ = try OfflineNoteTransferTextPayloadCodec.decodeReceiptAck(trimmedPayload)
+        }
+        return trimmedPayload
+    }
+
+    static func payloadBytes(
+        _ payload: String,
+        expectedKind: OfflineNoteTextPayloadKind
+    ) throws -> Data {
+        let normalized = try normalize(payload, expectedKind: expectedKind)
+        let textBytes = Data(normalized.utf8)
+        guard textBytes.count > legacyTextNfcPayloadMaxBytes else {
+            return textBytes
+        }
+        return try OfflineNoteTransferTextPayloadCodec.decode(
+            normalized,
             expectedKind: expectedKind
+        ).payload
+    }
+
+    static func normalizePayloadBytes(
+        _ payloadBytes: Data,
+        expectedKind: OfflineNoteTextPayloadKind
+    ) throws -> String {
+        if let payloadText = String(data: payloadBytes, encoding: .utf8),
+           let normalized = try? normalize(payloadText, expectedKind: expectedKind) {
+            return normalized
+        }
+        let textPayload = try OfflineNoteTransferTextPayloadCodec.encode(
+            payloadBytes,
+            kind: expectedKind
         )
+        return try normalize(textPayload, expectedKind: expectedKind)
     }
 
     static func kind(for nfcKind: OfflineNoteNfcPayloadKind) -> OfflineNoteTextPayloadKind {
@@ -486,7 +524,10 @@ private final class IrohaOfflineNfcCardSessionRuntime {
             receiveRequestPayload,
             expectedKind: .receiveRequest
         )
-        let payloadBytes = Data(trimmedPayload.utf8)
+        let payloadBytes = try IrohaOfflineDeviceTransferTextPayload.payloadBytes(
+            trimmedPayload,
+            expectedKind: .receiveRequest
+        )
         self.configuration = configuration
         self.passPresentationSuppression = IrohaOfflineWalletPassPresentationSuppression(
             enabled: configuration.walletPassSuppressionEnabled
@@ -792,13 +833,9 @@ private final class IrohaOfflineNfcCardSessionRuntime {
             )
             return HandleResult(response: OfflineNoteNfcApduProtocol.statusWrongData, receiptAckRead: false)
         }
-        guard let transportPayload = String(data: payloadBytes, encoding: .utf8) else {
-            NSLog("iroha_offline_nfc_ios_card apdu_commit_rejected reason=invalid_utf8 length=%ld", payloadBytes.count)
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusWrongData, receiptAckRead: false)
-        }
         let textKind = IrohaOfflineDeviceTransferTextPayload.kind(for: pendingWrite.kind)
-        guard let payload = try? IrohaOfflineDeviceTransferTextPayload.normalize(
-            transportPayload,
+        guard let payload = try? IrohaOfflineDeviceTransferTextPayload.normalizePayloadBytes(
+            payloadBytes,
             expectedKind: textKind
         ) else {
             NSLog(
@@ -863,7 +900,10 @@ private final class IrohaOfflineNfcCardSessionRuntime {
     private func publishPayload(kind: OfflineNoteNfcPayloadKind, payload: String) throws {
         let textKind = IrohaOfflineDeviceTransferTextPayload.kind(for: kind)
         let trimmedPayload = try IrohaOfflineDeviceTransferTextPayload.normalize(payload, expectedKind: textKind)
-        let payloadBytes = Data(trimmedPayload.utf8)
+        let payloadBytes = try IrohaOfflineDeviceTransferTextPayload.payloadBytes(
+            trimmedPayload,
+            expectedKind: textKind
+        )
         let payloadInfo = try OfflineNoteNfcApduProtocol.encodeInfo(kind: kind, payloadBytes: payloadBytes)
         lock.lock()
         currentKind = kind
@@ -1329,11 +1369,11 @@ public final class IrohaOfflineNfcReaderService: NSObject, @unchecked Sendable, 
         guard OfflineNoteNfcApduProtocol.payloadDigestMatches(payloadData, expectedSha256: info.sha256) else {
             throw IrohaOfflineNfcExchangeError.checksumMismatch
         }
-        guard let payloadText = String(data: payloadData, encoding: .utf8) else {
-            throw IrohaOfflineNfcExchangeError.invalidPayload
-        }
         let textKind = IrohaOfflineDeviceTransferTextPayload.kind(for: info.kind)
-        let payload = try IrohaOfflineDeviceTransferTextPayload.normalize(payloadText, expectedKind: textKind)
+        let payload = try IrohaOfflineDeviceTransferTextPayload.normalizePayloadBytes(
+            payloadData,
+            expectedKind: textKind
+        )
         return (info.kind, payload)
     }
 
@@ -1344,7 +1384,10 @@ public final class IrohaOfflineNfcReaderService: NSObject, @unchecked Sendable, 
         preferredChunkLength: Int
     ) async throws {
         let textKind = IrohaOfflineDeviceTransferTextPayload.kind(for: kind)
-        let payloadData = Data(try IrohaOfflineDeviceTransferTextPayload.normalize(payload, expectedKind: textKind).utf8)
+        let payloadData = try IrohaOfflineDeviceTransferTextPayload.payloadBytes(
+            payload,
+            expectedKind: textKind
+        )
         let chunkLength = min(
             max(preferredChunkLength, 1),
             OfflineNoteNfcApduProtocol.androidSafeChunkBytes
@@ -1366,7 +1409,9 @@ public final class IrohaOfflineNfcReaderService: NSObject, @unchecked Sendable, 
             )
             offset = end
         }
+        log("write_payload_commit_begin")
         try await transceive(OfflineNoteNfcApduProtocol.commitAPDUData(), tag: tag)
+        log("write_payload_committed")
     }
 
     @discardableResult

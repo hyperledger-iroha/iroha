@@ -22,7 +22,7 @@ use iroha_data_model::{
         musubi::{
             AssertMusubiReleaseExists, PublishMusubiRelease, SetMusubiShortAlias, YankMusubiRelease,
         },
-        offline::{AuditOfflineNote, IssueOfflineNote, RedeemOfflineNote},
+        offline::{AuditOfflineNote, IssueOfflineNote, KagemushaTransfer, RedeemOfflineNote},
         settlement::{DvpIsi, PvpIsi, SettlementInstructionBox},
         smart_contract_code::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
@@ -2233,6 +2233,9 @@ fn offline_note_asset_definition_target(any: &dyn std::any::Any) -> Option<&Asse
                     .first()
                     .map(|claim| claim.asset.definition())
             });
+    }
+    if let Some(transfer) = any.downcast_ref::<KagemushaTransfer>() {
+        return Some(&transfer.asset);
     }
     None
 }
@@ -4750,7 +4753,7 @@ mod tests {
             AssetDefinitionAlias, Mintable, NewAssetDefinition, definition::AssetConfidentialPolicy,
         },
         isi::{
-            offline::IssueOfflineNote,
+            offline::{IssueOfflineNote, KagemushaTransfer},
             prelude::{Mint, Register, Transfer},
             settlement::{
                 DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
@@ -4763,6 +4766,7 @@ mod tests {
         offline::{OfflineNoteIssue, OfflineNoteKeyCertificate},
         permission::Permission,
         prelude::*,
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         sns::{NameControllerV1, NameRecordV1},
         transaction::TransactionBuilder,
     };
@@ -7379,6 +7383,37 @@ mod tests {
             router
                 .try_route_with_view(&tx, &state.view())
                 .expect("offline issue route must resolve with state"),
+            RoutingDecision::new(LaneId::new(2), dataspace_id)
+        );
+
+        let kagemusha = KagemushaTransfer::new(
+            opaque_asset_definition,
+            vec![[0x11; 32]],
+            vec![[0x22; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
+            ),
+            Some([0x33; 32]),
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(kagemusha)],
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("opaque Kagemusha transfer should defer to state"),
+            None
+        );
+
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("Kagemusha route must resolve with state"),
             RoutingDecision::new(LaneId::new(2), dataspace_id)
         );
     }

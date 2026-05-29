@@ -329,17 +329,16 @@ public final class OfflineNoteHalo2Prover {
         new TypeAdapter<Object>() {
           @Override
           public void encode(final NoritoEncoder encoder, final Object value) {
-            writeField(encoder, child -> child.writeUInt(BACKEND_TAG, 32));
-            writeField(encoder, child -> writeString(child, CIRCUIT_ID));
-            writeField(encoder, child -> child.writeBytes(CANONICAL_VK_HASH));
-            writeField(encoder, child -> writeBytesVec(child, OfflineNote.RECURSIVE_PUBLIC_INPUTS_SCHEMA.getBytes(StandardCharsets.UTF_8)));
-            writeField(encoder, child -> writeBytesVec(child, proofPayload));
-            writeField(encoder, child -> writeBytesVec(child, new byte[0]));
+            writeOpenVerifyEnvelopeFields(encoder, proofPayload);
           }
 
           @Override
           public Object decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-            throw new UnsupportedOperationException("OpenVerifyEnvelope decoding is not supported");
+            final byte[] payload = readOpenVerifyEnvelopePayload(decoder);
+            if (payload.length == 0) {
+              throw new IllegalArgumentException("OpenVerifyEnvelope payload is invalid");
+            }
+            return marker;
           }
         },
         NoritoHeader.COMPACT_LEN);
@@ -351,33 +350,59 @@ public final class OfflineNoteHalo2Prover {
         new TypeAdapter<byte[]>() {
           @Override
           public void encode(final NoritoEncoder encoder, final byte[] value) {
-            throw new UnsupportedOperationException("OpenVerifyEnvelope encoding is not supported here");
+            writeOpenVerifyEnvelopeFields(encoder, value);
           }
 
           @Override
           public byte[] decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-            final long backendTag = readField(decoder, child -> child.readUInt(32));
-            if (backendTag != BACKEND_TAG) {
-              return new byte[0];
-            }
-            final String circuitId = readField(decoder, OfflineNoteHalo2Prover::readString);
-            if (!CIRCUIT_ID.equals(circuitId)) {
-              return new byte[0];
-            }
-            final byte[] vkHash = readField(decoder, child -> child.readBytes(32));
-            if (!Arrays.equals(CANONICAL_VK_HASH, vkHash)) {
-              return new byte[0];
-            }
-            readField(decoder, OfflineNoteHalo2Prover::readBytesVec);
-            final byte[] proofPayload = readField(decoder, OfflineNoteHalo2Prover::readBytesVec);
-            readField(decoder, OfflineNoteHalo2Prover::readBytesVec);
-            if (proofPayload.length == 0) {
-              throw new IllegalArgumentException("OpenVerifyEnvelope proof payload is empty");
-            }
-            return proofPayload;
+            return readOpenVerifyEnvelopePayload(decoder);
           }
         },
         "iroha_data_model::zk::OpenVerifyEnvelope");
+  }
+
+  private static void writeOpenVerifyEnvelopeFields(final NoritoEncoder encoder, final byte[] proofPayload) {
+    writeField(encoder, child -> child.writeUInt(BACKEND_TAG, 32));
+    writeField(encoder, child -> writeString(child, CIRCUIT_ID));
+    writeField(encoder, child -> child.writeBytes(CANONICAL_VK_HASH));
+    writeField(
+        encoder,
+        child -> writeBytesVec(
+            child,
+            OfflineNote.RECURSIVE_PUBLIC_INPUTS_SCHEMA.getBytes(StandardCharsets.UTF_8)));
+    writeField(encoder, child -> writeBytesVec(child, proofPayload));
+    writeField(encoder, child -> writeBytesVec(child, new byte[0]));
+  }
+
+  private static byte[] readOpenVerifyEnvelopePayload(
+      final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
+    final long backendTag = readField(decoder, child -> child.readUInt(32));
+    if (backendTag != BACKEND_TAG) {
+      return new byte[0];
+    }
+    final String circuitId = readField(decoder, OfflineNoteHalo2Prover::readString);
+    if (!CIRCUIT_ID.equals(circuitId)) {
+      return new byte[0];
+    }
+    final byte[] vkHash = readField(decoder, child -> child.readBytes(32));
+    if (!Arrays.equals(CANONICAL_VK_HASH, vkHash)) {
+      return new byte[0];
+    }
+    final byte[] publicInputSchema = readField(decoder, OfflineNoteHalo2Prover::readBytesVec);
+    if (!Arrays.equals(
+        OfflineNote.RECURSIVE_PUBLIC_INPUTS_SCHEMA.getBytes(StandardCharsets.UTF_8),
+        publicInputSchema)) {
+      return new byte[0];
+    }
+    final byte[] proofPayload = readField(decoder, OfflineNoteHalo2Prover::readBytesVec);
+    readField(decoder, OfflineNoteHalo2Prover::readBytesVec);
+    if (decoder.remaining() != 0) {
+      return new byte[0];
+    }
+    if (proofPayload.length == 0) {
+      throw new IllegalArgumentException("OpenVerifyEnvelope proof payload is empty");
+    }
+    return proofPayload;
   }
 
   private static Context buildContext() {

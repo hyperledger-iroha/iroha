@@ -10060,6 +10060,12 @@ pub struct Offline {
     /// Escrow account bindings keyed by asset definition id.
     #[config(default = "BTreeMap::new()")]
     pub escrow_accounts: BTreeMap<String, String>,
+    /// Enable Kagemusha shielded offline-offline payments.
+    #[config(default = "defaults::settlement::offline::KAGEMUSHA_ENABLED")]
+    pub kagemusha_enabled: bool,
+    /// Force legacy bearer-audit lineage instead of Kagemusha during migration fallback.
+    #[config(default = "defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY")]
+    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -10071,6 +10077,8 @@ impl Default for Offline {
             prune_batch_size: defaults::settlement::offline::PRUNE_BATCH_SIZE,
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
+            kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
+            kagemusha_force_legacy: defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY,
         }
     }
 }
@@ -10296,6 +10304,8 @@ impl Offline {
             prune_batch_size,
             escrow_required,
             escrow_accounts,
+            kagemusha_enabled,
+            kagemusha_force_legacy,
         } = self;
         if hot_retention_blocks == 0 {
             emitter.emit(ParseError::InvalidSettlementConfig.into());
@@ -10349,6 +10359,8 @@ impl Offline {
             prune_batch_size,
             escrow_required,
             escrow_accounts: escrow_bindings,
+            kagemusha_enabled,
+            kagemusha_force_legacy,
         }
     }
 }

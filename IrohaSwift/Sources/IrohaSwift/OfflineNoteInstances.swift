@@ -49,6 +49,10 @@ public enum OfflineNoteInstanceError: Error, LocalizedError, Equatable {
     case amountSumOverflow(String)
     case amountConservationMismatch(input: UInt64, output: UInt64)
     case auditInputCountMismatch(nullifiers: Int, claims: Int)
+    case auditOutputCountMismatch(commitments: Int, claims: Int)
+    case auditOutputClaimOrderMismatch(index: Int)
+    case auditInputCertificateMismatch
+    case auditAssetDefinitionMismatch
 
     public var errorDescription: String? {
         switch self {
@@ -70,6 +74,14 @@ public enum OfflineNoteInstanceError: Error, LocalizedError, Equatable {
             return "Offline audit amounts are not conserved: input \(input), output \(output)."
         case let .auditInputCountMismatch(nullifiers, claims):
             return "Offline audit input nullifier count \(nullifiers) must match input claim count \(claims)."
+        case let .auditOutputCountMismatch(commitments, claims):
+            return "Offline audit output commitment count \(commitments) must match output claim count \(claims)."
+        case let .auditOutputClaimOrderMismatch(index):
+            return "Offline audit output claim at index \(index) must match the output commitment at the same index."
+        case .auditInputCertificateMismatch:
+            return "Offline audit input claims must match the sender key certificate."
+        case .auditAssetDefinitionMismatch:
+            return "Offline audit input and output asset definitions must match."
         }
     }
 }
@@ -138,9 +150,31 @@ public enum OfflineNoteInstanceBuilder {
                 claims: audit.inputClaims.count
             )
         }
+        guard audit.outputCommitments.count == audit.outputClaims.count else {
+            throw OfflineNoteInstanceError.auditOutputCountMismatch(
+                commitments: audit.outputCommitments.count,
+                claims: audit.outputClaims.count
+            )
+        }
+        for (index, pair) in zip(audit.outputCommitments, audit.outputClaims).enumerated() where pair.0 != pair.1.noteCommitment {
+            throw OfflineNoteInstanceError.auditOutputClaimOrderMismatch(index: index)
+        }
 
         let publicInputsHash = try audit.publicInputsHash()
         let keyCertificatePayloadHash = try audit.senderKeyCertificate.payloadHash()
+        guard audit.inputClaims.allSatisfy({ $0.keyCertificatePayloadHash == keyCertificatePayloadHash }) else {
+            throw OfflineNoteInstanceError.auditInputCertificateMismatch
+        }
+        let inputDefinition = try assetDefinitionBytes(audit.inputClaims[0].assetId)
+        let inputAssetsMatch = try audit.inputClaims.allSatisfy {
+            try assetDefinitionBytes($0.assetId) == inputDefinition
+        }
+        let outputAssetsMatch = try audit.outputClaims.allSatisfy {
+            try assetDefinitionBytes($0.assetId) == inputDefinition
+        }
+        guard inputAssetsMatch && outputAssetsMatch else {
+            throw OfflineNoteInstanceError.auditAssetDefinitionMismatch
+        }
         let inputClaimHashes = try audit.inputClaims.map { try $0.claimHash() }
         let outputClaimHashes = try audit.outputClaims.map {
             try OfflineNoteIssuedClaim.fromAuditOutput($0).claimHash()
@@ -273,6 +307,14 @@ public enum OfflineNoteInstanceBuilder {
         }
     }
 
+    private static func assetDefinitionBytes(_ assetId: String) throws -> Data {
+        guard let parsed = OfflineNorito.parsePublicAssetIdLiteral(assetId),
+              let definitionBytes = AssetDefinitionAddress.decode(parsed.assetDefinitionId) else {
+            throw OfflineNoritoError.invalidAssetId(assetId)
+        }
+        return definitionBytes
+    }
+
     private static func hashLimb0Sum(_ hashes: [Data]) -> UInt64 {
         hashes.reduce(UInt64(0)) { sum, hash in
             sum &+ hashLimb0(hash)
@@ -297,4 +339,3 @@ public enum OfflineNoteInstanceBuilder {
         return limbs
     }
 }
-

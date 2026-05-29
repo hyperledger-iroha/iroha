@@ -5,6 +5,8 @@ import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
+import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
 
 /** Client-side verification helper for identifier-resolution receipts. */
 public final class IdentifierReceiptVerifier {
@@ -35,15 +37,8 @@ public final class IdentifierReceiptVerifier {
     switch (keyPayload.curveId()) {
       case 0x01:
         return verifyEd25519(keyPayload.keyBytes(), message, signatureBytes);
-      case 0x0F:
-        throw new UnsupportedOperationException(
-            "SM2 receipt verification is not available in the Android SDK");
-      case 0x02:
-        throw new UnsupportedOperationException(
-            "ML-DSA receipt verification is not available in the Android SDK");
       default:
-        throw new UnsupportedOperationException(
-            "Unsupported resolver key curve id: " + keyPayload.curveId());
+        return verifyNativeBacked(keyPayload.curveId(), keyPayload.keyBytes(), message, signatureBytes);
     }
   }
 
@@ -56,6 +51,46 @@ public final class IdentifierReceiptVerifier {
       return verifier.verifySignature(signature);
     } catch (final Exception ex) {
       throw new IllegalArgumentException("failed to verify Ed25519 identifier receipt", ex);
+    }
+  }
+
+  private static boolean verifyNativeBacked(
+      final int curveId, final byte[] publicKey, final byte[] message, final byte[] signature) {
+    final SigningAlgorithm algorithm = signingAlgorithmForCurveId(curveId);
+    if (algorithm == null || !NativeSignerBridge.isNativeAvailable()) {
+      return false;
+    }
+    try {
+      return NativeSignerBridge.verifyDetached(algorithm, publicKey, message, signature);
+    } catch (final RuntimeException ex) {
+      return false;
+    }
+  }
+
+  private static SigningAlgorithm signingAlgorithmForCurveId(final int curveId) {
+    switch (curveId) {
+      case 0x02:
+        return SigningAlgorithm.ML_DSA;
+      case 0x03:
+        return SigningAlgorithm.BLS_NORMAL;
+      case 0x04:
+        return SigningAlgorithm.SECP256K1;
+      case 0x05:
+        return SigningAlgorithm.BLS_SMALL;
+      case 0x0A:
+        return SigningAlgorithm.GOST_2012_256_A;
+      case 0x0B:
+        return SigningAlgorithm.GOST_2012_256_B;
+      case 0x0C:
+        return SigningAlgorithm.GOST_2012_256_C;
+      case 0x0D:
+        return SigningAlgorithm.GOST_2012_512_A;
+      case 0x0E:
+        return SigningAlgorithm.GOST_2012_512_B;
+      case 0x0F:
+        return SigningAlgorithm.SM2;
+      default:
+        return null;
     }
   }
 

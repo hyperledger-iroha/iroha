@@ -2502,6 +2502,8 @@ fn minimal_config_snapshot() {
                     prune_batch_size: 128,
                     escrow_required: false,
                     escrow_accounts: {},
+                    kagemusha_enabled: true,
+                    kagemusha_force_legacy: false,
                 },
                 router: Router {
                     twap_window: 60s,

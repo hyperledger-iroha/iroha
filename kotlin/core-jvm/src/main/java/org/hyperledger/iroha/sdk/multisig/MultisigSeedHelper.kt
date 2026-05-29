@@ -9,6 +9,7 @@ import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.crypto.Blake2b
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
+import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
@@ -100,6 +101,16 @@ object MultisigSeedHelper {
         encoder.writeBytes(payload)
     }
 
+    private fun <T> decodeSizedField(decoder: NoritoDecoder, adapter: TypeAdapter<T>): T {
+        val length = decoder.readLength((decoder.flags and NoritoHeader.COMPACT_LEN) != 0)
+        require(length <= Int.MAX_VALUE) { "Sized field payload too large" }
+        val payload = decoder.readBytes(length.toInt())
+        val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+        val value = adapter.decode(child)
+        require(child.remaining() == 0) { "Trailing bytes after sized field payload" }
+        return value
+    }
+
     private fun parseAccountIdParts(accountId: String?): AccountIdParts? {
         if (accountId.isNullOrBlank()) return null
         val trimmed = accountId.trim()
@@ -146,8 +157,8 @@ object MultisigSeedHelper {
 
     private class AccountIdParts(
         val domain: String,
-        private val curveId: Int,
-        private val algorithmTag: Int,
+        val curveId: Int,
+        val algorithmTag: Int,
         publicKey: ByteArray,
     ) : Comparable<AccountIdParts> {
 
@@ -194,7 +205,14 @@ object MultisigSeedHelper {
             }
 
             override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): AccountIdParts {
-                throw UnsupportedOperationException("AccountController decode is not supported")
+                val tag = ENUM_TAG_ADAPTER.decode(decoder)
+                require(tag == 0L) { "Only single-key AccountController seeds are supported" }
+                val publicKeyLiteral = decodeSizedField(decoder, STRING_ADAPTER)
+                val payload = decodePublicKeyLiteral(publicKeyLiteral)
+                    ?: throw IllegalArgumentException("Invalid AccountController public key literal")
+                val algorithmTag = algorithmTagForCurveId(payload.curveId)
+                require(algorithmTag >= 0) { "Unsupported AccountController curve id: ${payload.curveId}" }
+                return AccountIdParts("", payload.curveId, algorithmTag, payload.keyBytes)
             }
         }
 
@@ -206,7 +224,15 @@ object MultisigSeedHelper {
             }
 
             override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): AccountIdParts {
-                throw UnsupportedOperationException("AccountIdParts decode is not supported")
+                val domain = decodeSizedField(decoder, STRING_ADAPTER)
+                val controller = decodeSizedField(decoder, ACCOUNT_CONTROLLER_ADAPTER)
+                require(domain.isNotBlank()) { "AccountIdParts domain must not be blank" }
+                return AccountIdParts(
+                    domain,
+                    controller.curveId,
+                    controller.algorithmTag,
+                    controller.publicKey,
+                )
             }
         }
 }

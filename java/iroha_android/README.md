@@ -9,7 +9,7 @@ with Iroha nodes.
 This snapshot covers the offline key management façade, Norito encoding backed
 by the shared `norito-java` implementation, the Android Keystore/StrongBox
 backend (with cached attestations + explicit deterministic software providers), and
-scaffolding for network clients. The generated instruction helpers now include
+network client abstractions. The generated instruction helpers now include
 the first dedicated RWA lot builder slice alongside NFT helpers:
 `RegisterRwaInstruction`, `TransferRwaInstruction`,
 `MergeRwasInstruction`, `RedeemRwaInstruction`,
@@ -282,8 +282,8 @@ in sync. Lint and JVM publishing are covered by the default CI task list above, 
 Set `NORITO_JAVA_VERSION=<version>` to exercise a different Norito drop; the manifest guard fails if
 it diverges from `schemas/norito_schema_manifest.json`.
 
-`PlatformHttpTransportExecutor` now prefers the Android OkHttp factory when present (stubbed in core
-tests), falling back to the JDK client elsewhere. The Android module exposes
+`PlatformHttpTransportExecutor` now prefers the Android OkHttp factory when present (substituted in
+core tests), falling back to the JDK client elsewhere. The Android module exposes
 `OkHttpTransportExecutorFactory` for callers that want to reuse a shared `OkHttpClient`.
 
 To keep JVM-only transports out of the Android artefacts, run the guard after producing an AAR:
@@ -460,10 +460,10 @@ and release gates; set `ANDROID_PARITY_SUMMARY=<path>` to override the target
 location or `ANDROID_PARITY_PIPELINE_METADATA=<file>` to embed pipeline/test
 metadata in the summary when running under CI.
 
-The test harness currently executes the key manager, keystore scaffolding (with
-the Android Keystore stub backend), Norito codec round-trips that verify typed
+The test harness currently executes the key manager, keystore flows (with the
+Android Keystore fallback backend), Norito codec round-trips that verify typed
 instruction decoding, transaction builder signing, and HTTP client serialization
-stubs to keep the Java pathways aligned.
+paths to keep the Java pathways aligned.
 
 ### Publishing snapshots (AND9)
 
@@ -1046,7 +1046,7 @@ requests without reimplementing header/observer plumbing. Call
 `client.fetch(request)` when you only need the raw JSON/string output, or
 `client.fetchSummary(request)` to receive a typed `GatewayFetchSummary` that exposes
 provider receipts, anonymity ratios, and chunk metadata. The client reuses
-`HttpTransportExecutor`, which means tests can provide deterministic stubs and production
+`HttpTransportExecutor`, which means tests can provide deterministic fakes and production
 code can share the same connection pool as the Torii pipeline transport.
 `HttpClientTransport.newSorafsGatewayClient(...)` is a convenience helper that spawns the
 gateway client using the same executor, timeout, headers, and observers as the primary Torii
@@ -1120,6 +1120,11 @@ redeem transaction outcome.
 the Offline Note wallet so value is carried by note commitments, note secrets,
 nullifiers, audit lineage, and issuer-signed hardware key certificates instead
 of a separate mutable purse protocol.
+`KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
+token prover for shielded offline-offline payments. Pass a Norito-encoded
+`KagemushaVerifiedFoldRecordBundle`; the JNI bridge verifies each private hop
+proof against its verifier record and returns a Norito-encoded
+`KagemushaCompactPaymentToken` when `connect_norito_bridge` is available.
 `OfflineNoteTransferHandoff` provides the app-facing payment-token transfer
 surface: `qrStreamingFrameBytes(token)` for animated/binary QR,
 `nfcFrameBytes(token)` for APDU-sized NFC frame exchange, and

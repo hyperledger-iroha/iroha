@@ -1,6 +1,528 @@
 # Status
 
-Last updated: 2026-05-28
+Last updated: 2026-05-29
+
+## 2026-05-29 Kagemusha SDK bridge exposure
+
+- Swift, Kotlin/JVM, and Java Android now expose record-backed Kagemusha
+  compact-token prover wrappers. The SDK APIs accept Norito-encoded
+  `KagemushaVerifiedFoldRecordBundle` bytes and return Norito-encoded
+  `KagemushaCompactPaymentToken` bytes, keeping verifier-record enforcement in
+  the native Rust bridge instead of asking mobile callers to pre-fold public
+  inputs by hand.
+- Swift, Kotlin/JVM, and Java Android Offline Note model validation now rejects
+  recursive proof metadata substitution before accepting a proof binding:
+  `validateProofBinding` requires the canonical `halo2/ipa` proof backend and
+  `halo2/ipa:offline-note-recursive` verifier-key id, so a valid embedded
+  envelope cannot be replayed under a trusted-setup or wrong verifier label in
+  wallet-side validation. Wallet and redeem-planner drafts now use an explicit
+  unsupported `offline-note/draft-placeholder` backend instead of canonical
+  Halo2 IPA metadata, preventing draft placeholders from passing proof-binding
+  validation before a real proof provider replaces them.
+- `connect_norito_bridge` now exports matching JNI entry points for the Kotlin
+  and Java wrappers, and the Swift bridge loader requires ABI 4 plus the
+  record-backed Kagemusha symbol before marking the compact-token prover
+  available.
+- Kagemusha chain transfers and record-backed compact-token proving now require
+  confidential-transfer-v2 Halo2 IPA proof semantics rather than accepting any
+  active transparent verifier: the chain instruction requires an asset-bound
+  confidential transfer verifier and root hint, binds the submitted
+  `OpenVerifyEnvelope` backend tag, circuit id, schema, and verifier-key hash to
+  that asset verifier, and checked folding rejects generic active verifier
+  circuits before compact proof generation even when verifier records are not
+  supplied. Chain-side adversarial coverage now also forges the transaction
+  root hint, nullifier, output commitment, asset definition, and chain id while
+  keeping the proof envelope intact, and rejects each mismatch through
+  confidential-transfer-v2 public-input validation. Optional envelope-hash
+  metadata is now checked against the submitted envelope bytes for both
+  chain-side transfers and private-hop fold construction, so Kagemusha audit
+  metadata cannot be forged independently of the proof payload. Raw checked
+  Kagemusha fold construction also enforces the confidential-transfer-v2
+  `max_proof_bytes` cap before parsing hop envelopes, and compact-token
+  verification rejects folded proofs above the published Kagemusha proof cap.
+  The final folded Halo2 IPA envelope is now pinned to canonical empty
+  auxiliary bytes before backend verification, including the record-backed
+  verifier path, so unbound application metadata cannot ride along with an
+  otherwise valid compact token. The same canonical-empty-aux check now applies
+  to confidential-transfer-v2 Kagemusha hop envelopes and chain-side transfer
+  envelopes before they can enter folded transcripts or mutate shielded state.
+  Chain-side transfer admission now also requires the asset-bound active
+  verifier record to be the active circuit/version index entry and to publish
+  inline Halo2 IPA key bytes, a matching key length and commitment, and a
+  non-zero proof-size cap before the proof envelope is decoded, so forged or
+  stale verifier metadata fails before backend proof verification.
+  Private-hop fold verification now also rejects envelope verifier-key hash
+  and envelope-backend mismatches before backend proof verification, avoiding
+  expensive verifier work on proofs that cannot match the registered key
+  binding or claimed transparent proof system. The standalone Kagemusha
+  proof-statement digest helper now applies the same canonical envelope policy
+  and rejects non-empty auxiliary bytes or zero verifier-key hashes before
+  deriving folded transcript material. The data-model Poseidon2 digest helper
+  for `KagemushaProofPublicInputsStatement` enforces the same rule, so SDKs and
+  future recursive circuits cannot derive folded transcripts from non-canonical
+  per-hop proof metadata. The data-model Kagemusha transcript helpers now also
+  reject unsupported, trusted-setup, and developer-only backend labels when
+  hashing per-hop verifier-key material or folding verifier-key ids, keeping
+  the canonical transcript surface limited to transparent Halo2 IPA and
+  production STARK/FRI backends.
+  Proof-statement transcript derivation now also rejects empty circuit ids,
+  public-input schema bytes, missing or empty instance columns, and empty
+  verifier-key bytes. Folded-hop transcript derivation and core hop validation
+  reject empty verifier-key id names for the same reason, so absent metadata
+  cannot be used as wildcard binding material. The shared STARK/FRI backend
+  classifier now rejects a bare `stark/fri/` prefix, trusted-setup profiles
+  such as `stark/fri/kzg`, `stark/fri/bn254`, and `stark/fri/bls12_381`, and
+  any STARK profile containing developer-only `debug` or mock labels, with
+  ASCII-case-insensitive matching, before Offline/Kagemusha verifier admission
+  reaches proof decoding; Torii proof and prover paths now apply the same rule.
+  The shared trusted-setup classifier now also rejects standalone setup labels
+  such as `kzg`, `bn254`, `bn256`, and `bls12_381`, plus colon-delimited
+  profiles such as `halo2/ipa:kzg`, before broad verifier-registry, preverify,
+  guardrail, or prover allowlists can admit them. Mixed-case variants such as
+  `KZG`, `halo2/ipa:KZG`, `stark/fri/Debug`, and `halo2/ipa:Mock-Proof` are
+  covered by the same classifier rather than by per-call-site checks.
+  Chain-side Kagemusha transfers and the compact-token FFI bridge now also
+  require the submitted proof attachment to publish the asset-bound verifier-key
+  commitment and a non-empty verifier-key id name, rejecting missing
+  trust-anchor metadata before envelope decoding. Offline recursive proof
+  resolution, Kagemusha transfer admission, checked fold construction, and
+  compact-token record verification now reject empty inline verifier-key bytes
+  before backend verification.
+  Direct Poseidon2 aggregation transcript hashing now validates the full
+  canonical statement shape before hashing: checked aggregation mode, hop count
+  and hop indices, initial/final roots, root continuity, sorted non-zero
+  nullifier/output sets, duplicate detection, and supported transparent
+  verifier-key backends. Raw folded-hop proof public-input digests,
+  verifier-key commitments, and verifier-key Poseidon2 digests must also be
+  non-zero before entering canonical folded transcripts. Compact folded public
+  inputs now also reject zero or over-64 hop counts during data-model context
+  validation, before proof instance construction or backend verification.
+  Compact folded-token verification now has explicit adversarial coverage for
+  trusted-setup and developer-only final folded proof labels, including the
+  record-backed verifier path, so those labels cannot be replayed around the
+  canonical `halo2/ipa` folded proof boundary.
+  Derived Halo2 IPA proving keys for IVM execution, Offline Note, and Kagemusha
+  folded proofs are now stored as Norito archives that bind the canonical
+  circuit family and verifier-key commitment before raw Halo2 key bytes are
+  decoded. This rejects raw or cross-circuit proving-key material before proof
+  creation while keeping cached key derivation available for production
+  performance without a trusted setup. Torii's IVM prover key-store path now
+  has job-level coverage that rejects a non-archive `.pk` file instead of
+  treating arbitrary bytes as a Halo2 proving key. The IVM Halo2 prover helper
+  also refuses non-`ivm-execution-v1` circuit families before key parsing or
+  proof creation, aligning the emitted envelope with the archived key family and
+  Torii verifier-record admission.
+  Chain-side Kagemusha transfers now reject duplicate input nullifiers or output
+  commitments before proof envelope decoding, matching the folded-token
+  transcript invariant and preventing duplicate commitments from being appended
+  to the shielded tree. Checked fold construction and chain-side transfer
+  admission now also reject explicit all-zero nullifier or commitment entries
+  before proof decoding, preserving zero as padding only in confidential-v2
+  public input columns.
+  Offline recursive audit/redeem verifier resolution now also requires the
+  proof envelope verifier-key hash to exactly match the active record
+  commitment and rejects non-empty auxiliary bytes before proof verification,
+  closing the same unbound-metadata class for legacy bearer audit/redeem flows.
+  The resolver now also enforces inline key presence, key length, namespace,
+  schema hash, canonical `offline-note-recursive` circuit family, active
+  circuit/version index, commitment, non-zero proof cap, and proof-size cap
+  before proof verification. The resolver now uses the shared trusted-setup and
+  developer-only backend classifier before verifier-registry lookup, so
+  Groth16/KZG/BN254/BLS12 and labels containing `debug` or `mock` cannot fall
+  through to a missing-key path.
+  `AuditOfflineNote` now signature-checks each audited output certificate
+  against the output account before issuing its lineage, while input trust
+  remains anchored to the prior online-to-offline topup claim. Focused coverage
+  rejects a forged output certificate before recursive proof verification.
+  Verifying-key registry admission now rejects inline verifier-key records whose
+  published `vk_len` does not match the stored key bytes on both register and
+  update, so Kagemusha/Offline verifier-record trust anchors cannot be made
+  internally inconsistent at governance entry points. Registry admission and
+  generic proof attachments now also reject explicit trusted-setup backend
+  labels, including Groth16, Halo2/BN254, Halo2/BLS12, and Halo2/KZG, before a
+  proof can enter the preverify cache or verifier registry; generic proof
+  attachments also reject developer-only proof labels before envelope matching.
+  STARK/FRI registry admission rejects the same trusted-setup substrings even
+  when no inline key bytes are supplied. Verifier-key register/update admission
+  also rejects developer-only labels containing `debug` or `mock`, including
+  directly seeded legacy records that attempt to refresh through update. IVM
+  host verifier snapshots apply the same trusted-setup and
+  developer-only label policy when loading external verifier records, so
+  host-side proof syscalls cannot bypass chain registry admission by injecting
+  a bad key snapshot.
+  Torii's non-consensus proof/prover worker now reuses the same trusted-setup
+  backend classifier before applying broad backend allowlists, so `halo2/`
+  prefixes cannot admit KZG, BN254/BLS12, or Groth16 work items;
+  developer-only labels containing `debug` or `mock` are rejected at the same
+  boundary before registry lookup, and attachment/proof backend mismatches stop
+  at the same fatal pre-registry boundary instead of falling through to key
+  lookup. The core preverify cache and
+  guardrail dispatch wrappers now enforce the same developer-only
+  backend rejection before dedup insertion or verifier dispatch. Torii-generated
+  IVM proof attachments now include the active verifier-key commitment that was
+  checked during proof generation, keeping downstream proof-submission metadata
+  bound to the same trust anchor.
+  The `zk-preverify` trace sidecar now records only verified trace digest
+  artifacts. The background trace lane revalidates queued traces for diagnostics
+  and future transparent prover integration, but it no longer emits
+  `zk-trace/mock-proof` artifacts into block pipeline sidecars.
+  The shared chain-side `OpenVerifyEnvelope` admission policy now also rejects
+  zero/wildcard verifier-key hashes and non-empty auxiliary bytes for generic
+  `VerifyProof`, governance voting proofs, STARK shielded transfer/unshield
+  wrappers, IVM-proved overlays, IVM host registered-key verify syscalls, and
+  Kaigi privacy proofs. RAM-LFE proof receipts used by generic program policies
+  and identifier claims now also reject non-canonical envelope backend tags and
+  non-empty auxiliary bytes before public-instance extraction. Those registered
+  proof paths now require the envelope `vk_hash` to exactly match the active
+  registered verifier-key commitment before backend verification or
+  preverified-cache lookup.
+  Generic confidential-transfer-v2 `ZkTransfer` and unshield admission now also
+  rejects non-canonical Halo2 IPA `OpenVerifyEnvelope` metadata before public
+  input parsing: backend tag, confidential circuit id, public-input schema,
+  auxiliary bytes, verifier-key hash, and active circuit/version index must all
+  match the bound verifier. Private Kaigi fee spends still carry fee-binding
+  metadata at the transaction boundary, but the fee path validates that aux
+  first and then submits a canonical empty-aux proof envelope into the internal
+  `ZkTransfer`. Anonymous escrow close prechecks now apply the same canonical
+  confidential-transfer-v2 envelope guard before trusting parsed input
+  commitments from the proof payload. The shared Halo2 IPA backend verifier
+  itself now also rejects non-empty auxiliary bytes plus zero or mismatched
+  envelope verifier-key hashes before running proof verification, so direct
+  verifier callers fail closed even outside chain-specific wrappers. Low-level
+  backend dispatch now also rejects a `ProofBox.backend` that differs from the
+  requested verifier backend before consulting any verifier registry entry.
+  The lightweight preverify/dedup cache path now decodes known
+  `OpenVerifyEnvelope` wrappers before cache insertion and rejects raw payloads,
+  wrong backend tags, non-empty auxiliary bytes, zero verifier-key hashes, and
+  mismatched verifier-key commitments, while trusted-setup labels such as
+  Groth16, Halo2/BN254, and Halo2/KZG remain unsupported before dedup
+  insertion, so malformed proofs cannot poison a later valid preverified entry.
+  The checked verifier guardrail wrapper now rejects the same trusted-setup
+  labels before backend dispatch even when a caller bypasses chain-specific
+  registry admission.
+  Checked fold bundle paths now reject empty or over-64-hop bundles before
+  constructing verifier work or decoding proof envelopes, and reject malformed
+  hop input/output shapes, root discontinuities, and duplicate
+  nullifiers/commitments before proof metadata is parsed. Record-backed checked
+  folding now also requires the supplied verifier-record set to be exact:
+  referenced records must be present once and unrelated records are rejected
+  before per-hop verifier work.
+- The aggregation-mode surface now reports mode `2` as a reserved value with a
+  stable rejection reason. The current tree has native Halo2 IPA verification,
+  but no in-circuit Halo2 IPA verifier gadget, so public compact-token prover
+  and verifier paths remain constrained to checked pre-fold mode `1`.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock` (no output)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_cli`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha --lib` (17 tests, including JNI-helper record checks, exact verifier-record-set enforcement, missing trust-anchor metadata rejection, forged envelope-hash metadata and hop auxiliary-byte rejection for both bridge entry points, oversized-hop rejection, oversized-bundle early rejection, malformed-hop-shape early rejection, and root-discontinuity early rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_proof_public_inputs_statement_digest --lib` (2 tests, including data-model canonical proof-statement auxiliary-byte and zero verifier-key-hash rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha --lib` (11 tests, including data-model trusted-setup, developer-only debug/mock substring, and profile-less STARK backend rejection for proof statements, verifier-key digests, and folded-step verifier ids, standalone KZG/pairing label rejection for verifier-key Poseidon digests, empty proof-statement metadata, verifier-key ids, and verifier-key bytes rejection, direct aggregation-statement canonical-shape rejection, zero digest/commitment rejection, and compact folded public-input hop-count rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_verifier_key_poseidon_digest_binds_backend_and_bytes --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model offline --lib` (16 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_proof_statement_digest --lib` (4 tests, including standalone Kagemusha proof-statement auxiliary-byte, zero verifier-key-hash, empty circuit-id, empty schema, and empty instance-column rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer --lib` (20 tests, including chain-side missing verifier-key commitment metadata and empty verifier-key id rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha --lib` (72 tests, including empty verifier-key bytes rejection, final prover archive/circuit-family hardening, and checked fold construction)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token_rejects_non_production_folded_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token_rejects_ --lib` (14 compact-token adversarial tests, including trusted-setup/developer-only folded proof labels, public-input/context substitution, reserved recursive mode, final prover metadata/key archive rejection, envelope metadata substitution, oversized folded proofs, and tampered hop proofs)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_kagemusha_compact_payment_token_rejects_ --lib` (3 final prover boundary tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core confidential_transfer_v2 --lib` (6 tests, including real Halo2 IPA confidential-transfer-v2 proofs and generic envelope metadata rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core halo2_ipa_proving_key_archive --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core ivm_execution_prover_rejects_wrong_circuit_family --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core halo2_ipa --lib` (9 tests, including IVM circuit-family rejection, circuit/vk-bound proving-key archive rejection, real offline-note/Kagemusha Halo2 IPA proofs, and low-level proof-backend mismatch rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core confidential_unshield_v2_v3_reject_noncanonical_envelope_metadata_before_proof_decode --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core private_kaigi --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core anonymous_escrow --lib` (8 tests, including anonymous escrow close envelope metadata rejection before public-input trust)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify_rejects_trusted_setup_backends_before_dedup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify --lib` (6 tests, including malformed envelope metadata and trusted-setup backend rejection before dedup insertion)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails_reject_trusted_setup_backends_before_dispatch --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails --lib` (8 tests, including trusted-setup and developer-only backend rejection before verifier dispatch)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core set_verifying_keys_rejects_trusted_setup_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core trusted_setup_classifier_catches_standalone_and_profile_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core stark_backend_tag_tests --lib` (3 tests, including profile-less, trusted-setup, and developer-only debug/mock STARK/FRI profile rejection plus standalone KZG/pairing and colon-profile trusted-setup classification)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii stark_fri_backend_labels_require_non_empty_profile --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_does_not_classify_profileless_stark_prefix_as_stark --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects_trusted_setup_labels --lib` (includes standalone KZG/pairing labels and `halo2/ipa:kzg` under a broad `halo2/` allowlist)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects_trusted_setup_backend_before_registry_lookup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects_developer_only_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects_developer_only_backend_before_registry_lookup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects_attachment_backend_mismatch_before_registry_lookup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_still_reports_missing_registry_for_supported_backend --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii zk_prover --lib` (77 tests, including trusted-setup, developer-only, attachment-backend mismatch, and profile-less STARK backend rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii zk_ivm_prove_job_completes_and_does_not_expose_gas_used --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii zk_ivm_prove_job_rejects_non_archive_proving_key_bytes --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii zk_ivm_prove --lib` (9 tests, including generated proof-attachment verifier-key commitment binding, archived IVM proving-key loading from disk, and non-archive `.pk` rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify preverify_rejects_developer_only_backends_before_dedup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify preverify --lib` (8 tests, including developer-only backend rejection before dedup and canonical-envelope dedup fixture coverage)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify --test zk_dedup`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify --test zk_preverify_budget`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_non_transparent_proof_backends --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_non_production_backend_labels_before_registry_lookup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_self_consistent_noncanonical_recursive_circuit --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_ --lib` (10 tests, including non-production backend-label rejection before registry lookup, empty recursive verifier-key id, empty verifier-key bytes rejection, self-consistent noncanonical recursive circuit rejection, and profile-less `stark/fri/` backend rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_ --lib` (24 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note --lib` (32 tests, including real Halo2 IPA envelope metadata substitution rejection, archived Offline Note proving-key use, empty verifier-key trust-anchor rejection, and forged recursive circuit rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_trusted_setup_halo2_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_developer_only_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_trusted_setup_stark_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core update_vk_rejects_non_production_existing_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core vk_ --lib` (30 tests, including trusted-setup Halo2/STARK and developer-only backend-label rejection at VK admission and update)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core validate_proof_attachment_rejects_mismatched_attachment_triples --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core set_verifying_keys_rejects_ --lib` (2 tests, including IVM host trusted-setup and developer-only snapshot rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generic_verify_proof_syscall --lib` (2 tests, including syscall-time rejection of an injected developer-only VK snapshot)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core verify_proof --lib` (14 tests, including zero verifier-key hash, auxiliary-byte preverified-cache bypass rejection, and injected developer-only VK snapshot rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify --test zk_backend_tags` (2 tests, including Groth16 VK admission rejection and Halo2 curve admission rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests --test zk_proof_retention` (2 tests, retention coverage migrated to rejected no-trusted-setup Halo2 IPA proof records)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-preverify trace_proving_queue_tests --lib` (3 tests, including validation-only trace jobs that emit no mock proof artifact and tampered-trace rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-preverify trace_proof_queue_tests --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-preverify process_batch_enqueues_digest_and_trace_jobs --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core validate_open_verify_envelope_metadata --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core resolve_vk_commitment --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core overlay_rejects_ivm_proved_when_commitments_mismatch --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core enforce_zk_envelope --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core ram_lfe --lib` (7 tests, including non-canonical proof-envelope metadata rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core identifier_verify_execution_proof --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core ballot --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core tally --lib`
+  - `git diff --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-stark --test zk_asset_stark_envelope` (8 STARK wrapper rejection tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test kaigi_privacy` (3 Kaigi privacy tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_config offline_defaults_keep_kagemusha_enabled_without_legacy_fallback --lib`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo build -p connect_norito_bridge --release` and refreshed the ignored local `dist/NoritoBridge.xcframework/macos-arm64/libNoritoBridge.a` artifact for Swift testing
+  - `cd IrohaSwift && swift package clean && swift test --filter KagemushaCompactPaymentTokenProverTests` (2 tests; native ABI-4 malformed-archive rejection path exercised)
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteProofBindingRejectsRecursiveMetadataSubstitution`
+  - `cd IrohaSwift && swift test --filter OfflineNoteRedeemPlannerTests/testPartialRedeemDraftSplitsIssuedNoteAndRedeemsIssuedOutput`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteWalletLifecycleBuildsAuditAcceptAndRedeemTransactions`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.proofBindingRejectsRecursiveMetadataSubstitution --console=plain`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.walletLifecycleBuildsAuditAcceptAndRedeemTransactions --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.proofBindingRejectsRecursiveMetadataSubstitution --console=plain`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --rerun-tasks --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.offline.OfflineNoteTest --console=plain`
+
+## 2026-05-28 Kagemusha chain instruction and transparent proof hardening
+
+- Added `KagemushaTransfer` as the chain-side shielded offline-offline payment
+  instruction. It is default-enabled by settlement config, rejects explicit
+  legacy forcing, charges the same confidential proof gas as `ZkTransfer`, routes
+  by its asset definition, and reuses the existing ZK asset nullifier set,
+  commitment tree/root history, verifier binding, telemetry, and confidential
+  policy admission path. The instruction now also rejects forged
+  `OpenVerifyEnvelope` metadata whose backend tag, confidential-transfer-v2
+  circuit id, public-input schema, or verifier-key hash does not match the
+  active asset-bound verifier. The real execution fixture now relies on the default
+  `kagemusha_enabled = true` and `kagemusha_force_legacy = false` settings, so
+  accidentally disabling Kagemusha by default fails focused config and core
+  coverage.
+- Kagemusha and Offline recursive proofs now reject trusted-setup backend labels
+  before verification. Production accepted labels are transparent `halo2/ipa`
+  and `stark/fri*`, with exact attachment/proof/verifier backend binding.
+- Offline Halo2 IPA recursive proving now caches derived proving keys by
+  verifier-key hash when no serialized proving key is supplied, avoiding repeated
+  derivation while preserving the transparent IPA setup.
+- Offline audit coverage now proves the trust anchor is the online-to-offline
+  topup lineage rather than the submitter: an independent relayer can submit a
+  real-proof audit only after `IssueOfflineNote` anchors the input claim, while
+  certificate-only or missing-certificate anchors fail before proof verification.
+- Kagemusha focused tests now include a real Halo2 IPA fixture execution path
+  that records the spent nullifier, deterministic output commitments, and root
+  history, plus tampered-proof rejection.
+- Added the first compact multi-hop Kagemusha folding artifact:
+  `KagemushaFoldStep` witness hops and `KagemushaFoldedPublicInputs` canonical
+  public inputs. The builder is bounded, canonicalizes per-hop sets, rejects
+  malformed shape, duplicate nullifiers/commitments, and root discontinuities,
+  and binds chain id, asset definition, roots, hop count, aggregate digests, and
+  ordered folded-hop proof hashes. Folded public inputs now also carry an
+  explicit aggregation mode; this release supports checked transparent pre-fold
+  v1 and rejects reserved/future recursive aggregation modes until an in-circuit
+  recursive verifier exists. The same canonical hop sequence now produces a
+  Poseidon2 aggregation transcript digest, giving future recursive verifier
+  circuits a no-trusted-setup hash-friendly public accumulator while preserving
+  the ordinary Iroha `fold_digest` for host-side checks. Each folded hop now
+  also carries a Poseidon2 digest of the proof public-input statement that was
+  actually verified, so public-instance substitution is bound into both
+  transcript digests. Each hop also carries a domain-separated Poseidon2 digest
+  of the verifier-key backend and bytes used for proof verification, giving the
+  future recursive circuit a hash-friendly verifier-key binding alongside the
+  host-side verifier-key commitment. The proof statement and aggregation
+  transcript preimages are now public data-model types,
+  `KagemushaProofPublicInputsStatement` and
+  `KagemushaPoseidonAggregationTranscriptStatement`, with canonical digest
+  helpers and a public aggregation-statement builder so SDKs and future
+  recursive circuits use the same canonicalized Norito/Poseidon2 layout as the
+  chain-visible folded public inputs.
+- Added `KagemushaCompactPaymentToken`, which wraps folded public inputs with a
+  transparent folded proof and rejects proof/public-input hash substitution
+  before backend proof verification.
+- Exposed the verified compact-token prover as the public core helper and added
+  `KagemushaVerifiedFoldBundle`,
+  `KagemushaVerifiedFoldRecordBundle`, and
+  `connect_norito_kagemusha_prove_verified_compact_payment_token` for mobile
+  bridge callers. The bridge accepts Norito-encoded private hop proof bundles,
+  verifies every hop proof and verifier-key commitment before deriving folded
+  public inputs, returns a Norito-encoded `KagemushaCompactPaymentToken`, and
+  rejects malformed archives, tampered hop proofs, verifier-key commitment
+  mismatches, or reserved recursive aggregation modes before proof generation.
+  A second bridge entry point,
+  `connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`,
+  accepts record-backed bundles and enforces hop verifier records before proof
+  generation. The raw preverified folded-input prover is crate-local, the C
+  header declares the verified symbols, and the bridge ABI version is `4`.
+- Added checked Kagemusha fold construction for wallet/prover code. Each
+  private hop proof attachment is backend-bound, verifier-key-commitment-bound,
+  transparent-only, cryptographically verified, and hashed from the actual
+  encoded `ProofBox`, extracted proof public-input statement, and verifier-key
+  id/commitment before it enters the folded transcript; missing verifier-key
+  commitments and envelope verifier-key hash mismatches are rejected before a
+  hop can be folded. Confidential-v2 hop proofs also have public
+  root/nullifier/output/asset/chain tags checked against the hop metadata when
+  those public inputs are present. A record-backed bundle verifier additionally
+  enforces WSV-style hop verifier metadata: active status, backend tag, circuit
+  id, public-input schema hash, verifier-key commitment, key length, proof-size
+  cap, and optional inline-key consistency. A high-level compact-token prover
+  now uses this checked path before emitting the folded `kagemusha-folded-v1`
+  proof, and adversarial tests reject tampered hop proofs, missing or mismatched
+  verifier commitments, missing/duplicate/inactive/bad verifier records,
+  envelope verifier-key hash substitutions, public-statement substitutions,
+  verifier-key Poseidon digest substitutions, and root-discontinuous folded
+  witnesses.
+- Added a folded-public-input size regression for the maximum 64-hop compact
+  corridor. The data model now exposes
+  `KAGEMUSHA_FOLDED_PUBLIC_INPUTS_MAX_ENCODED_BYTES` plus
+  `norito_encoded_len()` helpers for folded public inputs and compact tokens, so
+  wallet/QR/NFC code can budget the chain-visible transcript separately from
+  backend proof bytes. `validate_supported_context()` now rejects oversized
+  folded public inputs before compact-token binding accepts them.
+- Added the transparent Halo2 IPA `kagemusha-folded-v1` semantic proof path.
+  It publishes an active verifier-key record, derives or caches production
+  proving keys from the transparent IPA verifier key, proves the 30-column
+  folded public statement, constrains aggregation mode to checked pre-fold v1,
+  constrains compact-token hop count to `1..=64`, and rejects tampered proofs or
+  substituted folded public inputs. The compact verifier now also rejects wrong
+  verifier-key ids, domain or aggregation-mode substitutions, envelope circuit
+  substitutions, envelope backend-tag substitutions, and verifier-key hash
+  substitutions before backend verification. A record-backed verifier mirrors
+  WSV verifier-key admission and rejects inactive records, schema mismatches,
+  missing inline keys, commitment mismatches, and proof-size cap violations.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_config offline_defaults_keep_kagemusha_enabled_without_legacy_fallback --lib`
+  - `cargo test -p iroha_data_model offline_note --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 poseidon --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha --lib` (8 tests after record-backed bundle serialization)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_ --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha --lib` (42 tests after record-backed hop-verifier enforcement)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha --lib` (8 tests after record-backed FFI and JNI helper coverage)
+  - `cargo test -p iroha_core offline_note --lib`
+  - `cargo test -p iroha_core audit_ --lib`
+  - `cargo test -p iroha_core confidential_policy_admission_ --lib`
+  - `cargo test -p iroha_core time_sensitive_instruction_detects_governance_and_non_sensitive --lib`
+  - `cargo test -p iroha_core opaque_offline_note_issue_defers_to_state_for_asset_definition_dataspace --lib`
+  - `cargo test -p iroha_config`
+  - `cargo test -p iroha_torii --test offline_readiness_smoke`
+  - `cargo test -p integration_tests --test network_functional offline_note_issue_audit_redeem_real_proofs_on_four_peers --no-run`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --rerun-tasks --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.offline.OfflineNoteTest --console=plain`
+  - `cd IrohaSwift && swift test --filter Halo2PastaTests/testOfflineNoteInstanceBuilderRejectsCountAndAmountViolations`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteAuditBundleRejectsInvalidShapes`
+  - `cd IrohaSwift && swift test`
+  - `scripts/check_no_scale.sh`
+  - `git diff --check`
+
+## 2026-05-28 Offline Bearer Cash SDK policy hardening
+
+- Swift, Kotlin/JVM, and Java Android Offline Bearer Cash wallets now derive
+  custody-hop and lineage-step metrics from audit-trail structure and enforce
+  the shared v1 policy before accepting, paying, or redeeming bearer notes.
+  Malformed, duplicated, cyclic, uncommitted, over-depth, and over-length
+  trails are rejected before wallet state changes.
+- Swift, Kotlin/JVM, and Java Android wallets now persist the consumed
+  `paymentRequestId` on spent input notes, so exact-value offline payments
+  leave a durable local replay marker even when no change note is created.
+  Reusing the same receive request after a restart or later refill is rejected
+  before another note can be spent.
+- Swift, Kotlin/JVM, and Java Android receive-request, payment-token, and ACK
+  text decoding now reject padded or non-url-safe base64 payloads.
+- Payment-token Norito envelopes now carry an explicit v2 layout field across
+  the Swift, Kotlin/JVM, Java Android codecs and the Rust offline vector
+  generator.
+- Kotlin/JVM signed transaction Norito envelopes now decode their canonical
+  and version-prefixed wire forms, including multisig signature bundles, and
+  reject empty, truncated, trailing-byte, and wrong-version envelopes.
+  Supporting transfer, register-account, claim-identifier, and identifier
+  receipt payload decoders now render shared fixture assertions.
+- Kotlin/JVM main SDK sources no longer contain `UnsupportedOperationException`
+  placeholders for internal Norito adapter encode/decode paths; default client
+  and WebSocket methods now fail futures with ordinary state errors, and
+  native-backed identifier receipt verification delegates to the JNI bridge
+  when available.
+- Java Android signed transaction Norito envelopes now decode canonical and
+  version-prefixed wire forms, including multisig signature bundles, and
+  reject malformed envelopes in the Norito fixture harness. Java Android also
+  mirrors the transfer, claim-identifier, set-primary-account-alias, and
+  identifier receipt canonical payload reverse decoders, failed-future client
+  defaults, native-backed identifier receipt verification, multisig seed
+  adapter decode, and OpenVerifyEnvelope encode/decode cleanup.
+- Swift, Kotlin/JVM, and Java Android Offline Note wallets now hand proof
+  providers draft audit/redeem bundles whose provisional recursive proofs are
+  already bound to the exact public-input hash. The fixed draft proof marker
+  was removed, and test proof providers validate draft binding before returning
+  replacement proofs.
+- JavaScript's pure Norito fallback now encodes and decodes
+  `Register.AssetDefinition`, including mintability, metadata, aliases, SoraFS
+  logos, balance-scope policy, confidential policy, parameter hashes, and
+  pending transitions. The generated `dist/` entrypoints are synchronized with
+  `src/`, the native decoder accepts frames emitted by the pure fallback, and
+  adversarial JS tests reject invalid policy modes, logos, checksums, and mint
+  limits.
+- Python SDK filter and Connect control base helpers now use explicit abstract
+  base classes instead of `NotImplementedError` stubs, while concrete helpers
+  retain their payload rendering. Kotlin/JVM and Java Android default client
+  and WebSocket capability failures now describe concrete-client or unsupported
+  transport requirements instead of placeholder-style "not implemented" text.
+- Java Norito and Kotlin/JVM Norito columnar helpers now cover optional
+  string/u32 and bytes+bool row shapes with matching NCB/AoS adaptive APIs.
+  Rust golden hex vectors are locked in both SDKs, and malformed trailing
+  bytes, padding bits, invalid UTF-8, truncated flags, invalid AoS presence
+  tags, and out-of-range optional u32 values are rejected.
+- Focused validation passed:
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteWalletRejectsExactAmountReceiveRequestReplayAfterRestart`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineBearerCashPolicyAndPrefixesUseSingleAppSurface`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteWalletRejectsBearerCashCustodyPolicyOverflow`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNotePaymentTokenCodecRoundTripsNoritoTextAndQrFrames`
+  - `cd IrohaSwift && swift test --filter OfflineNoteTests`
+  - `cd IrohaSwift && swift test --filter Offline`
+  - `cd IrohaSwift && swift test`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --rerun-tasks --console=plain`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest --rerun-tasks --console=plain`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoderParityTest --tests org.hyperledger.iroha.sdk.core.model.instructions.RegisterAccountWirePayloadEncoderParityTest --tests org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest --tests org.hyperledger.iroha.sdk.client.TransportSecurityClientTest --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --rerun-tasks --console=plain`
+  - `cd kotlin && ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :offline-wallet-android:assembleRelease --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.offline.OfflineNoteTest --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests,org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests,org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.client.HttpClientTransportTests --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --tests org.hyperledger.iroha.android.model.instructions.SetPrimaryAccountAliasWirePayloadEncoderTests -Dandroid.test.mains=org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoderTests,org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests,org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --rerun-tasks --console=plain --stacktrace`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --rerun-tasks --console=plain --stacktrace`
+  - `cd javascript/iroha_js && node --test test/norito.test.js`
+  - `cd javascript/iroha_js && node --test test/instructionBuilders.test.js`
+  - `cd javascript/iroha_js && node --test test/transaction.test.js`
+  - `cd javascript/iroha_js && node --test test/transactionBuilder.test.js`
+  - `cd javascript/iroha_js && node --test`
+  - `cd javascript/iroha_js && npm run test:dist -- --test-name-pattern "asset definition|pure JS Norito asset definition|native Norito decoder accepts pure JS"`
+  - `/tmp/iroha-python-sdk-test-venv/bin/python -m pytest python/iroha_python/tests/test_abstract_sdk_helpers.py`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.TransportSecurityClientTest --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --rerun-tasks --console=plain`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.norito.NoritoColumnarTest --rerun-tasks --console=plain`
+  - `cd java/norito_java && ./run_tests.sh`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.client.HttpClientTransportTests --console=plain`
+  - `cargo check -p iroha_data_model --bin offline_vectors --features "test-fixtures transparent_api"`
+  - `git diff --check`
+- Java Android now mirrors the reverse decoders for transfer,
+  claim-identifier, set-primary-account-alias, and identifier receipt canonical
+  payloads. No TODO, placeholder, or draft-proof markers remain in the audited
+  main SDK source trees.
 
 ## 2026-05-28 Queue-aware Torii status and pipeline preflight
 
@@ -77,6 +599,19 @@ Last updated: 2026-05-28
   - `cargo test -p iroha_p2p --test mod --quiet`
   - `git diff --check`
 
+## 2026-05-28 Offline audit hardening and Kagemusha defaults
+
+- `AuditOfflineNote` lineage now uses the online-to-offline topup/audited-output
+  certificate chain as its trust anchor instead of the transaction submitter.
+  Audit submitters can be independent relayers once the bundle proves valid.
+- Offline audits now reject input claims that are not bound to the sender key
+  certificate, hidden output commitments, cross-asset conservation, and public
+  input/output amount mismatches before proof verification.
+- Kagemusha is exposed as the default offline-offline direction through
+  `settlement.offline.kagemusha_enabled = true`; the explicit migration fallback
+  `settlement.offline.kagemusha_force_legacy` defaults to `false` and is reported
+  by `/v1/offline/readiness`.
+
 ## 2026-05-27 Offline Bearer Cash v1 app surface
 
 - The first-release offline app surface is now Offline Bearer Cash v1 over the
@@ -94,8 +629,8 @@ Last updated: 2026-05-28
   `max_single_qr_payload_bytes = 2048`, `max_stream_payload_bytes = 12288`,
   and Android StrongBox/KeyMint pool defaults of target `20`, replenish below
   `8`, cap `40`. NFC APDU/Nearby incoming payload bounds now follow the
-  12 KiB stream limit. Custody/lineage limit enforcement is marked as a code
-  TODO until note audit payloads carry those counters.
+  12 KiB stream limit. Swift, Kotlin/JVM, and Java Android now enforce
+  custody/lineage limits by deriving metrics from the wallet audit-trail DAG.
 - The shared offline fixture now includes `offline_bearer_cash_v1` policy and
   transport metadata, and `sdk_interop.payment_token_text` uses the Bearer Cash
   payment prefix.

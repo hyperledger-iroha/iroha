@@ -31,6 +31,7 @@ tracing.workspace = true
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 
 [dev-dependencies]
+iroha_core = { workspace = true, features = ["iroha-core-tests"] }
 tempfile = { workspace = true }
 sorafs_chunker = { workspace = true }
 

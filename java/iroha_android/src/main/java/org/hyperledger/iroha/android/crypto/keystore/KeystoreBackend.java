@@ -10,9 +10,8 @@ import org.hyperledger.iroha.android.crypto.keystore.KeyAttestation;
  * Facade over the Android Keystore (and StrongBox) primitives.
  *
  * <p>This abstraction allows the desktop JVM build to compile without depending on the Android SDK
- * while enabling platform-specific backends in instrumentation builds. The default implementation
- * will land alongside the Android integration and will delegate to {@code android.security.keystore}
- * APIs.
+ * while {@link SystemAndroidKeystoreBackend} delegates to {@code android.security.keystore} APIs
+ * whenever those platform classes are available at runtime.
  */
 public interface KeystoreBackend {
 
@@ -35,8 +34,8 @@ public interface KeystoreBackend {
    * Returns the attestation material for {@code alias}, if available.
    *
    * <p>Backends should return an empty optional when attestation is unsupported or the alias has no
-   * recorded certificates. The Android implementation will populate this with the StrongBox/TEE
-   * attestation chain.
+   * recorded certificates. The Android implementation populates this with the StrongBox/TEE
+   * attestation chain when the platform returns certificates for the generated key.
    */
   default Optional<KeyAttestation> attestation(final String alias) {
     return Optional.empty();

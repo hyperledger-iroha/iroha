@@ -15,6 +15,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 public final class OfflineNotePaymentTokenCodec {
   public static final String TYPE = "offline_payment_token";
   public static final String TEXT_PREFIX = "wallet-offline-bearer-cash-payment:";
+  public static final long ENVELOPE_VERSION = 2L;
   private static final String TOKEN_ENVELOPE_SCHEMA =
       "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelope";
 
@@ -50,7 +51,9 @@ public final class OfflineNotePaymentTokenCodec {
     if (!trimmed.startsWith(TEXT_PREFIX)) {
       throw new IllegalArgumentException("Offline Note payment token prefix missing");
     }
-    return decodeNorito(Base64.getUrlDecoder().decode(trimmed.substring(TEXT_PREFIX.length())));
+    return decodeNorito(
+        OfflineBase64Url.decodeUnpadded(
+            trimmed.substring(TEXT_PREFIX.length()), "Offline Note payment token payload"));
   }
 
   public static List<byte[]> encodeQrFrameBytes(final OfflineNotePaymentToken token) {
@@ -71,6 +74,7 @@ public final class OfflineNotePaymentTokenCodec {
       new TypeAdapter<>() {
         @Override
         public void encode(final NoritoEncoder encoder, final OfflineNotePaymentToken value) {
+          writeField(encoder, child -> child.writeUInt(ENVELOPE_VERSION, 64));
           writeField(encoder, child -> writeString(child, value.chainId()));
           writeField(encoder, child -> writeString(child, value.paymentRequestId()));
           writeField(encoder, child -> child.writeUInt(value.createdAtMs(), 64));
@@ -82,6 +86,11 @@ public final class OfflineNotePaymentTokenCodec {
 
         @Override
         public OfflineNotePaymentToken decode(final NoritoDecoder decoder) {
+          final long version = readField(decoder, child -> child.readUInt(64));
+          if (version != ENVELOPE_VERSION) {
+            throw new IllegalArgumentException(
+                "Offline Note payment token envelope version is unsupported");
+          }
           final String chainId = readField(decoder, OfflineNotePaymentTokenCodec::readString);
           final String paymentRequestId =
               readField(decoder, OfflineNotePaymentTokenCodec::readString);

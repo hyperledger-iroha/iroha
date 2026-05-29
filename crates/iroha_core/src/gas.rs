@@ -402,6 +402,13 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             transfer.outputs.len(),
         );
     }
+    if let Some(transfer) = any.downcast_ref::<dm_isi::offline::KagemushaTransfer>() {
+        return gas_for_proof_attachment(
+            &transfer.proof,
+            transfer.inputs.len(),
+            transfer.outputs.len(),
+        );
+    }
     if let Some(unshield) = any.downcast_ref::<dm_isi::zk::Unshield>() {
         return gas_for_proof_attachment(&unshield.proof, unshield.inputs.len(), 0);
     }
@@ -443,6 +450,13 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
         return zk_gas_per_commitment();
     }
     if let Some(transfer) = any.downcast_ref::<dm_isi::zk::ZkTransfer>() {
+        return gas_for_proof_attachment(
+            &transfer.proof,
+            transfer.inputs.len(),
+            transfer.outputs.len(),
+        );
+    }
+    if let Some(transfer) = any.downcast_ref::<dm_isi::offline::KagemushaTransfer>() {
         return gas_for_proof_attachment(
             &transfer.proof,
             transfer.inputs.len(),
@@ -739,6 +753,46 @@ mod tests {
             + schedule.per_proof_byte.saturating_mul(proof_bytes)
             + schedule.per_nullifier.saturating_mul(2)
             + schedule.per_commitment;
+        assert_eq!(gas, expected);
+        assert_eq!(confidential_gas_cost(&transfer_instr), expected);
+    }
+
+    #[test]
+    fn kagemusha_transfer_gas_matches_shielded_transfer_metering() {
+        let _gas_lock = super::lock_confidential_gas_for_tests();
+        use iroha_data_model::{
+            isi::offline::KagemushaTransfer, prelude::AssetDefinitionId, proof::VerifyingKeyId,
+        };
+
+        let schedule = super::ConfidentialGasSchedule::default();
+        super::configure_confidential_gas(schedule);
+        let fixture = halo2_fixture_envelope("halo2/ipa:kagemusha-transfer-gas", [0u8; 32]);
+        let proof_box = fixture.proof_box("halo2/ipa");
+        let attachment = ProofAttachment::new_ref(
+            proof_box.backend.clone(),
+            proof_box,
+            VerifyingKeyId::new("halo2/ipa", "vk-kagemusha-transfer"),
+        );
+        let proof_bytes = attachment.proof.bytes.len() as u64;
+        let public_inputs = (fixture.public_inputs.len() / super::FIELD_ELEMENT_BYTES) as u64;
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("domain", "universal").unwrap(),
+            "shield".parse().unwrap(),
+        );
+        let transfer = KagemushaTransfer::new(
+            asset,
+            vec![[0xAA; 32], [0xBB; 32]],
+            vec![[0xCC; 32], [0xDD; 32]],
+            attachment,
+            Some([0xEE; 32]),
+        );
+        let transfer_instr = InstructionBox::from(transfer);
+        let gas = meter_instruction(&transfer_instr);
+        let expected = schedule.base_verify
+            + schedule.per_public_input.saturating_mul(public_inputs)
+            + schedule.per_proof_byte.saturating_mul(proof_bytes)
+            + schedule.per_nullifier.saturating_mul(2)
+            + schedule.per_commitment.saturating_mul(2);
         assert_eq!(gas, expected);
         assert_eq!(confidential_gas_cost(&transfer_instr), expected);
     }

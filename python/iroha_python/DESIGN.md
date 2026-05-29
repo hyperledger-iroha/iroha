@@ -23,8 +23,8 @@ applications. The package bundles three pillars:
   Rust SDK while keeping gRPC integration pluggable for environments that ship
   the proto bindings.
 - **Governance and Connect helpers** that expose high-level wrappers for the
-  Torii governance endpoints (`/v1/gov/*`) and pave the way for Connect flows
-  by sharing the transport and optional gRPC scaffolding.
+  Torii governance endpoints (`/v1/gov/*`) and Connect flows by sharing the
+  transport and optional gRPC integration points.
 
 The SDK aims to expose deterministic, Norito-first APIs that mirror the Rust
 bindings.

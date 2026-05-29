@@ -4,9 +4,18 @@
 package org.hyperledger.iroha.sdk.norito
 
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 
+private const val DESC_U64_BYTES_BOOL_VALUE = 0x14
+private const val DESC_U64_OPTSTR_BOOL_VALUE = 0x1B
+private const val DESC_U64_OPTU32_BOOL_VALUE = 0x1C
 private const val DESC_U64_DELTA_STR_BOOL = 0x53
+private const val DESC_U64_DELTA_BYTES_BOOL = 0x54
+private const val DESC_U64_DELTA_OPTSTR_BOOL = 0x5B
+private const val DESC_U64_DELTA_OPTU32_BOOL = 0x5C
 private const val DESC_U64_DICT_STR_BOOL = 0x93
 private const val DESC_U64_OPTIONAL_BYTES = 0x71
 private const val DESC_U64_ENUM_BOOL = 0x61
@@ -37,6 +46,9 @@ object NoritoColumnar {
 
     const val DESC_U64_STR_BOOL = 0x13
     const val DESC_U64_BYTES = 0x21
+    const val DESC_U64_BYTES_BOOL = DESC_U64_BYTES_BOOL_VALUE
+    const val DESC_U64_OPTSTR_BOOL = DESC_U64_OPTSTR_BOOL_VALUE
+    const val DESC_U64_OPTU32_BOOL = DESC_U64_OPTU32_BOOL_VALUE
 
     data class StrBoolRow(
         @JvmField val id: Long,
@@ -103,6 +115,42 @@ object NoritoColumnar {
         }
 
         override fun hashCode(): Int = 31 * id.hashCode() + (_data?.contentHashCode() ?: 0)
+    }
+
+    data class OptionalStringBoolRow(
+        @JvmField val id: Long,
+        @JvmField val value: String?,
+        @JvmField val flag: Boolean,
+    )
+
+    data class OptionalU32BoolRow(
+        @JvmField val id: Long,
+        @JvmField val value: Long?,
+        @JvmField val flag: Boolean,
+    ) {
+        init {
+            require(value == null || value in 0..U32_MAX) { "value must fit into u32" }
+        }
+    }
+
+    class BytesBoolRow(
+        @JvmField val id: Long,
+        data: ByteArray,
+        @JvmField val flag: Boolean,
+    ) {
+        private val _data: ByteArray = data.copyOf()
+
+        val data: ByteArray get() = _data.copyOf()
+
+        internal fun dataRaw(): ByteArray = _data
+
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is BytesBoolRow) return false
+            return id == other.id && flag == other.flag && _data.contentEquals(other._data)
+        }
+
+        override fun hashCode(): Int = 31 * (31 * id.hashCode() + _data.contentHashCode()) + flag.hashCode()
     }
 
     @JvmStatic
@@ -534,6 +582,260 @@ object NoritoColumnar {
         return rows
     }
 
+    @JvmStatic
+    fun encodeNcbU64OptionalStringBool(rows: List<OptionalStringBoolRow>): ByteArray {
+        val out = ByteArrayOutputStream()
+        val useDelta = shouldUseIdDeltaOptionalString(rows)
+        writeU32(out, rows.size)
+        out.write(if (useDelta) DESC_U64_DELTA_OPTSTR_BOOL else DESC_U64_OPTSTR_BOOL)
+        writeIds(out, rows, useDelta) { it.id }
+        writeOptionalStringColumn(out, rows)
+        out.write(buildOptionalStringFlags(rows))
+        return out.toByteArray()
+    }
+
+    @JvmStatic
+    fun decodeNcbU64OptionalStringBool(data: ByteArray): List<OptionalStringBoolRow> {
+        require(data.size >= 5) { "NCB optional string payload too short" }
+        var offset = 0
+        val n = readU32(data, offset)
+        offset += 4
+        val desc = data[offset++].toInt() and 0xFF
+        require(desc == DESC_U64_OPTSTR_BOOL || desc == DESC_U64_DELTA_OPTSTR_BOOL) {
+            "Unsupported descriptor 0x${"%02x".format(desc)}"
+        }
+        val decodedIds = decodeIds(data, offset, n, desc == DESC_U64_DELTA_OPTSTR_BOOL, "optional string")
+        val ids = decodedIds.ids
+        offset = decodedIds.offset
+
+        val bitBytes = (n + 7) / 8
+        require(offset + bitBytes <= data.size) { "NCB optional string payload missing presence bitmap" }
+        val presence = data.copyOfRange(offset, offset + bitBytes)
+        validateBitsetPadding(presence, n, "optional string presence")
+        val present = countSetBits(presence)
+        offset += bitBytes + localPadding(bitBytes, 4)
+
+        val offs = readOffsetTable(data, offset, present + 1, "optional string offsets")
+        offset += (present + 1) * 4
+        val blobLen = offs[present]
+        require(offset + blobLen <= data.size) { "NCB optional string payload truncated (blob)" }
+        validateOffsets(offs, blobLen, "optional string")
+        val blob = data.copyOfRange(offset, offset + blobLen)
+        offset += blobLen
+
+        require(offset + bitBytes <= data.size) { "NCB optional string payload truncated (flags)" }
+        val flags = data.copyOfRange(offset, offset + bitBytes)
+        validateBitsetPadding(flags, n, "optional string flags")
+        offset += bitBytes
+        require(offset == data.size) { "Trailing bytes after optional string columnar decode" }
+
+        val rows = ArrayList<OptionalStringBoolRow>(n)
+        var presentIndex = 0
+        for (i in 0 until n) {
+            var value: String? = null
+            if (bitIsSet(presence, i)) {
+                val start = offs[presentIndex]
+                val end = offs[presentIndex + 1]
+                value = decodeUtf8Strict(blob, start, end)
+                presentIndex += 1
+            }
+            rows.add(OptionalStringBoolRow(ids[i], value, bitIsSet(flags, i)))
+        }
+        return rows
+    }
+
+    @JvmStatic
+    fun encodeRowsU64OptionalStringBoolAdaptive(rows: List<OptionalStringBoolRow>): ByteArray {
+        if (rows.size <= AOS_NCB_SMALL_N) {
+            val aos = NoritoAoS.encodeU64OptionalStringBool(rows)
+            val ncb = encodeNcbU64OptionalStringBool(rows)
+            if (ncb.size < aos.size) return concat(ADAPTIVE_TAG_NCB, ncb)
+            return concat(ADAPTIVE_TAG_AOS, aos)
+        }
+        return concat(ADAPTIVE_TAG_AOS, NoritoAoS.encodeU64OptionalStringBool(rows))
+    }
+
+    @JvmStatic
+    fun decodeRowsU64OptionalStringBoolAdaptive(payload: ByteArray): List<OptionalStringBoolRow> {
+        require(payload.isNotEmpty()) { "Adaptive payload is empty" }
+        val tag = payload[0].toInt() and 0xFF
+        val body = payload.copyOfRange(1, payload.size)
+        return when (tag) {
+            ADAPTIVE_TAG_AOS -> NoritoAoS.decodeU64OptionalStringBool(body)
+            ADAPTIVE_TAG_NCB -> decodeNcbU64OptionalStringBool(body)
+            else -> throw IllegalArgumentException("Unknown adaptive tag: $tag")
+        }
+    }
+
+    @JvmStatic
+    fun encodeNcbU64OptionalU32Bool(rows: List<OptionalU32BoolRow>): ByteArray {
+        val out = ByteArrayOutputStream()
+        val useDelta = shouldUseIdDeltaOptionalU32(rows)
+        writeU32(out, rows.size)
+        out.write(if (useDelta) DESC_U64_DELTA_OPTU32_BOOL else DESC_U64_OPTU32_BOOL)
+        writeIds(out, rows, useDelta) { it.id }
+        writeOptionalU32Column(out, rows)
+        out.write(buildOptionalU32Flags(rows))
+        return out.toByteArray()
+    }
+
+    @JvmStatic
+    fun decodeNcbU64OptionalU32Bool(data: ByteArray): List<OptionalU32BoolRow> {
+        require(data.size >= 5) { "NCB optional u32 payload too short" }
+        var offset = 0
+        val n = readU32(data, offset)
+        offset += 4
+        val desc = data[offset++].toInt() and 0xFF
+        require(desc == DESC_U64_OPTU32_BOOL || desc == DESC_U64_DELTA_OPTU32_BOOL) {
+            "Unsupported descriptor 0x${"%02x".format(desc)}"
+        }
+        val decodedIds = decodeIds(data, offset, n, desc == DESC_U64_DELTA_OPTU32_BOOL, "optional u32")
+        val ids = decodedIds.ids
+        offset = decodedIds.offset
+
+        val bitBytes = (n + 7) / 8
+        require(offset + bitBytes <= data.size) { "NCB optional u32 payload missing presence bitmap" }
+        val presence = data.copyOfRange(offset, offset + bitBytes)
+        validateBitsetPadding(presence, n, "optional u32 presence")
+        val present = countSetBits(presence)
+        offset += bitBytes + localPadding(bitBytes, 4)
+
+        val valuesLen = present * 4
+        require(offset + valuesLen <= data.size) { "NCB optional u32 payload truncated (values)" }
+        val values = LongArray(present)
+        for (i in 0 until present) {
+            values[i] = Integer.toUnsignedLong(readU32(data, offset))
+            offset += 4
+        }
+
+        require(offset + bitBytes <= data.size) { "NCB optional u32 payload truncated (flags)" }
+        val flags = data.copyOfRange(offset, offset + bitBytes)
+        validateBitsetPadding(flags, n, "optional u32 flags")
+        offset += bitBytes
+        require(offset == data.size) { "Trailing bytes after optional u32 columnar decode" }
+
+        val rows = ArrayList<OptionalU32BoolRow>(n)
+        var presentIndex = 0
+        for (i in 0 until n) {
+            var value: Long? = null
+            if (bitIsSet(presence, i)) {
+                value = values[presentIndex++]
+            }
+            rows.add(OptionalU32BoolRow(ids[i], value, bitIsSet(flags, i)))
+        }
+        return rows
+    }
+
+    @JvmStatic
+    fun encodeRowsU64OptionalU32BoolAdaptive(rows: List<OptionalU32BoolRow>): ByteArray {
+        if (rows.size <= AOS_NCB_SMALL_N) {
+            val aos = NoritoAoS.encodeU64OptionalU32Bool(rows)
+            val ncb = encodeNcbU64OptionalU32Bool(rows)
+            if (ncb.size < aos.size) return concat(ADAPTIVE_TAG_NCB, ncb)
+            return concat(ADAPTIVE_TAG_AOS, aos)
+        }
+        return concat(ADAPTIVE_TAG_AOS, NoritoAoS.encodeU64OptionalU32Bool(rows))
+    }
+
+    @JvmStatic
+    fun decodeRowsU64OptionalU32BoolAdaptive(payload: ByteArray): List<OptionalU32BoolRow> {
+        require(payload.isNotEmpty()) { "Adaptive payload is empty" }
+        val tag = payload[0].toInt() and 0xFF
+        val body = payload.copyOfRange(1, payload.size)
+        return when (tag) {
+            ADAPTIVE_TAG_AOS -> NoritoAoS.decodeU64OptionalU32Bool(body)
+            ADAPTIVE_TAG_NCB -> decodeNcbU64OptionalU32Bool(body)
+            else -> throw IllegalArgumentException("Unknown adaptive tag: $tag")
+        }
+    }
+
+    @JvmStatic
+    fun encodeNcbU64BytesBool(rows: List<BytesBoolRow>): ByteArray {
+        val out = ByteArrayOutputStream()
+        val useDelta = shouldUseIdDeltaBytesBool(rows)
+        writeU32(out, rows.size)
+        out.write(if (useDelta) DESC_U64_DELTA_BYTES_BOOL else DESC_U64_BYTES_BOOL)
+        writeIds(out, rows, useDelta) { it.id }
+        padTo(out, 4)
+        val offs = IntArray(rows.size + 1)
+        var acc = 0
+        val blob = ByteArrayOutputStream()
+        offs[0] = 0
+        for (i in rows.indices) {
+            val value = rows[i].dataRaw()
+            acc += value.size
+            offs[i + 1] = acc
+            blob.write(value)
+        }
+        for (value in offs) {
+            writeU32(out, value)
+        }
+        out.write(blob.toByteArray())
+        out.write(buildBytesBoolFlags(rows))
+        return out.toByteArray()
+    }
+
+    @JvmStatic
+    fun decodeNcbU64BytesBool(data: ByteArray): List<BytesBoolRow> {
+        require(data.size >= 5) { "NCB bytes bool payload too short" }
+        var offset = 0
+        val n = readU32(data, offset)
+        offset += 4
+        val desc = data[offset++].toInt() and 0xFF
+        require(desc == DESC_U64_BYTES_BOOL || desc == DESC_U64_DELTA_BYTES_BOOL) {
+            "Unsupported descriptor 0x${"%02x".format(desc)}"
+        }
+        val decodedIds = decodeIds(data, offset, n, desc == DESC_U64_DELTA_BYTES_BOOL, "bytes bool")
+        val ids = decodedIds.ids
+        offset = align(decodedIds.offset, 4)
+
+        val offs = readOffsetTable(data, offset, n + 1, "bytes bool offsets")
+        offset += (n + 1) * 4
+        val blobLen = offs[n]
+        require(offset + blobLen <= data.size) { "NCB bytes bool payload truncated (blob)" }
+        validateOffsets(offs, blobLen, "bytes bool")
+        val blob = data.copyOfRange(offset, offset + blobLen)
+        offset += blobLen
+
+        val bitBytes = (n + 7) / 8
+        require(offset + bitBytes <= data.size) { "NCB bytes bool payload truncated (flags)" }
+        val flags = data.copyOfRange(offset, offset + bitBytes)
+        validateBitsetPadding(flags, n, "bytes bool flags")
+        offset += bitBytes
+        require(offset == data.size) { "Trailing bytes after bytes bool columnar decode" }
+
+        val rows = ArrayList<BytesBoolRow>(n)
+        for (i in 0 until n) {
+            val start = offs[i]
+            val end = offs[i + 1]
+            rows.add(BytesBoolRow(ids[i], blob.copyOfRange(start, end), bitIsSet(flags, i)))
+        }
+        return rows
+    }
+
+    @JvmStatic
+    fun encodeRowsU64BytesBoolAdaptive(rows: List<BytesBoolRow>): ByteArray {
+        if (rows.size <= AOS_NCB_SMALL_N) {
+            val aos = NoritoAoS.encodeU64BytesBool(rows)
+            val ncb = encodeNcbU64BytesBool(rows)
+            if (ncb.size < aos.size) return concat(ADAPTIVE_TAG_NCB, ncb)
+            return concat(ADAPTIVE_TAG_AOS, aos)
+        }
+        return concat(ADAPTIVE_TAG_AOS, NoritoAoS.encodeU64BytesBool(rows))
+    }
+
+    @JvmStatic
+    fun decodeRowsU64BytesBoolAdaptive(payload: ByteArray): List<BytesBoolRow> {
+        require(payload.isNotEmpty()) { "Adaptive payload is empty" }
+        val tag = payload[0].toInt() and 0xFF
+        val body = payload.copyOfRange(1, payload.size)
+        return when (tag) {
+            ADAPTIVE_TAG_AOS -> NoritoAoS.decodeU64BytesBool(body)
+            ADAPTIVE_TAG_NCB -> decodeNcbU64BytesBool(body)
+            else -> throw IllegalArgumentException("Unknown adaptive tag: $tag")
+        }
+    }
+
     private fun concat(tag: Int, payload: ByteArray): ByteArray {
         val out = ByteArray(payload.size + 1)
         out[0] = tag.toByte()
@@ -773,6 +1075,99 @@ object NoritoColumnar {
         return bits
     }
 
+    private fun buildOptionalStringPresenceFlags(rows: List<OptionalStringBoolRow>): ByteArray {
+        val bytes = (rows.size + 7) / 8
+        val bits = ByteArray(bytes)
+        for (i in rows.indices) {
+            if (rows[i].value != null) {
+                bits[i / 8] = (bits[i / 8].toInt() or (1 shl (i % 8))).toByte()
+            }
+        }
+        return bits
+    }
+
+    private fun buildOptionalStringFlags(rows: List<OptionalStringBoolRow>): ByteArray {
+        val bytes = (rows.size + 7) / 8
+        val bits = ByteArray(bytes)
+        for (i in rows.indices) {
+            if (rows[i].flag) {
+                bits[i / 8] = (bits[i / 8].toInt() or (1 shl (i % 8))).toByte()
+            }
+        }
+        return bits
+    }
+
+    private fun buildOptionalU32PresenceFlags(rows: List<OptionalU32BoolRow>): ByteArray {
+        val bytes = (rows.size + 7) / 8
+        val bits = ByteArray(bytes)
+        for (i in rows.indices) {
+            if (rows[i].value != null) {
+                bits[i / 8] = (bits[i / 8].toInt() or (1 shl (i % 8))).toByte()
+            }
+        }
+        return bits
+    }
+
+    private fun buildOptionalU32Flags(rows: List<OptionalU32BoolRow>): ByteArray {
+        val bytes = (rows.size + 7) / 8
+        val bits = ByteArray(bytes)
+        for (i in rows.indices) {
+            if (rows[i].flag) {
+                bits[i / 8] = (bits[i / 8].toInt() or (1 shl (i % 8))).toByte()
+            }
+        }
+        return bits
+    }
+
+    private fun buildBytesBoolFlags(rows: List<BytesBoolRow>): ByteArray {
+        val bytes = (rows.size + 7) / 8
+        val bits = ByteArray(bytes)
+        for (i in rows.indices) {
+            if (rows[i].flag) {
+                bits[i / 8] = (bits[i / 8].toInt() or (1 shl (i % 8))).toByte()
+            }
+        }
+        return bits
+    }
+
+    private fun writeOptionalStringColumn(out: ByteArrayOutputStream, rows: List<OptionalStringBoolRow>) {
+        val presence = buildOptionalStringPresenceFlags(rows)
+        out.write(presence)
+        out.write(ByteArray(localPadding(presence.size, 4)))
+        val present = countSetBits(presence)
+        val offs = IntArray(present + 1)
+        var acc = 0
+        var presentIndex = 0
+        val blob = ByteArrayOutputStream()
+        offs[0] = 0
+        for (row in rows) {
+            val value = row.value
+            if (value != null) {
+                val encoded = value.toByteArray(StandardCharsets.UTF_8)
+                acc += encoded.size
+                presentIndex += 1
+                offs[presentIndex] = acc
+                blob.write(encoded)
+            }
+        }
+        for (value in offs) {
+            writeU32(out, value)
+        }
+        out.write(blob.toByteArray())
+    }
+
+    private fun writeOptionalU32Column(out: ByteArrayOutputStream, rows: List<OptionalU32BoolRow>) {
+        val presence = buildOptionalU32PresenceFlags(rows)
+        out.write(presence)
+        out.write(ByteArray(localPadding(presence.size, 4)))
+        for (row in rows) {
+            val value = row.value
+            if (value != null) {
+                writeU32(out, value.toInt())
+            }
+        }
+    }
+
     private fun buildDict(rows: List<StrBoolRow>): DictResult {
         if (!COMBO_ENABLE_NAME_DICT || rows.isEmpty()) return DictResult.disabled()
         val mapping = HashMap<String, Int>()
@@ -809,6 +1204,37 @@ object NoritoColumnar {
             varintBytes += varintLength(zz)
             if (varintBytes >= 8 * (rows.size - 1)) return false
             prev = rows[i].id
+        }
+        return true
+    }
+
+    private fun shouldUseIdDeltaOptionalString(rows: List<OptionalStringBoolRow>): Boolean =
+        shouldUseIdDeltaGeneric(rows) { it.id }
+
+    private fun shouldUseIdDeltaOptionalU32(rows: List<OptionalU32BoolRow>): Boolean =
+        shouldUseIdDeltaGeneric(rows) { it.id }
+
+    private fun shouldUseIdDeltaBytesBool(rows: List<BytesBoolRow>): Boolean {
+        if (!COMBO_ENABLE_ID_DELTA || rows.size < COMBO_ID_DELTA_MIN_ROWS) return false
+        if (rows.size <= COMBO_NO_DELTA_SMALL_N_IF_EMPTY) {
+            for (row in rows) {
+                if (row.dataRaw().isEmpty()) return false
+            }
+        }
+        return shouldUseIdDeltaGeneric(rows) { it.id }
+    }
+
+    private fun <T> shouldUseIdDeltaGeneric(rows: List<T>, getter: (T) -> Long): Boolean {
+        if (!COMBO_ENABLE_ID_DELTA || rows.size < COMBO_ID_DELTA_MIN_ROWS) return false
+        var prev = getter(rows[0])
+        var varintBytes = 0
+        for (i in 1 until rows.size) {
+            val current = getter(rows[i])
+            val delta = current - prev
+            val zz = zigzagEncode(delta)
+            varintBytes += varintLength(zz)
+            if (varintBytes >= 8 * (rows.size - 1)) return false
+            prev = current
         }
         return true
     }
@@ -864,6 +1290,119 @@ object NoritoColumnar {
             prev = codes[i]
         }
         return true
+    }
+
+    private fun <T> writeIds(
+        out: ByteArrayOutputStream,
+        rows: List<T>,
+        useDelta: Boolean,
+        getter: (T) -> Long,
+    ) {
+        padTo(out, 8)
+        if (useDelta && rows.isNotEmpty()) {
+            val base = getter(rows[0])
+            writeU64(out, base)
+            var prev = base
+            for (i in 1 until rows.size) {
+                val current = getter(rows[i])
+                val delta = current - prev
+                out.write(Varint.encode(zigzagEncode(delta)))
+                prev = current
+            }
+        } else {
+            for (row in rows) {
+                writeU64(out, getter(row))
+            }
+        }
+    }
+
+    private fun decodeIds(
+        data: ByteArray,
+        initialOffset: Int,
+        n: Int,
+        useDelta: Boolean,
+        context: String,
+    ): DecodeIdsResult {
+        var offset = align(initialOffset, 8)
+        val ids = ArrayList<Long>(n)
+        if (useDelta) {
+            if (n > 0) {
+                require(offset + 8 <= data.size) { "NCB $context payload truncated (id base)" }
+                val base = readU64(data, offset)
+                offset += 8
+                ids.add(base)
+                while (ids.size < n) {
+                    val res = Varint.decode(data, offset)
+                    offset = res.nextOffset
+                    val delta = zigzagDecode(res.value)
+                    ids.add(ids[ids.size - 1] + delta)
+                }
+            }
+        } else {
+            for (i in 0 until n) {
+                require(offset + 8 <= data.size) { "NCB $context payload truncated (ids)" }
+                ids.add(readU64(data, offset))
+                offset += 8
+            }
+        }
+        return DecodeIdsResult(ids, offset)
+    }
+
+    private fun readOffsetTable(data: ByteArray, offset: Int, count: Int, context: String): IntArray {
+        require(count >= 1) { "Offset table must include a sentinel" }
+        require(offset + count * 4 <= data.size) { "NCB payload truncated ($context)" }
+        val offs = IntArray(count)
+        var cursor = offset
+        for (i in 0 until count) {
+            offs[i] = readU32(data, cursor)
+            cursor += 4
+        }
+        require(offs[0] == 0) { "Invalid offset table in $context" }
+        return offs
+    }
+
+    private fun validateOffsets(offs: IntArray, blobLen: Int, context: String) {
+        var prev = 0
+        for (off in offs) {
+            require(off >= prev && off <= blobLen) { "Invalid offset table in $context payload" }
+            prev = off
+        }
+    }
+
+    private fun validateBitsetPadding(bits: ByteArray, rows: Int, context: String) {
+        val usedBits = rows % 8
+        if (usedBits == 0 || bits.isEmpty()) return
+        val mask = 0xFF shl usedBits
+        require((bits[bits.size - 1].toInt() and mask) == 0) {
+            "Non-zero padding bits in $context bitmap"
+        }
+    }
+
+    private fun countSetBits(bits: ByteArray): Int {
+        var count = 0
+        for (bit in bits) {
+            count += Integer.bitCount(bit.toInt() and 0xFF)
+        }
+        return count
+    }
+
+    private fun bitIsSet(bits: ByteArray, index: Int): Boolean =
+        ((bits[index / 8].toInt() shr (index % 8)) and 1) != 0
+
+    private fun localPadding(length: Int, alignment: Int): Int {
+        val mis = length % alignment
+        return if (mis == 0) 0 else alignment - mis
+    }
+
+    private fun decodeUtf8Strict(bytes: ByteArray, start: Int, end: Int): String = try {
+        StandardCharsets.UTF_8
+            .newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes, start, end - start))
+            .toString()
+    } catch (ex: CharacterCodingException) {
+        throw IllegalArgumentException("Invalid UTF-8 in columnar string payload", ex)
     }
 
     private fun varintLength(value: Long): Int {
@@ -938,6 +1477,8 @@ object NoritoColumnar {
     }
 
     private data class EnumDescriptor(val deltaIds: Boolean, val nameDict: Boolean, val codeDelta: Boolean)
+
+    private data class DecodeIdsResult(val ids: List<Long>, val offset: Int)
 
     private data class DictResult(val useDict: Boolean, val mapping: Map<String, Int>, val dictionary: List<String>) {
         companion object {

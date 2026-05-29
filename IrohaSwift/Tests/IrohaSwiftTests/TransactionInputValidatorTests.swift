@@ -55,6 +55,20 @@ final class TransactionInputValidatorTests: XCTestCase {
         }
     }
 
+    func testValidateRejectsBase58AssetDefinitionWithInvalidChecksum() throws {
+        let authority = try i105(seed: 2)
+        let invalidDefinition = "66owaQmAQMuHxPzxUN3bqZ6FJfDb"
+
+        XCTAssertThrowsError(
+            try TransactionInputValidator.validate(chainId: "0000",
+                                                   authorityId: authority,
+                                                   assetDefinitionId: invalidDefinition)
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAssetDefinitionId(invalidDefinition))
+        }
+    }
+
     func testValidateRejectsAssetDefinitionWithReservedCharacters() throws {
         let authority = try i105(seed: 3)
         XCTAssertThrowsError(

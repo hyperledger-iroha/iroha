@@ -3,14 +3,14 @@
 #![cfg(feature = "zk-tests")]
 #![cfg(feature = "zk-preverify")]
 //! Backend tag acceptance tests for ZK attachments (pre-verify path).
-//! - Unknown families (e.g., `groth16/*`) are rejected as unsupported.
-//! - Halo2 curve mismatch is rejected as "curve not allowed".
+//! - Trusted-setup families (e.g., `groth16/*`) are rejected at VK admission.
+//! - Halo2 curve mismatch is rejected at VK admission.
 
 use iroha_core::{
-    executor::Executor, kura::Kura, query::store::LiveQueryStore, state::State,
-    zk::test_utils::halo2_fixture_envelope,
+    executor::Executor, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
+    state::State, zk::test_utils::halo2_fixture_envelope,
 };
-use iroha_data_model::{ValidationFail, prelude::*, transaction::signed::TransactionBuilder};
+use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 
@@ -52,15 +52,18 @@ fn vk_record(
 fn groth16_backend_tag_is_unsupported() {
     let (state, header) = new_block_ctx();
     let mut block = state.block(header);
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
 
     let mut stx = block.transaction();
-
-    // Build a transaction with proofs carrying one Groth16 attachment.
-    let chain: ChainId = "test-chain".parse().unwrap();
     let authority = ALICE_ID.clone();
-    let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
+    let perm = Permission::new(
+        "CanManageVerifyingKeys".parse().unwrap(),
+        iroha_primitives::json::Json::new(()),
+    );
+    Grant::account_permission(perm, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant manage vk");
+
     let vk_id = iroha_data_model::proof::VerifyingKeyId::new("groth16/bn254", "vk_groth16");
     let vk_box =
         iroha_data_model::proof::VerifyingKeyBox::new("groth16/bn254".into(), vec![7, 7, 7]);
@@ -75,49 +78,36 @@ fn groth16_backend_tag_is_unsupported() {
         ),
     }
     .into();
-    exec.execute_instruction(&mut stx, &authority, reg_vk)
-        .expect("register vk");
-    let attach = iroha_data_model::proof::ProofAttachment::new_ref(
-        "groth16/bn254".into(),
-        iroha_data_model::proof::ProofBox::new("groth16/bn254".into(), vec![1, 2, 3, 4]),
-        vk_id,
-    );
-    let tx: SignedTransaction = TransactionBuilder::new(chain, authority.clone())
-        .with_executable(Executable::Instructions(
-            Vec::<InstructionBox>::new().into(),
-        ))
-        .with_attachments(iroha_data_model::proof::ProofAttachmentList(vec![attach]))
-        .sign(&private_key);
-
     let err = exec
-        .execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
-        .expect_err("unsupported backend should be rejected at pre-verify");
-    match err {
-        ValidationFail::NotPermitted(msg) => {
-            assert!(msg.contains("unsupported proof backend"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+        .execute_instruction(&mut stx, &authority, reg_vk)
+        .expect_err("trusted-setup VK backend should be rejected at admission");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("backend must be Halo2IpaPasta or Stark"),
+        "unexpected error: {msg}"
+    );
 }
 
 #[test]
-fn halo2_curve_mismatch_rejected_as_curve_not_allowed() {
+fn halo2_curve_mismatch_rejected_at_vk_admission() {
     let (state, header) = new_block_ctx();
     let mut block = state.block(header);
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
 
-    // Node default config curve is Pallas (see state defaults).
-    // Attach a Halo2 Pasta backend proof to trigger curve mismatch.
-    let chain: ChainId = "test-chain".parse().unwrap();
     let authority = ALICE_ID.clone();
-    let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
     let halo2_fixture = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add", [0u8; 32]);
     let vk_box = halo2_fixture
         .vk_box("halo2/pasta/ipa")
         .expect("fixture verifying key");
     let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/pasta/ipa", "vk_curve");
     let mut stx = block.transaction();
+    let perm = Permission::new(
+        "CanManageVerifyingKeys".parse().unwrap(),
+        iroha_primitives::json::Json::new(()),
+    );
+    Grant::account_permission(perm, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant manage vk");
     let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: vk_record(
@@ -129,27 +119,12 @@ fn halo2_curve_mismatch_rejected_as_curve_not_allowed() {
         ),
     }
     .into();
-    exec.execute_instruction(&mut stx, &authority, reg_vk)
-        .expect("register vk");
-    let attach = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/pasta/ipa".into(),
-        halo2_fixture.proof_box("halo2/pasta/ipa"),
-        vk_id,
-    );
-    let tx: SignedTransaction = TransactionBuilder::new(chain, authority.clone())
-        .with_executable(Executable::Instructions(
-            Vec::<InstructionBox>::new().into(),
-        ))
-        .with_attachments(iroha_data_model::proof::ProofAttachmentList(vec![attach]))
-        .sign(&private_key);
-
     let err = exec
-        .execute_transaction(&mut stx, &authority, tx, &mut ivm_cache)
-        .expect_err("curve mismatch should be rejected");
-    match err {
-        ValidationFail::NotPermitted(msg) => {
-            assert!(msg.contains("curve not allowed"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+        .execute_instruction(&mut stx, &authority, reg_vk)
+        .expect_err("curve mismatch should be rejected at VK admission");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("verifying key curve must be \\\"pallas\\\""),
+        "unexpected error: {msg}"
+    );
 }

@@ -80,6 +80,19 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun kagemushaRecordBackedNativeProverValidatesInput() {
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(ByteArray(0))
+        }
+        if (KagemushaCompactPaymentTokenProver.isNativeAvailable()) {
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCompactPaymentTokenProver
+                    .proveVerifiedCompactPaymentTokenWithRecords(byteArrayOf(0x01, 0x02))
+            }
+        }
+    }
+
+    @Test
     fun publicNoritoDecodersRoundTripFixturePayloads() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -362,6 +375,46 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun proofBindingRejectsRecursiveMetadataSubstitution() {
+        val fixture = loadFixture()
+        val audit = audit(fixture)
+        val wrongVerifier = OfflineNote.RecursiveProof(
+            verifierKeyId = OfflineNote.VerifyingKeyIdReference(
+                "halo2/kzg",
+                OfflineNote.RECURSIVE_VERIFIER_NAME,
+            ),
+            publicInputsHash = audit.publicInputsHash(),
+            proof = audit.recursiveProof.proof,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            audit.replacingRecursiveProof(wrongVerifier).validateProofBinding()
+        }
+
+        val redeem = redeem(fixture)
+        val wrongProofBackend = OfflineNote.RecursiveProof(
+            publicInputsHash = redeem.publicInputsHash(),
+            proof = OfflineNote.ProofBox(
+                "groth16",
+                redeem.recursiveProof.proof.bytes(),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            redeem.replacingRecursiveProof(wrongProofBackend).validateProofBinding()
+        }
+
+        val draftPlaceholder = OfflineNote.RecursiveProof(
+            publicInputsHash = redeem.publicInputsHash(),
+            proof = OfflineNote.ProofBox(
+                "offline-note/draft-placeholder",
+                byteArrayOf(0),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            redeem.replacingRecursiveProof(draftPlaceholder).validateProofBinding()
+        }
+    }
+
+    @Test
     fun instanceValuesMatchRustVectors() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -397,6 +450,57 @@ class OfflineNoteTest {
             OfflineNote.instanceScalarBytes(auditPublic[0]).toList(),
             auditValues.publicInstanceColumns()[0].toList(),
         )
+    }
+
+    @Test
+    fun auditInstanceValuesRejectUnanchoredClaimsAndHiddenOutputs() {
+        val fixture = loadFixture()
+        val audit = audit(fixture)
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNote.AuditBundle(
+                tokenId = audit.tokenId(),
+                senderKeyCertificate = audit.senderKeyCertificate,
+                inputNullifiers = audit.inputNullifiers(),
+                inputClaims = audit.inputClaims,
+                outputCommitments = audit.outputCommitments() + listOf(flippedHash(audit.outputCommitments()[0])),
+                outputClaims = audit.outputClaims,
+                recursiveProof = audit.recursiveProof,
+            )
+        }
+
+        assertTrue(audit.outputCommitments().size > 1)
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNote.AuditBundle(
+                tokenId = audit.tokenId(),
+                senderKeyCertificate = audit.senderKeyCertificate,
+                inputNullifiers = audit.inputNullifiers(),
+                inputClaims = audit.inputClaims,
+                outputCommitments = audit.outputCommitments().reversed(),
+                outputClaims = audit.outputClaims,
+                recursiveProof = audit.recursiveProof,
+            )
+        }
+
+        val forgedClaim = OfflineNote.IssuedClaim(
+            domain = audit.inputClaims[0].domain,
+            noteCommitment = audit.inputClaims[0].noteCommitment(),
+            keyCertificatePayloadHash = flippedHash(audit.inputClaims[0].keyCertificatePayloadHash()),
+            assetId = audit.inputClaims[0].assetId,
+            amount = audit.inputClaims[0].amount,
+        )
+        val forgedAudit = OfflineNote.AuditBundle(
+            tokenId = audit.tokenId(),
+            senderKeyCertificate = audit.senderKeyCertificate,
+            inputNullifiers = audit.inputNullifiers(),
+            inputClaims = listOf(forgedClaim),
+            outputCommitments = audit.outputCommitments(),
+            outputClaims = audit.outputClaims,
+            recursiveProof = audit.recursiveProof,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNote.InstanceBuilder.auditInstanceValues(forgedAudit)
+        }
     }
 
     @Test
@@ -510,6 +614,9 @@ class OfflineNoteTest {
                 "wallet-offline-bearer-cash-payment-invalid:${text.substringAfter(':')}",
             )
         }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNotePaymentTokenCodec.decodeText("$text=")
+        }
 
         val frames = OfflineNotePaymentTokenCodec.encodeQrFrameBytes(
             token,
@@ -556,6 +663,24 @@ class OfflineNoteTest {
             OfflineBearerCashTransport.FRAMED_BYTE_TRANSPORT,
             policy.recommendedTransportForPayloadByteCount(12_289),
         )
+        val fixture = loadFixture()
+        val audit = audit(fixture)
+        val ancestor = ancestorAuditProducingFirstInput(audit, 0xB0)
+        val metrics = policy.auditTrailMetrics(listOf(ancestor, audit), audit)
+        assertEquals(2, metrics.custodyHops)
+        assertEquals(2, metrics.lineageSteps)
+        assertFailsWith<IllegalArgumentException> {
+            OfflineBearerCashPolicyV1(maxCustodyHops = 1).validateAuditTrail(
+                listOf(ancestor, audit),
+                audit,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineBearerCashPolicyV1(maxLineageSteps = 1).validateAuditTrail(
+                listOf(ancestor, audit),
+                audit,
+            )
+        }
         assertEquals("wallet-offline-bearer-cash-receive:", OfflineNoteReceiveRequestCodec.TEXT_PREFIX)
         assertEquals("wallet-offline-bearer-cash-payment:", OfflineNotePaymentTokenCodec.TEXT_PREFIX)
         assertEquals("wallet-offline-bearer-cash-ack:", OfflineNoteReceiptAckCodec.TEXT_PREFIX)
@@ -583,6 +708,9 @@ class OfflineNoteTest {
             request.outputCommitmentHex(),
             OfflineNoteReceiveRequestCodec.decodeText(text).outputCommitmentHex(),
         )
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiveRequestCodec.decodeText("$text=")
+        }
 
         val frames = OfflineNoteReceiveRequestCodec.encodeQrFrameBytes(
             request,
@@ -626,6 +754,9 @@ class OfflineNoteTest {
         val text = OfflineNoteReceiptAckCodec.encodeText(ack)
         assertTrue(text.startsWith(OfflineNoteReceiptAckCodec.TEXT_PREFIX))
         assertEquals(ack.tokenIdHex(), OfflineNoteReceiptAckCodec.decodeText(text).tokenIdHex())
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiptAckCodec.decodeText("$text=")
+        }
 
         val frames = OfflineNoteReceiptAckCodec.encodeQrFrameBytes(
             ack,
@@ -1190,36 +1321,36 @@ class OfflineNoteTest {
         val readApdus = OfflineNoteNfcApduProtocol.readPayloadApdus(payload.size)
         val nearbyBytes = OfflineNoteTransferHandoff.nearbyPaymentEnvelopeBytes(token)
 
-        assertEquals(4_665, payload.size)
+        assertEquals(4_674, payload.size)
         assertEquals("00a4040007f049524f48413200", hex(OfflineNoteNfcApduProtocol.selectAidApdu()))
         assertEquals("8010000000", hex(OfflineNoteNfcApduProtocol.getInfoApdu()))
         assertEquals(
-            "020000123900f074daabfb799585d3bd938827eaf913df0d590a5b4b4da1968e3d4cdec2587abd",
+            "020000124200f068ca7bc10b9a8c2d2da698c943d94f84eccc0fb795ede09337399075fb330d3c",
             hex(OfflineNoteNfcApduProtocol.encodeInfo(OfflineNoteNfcPayloadKind.PAYMENT_TOKEN, payload)),
         )
         assertEquals(
-            "8020000025020000123974daabfb799585d3bd938827eaf913df0d590a5b4b4da1968e3d4cdec2587abd",
+            "8020000025020000124268ca7bc10b9a8c2d2da698c943d94f84eccc0fb795ede09337399075fb330d3c",
             hex(OfflineNoteNfcApduProtocol.writeMetaApdu(OfflineNoteNfcPayloadKind.PAYMENT_TOKEN, payload)),
         )
         assertEquals(22, writeApdus.size)
         assertEquals(
-            "8020000025020000123974daabfb799585d3bd938827eaf913df0d590a5b4b4da1968e3d4cdec2587abd",
+            "8020000025020000124268ca7bc10b9a8c2d2da698c943d94f84eccc0fb795ede09337399075fb330d3c",
             hex(writeApdus[0]),
         )
         assertEquals(
-            "67ce747103b4acbfa13aabbc6424f80b884fd303ab79c72f4b09d374268a116d",
+            "53d4d61b3f22e432a5a309c4813f55f5562d74b96b59c657bc230f6d5a0031d4",
             hex(OfflineNoteNfcApduProtocol.sha256(writeApdus[1])),
         )
         assertEquals(
-            "802111d0696117166f66666c696e652d6e6f74652d72656375727369766520699b945eaef37b763f70ce18b173caed4fe4fec9bb8110fc5231feb9f868d7a52e0a0968616c6f322f697061221a000000000000006f66666c696e652d766563746f722d61756469742d70726f6f66",
+            "802111d0720968616c6f322f69706117166f66666c696e652d6e6f74652d72656375727369766520699b945eaef37b763f70ce18b173caed4fe4fec9bb8110fc5231feb9f868d7a52e0a0968616c6f322f697061221a000000000000006f66666c696e652d766563746f722d61756469742d70726f6f66",
             hex(writeApdus[writeApdus.size - 2]),
         )
         assertEquals("8022000000", hex(writeApdus.last()))
         assertEquals(20, readApdus.size)
         assertEquals("80110000f0", hex(readApdus.first()))
-        assertEquals(6_318, nearbyBytes.size)
+        assertEquals(6_330, nearbyBytes.size)
         assertEquals(
-            "586c5562935e68b942a5ba5c1e9935cc799a49b88320942751fa05ded0c43d40",
+            "fa386f2157f8d9be82828eb1e79b6b57e05b9d4777d5e46b0c0684de11892184",
             hex(OfflineNoteNfcApduProtocol.sha256(nearbyBytes)),
         )
     }
@@ -1575,6 +1706,41 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun walletRejectsBearerCashCustodyPolicyOverflow() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val recipientCertificate = certificate(obj(obj(fixture, "payment_token"), "recipient_key_certificate"))
+        val recipientWallet = OfflineNoteWallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = string(obj(fixture, "payment_token"), "recipient_account_id"),
+            attestationProvider = StaticAttestationProvider(recipientCertificate),
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "recipient_note_secret_hex")))),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = LongSupplier { 1_700_000_001_250L },
+            bearerCashPolicy = OfflineBearerCashPolicyV1(maxCustodyHops = 1),
+        )
+        val receiveRequest = recipientWallet.prepareReceive(
+            assetDefinitionId = assetDefinitionFromAssetId(string(obj(chain, "issue"), "asset_id")),
+            amount = string(obj(chain, "redeem"), "amount"),
+        )
+        assertEquals(string(derivation, "recipient_output_commitment"), receiveRequest.outputCommitmentHex())
+        val token = OfflineNotePaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64"))
+        )
+        val ancestor = ancestorAuditProducingFirstInput(token.audit, 0xC0)
+        val overLimit = paymentTokenReplacingBearerAuditTrail(token, listOf(ancestor, token.audit))
+
+        assertFailsWith<IllegalArgumentException> {
+            recipientWallet.accept(overLimit)
+        }
+    }
+
+    @Test
     fun walletLoadDerivesCommitmentBeforeIssuerSubmission() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -1849,6 +2015,9 @@ class OfflineNoteTest {
         assertEquals(string(derivation, "payment_token_id"), token.tokenIdHex())
         assertEquals(string(chainAudit, "public_inputs_hash"), hex(token.audit.publicInputsHash()))
         assertEquals(string(derivation, "payment_request_id"), token.paymentRequestId)
+        val auditMetrics = OfflineBearerCashPolicyV1.DEFAULT.auditTrailMetrics(token.bearerAuditTrail(), token.audit)
+        assertEquals(1, auditMetrics.custodyHops)
+        assertEquals(1, auditMetrics.lineageSteps)
         assertEquals(
             OfflineNoteWalletNoteState.SPENT,
             senderStore.findNote(hexBytes(string(derivation, "source_note_commitment")))?.state,
@@ -1871,6 +2040,97 @@ class OfflineNoteTest {
         assertEquals(string(chainRedeem, "public_inputs_hash"), hex(recipientSubmitter.defunds[0].first.publicInputsHash()))
         assertEquals(1, recipientSubmitter.defunds[0].second.size)
         assertEquals(token.tokenIdHex(), hex(recipientSubmitter.defunds[0].second[0].tokenId()))
+    }
+
+    @Test
+    fun walletRejectsExactAmountReceiveRequestReplayAfterRestart() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val payment = obj(fixture, "payment_token")
+        val senderCertificate = certificate(obj(payment, "sender_key_certificate"))
+        val recipientCertificate = certificate(obj(payment, "recipient_key_certificate"))
+        val senderAccountId = accountFromAssetId(string(chainIssue, "asset_id"))
+        val senderStore = InMemoryOfflineNoteStore()
+        senderStore.upsert(sourceWalletNote(fixture, senderCertificate))
+        senderStore.upsert(
+            OfflineNoteWalletNote(
+                chainId = string(derivation, "chain_id"),
+                accountId = senderAccountId,
+                assetId = string(chainIssue, "asset_id"),
+                amount = string(chainIssue, "amount"),
+                keyCertificate = senderCertificate,
+                noteCommitment = ByteArray(32) { 0x71.toByte() },
+                noteSecret = ByteArray(32) { 0x72.toByte() },
+                origin = OfflineNote.CommitmentOrigin.IssuerLoad(
+                    operationId = "operation-extra-exact",
+                    lineageId = "lineage-extra-exact",
+                    localRevision = 2L,
+                ),
+                state = OfflineNoteWalletNoteState.SPENDABLE,
+                createdAtMs = 1_700_000_000_100L,
+                updatedAtMs = 1_700_000_000_100L,
+            )
+        )
+        val senderWallet = OfflineNoteWallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = senderAccountId,
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            store = senderStore,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "token_nonce_hex")))),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_002_400L },
+        )
+        val recipientWallet = OfflineNoteWallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = string(payment, "recipient_account_id"),
+            attestationProvider = StaticAttestationProvider(recipientCertificate),
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "recipient_note_secret_hex")))),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_002_500L },
+        )
+
+        val receiveRequest = recipientWallet.prepareReceive(
+            assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id")),
+            amount = string(chainIssue, "amount"),
+        )
+        senderWallet.pay(receiveRequest)
+        val spentNotes = senderStore.listNotes().filter { it.state == OfflineNoteWalletNoteState.SPENT }
+        assertEquals(1, spentNotes.size)
+        assertEquals(string(derivation, "payment_request_id"), spentNotes[0].spentPaymentRequestId)
+
+        val restoredStore = InMemoryOfflineNoteStore()
+        senderStore.listNotes().forEach { restoredStore.upsert(it) }
+        val restoredWallet = OfflineNoteWallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = senderAccountId,
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            store = restoredStore,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(emptyList()),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_002_600L },
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            restoredWallet.pay(receiveRequest)
+        }
+        assertEquals(
+            1,
+            restoredStore.listNotes().count { it.state == OfflineNoteWalletNoteState.SPENDABLE },
+        )
     }
 
     @Test
@@ -2609,6 +2869,60 @@ class OfflineNoteTest {
         )
     }
 
+    private fun ancestorAuditProducingFirstInput(
+        child: OfflineNote.AuditBundle,
+        seed: Int,
+    ): OfflineNote.AuditBundle {
+        val childInput = child.inputClaims.first()
+        val parentInput = OfflineNote.IssuedClaim(
+            noteCommitment = ByteArray(32) { (seed or 1).toByte() },
+            keyCertificatePayloadHash = child.senderKeyCertificate.payloadHash(),
+            assetId = childInput.assetId,
+            amount = childInput.amount,
+        )
+        val output = OfflineNote.AuditOutputClaim(
+            noteCommitment = childInput.noteCommitment(),
+            keyCertificate = child.senderKeyCertificate,
+            assetId = childInput.assetId,
+            amount = childInput.amount,
+        )
+        val tokenId = ByteArray(32) { ((seed + 2) or 1).toByte() }
+        val inputNullifiers = listOf(ByteArray(32) { ((seed + 4) or 1).toByte() })
+        val outputCommitments = listOf(childInput.noteCommitment())
+        val auditPublicInputs = OfflineNote.AuditPublicInputs(
+            tokenId = tokenId,
+            keyCertificatePayloadHash = child.senderKeyCertificate.payloadHash(),
+            inputNullifiers = inputNullifiers,
+            inputClaims = listOf(parentInput),
+            outputCommitments = outputCommitments,
+            outputClaims = listOf(output.issuedClaim()),
+        )
+        val draft = OfflineNote.AuditBundle(
+            tokenId = tokenId,
+            senderKeyCertificate = child.senderKeyCertificate,
+            inputNullifiers = inputNullifiers,
+            inputClaims = listOf(parentInput),
+            outputCommitments = outputCommitments,
+            outputClaims = listOf(output),
+            recursiveProof = OfflineNote.RecursiveProof(
+                publicInputsHash = auditPublicInputs.publicInputsHash(),
+                proof = OfflineNote.ProofBox(
+                    OfflineNote.RECURSIVE_BACKEND,
+                    "ancestor-audit-provisional".toByteArray(),
+                ),
+            ),
+        )
+        return draft.replacingRecursiveProof(
+            OfflineNote.RecursiveProof(
+                publicInputsHash = draft.publicInputsHash(),
+                proof = OfflineNote.ProofBox(
+                    OfflineNote.RECURSIVE_BACKEND,
+                    "ancestor-audit-proof".toByteArray(),
+                ),
+            )
+        )
+    }
+
     private fun certificate(json: Map<String, Any?>): OfflineNote.KeyCertificate =
         OfflineNote.KeyCertificate(
             version = int(json, "version"),
@@ -3225,23 +3539,25 @@ class OfflineNoteTest {
     }
 
     private object BindingProofProvider : OfflineNoteProofProvider {
-        override fun proveAudit(audit: OfflineNote.AuditBundle): OfflineNote.RecursiveProof =
-            OfflineNote.RecursiveProof(
+        override fun proveAudit(audit: OfflineNote.AuditBundle): OfflineNote.RecursiveProof {
+            return OfflineNote.RecursiveProof(
                 publicInputsHash = audit.publicInputsHash(),
                 proof = OfflineNote.ProofBox(
                     OfflineNote.RECURSIVE_BACKEND,
                     "wallet-audit-proof".toByteArray(),
                 ),
             )
+        }
 
-        override fun proveRedeem(redemption: OfflineNote.Redeem): OfflineNote.RecursiveProof =
-            OfflineNote.RecursiveProof(
+        override fun proveRedeem(redemption: OfflineNote.Redeem): OfflineNote.RecursiveProof {
+            return OfflineNote.RecursiveProof(
                 publicInputsHash = redemption.publicInputsHash(),
                 proof = OfflineNote.ProofBox(
                     OfflineNote.RECURSIVE_BACKEND,
                     "wallet-redeem-proof".toByteArray(),
                 ),
             )
+        }
     }
 
     private object BindingProofVerifier : OfflineNoteProofVerifier {

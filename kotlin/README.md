@@ -52,6 +52,11 @@ secure storage remains in the platform wallet layer. The Android
 `AndroidOfflineNoteSecureStore` rotates a non-exportable Android Keystore key
 on every committed wallet-state revision and rejects app-data rollback or
 cloned preference snapshots when the old revision key is no longer present.
+`KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
+token prover for shielded offline-offline payments. Pass a Norito-encoded
+`KagemushaVerifiedFoldRecordBundle`; the JNI bridge verifies each private hop
+proof against its verifier record and returns a Norito-encoded
+`KagemushaCompactPaymentToken` when `connect_norito_bridge` is available.
 Legacy `SPEND_PENDING` records are migrated to `SPENT`, and legacy
 `CHANGE_PENDING` records are migrated to `SPENDABLE`.
 `OfflineNoteTransferHandoff` exposes one integration surface for local token

@@ -5953,6 +5953,7 @@ mod tests {
                 VerifyingKeyRecord,
             },
             transaction::{Executable, TransactionBuilder},
+            zk::{BackendTag, OpenVerifyEnvelope},
         };
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
@@ -5988,8 +5989,19 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
 
-        // Build attachments with mock proof payloads
-        let proof = ProofBox::new(backend.clone(), vec![1u8, 2, 3]);
+        // Build attachments with canonical envelope metadata so preverify
+        // exercises deduplication after production-shaped proof admission.
+        let envelope = OpenVerifyEnvelope::new(
+            BackendTag::Halo2IpaPasta,
+            "halo2/ipa:preverify",
+            vk_commitment,
+            b"preverify-test-schema".to_vec(),
+            vec![1u8, 2, 3],
+        );
+        let proof = ProofBox::new(
+            backend.clone(),
+            norito::to_bytes(&envelope).expect("encode preverify envelope"),
+        );
         let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
         attachment.vk_commitment = Some(vk_commitment);
         let attachments = ProofAttachmentList(vec![attachment.clone()]);

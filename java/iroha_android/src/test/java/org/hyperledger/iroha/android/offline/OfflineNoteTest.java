@@ -45,7 +45,10 @@ public final class OfflineNoteTest {
     walletDerivationsMatchRustVectors();
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
+    proofBindingRejectsRecursiveMetadataSubstitution();
     instanceValuesMatchRustVectors();
+    auditInstanceValuesRejectUnanchoredClaimsAndHiddenOutputs();
+    kagemushaRecordBackedNativeProverValidatesInput();
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
     nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
@@ -64,6 +67,7 @@ public final class OfflineNoteTest {
     nearbyEnvelopeRoundTripsPairingPaymentAndAck();
     nearbyEnvelopeRejectsAdversarialMessages();
     walletAcceptsCanonicalSdkInteropPaymentToken();
+    walletRejectsBearerCashCustodyPolicyOverflow();
     walletNoteJsonCodecRoundTripsFixtureNote();
     walletLoadDerivesCommitmentBeforeIssuerSubmission();
     walletLoadDoesNotBlockIssuerCompletionThread();
@@ -72,6 +76,7 @@ public final class OfflineNoteTest {
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
     walletSyncReconcilesPendingSpendChangeAndRedeemStates();
     walletRejectsDuplicateTokenAndAlreadyPendingInputs();
+    walletRejectsExactAmountReceiveRequestReplayAfterRestart();
     walletRedeemReservesNoteBeforeSubmitCompletes();
     walletRejectsAdversarialCertificateBindings();
     walletSyncReconcilesFailedAuditAndRedeemOutcomes();
@@ -413,6 +418,41 @@ public final class OfflineNoteTest {
     assertThrows(forged::validateProofBinding, "proof binding mismatch should throw");
   }
 
+  private static void proofBindingRejectsRecursiveMetadataSubstitution() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNote.AuditBundle audit = audit(fixture);
+    final OfflineNote.RecursiveProof wrongVerifier =
+        new OfflineNote.RecursiveProof(
+            new OfflineNote.VerifyingKeyIdReference(
+                "halo2/kzg", OfflineNote.RECURSIVE_VERIFIER_NAME),
+            audit.publicInputsHash(),
+            audit.recursiveProof().proof());
+    assertThrows(
+        () -> audit.replacingRecursiveProof(wrongVerifier).validateProofBinding(),
+        "proof binding should reject verifier-key metadata substitution");
+
+    final OfflineNote.Redeem redeem = redeem(fixture);
+    final OfflineNote.RecursiveProof wrongProofBackend =
+        new OfflineNote.RecursiveProof(
+            redeem.publicInputsHash(),
+            new OfflineNote.ProofBox(
+                "groth16",
+                redeem.recursiveProof().proof().bytes()));
+    assertThrows(
+        () -> redeem.replacingRecursiveProof(wrongProofBackend).validateProofBinding(),
+        "proof binding should reject proof-backend metadata substitution");
+
+    final OfflineNote.RecursiveProof draftPlaceholder =
+        new OfflineNote.RecursiveProof(
+            redeem.publicInputsHash(),
+            new OfflineNote.ProofBox(
+                "offline-note/draft-placeholder",
+                new byte[] {0}));
+    assertThrows(
+        () -> redeem.replacingRecursiveProof(draftPlaceholder).validateProofBinding(),
+        "proof binding should reject draft-placeholder proofs");
+  }
+
   private static void instanceValuesMatchRustVectors() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
@@ -452,6 +492,62 @@ public final class OfflineNoteTest {
         "audit first instance scalar");
   }
 
+  private static void auditInstanceValuesRejectUnanchoredClaimsAndHiddenOutputs() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNote.AuditBundle audit = audit(fixture);
+    final List<byte[]> hiddenOutputCommitments = new ArrayList<>(audit.outputCommitments());
+    hiddenOutputCommitments.add(flippedHash(audit.outputCommitments().get(0)));
+
+    assertThrows(
+        () ->
+            new OfflineNote.AuditBundle(
+                audit.tokenId(),
+                audit.senderKeyCertificate(),
+                audit.inputNullifiers(),
+                audit.inputClaims(),
+                hiddenOutputCommitments,
+                audit.outputClaims(),
+                audit.recursiveProof()),
+        "hidden audit output commitments must be rejected");
+
+    assertTrue(audit.outputCommitments().size() > 1, "fixture has multiple audit outputs");
+    final List<byte[]> reversedOutputCommitments = new ArrayList<>(audit.outputCommitments());
+    Collections.reverse(reversedOutputCommitments);
+    assertThrows(
+        () ->
+            new OfflineNote.AuditBundle(
+                audit.tokenId(),
+                audit.senderKeyCertificate(),
+                audit.inputNullifiers(),
+                audit.inputClaims(),
+                reversedOutputCommitments,
+                audit.outputClaims(),
+                audit.recursiveProof()),
+        "reordered audit output commitments must be rejected");
+
+    final OfflineNote.IssuedClaim claim = audit.inputClaims().get(0);
+    final OfflineNote.IssuedClaim forgedClaim =
+        new OfflineNote.IssuedClaim(
+            claim.domain(),
+            claim.noteCommitment(),
+            flippedHash(claim.keyCertificatePayloadHash()),
+            claim.assetId(),
+            claim.amount());
+    final OfflineNote.AuditBundle forgedAudit =
+        new OfflineNote.AuditBundle(
+            audit.tokenId(),
+            audit.senderKeyCertificate(),
+            audit.inputNullifiers(),
+            Collections.singletonList(forgedClaim),
+            audit.outputCommitments(),
+            audit.outputClaims(),
+            audit.recursiveProof());
+
+    assertThrows(
+        () -> OfflineNote.InstanceBuilder.auditInstanceValues(forgedAudit),
+        "audit input claims must be anchored to sender certificate");
+  }
+
   private static void nativeHalo2ProverProducesVerifyingPayloadWhenRequested() throws Exception {
     if (!"1".equals(System.getenv("IROHA_JAVA_OFFLINE_PROVER_TEST"))) {
       return;
@@ -485,6 +581,19 @@ public final class OfflineNoteTest {
         !OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
             proof.proof().bytes(), "0000000000000000000000000000000000000000000000000000000000000000"),
         "Java Offline Halo2 SDK envelope helper rejects a wrong public input hash");
+  }
+
+  private static void kagemushaRecordBackedNativeProverValidatesInput() {
+    assertThrows(
+        () -> KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(
+            new byte[0]),
+        "Kagemusha record-backed native prover must reject empty archives before JNI");
+    if (KagemushaCompactPaymentTokenProver.isNativeAvailable()) {
+      assertThrows(
+          () -> KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(
+              new byte[] {0x01, 0x02}),
+          "Kagemusha record-backed native prover must reject malformed archives");
+    }
   }
 
   private static void nativeHalo2ProverPerformanceWhenRequested() throws Exception {
@@ -581,6 +690,9 @@ public final class OfflineNoteTest {
                 "wallet-offline-bearer-cash-payment-invalid:"
                     + text.substring(text.indexOf(':') + 1)),
         "unknown payment prefix should reject");
+    assertThrows(
+        () -> OfflineNotePaymentTokenCodec.decodeText(text + "="),
+        "padded payment token text should reject");
 
     final List<byte[]> frames =
         OfflineNotePaymentTokenCodec.encodeQrFrameBytes(
@@ -628,7 +740,7 @@ public final class OfflineNoteTest {
         "canonical QR token id");
   }
 
-  private static void offlineBearerCashPolicyAndPrefixesUseSingleAppSurface() {
+  private static void offlineBearerCashPolicyAndPrefixesUseSingleAppSurface() throws Exception {
     final OfflineBearerCashPolicyV1 policy = OfflineBearerCashPolicyV1.DEFAULT;
     assertEquals(5, policy.maxCustodyHops(), "max custody hops");
     assertEquals(32, policy.maxLineageSteps(), "max lineage steps");
@@ -649,6 +761,23 @@ public final class OfflineNoteTest {
         OfflineBearerCashTransport.FRAMED_BYTE_TRANSPORT
             == policy.recommendedTransportForPayloadByteCount(12289),
         "framed byte threshold");
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNote.AuditBundle audit = audit(fixture);
+    final OfflineNote.AuditBundle ancestor = ancestorAuditProducingFirstInput(audit, 0xB0);
+    final OfflineBearerCashPolicyV1.AuditTrailMetrics metrics =
+        policy.auditTrailMetrics(Arrays.asList(ancestor, audit), audit);
+    assertEquals(2L, metrics.custodyHops(), "custody hop metric");
+    assertEquals(2L, metrics.lineageSteps(), "lineage step metric");
+    assertThrows(
+        () ->
+            new OfflineBearerCashPolicyV1(1, 32, 2048, 12288, 20, 8, 40)
+                .validateAuditTrail(Arrays.asList(ancestor, audit), audit),
+        "custody limit should reject over-depth audit trails");
+    assertThrows(
+        () ->
+            new OfflineBearerCashPolicyV1(5, 1, 2048, 12288, 20, 8, 40)
+                .validateAuditTrail(Arrays.asList(ancestor, audit), audit),
+        "lineage limit should reject overlong audit trails");
     assertEquals(
         "wallet-offline-bearer-cash-receive:",
         OfflineNoteReceiveRequestCodec.TEXT_PREFIX,
@@ -695,6 +824,9 @@ public final class OfflineNoteTest {
         request.outputCommitmentHex(),
         OfflineNoteReceiveRequestCodec.decodeText(text).outputCommitmentHex(),
         "receive request text output commitment");
+    assertThrows(
+        () -> OfflineNoteReceiveRequestCodec.decodeText(text + "="),
+        "padded receive request text should reject");
 
     final List<byte[]> frames =
         OfflineNoteReceiveRequestCodec.encodeQrFrameBytes(
@@ -752,6 +884,9 @@ public final class OfflineNoteTest {
         ack.tokenIdHex(),
         OfflineNoteReceiptAckCodec.decodeText(text).tokenIdHex(),
         "receipt ACK text token id");
+    assertThrows(
+        () -> OfflineNoteReceiptAckCodec.decodeText(text + "="),
+        "padded receipt ACK text should reject");
 
     final List<byte[]> frames =
         OfflineNoteReceiptAckCodec.encodeQrFrameBytes(ack, new OfflineQrStream.Options(180, 2));
@@ -1467,7 +1602,7 @@ public final class OfflineNoteTest {
     final List<byte[]> readApdus = OfflineNoteNfcApduProtocol.readPayloadApdus(payload.length);
     final byte[] nearbyBytes = OfflineNoteTransferHandoff.nearbyPaymentEnvelopeBytes(token);
 
-    assertEquals(4665, payload.length, "transport fixture payload length");
+    assertEquals(4674, payload.length, "transport fixture payload length");
     assertEquals(
         "00a4040007f049524f48413200",
         hex(OfflineNoteNfcApduProtocol.selectAidApdu()),
@@ -1475,36 +1610,36 @@ public final class OfflineNoteTest {
     assertEquals(
         "8010000000", hex(OfflineNoteNfcApduProtocol.getInfoApdu()), "get-info APDU fixture");
     assertEquals(
-        "020000123900f074daabfb799585d3bd938827eaf913df0d590a5b4b4da1968e3d4cdec2587abd",
+        "020000124200f068ca7bc10b9a8c2d2da698c943d94f84eccc0fb795ede09337399075fb330d3c",
         hex(
             OfflineNoteNfcApduProtocol.encodeInfo(
                 OfflineNoteNfcApduProtocol.PayloadKind.PAYMENT_TOKEN, payload)),
         "NFC info fixture");
     assertEquals(
-        "8020000025020000123974daabfb799585d3bd938827eaf913df0d590a5b4b4da1968e3d4cdec2587abd",
+        "8020000025020000124268ca7bc10b9a8c2d2da698c943d94f84eccc0fb795ede09337399075fb330d3c",
         hex(
             OfflineNoteNfcApduProtocol.writeMetaApdu(
                 OfflineNoteNfcApduProtocol.PayloadKind.PAYMENT_TOKEN, payload)),
         "NFC write-meta fixture");
     assertEquals(22, writeApdus.size(), "NFC write APDU count");
     assertEquals(
-        "8020000025020000123974daabfb799585d3bd938827eaf913df0d590a5b4b4da1968e3d4cdec2587abd",
+        "8020000025020000124268ca7bc10b9a8c2d2da698c943d94f84eccc0fb795ede09337399075fb330d3c",
         hex(writeApdus.get(0)),
         "NFC first write APDU fixture");
     assertEquals(
-        "67ce747103b4acbfa13aabbc6424f80b884fd303ab79c72f4b09d374268a116d",
+        "53d4d61b3f22e432a5a309c4813f55f5562d74b96b59c657bc230f6d5a0031d4",
         hex(OfflineNoteNfcApduProtocol.sha256(writeApdus.get(1))),
         "NFC first chunk fixture digest");
     assertEquals(
-        "802111d0696117166f66666c696e652d6e6f74652d72656375727369766520699b945eaef37b763f70ce18b173caed4fe4fec9bb8110fc5231feb9f868d7a52e0a0968616c6f322f697061221a000000000000006f66666c696e652d766563746f722d61756469742d70726f6f66",
+        "802111d0720968616c6f322f69706117166f66666c696e652d6e6f74652d72656375727369766520699b945eaef37b763f70ce18b173caed4fe4fec9bb8110fc5231feb9f868d7a52e0a0968616c6f322f697061221a000000000000006f66666c696e652d766563746f722d61756469742d70726f6f66",
         hex(writeApdus.get(writeApdus.size() - 2)),
         "NFC final chunk fixture");
     assertEquals("8022000000", hex(writeApdus.get(writeApdus.size() - 1)), "NFC commit fixture");
     assertEquals(20, readApdus.size(), "NFC read APDU count");
     assertEquals("80110000f0", hex(readApdus.get(0)), "NFC first read APDU fixture");
-    assertEquals(6318, nearbyBytes.length, "Nearby payment envelope fixture length");
+    assertEquals(6330, nearbyBytes.length, "Nearby payment envelope fixture length");
     assertEquals(
-        "586c5562935e68b942a5ba5c1e9935cc799a49b88320942751fa05ded0c43d40",
+        "fa386f2157f8d9be82828eb1e79b6b57e05b9d4777d5e46b0c0684de11892184",
         hex(OfflineNoteNfcApduProtocol.sha256(nearbyBytes)),
         "Nearby payment envelope fixture digest");
   }
@@ -1961,6 +2096,50 @@ public final class OfflineNoteTest {
         "stored canonical note state");
   }
 
+  private static void walletRejectsBearerCashCustodyPolicyOverflow() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final OfflineNote.KeyCertificate recipientCertificate =
+        certificate(obj(payment, "recipient_key_certificate"));
+    final OfflineNoteWallet recipientWallet =
+        new OfflineNoteWallet(
+            string(derivation, "chain_id"),
+            string(payment, "recipient_account_id"),
+            new StaticAttestationProvider(recipientCertificate),
+            new InMemoryOfflineNoteStore(),
+            null,
+            new RecordingTransactionSubmitter(),
+            null,
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            certificateVerifier(fixture),
+            new QueueRandomSource(
+                Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_001_250L,
+            new OfflineBearerCashPolicyV1(1, 32, 2048, 12288, 20, 8, 40));
+    final OfflineNoteReceiveRequest receiveRequest =
+        recipientWallet.prepareReceive(
+            assetDefinitionFromAssetId(string(obj(chain, "issue"), "asset_id")),
+            string(obj(chain, "redeem"), "amount"));
+    assertEquals(
+        string(derivation, "recipient_output_commitment"),
+        receiveRequest.outputCommitmentHex(),
+        "recipient output commitment");
+    final OfflineNotePaymentToken token =
+        OfflineNotePaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")));
+    final OfflineNote.AuditBundle ancestor = ancestorAuditProducingFirstInput(token.audit(), 0xC0);
+    final OfflineNotePaymentToken overLimit =
+        paymentTokenReplacingBearerAuditTrail(token, Arrays.asList(ancestor, token.audit()));
+
+    assertThrows(
+        () -> recipientWallet.accept(overLimit),
+        "custody policy should reject over-depth bearer audit trail");
+  }
+
   private static void walletNoteJsonCodecRoundTripsFixtureNote() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final OfflineNote.KeyCertificate senderCertificate =
@@ -2378,6 +2557,11 @@ public final class OfflineNoteTest {
         string(derivation, "payment_request_id"),
         token.paymentRequestId(),
         "payment request id");
+    final OfflineBearerCashPolicyV1.AuditTrailMetrics auditMetrics =
+        OfflineBearerCashPolicyV1.DEFAULT.auditTrailMetrics(
+            token.bearerAuditTrail(), token.audit());
+    assertEquals(1L, auditMetrics.custodyHops(), "audit trail custody hops");
+    assertEquals(1L, auditMetrics.lineageSteps(), "audit trail lineage steps");
     assertEquals(
         string(chainAudit, "public_inputs_hash"),
         hex(token.audit().publicInputsHash()),
@@ -2567,6 +2751,115 @@ public final class OfflineNoteTest {
         accepted.state().name(),
         "accepted note state");
     assertThrows(() -> recipientWallet.accept(token), "duplicate token replay should fail");
+  }
+
+  private static void walletRejectsExactAmountReceiveRequestReplayAfterRestart() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> chainIssue = obj(chain, "issue");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(payment, "sender_key_certificate"));
+    final OfflineNote.KeyCertificate recipientCertificate =
+        certificate(obj(payment, "recipient_key_certificate"));
+    final String accountId = accountFromAssetId(string(chainIssue, "asset_id"));
+    final InMemoryOfflineNoteStore senderStore = new InMemoryOfflineNoteStore();
+    senderStore.upsert(sourceWalletNote(fixture, senderCertificate));
+    senderStore.upsert(
+        new OfflineNoteWalletNote(
+            string(derivation, "chain_id"),
+            accountId,
+            string(chainIssue, "asset_id"),
+            string(chainIssue, "amount"),
+            senderCertificate,
+            filledBytes(32, (byte) 0x71),
+            filledBytes(32, (byte) 0x72),
+            new OfflineNote.CommitmentOrigin.IssuerLoad(
+                "operation-extra-exact", "lineage-extra-exact", 2L),
+            OfflineNoteWalletNoteState.SPENDABLE,
+            1_700_000_000_100L,
+            1_700_000_000_100L));
+    final OfflineNoteWallet senderWallet =
+        new OfflineNoteWallet(
+            string(derivation, "chain_id"),
+            accountId,
+            new StaticAttestationProvider(senderCertificate),
+            senderStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            certificateVerifier(fixture),
+            new QueueRandomSource(
+                Collections.singletonList(hexBytes(string(derivation, "token_nonce_hex")))),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_002_400L);
+    final OfflineNoteWallet recipientWallet =
+        new OfflineNoteWallet(
+            string(derivation, "chain_id"),
+            string(payment, "recipient_account_id"),
+            new StaticAttestationProvider(recipientCertificate),
+            new InMemoryOfflineNoteStore(),
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            certificateVerifier(fixture),
+            new QueueRandomSource(
+                Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_002_500L);
+
+    final OfflineNoteReceiveRequest receiveRequest =
+        recipientWallet.prepareReceive(
+            assetDefinitionFromAssetId(string(chainIssue, "asset_id")),
+            string(chainIssue, "amount"));
+    senderWallet.pay(receiveRequest);
+    int spentCount = 0;
+    String spentPaymentRequestId = null;
+    for (final OfflineNoteWalletNote note : senderStore.listNotes()) {
+      if (note.state() == OfflineNoteWalletNoteState.SPENT) {
+        spentCount++;
+        spentPaymentRequestId = note.spentPaymentRequestId();
+      }
+    }
+    assertEquals(1L, spentCount, "spent exact input count");
+    assertEquals(
+        string(derivation, "payment_request_id"),
+        spentPaymentRequestId,
+        "spent payment request id");
+
+    final InMemoryOfflineNoteStore restoredStore = new InMemoryOfflineNoteStore();
+    for (final OfflineNoteWalletNote note : senderStore.listNotes()) {
+      restoredStore.upsert(
+          OfflineNoteWalletNoteJsonCodec.decode(OfflineNoteWalletNoteJsonCodec.encode(note)));
+    }
+    final OfflineNoteWallet restoredWallet =
+        new OfflineNoteWallet(
+            string(derivation, "chain_id"),
+            accountId,
+            new StaticAttestationProvider(senderCertificate),
+            restoredStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            certificateVerifier(fixture),
+            new QueueRandomSource(Collections.emptyList()),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_002_600L);
+
+    assertThrows(
+        () -> restoredWallet.pay(receiveRequest),
+        "restored exact receive request replay should fail");
+    int spendableCount = 0;
+    for (final OfflineNoteWalletNote note : restoredStore.listNotes()) {
+      if (note.state() == OfflineNoteWalletNoteState.SPENDABLE) {
+        spendableCount++;
+      }
+    }
+    assertEquals(1L, spendableCount, "remaining spendable note count");
   }
 
   private static void walletRedeemReservesNoteBeforeSubmitCompletes() throws Exception {
@@ -3155,6 +3448,55 @@ public final class OfflineNoteTest {
                 "offline-vector-audit-proof".getBytes(StandardCharsets.UTF_8))));
   }
 
+  private static OfflineNote.AuditBundle ancestorAuditProducingFirstInput(
+      final OfflineNote.AuditBundle child, final int seed) {
+    final OfflineNote.IssuedClaim childInput = child.inputClaims().get(0);
+    final OfflineNote.IssuedClaim parentInput =
+        new OfflineNote.IssuedClaim(
+            filledBytes(32, seed | 1),
+            child.senderKeyCertificate().payloadHash(),
+            childInput.assetId(),
+            childInput.amount());
+    final OfflineNote.AuditOutputClaim output =
+        new OfflineNote.AuditOutputClaim(
+            childInput.noteCommitment(),
+            child.senderKeyCertificate(),
+            childInput.assetId(),
+            childInput.amount());
+    final byte[] tokenId = filledBytes(32, (seed + 2) | 1);
+    final List<byte[]> inputNullifiers =
+        Collections.singletonList(filledBytes(32, (seed + 4) | 1));
+    final List<byte[]> outputCommitments =
+        Collections.singletonList(childInput.noteCommitment());
+    final OfflineNote.AuditPublicInputs auditPublicInputs =
+        new OfflineNote.AuditPublicInputs(
+            tokenId,
+            child.senderKeyCertificate().payloadHash(),
+            inputNullifiers,
+            Collections.singletonList(parentInput),
+            outputCommitments,
+            Collections.singletonList(output.issuedClaim()));
+    final OfflineNote.AuditBundle draft =
+        new OfflineNote.AuditBundle(
+            tokenId,
+            child.senderKeyCertificate(),
+            inputNullifiers,
+            Collections.singletonList(parentInput),
+            outputCommitments,
+            Collections.singletonList(output),
+            new OfflineNote.RecursiveProof(
+                auditPublicInputs.publicInputsHash(),
+                new OfflineNote.ProofBox(
+                    OfflineNote.RECURSIVE_BACKEND,
+                    "ancestor-audit-provisional".getBytes(StandardCharsets.UTF_8))));
+    return draft.replacingRecursiveProof(
+        new OfflineNote.RecursiveProof(
+            draft.publicInputsHash(),
+            new OfflineNote.ProofBox(
+                OfflineNote.RECURSIVE_BACKEND,
+                "ancestor-audit-proof".getBytes(StandardCharsets.UTF_8))));
+  }
+
   private static OfflineNote.KeyCertificate certificate(final Map<String, Object> json) {
     return new OfflineNote.KeyCertificate(
         intValue(json, "version"),
@@ -3413,6 +3755,18 @@ public final class OfflineNoteTest {
         token.tokenNonce(),
         flippedHash(token.tokenId()),
         token.audit(),
+        token.createdAtMs());
+  }
+
+  private static OfflineNotePaymentToken paymentTokenReplacingBearerAuditTrail(
+      final OfflineNotePaymentToken token, final List<OfflineNote.AuditBundle> bearerAuditTrail) {
+    return new OfflineNotePaymentToken(
+        token.chainId(),
+        token.paymentRequestId(),
+        token.tokenNonce(),
+        token.tokenId(),
+        token.audit(),
+        bearerAuditTrail,
         token.createdAtMs());
   }
 

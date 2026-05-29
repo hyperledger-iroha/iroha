@@ -155,8 +155,7 @@ struct TransactionInputValidator {
         guard AssetDefinitionAddress.looksCanonical(definitionLiteral) else {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        if NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil,
-           AssetDefinitionAddress.decode(definitionLiteral) == nil {
+        if AssetDefinitionAddress.decode(definitionLiteral) == nil {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
         return definitionLiteral + scopeSuffix

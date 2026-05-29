@@ -84,6 +84,8 @@
   Norito BTreeSet serialization fix
 - Added compression profiles (`FAST`, `BALANCED`, `COMPACT`) via `CompressionConfig.zstdProfile`,
   matching the Python heuristics and surfacing runtime validation for the `zstd-jni` backend.
+- Added Java Norito NCB/AoS helpers for optional string/u32 and bytes+bool row shapes, with
+  Rust hex-vector parity and malformed payload rejection tests.
 - Initial Java Norito codec (JDK 21-ready)
 - Header encode/decode, CRC64-XZ, type adapters, packed sequences/structs
 - CLI inspector (`NoritoDump`) and assertion-based test harness

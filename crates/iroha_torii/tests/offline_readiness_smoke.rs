@@ -142,6 +142,8 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
     assert!(body.contains("\"offline_fountain_qr\":true"));
     assert!(body.contains("\"offline_sync_optional\":true"));
     assert!(body.contains("\"offline_telemetry\":true"));
+    assert!(body.contains("\"offline_kagemusha_enabled\":true"));
+    assert!(body.contains("\"offline_kagemusha_force_legacy\":false"));
 
     for path in [
         "/v1/offline/cash/setup",

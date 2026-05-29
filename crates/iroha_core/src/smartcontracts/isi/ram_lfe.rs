@@ -10,7 +10,7 @@ use iroha_data_model::{
         RamLfeExecutionReceipt, RamLfeExecutionReceiptPayload, RamLfeProgramPolicy,
         RamLfeReceiptAttestation,
     },
-    zk::OpenVerifyEnvelope,
+    zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_telemetry::metrics;
 
@@ -416,6 +416,9 @@ fn verify_execution_proof(
             verifier.proof_backend
         ));
     }
+    if envelope.backend != BackendTag::Halo2IpaPasta {
+        return Err("RAM-LFE proof envelope backend tag must be Halo2 IPA Pasta".to_owned());
+    }
     if envelope.circuit_id != verifier.circuit_id {
         return Err(format!(
             "RAM-LFE proof circuit {} does not match verifier circuit {}",
@@ -426,6 +429,9 @@ fn verify_execution_proof(
         return Err(
             "RAM-LFE proof public-input schema hash does not match verifier metadata".to_owned(),
         );
+    }
+    if !envelope.aux.is_empty() {
+        return Err("RAM-LFE proof envelope auxiliary bytes must be empty".to_owned());
     }
 
     let verifying_key = VerifyingKeyBox::new(
@@ -472,11 +478,12 @@ fn expected_execution_payload_hash_instances(payload_hash: Hash) -> Vec<Vec<[u8;
 mod tests {
     use std::str::FromStr as _;
 
-    use iroha_crypto::{KeyPair, PolicyCommitment};
+    use iroha_crypto::{KeyPair, PolicyCommitment, RamLfeProofVerifierMetadata};
     use iroha_data_model::{
         account::AccountId,
         proof::ProofBox,
         ram_lfe::{RamLfeProgramId, RamLfeReceiptAttestation},
+        zk::OpenVerifyEnvelope,
     };
 
     use super::*;
@@ -547,5 +554,74 @@ mod tests {
         let receipt = sample_receipt(&policy, 200, None);
         let err = validate_execution_receipt_at(&receipt, &policy, 100).expect_err("future");
         assert!(err.contains("executed in the future"));
+    }
+
+    fn sample_proof_payload() -> RamLfeExecutionReceiptPayload {
+        RamLfeExecutionReceiptPayload {
+            program_id: RamLfeProgramId::from_str("proof_program").expect("program id"),
+            program_digest: Hash::new(b"program"),
+            backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+            verification_mode: RamLfeVerificationMode::Proof,
+            input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+            output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+            parameter_digest: Hash::new(b"parameters"),
+            evaluation_key_digest: Hash::new(b"evaluation-keys"),
+            output_hash: Hash::new(b"output"),
+            associated_data_hash: Hash::new(b"associated-data"),
+            executed_at_ms: 100,
+            expires_at_ms: None,
+        }
+    }
+
+    fn sample_proof_verifier() -> RamLfeProofVerifierMetadata {
+        RamLfeProofVerifierMetadata {
+            proof_backend: crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+            circuit_id: "halo2/pasta/ipa/tiny-add".to_owned(),
+            public_inputs_schema_hash: Hash::new(b"ram-lfe-proof-schema"),
+            verifying_key_bytes: b"ram-lfe-proof-vk".to_vec(),
+        }
+    }
+
+    fn sample_proof_box(
+        verifier: &RamLfeProofVerifierMetadata,
+        mutate: impl FnOnce(&mut OpenVerifyEnvelope),
+    ) -> ProofBox {
+        let vk = VerifyingKeyBox::new(
+            verifier.proof_backend.clone().into(),
+            verifier.verifying_key_bytes.clone(),
+        );
+        let mut envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: verifier.circuit_id.clone(),
+            vk_hash: crate::zk::hash_vk(&vk),
+            public_inputs: b"ram-lfe-proof-schema".to_vec(),
+            proof_bytes: vec![0xCA, 0xFE],
+            aux: Vec::new(),
+        };
+        mutate(&mut envelope);
+        ProofBox::new(
+            verifier.proof_backend.clone().into(),
+            norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
+        )
+    }
+
+    #[test]
+    fn verify_execution_proof_rejects_noncanonical_envelope_metadata_before_proof_decode() {
+        let verifier = sample_proof_verifier();
+        let execution = sample_proof_payload();
+
+        let bad_backend = sample_proof_box(&verifier, |envelope| {
+            envelope.backend = BackendTag::Stark;
+        });
+        let err = verify_execution_proof(&bad_backend, &execution, &verifier)
+            .expect_err("wrong envelope backend tag must reject before proof parsing");
+        assert!(err.contains("backend tag"), "unexpected error: {err}");
+
+        let aux = sample_proof_box(&verifier, |envelope| {
+            envelope.aux = b"unbound-ram-lfe-proof-metadata".to_vec();
+        });
+        let err = verify_execution_proof(&aux, &execution, &verifier)
+            .expect_err("non-empty auxiliary bytes must reject before proof parsing");
+        assert!(err.contains("auxiliary bytes"), "unexpected error: {err}");
     }
 }

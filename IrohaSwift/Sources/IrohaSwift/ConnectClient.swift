@@ -2,8 +2,8 @@ import Foundation
 
 /// Lightweight wrapper around a WebSocket task for Iroha Connect flows.
 ///
-/// This is an early scaffold – it only surfaces raw binary frames.
-/// Raw frames are encoded/decoded via `ConnectCodec`, which requires the Norito bridge XCFramework.
+/// Raw payloads can be sent directly, and typed frames are encoded/decoded via `ConnectCodec`,
+/// which requires the Norito bridge XCFramework.
 public protocol ConnectWebSocketTask: AnyObject {
     func resume()
     func send(data: Data, completion: @Sendable @escaping (Error?) -> Void)
@@ -27,7 +27,7 @@ public enum ConnectCloseCode: UInt16, Sendable {
     case tlsHandshake = 1015
 }
 
-/// Factory used by `ConnectClient` so tests can inject a stub.
+/// Factory used by `ConnectClient` so tests can inject a deterministic WebSocket task.
 public struct ConnectWebSocketFactory: Sendable {
     private let makeTask: @Sendable (URLRequest) -> ConnectWebSocketTask
 
@@ -86,10 +86,10 @@ final class URLSessionConnectWebSocketTask: ConnectWebSocketTask {
     }
 }
 
-/// Early Connect client scaffold. Handles the WebSocket lifecycle and exposes async receive/send helpers.
+/// Connect client that handles the WebSocket lifecycle and exposes async receive/send helpers.
 /// Norito Connect frames flow through `ConnectCodec` (throws `ConnectCodecError.bridgeUnavailable` when
 /// the bridge is missing), and key exchange helpers are available via `ConnectCrypto`.
-/// Encryption of ciphertext envelopes will plug in once the bridge exports high-level envelope builders.
+/// Ciphertext envelope encryption and decryption are provided by `ConnectEnvelopeCodec` and `ConnectEnvelope`.
 public actor ConnectClient {
     public enum ClientError: Error, LocalizedError, Sendable {
         case alreadyStarted
@@ -201,7 +201,7 @@ public actor ConnectClient {
         }
     }
 
-    /// Send a typed Connect frame using the placeholder codec.
+    /// Send a typed Connect frame using the Norito bridge codec.
     public func send(frame: ConnectFrame) async throws {
         let data = try ConnectCodec.encode(frame)
         try await send(data: data)

@@ -38,6 +38,9 @@ public final class OfflineNoteWalletNoteJsonCodec {
     payload.put("state", note.state().name());
     payload.put("created_at_ms", note.createdAtMs());
     payload.put("updated_at_ms", note.updatedAtMs());
+    if (note.spentPaymentRequestId() != null) {
+      payload.put("spent_payment_request_id", note.spentPaymentRequestId());
+    }
     return JsonEncoder.encode(payload).getBytes(StandardCharsets.UTF_8);
   }
 
@@ -68,7 +71,8 @@ public final class OfflineNoteWalletNoteJsonCodec {
         decodeAuditTrail(object.get("bearer_audit_trail_norito_base64")),
         decodeState(asString(object.get("state"), "state")),
         asLong(object.get("created_at_ms"), "created_at_ms"),
-        asLong(object.get("updated_at_ms"), "updated_at_ms"));
+        asLong(object.get("updated_at_ms"), "updated_at_ms"),
+        optionalString(object.get("spent_payment_request_id"), "spent_payment_request_id"));
   }
 
   private static List<String> encodeAuditTrail(final List<OfflineNote.AuditBundle> audits) {
@@ -181,6 +185,13 @@ public final class OfflineNoteWalletNoteJsonCodec {
       throw new IllegalArgumentException(field + " must be a non-empty string");
     }
     return string;
+  }
+
+  private static String optionalString(final Object value, final String field) {
+    if (value == null) {
+      return null;
+    }
+    return asString(value, field);
   }
 
   private static long asLong(final Object value, final String field) {

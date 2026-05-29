@@ -20,7 +20,7 @@ public enum OfflineNoteWalletNoteJsonCodec {
     public static let version: UInt64 = 1
 
     public static func encode(_ note: OfflineNoteWalletNote) throws -> Data {
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "version": NSNumber(value: version),
             "chain_id": note.chainId,
             "account_id": note.accountId,
@@ -37,6 +37,9 @@ public enum OfflineNoteWalletNoteJsonCodec {
             "created_at_ms": NSNumber(value: note.createdAtMs),
             "updated_at_ms": NSNumber(value: note.updatedAtMs)
         ]
+        if let spentPaymentRequestId = note.spentPaymentRequestId {
+            payload["spent_payment_request_id"] = spentPaymentRequestId
+        }
         return try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
     }
 
@@ -76,6 +79,10 @@ public enum OfflineNoteWalletNoteJsonCodec {
             noteSecret: noteSecret,
             origin: decodeOrigin(dictionary(object["origin"], field: "origin")),
             bearerAuditTrail: try decodeAuditTrail(object["bearer_audit_trail_norito_base64"]),
+            spentPaymentRequestId: try optionalString(
+                object["spent_payment_request_id"],
+                field: "spent_payment_request_id"
+            ),
             state: state,
             createdAtMs: uint(object["created_at_ms"], field: "created_at_ms"),
             updatedAtMs: uint(object["updated_at_ms"], field: "updated_at_ms")
@@ -168,6 +175,13 @@ public enum OfflineNoteWalletNoteJsonCodec {
             throw OfflineNoteWalletNoteJsonCodecError.invalidField(field)
         }
         return string
+    }
+
+    private static func optionalString(_ value: Any?, field: String) throws -> String? {
+        guard let value else {
+            return nil
+        }
+        return try string(value, field: field)
     }
 
     private static func uint(_ value: Any?, field: String) throws -> UInt64 {

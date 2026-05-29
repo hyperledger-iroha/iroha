@@ -203,6 +203,9 @@ class AndroidOfflineNoteSecureStore @JvmOverloads constructor(
                 "created_at_ms" to note.createdAtMs,
                 "updated_at_ms" to note.updatedAtMs,
             )
+            note.spentPaymentRequestId?.let {
+                payload["spent_payment_request_id"] = it
+            }
             return JsonEncoder.encode(payload).toByteArray(Charsets.UTF_8)
         }
 
@@ -224,6 +227,9 @@ class AndroidOfflineNoteSecureStore @JvmOverloads constructor(
                 state = decodeState(asString(obj["state"], "state")),
                 createdAtMs = asLong(obj["created_at_ms"], "created_at_ms"),
                 updatedAtMs = asLong(obj["updated_at_ms"], "updated_at_ms"),
+                spentPaymentRequestId = obj["spent_payment_request_id"]?.let {
+                    asString(it, "spent_payment_request_id")
+                },
             )
         }
 

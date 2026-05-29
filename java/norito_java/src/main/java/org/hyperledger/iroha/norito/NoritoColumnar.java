@@ -4,6 +4,9 @@
 package org.hyperledger.iroha.norito;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -15,7 +18,13 @@ import java.util.Objects;
 public final class NoritoColumnar {
   public static final int DESC_U64_STR_BOOL = 0x13;
   public static final int DESC_U64_BYTES = 0x21;
+  public static final int DESC_U64_BYTES_BOOL = 0x14;
+  public static final int DESC_U64_OPTSTR_BOOL = 0x1B;
+  public static final int DESC_U64_OPTU32_BOOL = 0x1C;
   private static final int DESC_U64_DELTA_STR_BOOL = 0x53;
+  private static final int DESC_U64_DELTA_BYTES_BOOL = 0x54;
+  private static final int DESC_U64_DELTA_OPTSTR_BOOL = 0x5B;
+  private static final int DESC_U64_DELTA_OPTU32_BOOL = 0x5C;
   private static final int DESC_U64_DICT_STR_BOOL = 0x93;
   private static final int DESC_U64_OPTIONAL_BYTES = 0x71;
   private static final int DESC_U64_ENUM_BOOL = 0x61;
@@ -570,6 +579,64 @@ public final class NoritoColumnar {
     }
   }
 
+  public record OptionalStringBoolRow(long id, String value, boolean flag) {}
+
+  public record OptionalU32BoolRow(long id, Long value, boolean flag) {
+    public OptionalU32BoolRow {
+      if (value != null && (value < 0 || value > U32_MAX)) {
+        throw new IllegalArgumentException("value must fit into u32");
+      }
+    }
+  }
+
+  public static final class BytesBoolRow {
+    private final long id;
+    private final byte[] data;
+    private final boolean flag;
+
+    public BytesBoolRow(long id, byte[] data, boolean flag) {
+      if (data == null) {
+        throw new IllegalArgumentException("data must not be null");
+      }
+      this.id = id;
+      this.data = data.clone();
+      this.flag = flag;
+    }
+
+    public long id() {
+      return id;
+    }
+
+    public byte[] data() {
+      return data.clone();
+    }
+
+    byte[] dataRaw() {
+      return data;
+    }
+
+    public boolean flag() {
+      return flag;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (this == obj) {
+        return true;
+      }
+      if (!(obj instanceof BytesBoolRow other)) {
+        return false;
+      }
+      return id == other.id && flag == other.flag && Arrays.equals(data, other.data);
+    }
+
+    @Override
+    public int hashCode() {
+      int result = 31 * Long.hashCode(id) + Arrays.hashCode(data);
+      return 31 * result + Boolean.hashCode(flag);
+    }
+  }
+
   public static byte[] encodeNcbU64Bytes(List<BytesRow> rows) {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     writeU32(out, rows.size());
@@ -755,6 +822,289 @@ public final class NoritoColumnar {
     return rows;
   }
 
+  public static byte[] encodeNcbU64OptionalStringBool(List<OptionalStringBoolRow> rows) {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    boolean useDelta = shouldUseIdDeltaOptionalString(rows);
+    writeU32(out, rows.size());
+    out.write(useDelta ? DESC_U64_DELTA_OPTSTR_BOOL : DESC_U64_OPTSTR_BOOL);
+    writeIds(out, rows, useDelta, OptionalStringBoolRow::id);
+    writeOptionalStringColumn(out, rows);
+    out.writeBytes(buildOptionalStringFlags(rows));
+    return out.toByteArray();
+  }
+
+  public static List<OptionalStringBoolRow> decodeNcbU64OptionalStringBool(byte[] data) {
+    if (data.length < 5) {
+      throw new IllegalArgumentException("NCB optional string payload too short");
+    }
+    int offset = 0;
+    int n = readU32(data, offset);
+    offset += 4;
+    int desc = data[offset++] & 0xFF;
+    if (desc != DESC_U64_OPTSTR_BOOL && desc != DESC_U64_DELTA_OPTSTR_BOOL) {
+      throw new IllegalArgumentException(String.format("Unsupported descriptor 0x%02x", desc));
+    }
+    DecodeIdsResult decodedIds = decodeIds(data, offset, n, desc == DESC_U64_DELTA_OPTSTR_BOOL, "optional string");
+    List<Long> ids = decodedIds.ids();
+    offset = decodedIds.offset();
+
+    int bitBytes = (n + 7) / 8;
+    if (offset + bitBytes > data.length) {
+      throw new IllegalArgumentException("NCB optional string payload missing presence bitmap");
+    }
+    byte[] presence = Arrays.copyOfRange(data, offset, offset + bitBytes);
+    validateBitsetPadding(presence, n, "optional string presence");
+    int present = countSetBits(presence);
+    offset += bitBytes + localPadding(bitBytes, 4);
+
+    int[] offs = readOffsetTable(data, offset, present + 1, "optional string offsets");
+    offset += (present + 1) * 4;
+    int blobLen = offs[present];
+    if (offset + blobLen > data.length) {
+      throw new IllegalArgumentException("NCB optional string payload truncated (blob)");
+    }
+    validateOffsets(offs, blobLen, "optional string");
+    byte[] blob = Arrays.copyOfRange(data, offset, offset + blobLen);
+    offset += blobLen;
+
+    if (offset + bitBytes > data.length) {
+      throw new IllegalArgumentException("NCB optional string payload truncated (flags)");
+    }
+    byte[] flags = Arrays.copyOfRange(data, offset, offset + bitBytes);
+    validateBitsetPadding(flags, n, "optional string flags");
+    offset += bitBytes;
+    if (offset != data.length) {
+      throw new IllegalArgumentException("Trailing bytes after optional string columnar decode");
+    }
+
+    List<OptionalStringBoolRow> rows = new ArrayList<>(n);
+    int presentIndex = 0;
+    for (int i = 0; i < n; i++) {
+      String value = null;
+      if (bitIsSet(presence, i)) {
+        int start = offs[presentIndex];
+        int end = offs[presentIndex + 1];
+        value = decodeUtf8Strict(blob, start, end);
+        presentIndex += 1;
+      }
+      boolean flag = bitIsSet(flags, i);
+      rows.add(new OptionalStringBoolRow(ids.get(i), value, flag));
+    }
+    return rows;
+  }
+
+  public static byte[] encodeRowsU64OptionalStringBoolAdaptive(List<OptionalStringBoolRow> rows) {
+    if (rows.size() <= AOS_NCB_SMALL_N) {
+      byte[] aos = NoritoAoS.encodeU64OptionalStringBool(rows);
+      byte[] ncb = encodeNcbU64OptionalStringBool(rows);
+      if (ncb.length < aos.length) {
+        return concat(ADAPTIVE_TAG_NCB, ncb);
+      }
+      return concat(ADAPTIVE_TAG_AOS, aos);
+    }
+    return concat(ADAPTIVE_TAG_AOS, NoritoAoS.encodeU64OptionalStringBool(rows));
+  }
+
+  public static List<OptionalStringBoolRow> decodeRowsU64OptionalStringBoolAdaptive(byte[] payload) {
+    if (payload.length == 0) {
+      throw new IllegalArgumentException("Adaptive payload is empty");
+    }
+    int tag = payload[0] & 0xFF;
+    byte[] body = Arrays.copyOfRange(payload, 1, payload.length);
+    return switch (tag) {
+      case ADAPTIVE_TAG_AOS -> NoritoAoS.decodeU64OptionalStringBool(body);
+      case ADAPTIVE_TAG_NCB -> decodeNcbU64OptionalStringBool(body);
+      default -> throw new IllegalArgumentException("Unknown adaptive tag: " + tag);
+    };
+  }
+
+  public static byte[] encodeNcbU64OptionalU32Bool(List<OptionalU32BoolRow> rows) {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    boolean useDelta = shouldUseIdDeltaOptionalU32(rows);
+    writeU32(out, rows.size());
+    out.write(useDelta ? DESC_U64_DELTA_OPTU32_BOOL : DESC_U64_OPTU32_BOOL);
+    writeIds(out, rows, useDelta, OptionalU32BoolRow::id);
+    writeOptionalU32Column(out, rows);
+    out.writeBytes(buildOptionalU32Flags(rows));
+    return out.toByteArray();
+  }
+
+  public static List<OptionalU32BoolRow> decodeNcbU64OptionalU32Bool(byte[] data) {
+    if (data.length < 5) {
+      throw new IllegalArgumentException("NCB optional u32 payload too short");
+    }
+    int offset = 0;
+    int n = readU32(data, offset);
+    offset += 4;
+    int desc = data[offset++] & 0xFF;
+    if (desc != DESC_U64_OPTU32_BOOL && desc != DESC_U64_DELTA_OPTU32_BOOL) {
+      throw new IllegalArgumentException(String.format("Unsupported descriptor 0x%02x", desc));
+    }
+    DecodeIdsResult decodedIds = decodeIds(data, offset, n, desc == DESC_U64_DELTA_OPTU32_BOOL, "optional u32");
+    List<Long> ids = decodedIds.ids();
+    offset = decodedIds.offset();
+
+    int bitBytes = (n + 7) / 8;
+    if (offset + bitBytes > data.length) {
+      throw new IllegalArgumentException("NCB optional u32 payload missing presence bitmap");
+    }
+    byte[] presence = Arrays.copyOfRange(data, offset, offset + bitBytes);
+    validateBitsetPadding(presence, n, "optional u32 presence");
+    int present = countSetBits(presence);
+    offset += bitBytes + localPadding(bitBytes, 4);
+
+    int valuesLen = present * 4;
+    if (offset + valuesLen > data.length) {
+      throw new IllegalArgumentException("NCB optional u32 payload truncated (values)");
+    }
+    long[] values = new long[present];
+    for (int i = 0; i < present; i++) {
+      values[i] = Integer.toUnsignedLong(readU32(data, offset));
+      offset += 4;
+    }
+
+    if (offset + bitBytes > data.length) {
+      throw new IllegalArgumentException("NCB optional u32 payload truncated (flags)");
+    }
+    byte[] flags = Arrays.copyOfRange(data, offset, offset + bitBytes);
+    validateBitsetPadding(flags, n, "optional u32 flags");
+    offset += bitBytes;
+    if (offset != data.length) {
+      throw new IllegalArgumentException("Trailing bytes after optional u32 columnar decode");
+    }
+
+    List<OptionalU32BoolRow> rows = new ArrayList<>(n);
+    int presentIndex = 0;
+    for (int i = 0; i < n; i++) {
+      Long value = null;
+      if (bitIsSet(presence, i)) {
+        value = values[presentIndex++];
+      }
+      rows.add(new OptionalU32BoolRow(ids.get(i), value, bitIsSet(flags, i)));
+    }
+    return rows;
+  }
+
+  public static byte[] encodeRowsU64OptionalU32BoolAdaptive(List<OptionalU32BoolRow> rows) {
+    if (rows.size() <= AOS_NCB_SMALL_N) {
+      byte[] aos = NoritoAoS.encodeU64OptionalU32Bool(rows);
+      byte[] ncb = encodeNcbU64OptionalU32Bool(rows);
+      if (ncb.length < aos.length) {
+        return concat(ADAPTIVE_TAG_NCB, ncb);
+      }
+      return concat(ADAPTIVE_TAG_AOS, aos);
+    }
+    return concat(ADAPTIVE_TAG_AOS, NoritoAoS.encodeU64OptionalU32Bool(rows));
+  }
+
+  public static List<OptionalU32BoolRow> decodeRowsU64OptionalU32BoolAdaptive(byte[] payload) {
+    if (payload.length == 0) {
+      throw new IllegalArgumentException("Adaptive payload is empty");
+    }
+    int tag = payload[0] & 0xFF;
+    byte[] body = Arrays.copyOfRange(payload, 1, payload.length);
+    return switch (tag) {
+      case ADAPTIVE_TAG_AOS -> NoritoAoS.decodeU64OptionalU32Bool(body);
+      case ADAPTIVE_TAG_NCB -> decodeNcbU64OptionalU32Bool(body);
+      default -> throw new IllegalArgumentException("Unknown adaptive tag: " + tag);
+    };
+  }
+
+  public static byte[] encodeNcbU64BytesBool(List<BytesBoolRow> rows) {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    boolean useDelta = shouldUseIdDeltaBytesBool(rows);
+    writeU32(out, rows.size());
+    out.write(useDelta ? DESC_U64_DELTA_BYTES_BOOL : DESC_U64_BYTES_BOOL);
+    writeIds(out, rows, useDelta, BytesBoolRow::id);
+    padTo(out, 4);
+    int[] offs = new int[rows.size() + 1];
+    int acc = 0;
+    ByteArrayOutputStream blob = new ByteArrayOutputStream();
+    offs[0] = 0;
+    for (int i = 0; i < rows.size(); i++) {
+      byte[] value = rows.get(i).dataRaw();
+      acc += value.length;
+      offs[i + 1] = acc;
+      blob.writeBytes(value);
+    }
+    for (int value : offs) {
+      writeU32(out, value);
+    }
+    out.writeBytes(blob.toByteArray());
+    out.writeBytes(buildBytesBoolFlags(rows));
+    return out.toByteArray();
+  }
+
+  public static List<BytesBoolRow> decodeNcbU64BytesBool(byte[] data) {
+    if (data.length < 5) {
+      throw new IllegalArgumentException("NCB bytes bool payload too short");
+    }
+    int offset = 0;
+    int n = readU32(data, offset);
+    offset += 4;
+    int desc = data[offset++] & 0xFF;
+    if (desc != DESC_U64_BYTES_BOOL && desc != DESC_U64_DELTA_BYTES_BOOL) {
+      throw new IllegalArgumentException(String.format("Unsupported descriptor 0x%02x", desc));
+    }
+    DecodeIdsResult decodedIds = decodeIds(data, offset, n, desc == DESC_U64_DELTA_BYTES_BOOL, "bytes bool");
+    List<Long> ids = decodedIds.ids();
+    offset = align(decodedIds.offset(), 4);
+
+    int[] offs = readOffsetTable(data, offset, n + 1, "bytes bool offsets");
+    offset += (n + 1) * 4;
+    int blobLen = offs[n];
+    if (offset + blobLen > data.length) {
+      throw new IllegalArgumentException("NCB bytes bool payload truncated (blob)");
+    }
+    validateOffsets(offs, blobLen, "bytes bool");
+    byte[] blob = Arrays.copyOfRange(data, offset, offset + blobLen);
+    offset += blobLen;
+
+    int bitBytes = (n + 7) / 8;
+    if (offset + bitBytes > data.length) {
+      throw new IllegalArgumentException("NCB bytes bool payload truncated (flags)");
+    }
+    byte[] flags = Arrays.copyOfRange(data, offset, offset + bitBytes);
+    validateBitsetPadding(flags, n, "bytes bool flags");
+    offset += bitBytes;
+    if (offset != data.length) {
+      throw new IllegalArgumentException("Trailing bytes after bytes bool columnar decode");
+    }
+
+    List<BytesBoolRow> rows = new ArrayList<>(n);
+    for (int i = 0; i < n; i++) {
+      int start = offs[i];
+      int end = offs[i + 1];
+      rows.add(new BytesBoolRow(ids.get(i), Arrays.copyOfRange(blob, start, end), bitIsSet(flags, i)));
+    }
+    return rows;
+  }
+
+  public static byte[] encodeRowsU64BytesBoolAdaptive(List<BytesBoolRow> rows) {
+    if (rows.size() <= AOS_NCB_SMALL_N) {
+      byte[] aos = NoritoAoS.encodeU64BytesBool(rows);
+      byte[] ncb = encodeNcbU64BytesBool(rows);
+      if (ncb.length < aos.length) {
+        return concat(ADAPTIVE_TAG_NCB, ncb);
+      }
+      return concat(ADAPTIVE_TAG_AOS, aos);
+    }
+    return concat(ADAPTIVE_TAG_AOS, NoritoAoS.encodeU64BytesBool(rows));
+  }
+
+  public static List<BytesBoolRow> decodeRowsU64BytesBoolAdaptive(byte[] payload) {
+    if (payload.length == 0) {
+      throw new IllegalArgumentException("Adaptive payload is empty");
+    }
+    int tag = payload[0] & 0xFF;
+    byte[] body = Arrays.copyOfRange(payload, 1, payload.length);
+    return switch (tag) {
+      case ADAPTIVE_TAG_AOS -> NoritoAoS.decodeU64BytesBool(body);
+      case ADAPTIVE_TAG_NCB -> decodeNcbU64BytesBool(body);
+      default -> throw new IllegalArgumentException("Unknown adaptive tag: " + tag);
+    };
+  }
+
   private static byte[] concat(int tag, byte[] payload) {
     byte[] out = new byte[payload.length + 1];
     out[0] = (byte) tag;
@@ -886,6 +1236,100 @@ public final class NoritoColumnar {
     return bits;
   }
 
+  private static byte[] buildOptionalStringPresenceFlags(List<OptionalStringBoolRow> rows) {
+    int bytes = (rows.size() + 7) / 8;
+    byte[] bits = new byte[bytes];
+    for (int i = 0; i < rows.size(); i++) {
+      if (rows.get(i).value() != null) {
+        bits[i / 8] |= (byte) (1 << (i % 8));
+      }
+    }
+    return bits;
+  }
+
+  private static byte[] buildOptionalStringFlags(List<OptionalStringBoolRow> rows) {
+    int bytes = (rows.size() + 7) / 8;
+    byte[] bits = new byte[bytes];
+    for (int i = 0; i < rows.size(); i++) {
+      if (rows.get(i).flag()) {
+        bits[i / 8] |= (byte) (1 << (i % 8));
+      }
+    }
+    return bits;
+  }
+
+  private static byte[] buildOptionalU32PresenceFlags(List<OptionalU32BoolRow> rows) {
+    int bytes = (rows.size() + 7) / 8;
+    byte[] bits = new byte[bytes];
+    for (int i = 0; i < rows.size(); i++) {
+      if (rows.get(i).value() != null) {
+        bits[i / 8] |= (byte) (1 << (i % 8));
+      }
+    }
+    return bits;
+  }
+
+  private static byte[] buildOptionalU32Flags(List<OptionalU32BoolRow> rows) {
+    int bytes = (rows.size() + 7) / 8;
+    byte[] bits = new byte[bytes];
+    for (int i = 0; i < rows.size(); i++) {
+      if (rows.get(i).flag()) {
+        bits[i / 8] |= (byte) (1 << (i % 8));
+      }
+    }
+    return bits;
+  }
+
+  private static byte[] buildBytesBoolFlags(List<BytesBoolRow> rows) {
+    int bytes = (rows.size() + 7) / 8;
+    byte[] bits = new byte[bytes];
+    for (int i = 0; i < rows.size(); i++) {
+      if (rows.get(i).flag()) {
+        bits[i / 8] |= (byte) (1 << (i % 8));
+      }
+    }
+    return bits;
+  }
+
+  private static void writeOptionalStringColumn(ByteArrayOutputStream out, List<OptionalStringBoolRow> rows) {
+    byte[] presence = buildOptionalStringPresenceFlags(rows);
+    out.writeBytes(presence);
+    out.write(new byte[localPadding(presence.length, 4)], 0, localPadding(presence.length, 4));
+
+    int present = countSetBits(presence);
+    int[] offs = new int[present + 1];
+    int acc = 0;
+    int presentIndex = 0;
+    ByteArrayOutputStream blob = new ByteArrayOutputStream();
+    offs[0] = 0;
+    for (OptionalStringBoolRow row : rows) {
+      String value = row.value();
+      if (value != null) {
+        byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
+        acc += encoded.length;
+        presentIndex += 1;
+        offs[presentIndex] = acc;
+        blob.writeBytes(encoded);
+      }
+    }
+    for (int value : offs) {
+      writeU32(out, value);
+    }
+    out.writeBytes(blob.toByteArray());
+  }
+
+  private static void writeOptionalU32Column(ByteArrayOutputStream out, List<OptionalU32BoolRow> rows) {
+    byte[] presence = buildOptionalU32PresenceFlags(rows);
+    out.writeBytes(presence);
+    out.write(new byte[localPadding(presence.length, 4)], 0, localPadding(presence.length, 4));
+    for (OptionalU32BoolRow row : rows) {
+      Long value = row.value();
+      if (value != null) {
+        writeU32(out, value.intValue());
+      }
+    }
+  }
+
   private static DictResult buildDict(List<StrBoolRow> rows) {
     if (!COMBO_ENABLE_NAME_DICT || rows.isEmpty()) {
       return DictResult.disabled();
@@ -932,6 +1376,47 @@ public final class NoritoColumnar {
         return false;
       }
       prev = rows.get(i).id();
+    }
+    return true;
+  }
+
+  private static boolean shouldUseIdDeltaOptionalString(List<OptionalStringBoolRow> rows) {
+    return shouldUseIdDeltaGeneric(rows, OptionalStringBoolRow::id);
+  }
+
+  private static boolean shouldUseIdDeltaOptionalU32(List<OptionalU32BoolRow> rows) {
+    return shouldUseIdDeltaGeneric(rows, OptionalU32BoolRow::id);
+  }
+
+  private static boolean shouldUseIdDeltaBytesBool(List<BytesBoolRow> rows) {
+    if (!COMBO_ENABLE_ID_DELTA || rows.size() < COMBO_ID_DELTA_MIN_ROWS) {
+      return false;
+    }
+    if (rows.size() <= COMBO_NO_DELTA_SMALL_N_IF_EMPTY) {
+      for (BytesBoolRow row : rows) {
+        if (row.dataRaw().length == 0) {
+          return false;
+        }
+      }
+    }
+    return shouldUseIdDeltaGeneric(rows, BytesBoolRow::id);
+  }
+
+  private static <T> boolean shouldUseIdDeltaGeneric(List<T> rows, LongGetter<T> getter) {
+    if (!COMBO_ENABLE_ID_DELTA || rows.size() < COMBO_ID_DELTA_MIN_ROWS) {
+      return false;
+    }
+    long prev = getter.get(rows.get(0));
+    int varintBytes = 0;
+    for (int i = 1; i < rows.size(); i++) {
+      long current = getter.get(rows.get(i));
+      long delta = current - prev;
+      long zz = zigzagEncode(delta);
+      varintBytes += varintLength(zz);
+      if (varintBytes >= 8 * (rows.size() - 1)) {
+        return false;
+      }
+      prev = current;
     }
     return true;
   }
@@ -997,6 +1482,128 @@ public final class NoritoColumnar {
       prev = codes.get(i);
     }
     return true;
+  }
+
+  private static <T> void writeIds(ByteArrayOutputStream out, List<T> rows, boolean useDelta, LongGetter<T> getter) {
+    padTo(out, 8);
+    if (useDelta && !rows.isEmpty()) {
+      long base = getter.get(rows.get(0));
+      writeU64(out, base);
+      long prev = base;
+      for (int i = 1; i < rows.size(); i++) {
+        long current = getter.get(rows.get(i));
+        long delta = current - prev;
+        out.writeBytes(Varint.encode(zigzagEncode(delta)));
+        prev = current;
+      }
+    } else {
+      for (T row : rows) {
+        writeU64(out, getter.get(row));
+      }
+    }
+  }
+
+  private static DecodeIdsResult decodeIds(byte[] data, int offset, int n, boolean useDelta, String context) {
+    offset = align(offset, 8);
+    List<Long> ids = new ArrayList<>(n);
+    if (useDelta) {
+      if (n > 0) {
+        if (offset + 8 > data.length) {
+          throw new IllegalArgumentException("NCB " + context + " payload truncated (id base)");
+        }
+        long base = readU64(data, offset);
+        offset += 8;
+        ids.add(base);
+        while (ids.size() < n) {
+          Varint.DecodeResult res = Varint.decode(data, offset);
+          offset = res.nextOffset();
+          long delta = zigzagDecode(res.value());
+          ids.add(ids.get(ids.size() - 1) + delta);
+        }
+      }
+    } else {
+      for (int i = 0; i < n; i++) {
+        if (offset + 8 > data.length) {
+          throw new IllegalArgumentException("NCB " + context + " payload truncated (ids)");
+        }
+        ids.add(readU64(data, offset));
+        offset += 8;
+      }
+    }
+    return new DecodeIdsResult(ids, offset);
+  }
+
+  private static int[] readOffsetTable(byte[] data, int offset, int count, String context) {
+    if (count < 1) {
+      throw new IllegalArgumentException("Offset table must include a sentinel");
+    }
+    if (offset + count * 4 > data.length) {
+      throw new IllegalArgumentException("NCB payload truncated (" + context + ")");
+    }
+    int[] offs = new int[count];
+    for (int i = 0; i < count; i++) {
+      offs[i] = readU32(data, offset);
+      offset += 4;
+    }
+    if (offs[0] != 0) {
+      throw new IllegalArgumentException("Invalid offset table in " + context);
+    }
+    return offs;
+  }
+
+  private static void validateOffsets(int[] offs, int blobLen, String context) {
+    int prev = 0;
+    for (int off : offs) {
+      if (off < prev || off > blobLen) {
+        throw new IllegalArgumentException("Invalid offset table in " + context + " payload");
+      }
+      prev = off;
+    }
+  }
+
+  private static void validateBitsetPadding(byte[] bits, int rows, String context) {
+    int usedBits = rows % 8;
+    if (usedBits == 0 || bits.length == 0) {
+      return;
+    }
+    int mask = 0xFF << usedBits;
+    if ((bits[bits.length - 1] & mask) != 0) {
+      throw new IllegalArgumentException("Non-zero padding bits in " + context + " bitmap");
+    }
+  }
+
+  private static int countSetBits(byte[] bits) {
+    int count = 0;
+    for (byte bit : bits) {
+      count += Integer.bitCount(bit & 0xFF);
+    }
+    return count;
+  }
+
+  private static boolean bitIsSet(byte[] bits, int index) {
+    return ((bits[index / 8] >> (index % 8)) & 1) != 0;
+  }
+
+  private static int localPadding(int length, int align) {
+    int mis = length % align;
+    return mis == 0 ? 0 : align - mis;
+  }
+
+  private static String decodeUtf8Strict(byte[] bytes, int start, int end) {
+    try {
+      return StandardCharsets.UTF_8
+          .newDecoder()
+          .onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT)
+          .decode(ByteBuffer.wrap(bytes, start, end - start))
+          .toString();
+    } catch (CharacterCodingException ex) {
+      throw new IllegalArgumentException("Invalid UTF-8 in columnar string payload", ex);
+    }
+  }
+
+  private interface LongGetter<T> {
+    long get(T value);
   }
 
   private static int varintLength(long value) {
@@ -1079,6 +1686,8 @@ public final class NoritoColumnar {
   }
 
   private record EnumDescriptor(boolean deltaIds, boolean nameDict, boolean codeDelta) {}
+
+  private record DecodeIdsResult(List<Long> ids, int offset) {}
 
   private record DictResult(boolean useDict, Map<String, Integer> mapping, List<String> dictionary) {
     static DictResult enabled(Map<String, Integer> mapping, List<String> dictionary) {

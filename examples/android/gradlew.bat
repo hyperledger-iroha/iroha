@@ -2,7 +2,7 @@
 SETLOCAL
 SET PROJECT_DIR=%~dp0
 IF EXIST "%~dp0gradlew.bat" (
-  REM placeholder to keep symmetry with Unix helper
+  REM Delegate to the repository Gradle installation, matching the Unix helper.
 )
 where gradle >NUL 2>&1
 IF %ERRORLEVEL% EQU 0 (

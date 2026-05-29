@@ -70,6 +70,7 @@ public struct OfflineNoteWalletNote: Equatable, Sendable {
     public let noteSecret: Data
     public let origin: OfflineNoteCommitmentOrigin
     public let bearerAuditTrail: [OfflineNoteAuditBundle]
+    public let spentPaymentRequestId: String?
     public let state: OfflineNoteWalletNoteState
     public let createdAtMs: UInt64
     public let updatedAtMs: UInt64
@@ -83,6 +84,7 @@ public struct OfflineNoteWalletNote: Equatable, Sendable {
                 noteSecret: Data,
                 origin: OfflineNoteCommitmentOrigin,
                 bearerAuditTrail: [OfflineNoteAuditBundle] = [],
+                spentPaymentRequestId: String? = nil,
                 state: OfflineNoteWalletNoteState,
                 createdAtMs: UInt64,
                 updatedAtMs: UInt64) throws {
@@ -96,6 +98,7 @@ public struct OfflineNoteWalletNote: Equatable, Sendable {
         self.noteSecret = noteSecret
         self.origin = origin
         self.bearerAuditTrail = Self.normalizedBearerAuditTrail(bearerAuditTrail)
+        self.spentPaymentRequestId = Self.normalizedSpentPaymentRequestId(spentPaymentRequestId)
         self.state = state
         self.createdAtMs = createdAtMs
         self.updatedAtMs = updatedAtMs
@@ -126,6 +129,7 @@ public struct OfflineNoteWalletNote: Equatable, Sendable {
             noteSecret: noteSecret,
             origin: origin,
             bearerAuditTrail: bearerAuditTrail,
+            spentPaymentRequestId: spentPaymentRequestId,
             state: state,
             createdAtMs: createdAtMs,
             updatedAtMs: updatedAtMs
@@ -144,6 +148,26 @@ public struct OfflineNoteWalletNote: Equatable, Sendable {
             noteSecret: noteSecret,
             origin: origin,
             bearerAuditTrail: bearerAuditTrail,
+            spentPaymentRequestId: spentPaymentRequestId,
+            state: state,
+            createdAtMs: createdAtMs,
+            updatedAtMs: updatedAtMs
+        )
+    }
+
+    public func withSpentPaymentRequestId(_ paymentRequestId: String?,
+                                          updatedAtMs: UInt64) throws -> OfflineNoteWalletNote {
+        try OfflineNoteWalletNote(
+            chainId: chainId,
+            accountId: accountId,
+            assetId: assetId,
+            amount: amount,
+            keyCertificate: keyCertificate,
+            noteCommitment: noteCommitment,
+            noteSecret: noteSecret,
+            origin: origin,
+            bearerAuditTrail: bearerAuditTrail,
+            spentPaymentRequestId: paymentRequestId,
             state: state,
             createdAtMs: createdAtMs,
             updatedAtMs: updatedAtMs
@@ -161,6 +185,12 @@ public struct OfflineNoteWalletNote: Equatable, Sendable {
             result.append(audit)
         }
         return result
+    }
+
+    private static func normalizedSpentPaymentRequestId(_ paymentRequestId: String?) -> String? {
+        guard let paymentRequestId else { return nil }
+        let trimmed = paymentRequestId.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -667,10 +697,12 @@ public enum OfflineNotePaymentTokenCodecError: Error, LocalizedError, Equatable 
 public enum OfflineNotePaymentTokenCodec {
     public static let type = "offline_payment_token"
     public static let textPrefix = "wallet-offline-bearer-cash-payment:"
+    public static let envelopeVersion: UInt64 = 2
     private static let envelopeTypeName = "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelope"
 
     public static func encodeNorito(_ token: OfflineNotePaymentToken) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeUInt64(envelopeVersion))
         writer.writeField(OfflineCompactNorito.encodeString(token.chainId))
         writer.writeField(OfflineCompactNorito.encodeString(token.paymentRequestId))
         writer.writeField(OfflineCompactNorito.encodeUInt64(token.createdAtMs))
@@ -694,6 +726,10 @@ public enum OfflineNotePaymentTokenCodec {
             throw OfflineNotePaymentTokenCodecError.invalidField("layout")
         }
         var reader = OfflineNoritoReader(data: frame.payload)
+        let version = try field(&reader, "version") { try $0.readUInt64LE() }
+        guard version == envelopeVersion else {
+            throw OfflineNotePaymentTokenCodecError.invalidField("version")
+        }
         let chainId = try field(&reader, "chain_id", readString)
         let paymentRequestId = try field(&reader, "payment_request_id", readString)
         let createdAtMs = try field(&reader, "created_at_ms") { try $0.readUInt64LE() }
@@ -838,6 +874,18 @@ public enum OfflineNotePaymentTokenCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
+        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !value.contains("="),
+              value.unicodeScalars.allSatisfy({ scalar in
+                  let byte = scalar.value
+                  return (65...90).contains(byte)
+                      || (97...122).contains(byte)
+                      || (48...57).contains(byte)
+                      || byte == 45
+                      || byte == 95
+              }) else {
+            return nil
+        }
         var normalized = value
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
@@ -1352,6 +1400,7 @@ public final class OfflineNoteWallet {
     private let certificateVerifier: OfflineNoteCertificateVerifier
     private let randomSource: OfflineNoteRandomSource
     private let idGenerator: OfflineNoteIdGenerator
+    private let bearerCashPolicy: OfflineBearerCashPolicyV1
     private let clock: () -> UInt64
 
     public init(chainId: String,
@@ -1366,6 +1415,7 @@ public final class OfflineNoteWallet {
                 certificateVerifier: OfflineNoteCertificateVerifier = RejectingOfflineNoteCertificateVerifier(),
                 randomSource: OfflineNoteRandomSource = SecureOfflineNoteRandomSource(),
                 idGenerator: OfflineNoteIdGenerator = UuidOfflineNoteIdGenerator(),
+                bearerCashPolicy: OfflineBearerCashPolicyV1 = .default,
                 clock: @escaping () -> UInt64 = { UInt64(Date().timeIntervalSince1970 * 1000) }) {
         self.chainId = chainId
         self.accountId = accountId
@@ -1379,6 +1429,7 @@ public final class OfflineNoteWallet {
         self.certificateVerifier = certificateVerifier
         self.randomSource = randomSource
         self.idGenerator = idGenerator
+        self.bearerCashPolicy = bearerCashPolicy
         self.clock = clock
     }
 
@@ -1591,6 +1642,14 @@ public final class OfflineNoteWallet {
             inputNullifiers: inputNullifiers,
             outputCommitments: outputCommitments
         ).derivePaymentTokenId()
+        let auditPublicInputs = try OfflineNoteAuditPublicInputs(
+            tokenId: tokenId,
+            keyCertificatePayloadHash: senderCertificateHash,
+            inputNullifiers: inputNullifiers,
+            inputClaims: inputClaims,
+            outputCommitments: outputCommitments,
+            outputClaims: outputClaims.map(OfflineNoteIssuedClaim.fromAuditOutput)
+        )
         let draft = try OfflineNoteAuditBundle(
             tokenId: tokenId,
             senderKeyCertificate: senderCertificate,
@@ -1598,7 +1657,7 @@ public final class OfflineNoteWallet {
             inputClaims: inputClaims,
             outputCommitments: outputCommitments,
             outputClaims: outputClaims,
-            recursiveProof: placeholderProof()
+            recursiveProof: draftPlaceholderProof(publicInputsHash: auditPublicInputs.publicInputsHash())
         )
         let audit = try draft.replacingRecursiveProof(proofProvider.proveAudit(draft))
         try audit.validateProofBinding()
@@ -1607,6 +1666,7 @@ public final class OfflineNoteWallet {
             throw OfflineNoteWalletError.proofVerificationFailed
         }
         let outputBearerAuditTrail = try bearerAuditTrail(forInputs: selected, appending: audit)
+        try bearerCashPolicy.validateAuditTrail(outputBearerAuditTrail, terminalAudit: audit)
         try store.mutateNotes { notes in
             for note in selected {
                 guard notes[note.noteCommitmentHex]?.state == .spendable else {
@@ -1617,7 +1677,9 @@ public final class OfflineNoteWallet {
                 throw OfflineNoteWalletError.invalidState
             }
             for note in selected {
-                notes[note.noteCommitmentHex] = try note.withState(.spent, updatedAtMs: createdAtMs)
+                notes[note.noteCommitmentHex] = try note
+                    .withState(.spent, updatedAtMs: createdAtMs)
+                    .withSpentPaymentRequestId(receiveRequest.paymentRequestId, updatedAtMs: createdAtMs)
             }
             if let changeNote {
                 notes[changeNote.noteCommitmentHex] = try changeNote.withBearerAuditTrail(
@@ -1639,6 +1701,9 @@ public final class OfflineNoteWallet {
 
     private func rejectReusedReceiveRequest(_ paymentRequestId: String) throws {
         for note in try store.listNotes() {
+            if note.spentPaymentRequestId == paymentRequestId {
+                throw OfflineNoteWalletError.invalidState
+            }
             guard note.state != .receivePending else {
                 continue
             }
@@ -1737,6 +1802,14 @@ public final class OfflineNoteWallet {
         let bearerAuditTrail = try bearerAuditTrail(for: current)
         try requireTrustedCertificate(current.keyCertificate, expectedAccountId: current.accountId)
         let inputNullifier = try deriveInputNullifier(current)
+        let redeemPublicInputs = try OfflineNoteRedeemPublicInputs(
+            sourceNoteCommitment: current.noteCommitment,
+            inputNullifiers: [inputNullifier],
+            keyCertificatePayloadHash: current.keyCertificate.payloadHash(),
+            recipient: recipient ?? accountId,
+            assetId: current.assetId,
+            amount: current.amount
+        )
         let draft = try OfflineNoteRedeem(
             sourceNoteCommitment: current.noteCommitment,
             inputNullifiers: [inputNullifier],
@@ -1744,7 +1817,7 @@ public final class OfflineNoteWallet {
             recipient: recipient ?? accountId,
             assetId: current.assetId,
             amount: current.amount,
-            recursiveProof: placeholderProof()
+            recursiveProof: draftPlaceholderProof(publicInputsHash: redeemPublicInputs.publicInputsHash())
         )
         let redemption = try draft.replacingRecursiveProof(proofProvider.proveRedeem(draft))
         try redemption.validateProofBinding()
@@ -1880,6 +1953,7 @@ public final class OfflineNoteWallet {
         guard let last = audits.last, last == terminalAudit else {
             throw OfflineNotePaymentTokenCodecError.invalidField("bearer_audit_trail")
         }
+        try bearerCashPolicy.validateAuditTrail(audits, terminalAudit: terminalAudit)
         var tokenIds = Set<String>()
         var nullifiers = Set<String>()
         var outputs = Set<String>()
@@ -1956,10 +2030,11 @@ public final class OfflineNoteWallet {
     }
 }
 
-private func placeholderProof() throws -> OfflineNoteRecursiveProof {
+private func draftPlaceholderProof(publicInputsHash: Data) throws -> OfflineNoteRecursiveProof {
     try OfflineNoteRecursiveProof(
-        publicInputsHash: IrohaHash.hash(Data("offline-note-draft-proof".utf8)),
-        proofBytes: Data([0x01])
+        publicInputsHash: publicInputsHash,
+        proofBytes: Data([0]),
+        proofBackend: "offline-note/draft-placeholder"
     )
 }
 

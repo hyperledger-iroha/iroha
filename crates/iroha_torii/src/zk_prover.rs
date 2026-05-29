@@ -28,7 +28,10 @@ use std::{
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use iroha_core::{
     state::{State as CoreState, WorldReadOnly},
-    zk::{hash_proof, hash_vk, verify_backend, verify_backend_with_timing_checked},
+    zk::{
+        hash_proof, hash_vk, is_developer_only_backend_label, is_trusted_setup_backend_label,
+        verify_backend, verify_backend_with_timing_checked,
+    },
 };
 use iroha_data_model::proof::{
     ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId,
@@ -734,7 +737,9 @@ struct ProverContext {
 }
 
 fn backend_allowed(backend: &str, allowlist: &[String]) -> bool {
-    allowlist.is_empty() || allowlist.iter().any(|allowed| backend.starts_with(allowed))
+    !is_trusted_setup_backend_label(backend)
+        && !is_developer_only_backend_label(backend)
+        && (allowlist.is_empty() || allowlist.iter().any(|allowed| backend.starts_with(allowed)))
 }
 
 fn circuit_allowed(circuit_id: &str, allowlist: &[String]) -> bool {
@@ -853,6 +858,8 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     let backend_str = backend.as_str();
     let proof_hash = Some(hex::encode(hash_proof(&attachment.proof)));
     let mut errors = Vec::new();
+    let resolved_vk_ref = attachment.vk_ref.clone();
+    let mut circuit_id: Option<String> = None;
 
     if attachment.proof.backend.as_str() != backend_str {
         errors.push("proof backend does not match attachment backend".into());
@@ -860,20 +867,24 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     if attachment.proof.bytes.is_empty() {
         errors.push("proof bytes are empty".into());
     }
-    if !backend_allowed(backend_str, &ctx.allowed_backends) {
+    if is_trusted_setup_backend_label(backend_str) {
+        errors.push(format!(
+            "trusted-setup backend `{backend_str}` is not supported"
+        ));
+    } else if is_developer_only_backend_label(backend_str) {
+        errors.push(format!(
+            "developer-only backend `{backend_str}` is not supported"
+        ));
+    } else if !backend_allowed(backend_str, &ctx.allowed_backends) {
         errors.push(format!("backend `{backend_str}` not allowed"));
     }
-    if backend_str == "stark/fri" || backend_str.starts_with("stark/fri/") {
+    if crate::is_stark_fri_v1_backend(backend_str) {
         if let Some(state) = ctx.state.as_ref() {
             if !state.zk_snapshot().stark.enabled {
                 errors.push("stark verification is disabled in node configuration".into());
             }
         }
     }
-
-    let mut vk_box: Option<VerifyingKeyBox> = None;
-    let resolved_vk_ref = attachment.vk_ref.clone();
-    let mut circuit_id: Option<String> = None;
 
     let vk_id = &attachment.vk_ref;
     if vk_id.backend.as_str() != backend_str {
@@ -882,6 +893,18 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
             vk_id.backend
         ));
     }
+    if !errors.is_empty() {
+        return ProofReportEntry {
+            backend,
+            ok: false,
+            error: Some(errors.join("; ")),
+            proof_hash,
+            vk_ref: Some(resolved_vk_ref),
+            circuit_id,
+        };
+    }
+
+    let mut vk_box: Option<VerifyingKeyBox> = None;
     let state = match ctx.state.as_ref() {
         Some(state) => state,
         None => {
@@ -1621,7 +1644,7 @@ pub async fn handle_delete_report(AxumPath(id): AxumPath<String>) -> impl IntoRe
 mod tests {
     use http_body_util::BodyExt as _;
     use iroha_core::zk::test_utils::halo2_fixture_envelope;
-    use iroha_data_model::proof::ProofAttachment;
+    use iroha_data_model::proof::{ProofAttachment, ProofBox};
 
     use super::*;
     use crate::test_utils::TestDataDirGuard;
@@ -1650,6 +1673,62 @@ mod tests {
 
     fn init_test_cfg() {
         configure_test_cfg(iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits());
+    }
+
+    #[test]
+    fn prover_backend_allowlist_rejects_trusted_setup_labels() {
+        let broad_halo2 = ["halo2/".to_owned()];
+        for backend in [
+            "groth16/bn254",
+            "kzg",
+            "KZG",
+            "kzg/ceremony-v1",
+            "KZG/ceremony-v1",
+            "bn254",
+            "BN254",
+            "bn256",
+            "bls12_381",
+            "halo2/bn254",
+            "halo2/kzg",
+            "halo2/ipa:kzg",
+            "halo2/ipa:KZG",
+        ] {
+            assert!(
+                !backend_allowed(backend, &broad_halo2),
+                "trusted-setup backend {backend} must not pass broad prover allowlists"
+            );
+        }
+        assert!(backend_allowed("halo2/ipa", &broad_halo2));
+    }
+
+    #[test]
+    fn prover_backend_allowlist_rejects_developer_only_labels() {
+        for backend in [
+            "debug",
+            "Debug",
+            "debug-proof",
+            "Debug-Proof",
+            "debug/ok",
+            "halo2/debug",
+            "halo2/ipa:debug-proof",
+            "halo2/ipa:DEBUG-Proof",
+            "stark/fri/debug",
+            "stark/fri/Debug",
+            "mock",
+            "Mock",
+            "mock-proof",
+            "Mock-Proof",
+            "halo2/mock",
+            "halo2/ipa:mock-proof",
+            "halo2/ipa:Mock-Proof",
+            "zk-trace/mock-proof",
+        ] {
+            assert!(
+                !backend_allowed(backend, &[]),
+                "developer-only backend {backend} must not pass even an empty prover allowlist"
+            );
+        }
+        assert!(backend_allowed("halo2/ipa", &[]));
     }
 
     fn fixture_attachment_bytes() -> Vec<u8> {
@@ -1700,6 +1779,135 @@ mod tests {
         zk.halo2.enabled = true;
         state.set_zk(zk);
         Arc::new(state)
+    }
+
+    #[test]
+    fn prover_worker_does_not_classify_profileless_stark_prefix_as_stark() {
+        let ctx = ProverContext {
+            keys_dir: PathBuf::new(),
+            allowed_backends: Vec::new(),
+            allowed_circuits: Vec::new(),
+            state: Some(fixture_state()),
+        };
+        let attachment = ProofAttachment::new_ref(
+            "stark/fri/".to_owned(),
+            ProofBox::new("stark/fri/".to_owned(), vec![0x42]),
+            VerifyingKeyId::new("stark/fri/", "profileless"),
+        );
+
+        let report = process_proof_attachment(&ctx, &attachment);
+        let error = report
+            .error
+            .expect("profile-less STARK/Fri prefix must reject");
+        assert!(
+            !error.contains("stark verification is disabled"),
+            "profile-less STARK/Fri prefix must not be classified as a STARK backend"
+        );
+        assert!(error.contains("verifying key not found"));
+    }
+
+    #[test]
+    fn prover_worker_rejects_trusted_setup_backend_before_registry_lookup() {
+        let ctx = ProverContext {
+            keys_dir: PathBuf::new(),
+            allowed_backends: vec!["halo2/".to_owned()],
+            allowed_circuits: Vec::new(),
+            state: Some(fixture_state()),
+        };
+        for backend in ["halo2/kzg", "halo2/ipa:KZG"] {
+            let attachment = ProofAttachment::new_ref(
+                backend.to_owned(),
+                ProofBox::new(backend.to_owned(), vec![0x42]),
+                VerifyingKeyId::new(backend, "trusted-setup"),
+            );
+
+            let report = process_proof_attachment(&ctx, &attachment);
+            let error = report
+                .error
+                .expect("trusted-setup backend must reject before verification");
+            assert!(error.contains("trusted-setup backend"), "case {backend}");
+            assert!(
+                !error.contains("verifying key not found"),
+                "trusted-setup backend must stop before registry lookup: {error}"
+            );
+            assert!(report.circuit_id.is_none(), "case {backend}");
+        }
+    }
+
+    #[test]
+    fn prover_worker_rejects_developer_only_backend_before_registry_lookup() {
+        let ctx = ProverContext {
+            keys_dir: PathBuf::new(),
+            allowed_backends: Vec::new(),
+            allowed_circuits: Vec::new(),
+            state: Some(fixture_state()),
+        };
+        for backend in ["debug/ok", "halo2/ipa:Mock-Proof"] {
+            let attachment = ProofAttachment::new_ref(
+                backend.to_owned(),
+                ProofBox::new(backend.to_owned(), vec![0x42]),
+                VerifyingKeyId::new(backend, "developer-only"),
+            );
+
+            let report = process_proof_attachment(&ctx, &attachment);
+            let error = report
+                .error
+                .expect("developer-only backend must reject before verification");
+            assert!(error.contains("developer-only backend"), "case {backend}");
+            assert!(
+                !error.contains("verifying key not found"),
+                "developer-only backend must stop before registry lookup: {error}"
+            );
+            assert!(report.circuit_id.is_none(), "case {backend}");
+        }
+    }
+
+    #[test]
+    fn prover_worker_rejects_attachment_backend_mismatch_before_registry_lookup() {
+        let ctx = ProverContext {
+            keys_dir: PathBuf::new(),
+            allowed_backends: Vec::new(),
+            allowed_circuits: Vec::new(),
+            state: Some(fixture_state()),
+        };
+        let attachment = ProofAttachment::new_ref(
+            "halo2/ipa".to_owned(),
+            ProofBox::new("stark/fri".to_owned(), vec![0x42]),
+            VerifyingKeyId::new("halo2/ipa", "tiny-add"),
+        );
+
+        let report = process_proof_attachment(&ctx, &attachment);
+        let error = report
+            .error
+            .expect("backend mismatch must reject before registry lookup");
+        assert!(error.contains("proof backend does not match attachment backend"));
+        assert!(
+            !error.contains("verifying key not found"),
+            "backend mismatch must stop before registry lookup: {error}"
+        );
+        assert!(report.circuit_id.is_none());
+    }
+
+    #[test]
+    fn prover_worker_still_reports_missing_registry_for_supported_backend() {
+        let ctx = ProverContext {
+            keys_dir: PathBuf::new(),
+            allowed_backends: Vec::new(),
+            allowed_circuits: Vec::new(),
+            state: Some(fixture_state()),
+        };
+        let attachment = ProofAttachment::new_ref(
+            "halo2/ipa".to_owned(),
+            ProofBox::new("halo2/ipa".to_owned(), vec![0x42]),
+            VerifyingKeyId::new("halo2/ipa", "missing-vk"),
+        );
+
+        let report = process_proof_attachment(&ctx, &attachment);
+        let error = report
+            .error
+            .expect("supported missing verifier must report registry miss");
+        assert!(error.contains("verifying key not found"));
+        assert!(report.circuit_id.is_none());
     }
 
     fn anon_tenant_key() -> String {

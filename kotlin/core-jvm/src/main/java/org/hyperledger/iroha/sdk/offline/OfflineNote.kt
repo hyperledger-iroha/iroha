@@ -360,6 +360,18 @@ object OfflineNote {
         }
 
         fun publicInputsHash(): ByteArray = _publicInputsHash.copyOf()
+
+        fun validateCanonicalMetadata() {
+            require(
+                verifierKeyId.backend == RECURSIVE_BACKEND &&
+                    verifierKeyId.name == RECURSIVE_VERIFIER_NAME
+            ) {
+                "recursive proof verifier key must be $RECURSIVE_BACKEND:$RECURSIVE_VERIFIER_NAME"
+            }
+            require(proof.backend == RECURSIVE_BACKEND) {
+                "recursive proof backend must be $RECURSIVE_BACKEND"
+            }
+        }
     }
 
     class KeyCertificatePayload @JvmOverloads constructor(
@@ -682,6 +694,7 @@ object OfflineNote {
         )
         fun publicInputsHash(): ByteArray = publicInputs().publicInputsHash()
         fun validateProofBinding() {
+            recursiveProof.validateCanonicalMetadata()
             require(recursiveProof.publicInputsHash().contentEquals(publicInputsHash())) {
                 "recursive proof public inputs hash mismatch"
             }
@@ -724,10 +737,12 @@ object OfflineNote {
             }
             requireHashes(_outputCommitments, "output_commitments")
             require(outputClaims.isNotEmpty()) { "output claims must not be empty" }
-            val committed = _outputCommitments.map { hexLower(it) }.toSet()
-            for (claim in outputClaims) {
-                require(hexLower(claim.noteCommitment()) in committed) {
-                    "audit output claim is not listed in output commitments"
+            require(outputClaims.size == _outputCommitments.size) {
+                "output claim count must match output commitment count"
+            }
+            for ((commitment, claim) in _outputCommitments.zip(outputClaims)) {
+                require(claim.noteCommitment().contentEquals(commitment)) {
+                    "audit output claims must be ordered one-to-one with output commitments"
                 }
             }
         }
@@ -762,6 +777,14 @@ object OfflineNote {
             }
             requireHashes(_outputCommitments, "output_commitments")
             require(outputClaims.isNotEmpty()) { "output claims must not be empty" }
+            require(outputClaims.size == _outputCommitments.size) {
+                "output claim count must match output commitment count"
+            }
+            for ((commitment, claim) in _outputCommitments.zip(outputClaims)) {
+                require(claim.noteCommitment().contentEquals(commitment)) {
+                    "audit output claims must be ordered one-to-one with output commitments"
+                }
+            }
         }
 
         fun tokenId(): ByteArray = _tokenId.copyOf()
@@ -781,6 +804,7 @@ object OfflineNote {
         )
         fun publicInputsHash(): ByteArray = publicInputs().publicInputsHash()
         fun validateProofBinding() {
+            recursiveProof.validateCanonicalMetadata()
             require(recursiveProof.publicInputsHash().contentEquals(publicInputsHash())) {
                 "recursive proof public inputs hash mismatch"
             }
@@ -872,6 +896,28 @@ object OfflineNote {
             val outputCount = validateCount(audit.outputClaims.size, MAX_OUTPUT_AMOUNTS, "audit output")
             require(audit.inputNullifiers().size == audit.inputClaims.size) {
                 "audit input nullifier count must match input claim count"
+            }
+            require(audit.outputCommitments().size == audit.outputClaims.size) {
+                "audit output claim count must match output commitment count"
+            }
+            for ((commitment, claim) in audit.outputCommitments().zip(audit.outputClaims)) {
+                require(claim.noteCommitment().contentEquals(commitment)) {
+                    "audit output claims must be ordered one-to-one with output commitments"
+                }
+            }
+            val senderCertificateHash = audit.senderKeyCertificate.payloadHash()
+            require(audit.inputClaims.all { it.keyCertificatePayloadHash().contentEquals(senderCertificateHash) }) {
+                "audit input claims must match sender key certificate"
+            }
+            val inputDefinition = parseAssetId(audit.inputClaims.first().assetId).definitionBytes
+            val inputAssetsMatch = audit.inputClaims.all {
+                parseAssetId(it.assetId).definitionBytes.contentEquals(inputDefinition)
+            }
+            val outputAssetsMatch = audit.outputClaims.all {
+                parseAssetId(it.assetId).definitionBytes.contentEquals(inputDefinition)
+            }
+            require(inputAssetsMatch && outputAssetsMatch) {
+                "audit input and output asset definitions must match"
             }
 
             val inputClaimHashes = audit.inputClaims.map { it.claimHash() }

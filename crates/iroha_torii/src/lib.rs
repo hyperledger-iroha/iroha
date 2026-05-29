@@ -5918,7 +5918,10 @@ async fn handler_repo_agreements_query(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_note_readiness() -> Result<impl IntoResponse, Error> {
+async fn handler_offline_note_readiness(
+    State(app): State<SharedAppState>,
+) -> Result<impl IntoResponse, Error> {
+    let offline = &app.state.settlement.offline;
     let verifier_key_id = json_object([
         json_entry("backend", iroha_core::zk::ZK_BACKEND_HALO2_IPA),
         json_entry("name", iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID),
@@ -5953,6 +5956,11 @@ async fn handler_offline_note_readiness() -> Result<impl IntoResponse, Error> {
         json_entry("offline_sync_optional", true),
         json_entry("offline_telemetry", true),
         json_entry("offline_bearer_cash_v1", true),
+        json_entry("offline_kagemusha_enabled", offline.kagemusha_enabled),
+        json_entry(
+            "offline_kagemusha_force_legacy",
+            offline.kagemusha_force_legacy,
+        ),
     ]))
 }
 
@@ -9899,7 +9907,15 @@ fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
 }
 
 fn is_stark_fri_v1_backend(backend: &str) -> bool {
-    backend == iroha_core::zk::ZK_BACKEND_STARK_FRI_V1 || backend.starts_with("stark/fri/")
+    if iroha_core::zk::is_trusted_setup_backend_label(backend)
+        || iroha_core::zk::is_developer_only_backend_label(backend)
+    {
+        return false;
+    }
+    backend == iroha_core::zk::ZK_BACKEND_STARK_FRI_V1
+        || backend
+            .strip_prefix("stark/fri/")
+            .is_some_and(|profile| !profile.is_empty())
 }
 
 fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
@@ -10270,6 +10286,7 @@ async fn handler_zk_ivm_prove(
     let max_proof_bytes = vk_record.max_proof_bytes;
     let backend = req.vk_ref.backend.clone();
     let vk_ref = req.vk_ref;
+    let vk_commitment = computed_commitment;
     let chain_id = app.chain_id.as_ref().clone();
     let state = Arc::clone(&app.state);
     let job_id_for_task = job_id.clone();
@@ -10409,8 +10426,9 @@ async fn handler_zk_ivm_prove(
                 if max_proof_bytes > 0 && proof_box.bytes.len() > max_proof_bytes as usize {
                     return Err("generated proof exceeds verifying key max_proof_bytes".to_owned());
                 }
-                let attachment =
+                let mut attachment =
                     iroha_data_model::proof::ProofAttachment::new_ref(backend.clone(), proof_box, vk_ref);
+                attachment.vk_commitment = Some(vk_commitment);
                 Ok((derived_proved, attachment))
             })()
         });
@@ -57588,6 +57606,20 @@ mod tests {
     use iroha_core::smartcontracts::Execute;
 
     #[test]
+    fn stark_fri_backend_labels_require_non_empty_profile() {
+        assert!(is_stark_fri_v1_backend("stark/fri"));
+        assert!(is_stark_fri_v1_backend("stark/fri/sha256-goldilocks"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/kzg"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/bn254"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/debug"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/debug-proof"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/mock"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/mock-proof"));
+        assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
+    }
+
+    #[test]
     fn parse_pipeline_status_scope_defaults_to_global_and_trims_case() {
         assert_eq!(
             parse_pipeline_status_scope(None).expect("default scope"),
@@ -62057,10 +62089,11 @@ mod tests {
             }
         }
         let dto = final_dto.expect("prove job should complete");
-        assert!(
-            dto.attachment.is_some(),
-            "expected proof attachment in done response"
-        );
+        let attachment = dto
+            .attachment
+            .as_ref()
+            .expect("expected proof attachment in done response");
+        assert_eq!(attachment.vk_commitment, Some(vk_commitment));
 
         let response = handler_zk_ivm_prove_delete(
             State(app.clone()),
@@ -62202,6 +62235,7 @@ mod tests {
             .attachment
             .expect("expected proof attachment in done response");
         assert_eq!(attachment.backend.as_str(), backend);
+        assert_eq!(attachment.vk_commitment, Some(vk_commitment));
         assert!(
             iroha_core::zk::verify_backend(backend, &attachment.proof, Some(&vk_box),),
             "generated STARK attachment should verify"
@@ -62340,9 +62374,139 @@ mod tests {
             }
         }
         let dto = final_dto.expect("prove job should complete");
+        let attachment = dto
+            .attachment
+            .as_ref()
+            .expect("expected proof attachment in done response");
+        assert_eq!(attachment.vk_commitment, Some(vk_commitment));
+    }
+
+    #[tokio::test]
+    async fn zk_ivm_prove_job_rejects_non_archive_proving_key_bytes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app");
+            state.zk_prover_keys_dir = temp.path().to_path_buf();
+            let core = Arc::get_mut(&mut state.state).expect("unique core state");
+            core.zk.halo2.enabled = true;
+        }
+
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-raw-pk");
+        let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+            Hash::new(b"code"),
+            Hash::new(b"overlay"),
+            Hash::new(b"events"),
+            Hash::new(b"gas"),
+        );
+        let vk_box = fixture
+            .vk_box("halo2/ipa")
+            .expect("fixture should include verifying key bytes");
+        let vk_commitment = fixture
+            .vk_hash("halo2/ipa")
+            .expect("fixture should include verifying key commitment");
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            "halo2/ipa:ivm-execution-v1",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pasta",
+            fixture.schema_hash,
+            vk_commitment,
+        );
+        vk_record.vk_len = vk_box.bytes.len() as u32;
+        vk_record.max_proof_bytes = 8 * 1024 * 1024;
+        vk_record.key = Some(vk_box);
+        vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+        vk_record.gas_schedule_id = Some("sched_0".to_owned());
+
+        let pk_path = zk_pk_store_path(temp.path(), &vk_id);
+        std::fs::write(&pk_path, b"raw-halo2-proving-key").expect("write raw proving key bytes");
+
+        {
+            let height = next_block_height(&app);
+            let header = BlockHeader::new(
+                NonZeroU64::new(height).expect("height>0"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = app.state.block(header);
+            let mut stx = block.transaction();
+            stx.world
+                .verifying_keys_mut_for_testing()
+                .insert(vk_id.clone(), vk_record);
+            stx.apply();
+            block.transactions.insert_block(
+                HashSet::new(),
+                NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+            );
+            block.commit().expect("commit should persist vk record");
+        }
+
+        let meta = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            ..Default::default()
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let bytecode = IvmBytecode::from_compiled(program);
+        let req = make_ivm_prove_request(vk_id, bytecode, None);
+        let body = norito::json::to_vec(&req).expect("json encode request");
+        let response = handler_zk_ivm_prove(
+            State(app.clone()),
+            negotiated(&app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("prove submit ok")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let created: ZkIvmProveJobCreatedDto =
+            norito::json::from_slice(&body).expect("json decode created dto");
+
+        let job_id = created.job_id;
+        let mut final_dto: Option<ZkIvmProveJobDto> = None;
+        for _ in 0..4000 {
+            let response = handler_zk_ivm_prove_get(
+                State(app.clone()),
+                negotiated(&app),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+                axum::extract::Path(job_id.clone()),
+            )
+            .await
+            .expect("prove get ok")
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .unwrap()
+                .to_bytes();
+            let dto: ZkIvmProveJobDto = norito::json::from_slice(&body).expect("decode job dto");
+            match dto.status.as_str() {
+                "pending" | "running" => tokio::time::sleep(Duration::from_millis(25)).await,
+                "error" => {
+                    final_dto = Some(dto);
+                    break;
+                }
+                "done" => panic!("prove job should fail for non-archive proving key bytes"),
+                other => panic!("unexpected prove job status: {other}"),
+            }
+        }
+
+        let dto = final_dto.expect("prove job should fail");
+        let error = dto.error.unwrap_or_default();
         assert!(
-            dto.attachment.is_some(),
-            "expected proof attachment in done response"
+            error.contains("failed to decode proving key archive"),
+            "unexpected error: {error}"
         );
     }
 

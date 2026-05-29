@@ -17,7 +17,7 @@ import java.time.Duration
 import org.hyperledger.iroha.samples.wallet.databinding.ActivityMainBinding
 
 /**
- * Retail wallet placeholder that will eventually exercise offline envelopes and recovery flows.
+ * Retail wallet sample that previews offline envelopes, policy controls, and recovery evidence.
  */
 class MainActivity : AppCompatActivity() {
 

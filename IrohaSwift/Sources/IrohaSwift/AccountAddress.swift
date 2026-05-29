@@ -1504,7 +1504,7 @@ extension AccountAddress {
     }
 }
 
-// MARK: - Multisig builder (IOS4 scaffolding)
+// MARK: - Multisig builder
 
 public enum MultisigBuilderError: Error, LocalizedError {
     case thresholdNotSet

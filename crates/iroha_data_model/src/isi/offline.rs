@@ -1,5 +1,9 @@
 use super::*;
-use crate::offline::{OfflineNoteAuditBundle, OfflineNoteIssue, OfflineNoteRedeem};
+use crate::{
+    asset::AssetDefinitionId,
+    offline::{OfflineNoteAuditBundle, OfflineNoteIssue, OfflineNoteRedeem},
+    proof::ProofAttachment,
+};
 
 isi! {
     /// Issue a production Offline bearer note.
@@ -32,9 +36,34 @@ isi! {
     }
 }
 
+isi! {
+    /// Settle a Kagemusha offline-offline shielded transfer.
+    ///
+    /// This is the default private offline-offline settlement surface. It uses the same
+    /// transparent shielded ledger accumulator as ZK assets: input nullifiers are consumed,
+    /// output commitments are appended, and the proof must be verified against the asset's
+    /// configured transparent verifier.
+    pub struct KagemushaTransfer {
+        /// Shielded asset definition id.
+        pub asset: AssetDefinitionId,
+        /// Spent nullifiers.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
+        pub inputs: Vec<[u8; 32]>,
+        /// Output note commitments.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
+        pub outputs: Vec<[u8; 32]>,
+        /// Proof attachment for the private transfer.
+        pub proof: ProofAttachment,
+        /// Optional recent Merkle root used during proof construction.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::option"))]
+        pub root_hint: Option<[u8; 32]>,
+    }
+}
+
 impl crate::seal::Instruction for IssueOfflineNote {}
 impl crate::seal::Instruction for RedeemOfflineNote {}
 impl crate::seal::Instruction for AuditOfflineNote {}
+impl crate::seal::Instruction for KagemushaTransfer {}
 
 impl IssueOfflineNote {
     /// Construct an Offline note issuance instruction.
@@ -57,6 +86,26 @@ impl AuditOfflineNote {
     #[must_use]
     pub fn new(audit: OfflineNoteAuditBundle) -> Self {
         Self { audit }
+    }
+}
+
+impl KagemushaTransfer {
+    /// Construct a Kagemusha shielded offline-offline transfer instruction.
+    #[must_use]
+    pub fn new(
+        asset: AssetDefinitionId,
+        inputs: Vec<[u8; 32]>,
+        outputs: Vec<[u8; 32]>,
+        proof: ProofAttachment,
+        root_hint: Option<[u8; 32]>,
+    ) -> Self {
+        Self {
+            asset,
+            inputs,
+            outputs,
+            proof,
+            root_hint,
+        }
     }
 }
 
@@ -98,6 +147,51 @@ impl_decode_one_offline_field!(AuditOfflineNote {
     audit: OfflineNoteAuditBundle
 });
 
+impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaTransfer {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = offline_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let asset = super::decode_aos_canonical_field::<AssetDefinitionId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let inputs = super::decode_aos_canonical_field::<Vec<[u8; 32]>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let outputs = super::decode_aos_canonical_field::<Vec<[u8; 32]>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let proof = super::decode_aos_canonical_field::<ProofAttachment>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let root_hint = super::decode_aos_canonical_field::<Option<[u8; 32]>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                asset,
+                inputs,
+                outputs,
+                proof,
+                root_hint,
+            },
+            offset,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
@@ -113,7 +207,7 @@ mod tests {
             OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim, OfflineNoteKeyCertificate,
             OfflineNoteRecursiveProof,
         },
-        proof::{ProofBox, VerifyingKeyId},
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     };
 
     fn account() -> AccountId {
@@ -197,6 +291,20 @@ mod tests {
         }
     }
 
+    fn kagemusha_transfer() -> KagemushaTransfer {
+        KagemushaTransfer::new(
+            issue().asset.definition().clone(),
+            vec![[0x11; 32]],
+            vec![[0x22; 32], [0x33; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
+            ),
+            Some([0x44; 32]),
+        )
+    }
+
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -231,6 +339,7 @@ mod tests {
         assert_slice_roundtrip(IssueOfflineNote::new(issue()));
         assert_slice_roundtrip(RedeemOfflineNote::new(redemption()));
         assert_slice_roundtrip(AuditOfflineNote::new(audit()));
+        assert_slice_roundtrip(kagemusha_transfer());
     }
 
     #[test]
@@ -238,10 +347,12 @@ mod tests {
         let registry = crate::isi::InstructionRegistry::new()
             .register_slice::<IssueOfflineNote>()
             .register_slice::<RedeemOfflineNote>()
-            .register_slice::<AuditOfflineNote>();
+            .register_slice::<AuditOfflineNote>()
+            .register_slice::<KagemushaTransfer>();
 
         assert_registry_decodes(&registry, IssueOfflineNote::new(issue()));
         assert_registry_decodes(&registry, RedeemOfflineNote::new(redemption()));
         assert_registry_decodes(&registry, AuditOfflineNote::new(audit()));
+        assert_registry_decodes(&registry, kagemusha_transfer());
     }
 }

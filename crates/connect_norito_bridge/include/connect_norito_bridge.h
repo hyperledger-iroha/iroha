@@ -21,6 +21,7 @@ extern "C" {
 #define CONNECT_NORITO_ERR_OFFLINE_NONCE -303
 #define CONNECT_NORITO_ERR_OFFLINE_SERIALIZE -304
 #define CONNECT_NORITO_ERR_OFFLINE_NOTE_PROVE -310
+#define CONNECT_NORITO_ERR_KAGEMUSHA_PROVE -311
 
 // ---------------- Bridge ABI ----------------
 uint32_t connect_norito_bridge_abi_version(void);
@@ -81,6 +82,24 @@ int32_t connect_norito_offline_prove_note_audit(
     unsigned long audit_norito_len,
     uint8_t** out_recursive_proof_ptr,
     unsigned long* out_recursive_proof_len);
+
+// Verify private Kagemusha hop proofs and generate a compact folded-token proof.
+// Input: Norito-archive bytes of `KagemushaVerifiedFoldBundle`.
+// Output: Norito-archive bytes of `KagemushaCompactPaymentToken`.
+int32_t connect_norito_kagemusha_prove_verified_compact_payment_token(
+    const uint8_t* verified_bundle_norito_ptr,
+    unsigned long verified_bundle_norito_len,
+    uint8_t** out_compact_token_ptr,
+    unsigned long* out_compact_token_len);
+
+// Verify private Kagemusha hop proofs against verifier records and generate a compact folded-token proof.
+// Input: Norito-archive bytes of `KagemushaVerifiedFoldRecordBundle`.
+// Output: Norito-archive bytes of `KagemushaCompactPaymentToken`.
+int32_t connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+    const uint8_t* verified_record_bundle_norito_ptr,
+    unsigned long verified_record_bundle_norito_len,
+    uint8_t** out_compact_token_ptr,
+    unsigned long* out_compact_token_len);
 
 void connect_norito_free(uint8_t* ptr);
 

@@ -42,6 +42,7 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "Transfer.Nft",
   "Register.Domain",
   "Register.Account",
+  "Register.AssetDefinition",
   "ExecuteTrigger",
   "Custom",
   "Kaigi.*",
@@ -377,12 +378,21 @@ function encodeNormalizedInstruction(normalized) {
     }
     try {
       encoded = encodePureJsInstruction(normalized);
-    } catch {
+    } catch (fallbackError) {
+      if (!isPureJsUnsupportedInstructionError(fallbackError)) {
+        throw fallbackError;
+      }
       throw error;
     }
   }
   cacheInstructionRoundTrip(encoded, normalized);
   return encoded;
+}
+
+function isPureJsUnsupportedInstructionError(error) {
+  const message =
+    error && typeof error.message === "string" ? error.message : String(error ?? "");
+  return message.startsWith("Internal Norito canonicalization supports ");
 }
 
 function cacheInstructionRoundTrip(bytes, instruction) {
@@ -951,6 +961,21 @@ function encodePureJsInstructionPayload(instruction) {
       encodeNoritoField(encodeNewAccountValue(instruction.Register.Account, "Register.Account")),
     );
   }
+  if (
+    isPlainObject(instruction.Register) &&
+    isPlainObject(instruction.Register.AssetDefinition)
+  ) {
+    return encodeEnumInstruction(
+      "iroha.register",
+      3,
+      encodeNoritoField(
+        encodeNewAssetDefinitionValue(
+          instruction.Register.AssetDefinition,
+          "Register.AssetDefinition",
+        ),
+      ),
+    );
+  }
   if (isPlainObject(instruction.ExecuteTrigger)) {
     const payload = encodeExecuteTriggerPayload(instruction.ExecuteTrigger);
     return encodeInstructionEnvelope("iroha.execute_trigger", payload);
@@ -1275,6 +1300,13 @@ function decodeRegisterPayload(payload) {
         Account: decodeNewAccountValue(
           unwrapStructBody(body, "Register.Account"),
           "Register.Account",
+        ),
+      };
+    case 3:
+      return {
+        AssetDefinition: decodeNewAssetDefinitionValue(
+          unwrapStructBody(body, "Register.AssetDefinition"),
+          "Register.AssetDefinition",
         ),
       };
     default:
@@ -2520,7 +2552,7 @@ function decodeCustomInstructionPayload(payload) {
 function encodeNewDomainValue(value, context) {
   return encodeStructValue([
     [encodeNoritoField(encodeDomainIdValue(value.id, `${context}.id`))],
-    [encodeOptionValue(value.logo, encodeNoritoStringValue, `${context}.logo`)],
+    [encodeOptionValue(value.logo, encodeSorafsUriValue, `${context}.logo`)],
     [encodeMetadataValue(value.metadata ?? {}, `${context}.metadata`)],
   ]);
 }
@@ -2529,7 +2561,7 @@ function decodeNewDomainValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["id", "logo", "metadata"]);
   return {
     id: decodeNestedValue(fields.id, decodeDomainIdValue, `${context}.id`),
-    logo: decodeOptionValue(fields.logo, decodeStringValue, `${context}.logo`),
+    logo: decodeOptionValue(fields.logo, decodeSorafsUriValue, `${context}.logo`),
     metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
   };
 }
@@ -2565,6 +2597,87 @@ function decodeNewAccountValue(payload, context) {
   };
 }
 
+function encodeNewAssetDefinitionValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  return encodeStructValue([
+    [encodeAssetDefinitionIdValue(value.id, `${context}.id`)],
+    [encodeStringValue(value.name ?? "", `${context}.name`)],
+    [encodeOptionValue(value.description ?? null, encodeStringValue, `${context}.description`)],
+    [
+      encodeOptionValue(
+        value.alias ?? null,
+        encodeAssetDefinitionAliasValue,
+        `${context}.alias`,
+      ),
+    ],
+    [encodeNumericSpecValue(value.spec ?? { scale: null }, `${context}.spec`)],
+    [encodeMintableValue(value.mintable ?? "Infinitely", `${context}.mintable`)],
+    [encodeOptionValue(value.logo ?? null, encodeSorafsUriValue, `${context}.logo`)],
+    [encodeMetadataValue(value.metadata ?? {}, `${context}.metadata`)],
+    [
+      encodeAssetBalancePolicyValue(
+        value.balance_scope_policy ?? value.balanceScopePolicy ?? "Global",
+        `${context}.balance_scope_policy`,
+      ),
+    ],
+    [
+      encodeAssetConfidentialPolicyValue(
+        value.confidential_policy ?? value.confidentialPolicy ?? defaultAssetConfidentialPolicy(),
+        `${context}.confidential_policy`,
+      ),
+    ],
+  ]);
+}
+
+function decodeNewAssetDefinitionValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "id",
+    "name",
+    "description",
+    "alias",
+    "spec",
+    "mintable",
+    "logo",
+    "metadata",
+    "balance_scope_policy",
+    "confidential_policy",
+  ]);
+  return {
+    id: decodeAssetDefinitionIdValue(fields.id, `${context}.id`),
+    name: decodeStringValue(fields.name, `${context}.name`),
+    description: decodeOptionValue(fields.description, decodeStringValue, `${context}.description`),
+    alias: decodeOptionValue(
+      fields.alias,
+      decodeAssetDefinitionAliasValue,
+      `${context}.alias`,
+    ),
+    spec: decodeNumericSpecValue(fields.spec, `${context}.spec`),
+    mintable: decodeMintableValue(fields.mintable, `${context}.mintable`),
+    logo: decodeOptionValue(fields.logo, decodeSorafsUriValue, `${context}.logo`),
+    metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
+    balance_scope_policy: decodeAssetBalancePolicyValue(
+      fields.balance_scope_policy,
+      `${context}.balance_scope_policy`,
+    ),
+    confidential_policy: decodeAssetConfidentialPolicyValue(
+      fields.confidential_policy,
+      `${context}.confidential_policy`,
+    ),
+  };
+}
+
+function defaultAssetConfidentialPolicy() {
+  return {
+    mode: "TransparentOnly",
+    vk_set_hash: null,
+    poseidon_params_id: null,
+    pedersen_params_id: null,
+    pending_transition: null,
+  };
+}
+
 function encodeMetadataValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
@@ -2575,7 +2688,7 @@ function encodeMetadataValue(value, context) {
   return encodeNoritoVec(entries, ([key, json]) =>
     encodeTupleValue([
       encodeNameValue(key, `${context}.${key}`),
-      encodeNoritoField(encodeNoritoJsonValue(json)),
+      encodeNoritoJsonValue(json),
     ]),
   );
 }
@@ -2587,7 +2700,7 @@ function decodeMetadataValue(payload, context) {
       const fields = decodeTupleFields(entry, `${context}[${index}]`, ["key", "value"]);
       return [
         decodeNameValue(fields.key, `${context}[${index}].key`),
-        decodeNestedJsonValue(fields.value, `${context}[${index}].value`),
+        decodeJsonValue(fields.value, `${context}[${index}].value`),
       ];
     },
     context,
@@ -3897,6 +4010,13 @@ function decodeHashValue(payload, context) {
   return decodeHashLiteral(payload, context);
 }
 
+function encodeStringValue(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string`);
+  }
+  return encodeNoritoStringValue(value);
+}
+
 function encodeHashLiteralBytes(value, context) {
   if (Buffer.isBuffer(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer || Array.isArray(value)) {
     return encodeFixedBytesValue(value, 32, context);
@@ -3951,6 +4071,226 @@ function decodeNumericSpecValue(payload, context) {
   return {
     scale: decodeOptionValue(payload, decodeU32Value, `${context}.scale`),
   };
+}
+
+function encodeMintableValue(value, context) {
+  const normalized =
+    typeof value === "string" ? parseMintableLabel(value, context) : parseMintableObject(value, context);
+  switch (normalized.kind) {
+    case "Infinitely":
+      return encodeEnumTagValue(0);
+    case "Once":
+      return encodeEnumTagValue(1);
+    case "Not":
+      return encodeEnumTagValue(2);
+    case "Limited":
+      return encodeEnumTagValue(3, () =>
+        encodeStructValue([[encodeU32Value(normalized.tokens, `${context}.tokens`)]]),
+      );
+    default:
+      throw new Error(`${context} uses unsupported mintability ${normalized.kind}`);
+  }
+}
+
+function decodeMintableValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("tag");
+  if (tag === 0 || tag === 1 || tag === 2) {
+    reader.assertEof();
+    return ["Infinitely", "Once", "Not"][tag];
+  }
+  if (tag !== 3) {
+    throw new Error(`${context} uses unsupported mintability ${tag}`);
+  }
+  const body = readNoritoField(reader, "tokens");
+  reader.assertEof();
+  const fields = decodeStructFields(body, `${context}.tokens`, ["value"]);
+  const tokens = decodeU32Value(fields.value, `${context}.tokens.value`);
+  if (tokens === 0) {
+    throw new Error(`${context}.tokens must be non-zero`);
+  }
+  return `Limited(${tokens})`;
+}
+
+function parseMintableLabel(value, context) {
+  const label = assertNonEmptyString(value, context);
+  if (label === "Infinitely" || label === "Once" || label === "Not") {
+    return { kind: label };
+  }
+  const match = /^Limited\((\d+)\)$/.exec(label);
+  if (match) {
+    return { kind: "Limited", tokens: parseMintabilityTokens(match[1], `${context}.tokens`) };
+  }
+  throw new Error(`${context} must be Infinitely, Once, Not, or Limited(n)`);
+}
+
+function parseMintableObject(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be a string or object`);
+  }
+  const kind = assertNonEmptyString(value.kind, `${context}.kind`);
+  if (kind === "Infinitely" || kind === "Once" || kind === "Not") {
+    return { kind };
+  }
+  if (kind === "Limited") {
+    return {
+      kind,
+      tokens: parseMintabilityTokens(value.tokens ?? value.value, `${context}.tokens`),
+    };
+  }
+  throw new Error(`${context}.kind must be Infinitely, Once, Not, or Limited`);
+}
+
+function parseMintabilityTokens(value, context) {
+  let normalized;
+  if (typeof value === "string") {
+    if (!/^\d+$/.test(value)) {
+      throw new TypeError(`${context} must be a positive unsigned 32-bit integer`);
+    }
+    normalized = Number(value);
+  } else {
+    normalized = Number(value);
+  }
+  if (!Number.isInteger(normalized) || normalized <= 0 || normalized > 0xffff_ffff) {
+    throw new TypeError(`${context} must be a positive unsigned 32-bit integer`);
+  }
+  return normalized;
+}
+
+function encodeAssetBalancePolicyValue(value, context) {
+  const normalized = assertNonEmptyString(value, context);
+  if (normalized === "Global") {
+    return encodeEnumTagValue(0);
+  }
+  if (normalized === "DataspaceRestricted") {
+    return encodeEnumTagValue(1);
+  }
+  throw new Error(`${context} must be Global or DataspaceRestricted`);
+}
+
+function decodeAssetBalancePolicyValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("tag");
+  reader.assertEof();
+  switch (tag) {
+    case 0:
+      return "Global";
+    case 1:
+      return "DataspaceRestricted";
+    default:
+      throw new Error(`${context} uses unsupported balance policy ${tag}`);
+  }
+}
+
+function encodeAssetConfidentialPolicyValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  return encodeStructValue([
+    [encodeConfidentialPolicyModeValue(value.mode ?? "TransparentOnly", `${context}.mode`)],
+    [encodeOptionValue(value.vk_set_hash ?? null, encodeHashValue, `${context}.vk_set_hash`)],
+    [encodeOptionValue(value.poseidon_params_id ?? null, encodeU32Value, `${context}.poseidon_params_id`)],
+    [encodeOptionValue(value.pedersen_params_id ?? null, encodeU32Value, `${context}.pedersen_params_id`)],
+    [
+      encodeOptionValue(
+        value.pending_transition ?? null,
+        encodeConfidentialPolicyTransitionValue,
+        `${context}.pending_transition`,
+      ),
+    ],
+  ]);
+}
+
+function decodeAssetConfidentialPolicyValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "mode",
+    "vk_set_hash",
+    "poseidon_params_id",
+    "pedersen_params_id",
+    "pending_transition",
+  ]);
+  return {
+    mode: decodeConfidentialPolicyModeValue(fields.mode, `${context}.mode`),
+    vk_set_hash: decodeOptionValue(fields.vk_set_hash, decodeHashValue, `${context}.vk_set_hash`),
+    poseidon_params_id: decodeOptionValue(
+      fields.poseidon_params_id,
+      decodeU32Value,
+      `${context}.poseidon_params_id`,
+    ),
+    pedersen_params_id: decodeOptionValue(
+      fields.pedersen_params_id,
+      decodeU32Value,
+      `${context}.pedersen_params_id`,
+    ),
+    pending_transition: decodeOptionValue(
+      fields.pending_transition,
+      decodeConfidentialPolicyTransitionValue,
+      `${context}.pending_transition`,
+    ),
+  };
+}
+
+function encodeConfidentialPolicyTransitionValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  return encodeStructValue([
+    [encodeConfidentialPolicyModeValue(value.new_mode, `${context}.new_mode`)],
+    [encodeU64NumberValue(value.effective_height, `${context}.effective_height`)],
+    [encodeConfidentialPolicyModeValue(value.previous_mode, `${context}.previous_mode`)],
+    [encodeHashValue(value.transition_id, `${context}.transition_id`)],
+    [encodeOptionValue(value.conversion_window ?? null, encodeU64NumberValue, `${context}.conversion_window`)],
+  ]);
+}
+
+function decodeConfidentialPolicyTransitionValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "new_mode",
+    "effective_height",
+    "previous_mode",
+    "transition_id",
+    "conversion_window",
+  ]);
+  return {
+    new_mode: decodeConfidentialPolicyModeValue(fields.new_mode, `${context}.new_mode`),
+    effective_height: decodeU64NumberValue(fields.effective_height, `${context}.effective_height`),
+    previous_mode: decodeConfidentialPolicyModeValue(fields.previous_mode, `${context}.previous_mode`),
+    transition_id: decodeHashValue(fields.transition_id, `${context}.transition_id`),
+    conversion_window: decodeOptionValue(
+      fields.conversion_window,
+      decodeU64NumberValue,
+      `${context}.conversion_window`,
+    ),
+  };
+}
+
+function encodeAssetDefinitionAliasValue(value, context) {
+  const literal = assertNonEmptyString(value, context);
+  if (!literal.includes("#")) {
+    throw new Error(`${context} must use <name>#<dataspace> or <name>#<domain>.<dataspace>`);
+  }
+  return encodeStructValue([[encodeNoritoStringValue(literal)]]);
+}
+
+function decodeAssetDefinitionAliasValue(payload, context) {
+  return decodeNestedValue(payload, decodeStringValue, context);
+}
+
+function encodeSorafsUriValue(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string`);
+  }
+  if (value.trim() !== value || value.includes("\u0000") || /[\u0001-\u001f\u007f]/u.test(value)) {
+    throw new Error(`${context} must not contain whitespace padding or control characters`);
+  }
+  if (!value.startsWith("sorafs://") || value.length === "sorafs://".length) {
+    throw new Error(`${context} must use a non-empty sorafs:// URI`);
+  }
+  return encodeStructValue([[encodeNoritoStringValue(value)]]);
+}
+
+function decodeSorafsUriValue(payload, context) {
+  return decodeNestedValue(payload, decodeStringValue, context);
 }
 
 function encodeEnumTagValue(index, encodePayload) {

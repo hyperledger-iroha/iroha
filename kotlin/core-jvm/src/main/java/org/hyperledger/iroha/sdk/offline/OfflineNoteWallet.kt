@@ -63,10 +63,12 @@ class OfflineNoteWalletNote @JvmOverloads constructor(
     val state: OfflineNoteWalletNoteState,
     val createdAtMs: Long = 0,
     val updatedAtMs: Long = createdAtMs,
+    spentPaymentRequestId: String? = null,
 ) {
     private val _noteCommitment = noteCommitment.copyOf()
     private val _noteSecret = noteSecret.copyOf()
     private val _bearerAuditTrail = bearerAuditTrail.toList()
+    val spentPaymentRequestId: String?
     val canonicalAmount: String
 
     init {
@@ -79,6 +81,7 @@ class OfflineNoteWalletNote @JvmOverloads constructor(
             assetId = assetId,
             amount = amount,
         ).canonicalAmount
+        this.spentPaymentRequestId = spentPaymentRequestId?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     constructor(
@@ -134,6 +137,7 @@ class OfflineNoteWalletNote @JvmOverloads constructor(
             state = state,
             createdAtMs = createdAtMs,
             updatedAtMs = updatedAtMs,
+            spentPaymentRequestId = spentPaymentRequestId,
         )
 
     fun withBearerAuditTrail(
@@ -153,6 +157,27 @@ class OfflineNoteWalletNote @JvmOverloads constructor(
             state = state,
             createdAtMs = createdAtMs,
             updatedAtMs = updatedAtMs,
+            spentPaymentRequestId = spentPaymentRequestId,
+        )
+
+    fun withSpentPaymentRequestId(
+        spentPaymentRequestId: String?,
+        updatedAtMs: Long,
+    ): OfflineNoteWalletNote =
+        OfflineNoteWalletNote(
+            chainId = chainId,
+            accountId = accountId,
+            assetId = assetId,
+            amount = canonicalAmount,
+            keyCertificate = keyCertificate,
+            noteCommitment = noteCommitment(),
+            noteSecret = noteSecret(),
+            origin = origin,
+            bearerAuditTrail = bearerAuditTrail(),
+            state = state,
+            createdAtMs = createdAtMs,
+            updatedAtMs = updatedAtMs,
+            spentPaymentRequestId = spentPaymentRequestId,
         )
 }
 
@@ -379,7 +404,12 @@ object OfflineNoteReceiveRequestCodec {
     fun decodeText(text: String): OfflineNoteReceiveRequest {
         val trimmed = text.trim()
         require(trimmed.startsWith(TEXT_PREFIX)) { "Offline Note receive request prefix missing" }
-        return decodeNorito(Base64.getUrlDecoder().decode(trimmed.substring(TEXT_PREFIX.length)))
+        return decodeNorito(
+            strictBase64UrlDecode(
+                trimmed.substring(TEXT_PREFIX.length),
+                "Offline Note receive request payload",
+            )
+        )
     }
 
     @JvmStatic
@@ -517,6 +547,7 @@ class OfflineNotePaymentToken(
 object OfflineNotePaymentTokenCodec {
     const val TYPE: String = "offline_payment_token"
     const val TEXT_PREFIX: String = "wallet-offline-bearer-cash-payment:"
+    const val ENVELOPE_VERSION: Long = 2L
     private const val TOKEN_ENVELOPE_SCHEMA =
         "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelope"
 
@@ -542,7 +573,12 @@ object OfflineNotePaymentTokenCodec {
     fun decodeText(text: String): OfflineNotePaymentToken {
         val trimmed = text.trim()
         require(trimmed.startsWith(TEXT_PREFIX)) { "Offline Note payment token prefix missing" }
-        return decodeNorito(Base64.getUrlDecoder().decode(trimmed.substring(TEXT_PREFIX.length)))
+        return decodeNorito(
+            strictBase64UrlDecode(
+                trimmed.substring(TEXT_PREFIX.length),
+                "Offline Note payment token payload",
+            )
+        )
     }
 
     @JvmStatic
@@ -565,6 +601,7 @@ object OfflineNotePaymentTokenCodec {
 
     private object PaymentTokenAdapter : TypeAdapter<OfflineNotePaymentToken> {
         override fun encode(encoder: NoritoEncoder, value: OfflineNotePaymentToken) {
+            writeField(encoder) { it.writeUInt(ENVELOPE_VERSION, 64) }
             writeField(encoder) { writeString(it, value.chainId) }
             writeField(encoder) { writeString(it, value.paymentRequestId) }
             writeField(encoder) { it.writeUInt(value.createdAtMs, 64) }
@@ -575,6 +612,10 @@ object OfflineNotePaymentTokenCodec {
         }
 
         override fun decode(decoder: NoritoDecoder): OfflineNotePaymentToken {
+            val version = readField(decoder) { it.readUInt(64) }
+            require(version == ENVELOPE_VERSION) {
+                "Offline Note payment token envelope version is unsupported"
+            }
             val chainId = readField(decoder) { readString(it) }
             val paymentRequestId = readField(decoder) { readString(it) }
             val createdAtMs = readField(decoder) { it.readUInt(64) }
@@ -738,7 +779,12 @@ object OfflineNoteReceiptAckCodec {
     fun decodeText(text: String): OfflineNoteReceiptAck {
         val trimmed = text.trim()
         require(trimmed.startsWith(TEXT_PREFIX)) { "Offline Note receipt ACK prefix missing" }
-        return decodeNorito(Base64.getUrlDecoder().decode(trimmed.substring(TEXT_PREFIX.length)))
+        return decodeNorito(
+            strictBase64UrlDecode(
+                trimmed.substring(TEXT_PREFIX.length),
+                "Offline Note receipt ACK payload",
+            )
+        )
     }
 
     @JvmStatic
@@ -1172,6 +1218,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
     private val randomSource: OfflineNoteRandomSource = SecureOfflineNoteRandomSource(),
     private val idGenerator: OfflineNoteIdGenerator = UuidOfflineNoteIdGenerator(),
     private val clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
+    private val bearerCashPolicy: OfflineBearerCashPolicyV1 = OfflineBearerCashPolicyV1.DEFAULT,
 ) {
     private companion object {
         private val loadThreadIds = AtomicInteger()
@@ -1414,6 +1461,14 @@ class OfflineNoteWallet @JvmOverloads constructor(
                 outputCommitments = outputCommitments,
             )
         )
+        val auditPublicInputs = OfflineNote.AuditPublicInputs(
+            tokenId = tokenId,
+            keyCertificatePayloadHash = senderCertificateHash,
+            inputNullifiers = inputNullifiers,
+            inputClaims = selected.map { it.issuedClaim() },
+            outputCommitments = outputCommitments,
+            outputClaims = outputClaims.map { it.issuedClaim() },
+        )
         val draft = OfflineNote.AuditBundle(
             tokenId = tokenId,
             senderKeyCertificate = senderCertificate,
@@ -1421,13 +1476,14 @@ class OfflineNoteWallet @JvmOverloads constructor(
             inputClaims = selected.map { it.issuedClaim() },
             outputCommitments = outputCommitments,
             outputClaims = outputClaims,
-            recursiveProof = placeholderProof(),
+            recursiveProof = draftPlaceholderProof(auditPublicInputs.publicInputsHash()),
         )
         val audit = draft.replacingRecursiveProof(proofProvider.proveAudit(draft))
         audit.validateProofBinding()
         requireTrustedAuditCertificates(audit)
         require(proofVerifier.verifyAudit(audit)) { "Offline Note recursive audit proof verification failed" }
         val outputBearerAuditTrail = bearerAuditTrail(selected, audit)
+        bearerCashPolicy.validateAuditTrail(outputBearerAuditTrail, audit)
         store.mutateNotes { notes ->
             selected.forEach {
                 require(notes[it.noteCommitmentHex()]?.state == OfflineNoteWalletNoteState.SPENDABLE) {
@@ -1440,7 +1496,9 @@ class OfflineNoteWallet @JvmOverloads constructor(
                 }
             }
             selected.forEach {
-                notes[it.noteCommitmentHex()] = it.withState(OfflineNoteWalletNoteState.SPENT, createdAtMs)
+                notes[it.noteCommitmentHex()] = it
+                    .withState(OfflineNoteWalletNoteState.SPENT, createdAtMs)
+                    .withSpentPaymentRequestId(receiveRequest.paymentRequestId, createdAtMs)
             }
             if (changeNote != null) {
                 notes[changeNote.noteCommitmentHex()] = changeNote.withBearerAuditTrail(
@@ -1462,8 +1520,11 @@ class OfflineNoteWallet @JvmOverloads constructor(
 
     private fun rejectReusedReceiveRequest(paymentRequestId: String) {
         val reused = store.listNotes().any { note ->
-            note.state != OfflineNoteWalletNoteState.RECEIVE_PENDING &&
-                (note.origin as? OfflineNote.CommitmentOrigin.P2pOutput)?.paymentRequestId == paymentRequestId
+            note.spentPaymentRequestId == paymentRequestId ||
+                (
+                    note.state != OfflineNoteWalletNoteState.RECEIVE_PENDING &&
+                        (note.origin as? OfflineNote.CommitmentOrigin.P2pOutput)?.paymentRequestId == paymentRequestId
+                )
         }
         require(!reused) { "Offline Note receive request has already been used locally" }
     }
@@ -1562,6 +1623,14 @@ class OfflineNoteWallet @JvmOverloads constructor(
         val bearerAuditTrail = bearerAuditTrail(current)
         requireTrustedCertificate(current.keyCertificate, current.accountId)
         val inputNullifier = deriveInputNullifier(current)
+        val redeemPublicInputs = OfflineNote.RedeemPublicInputs(
+            sourceNoteCommitment = current.noteCommitment(),
+            inputNullifiers = listOf(inputNullifier),
+            keyCertificatePayloadHash = current.keyCertificate.payloadHash(),
+            recipient = recipient,
+            assetId = current.assetId,
+            amount = current.canonicalAmount,
+        )
         val draft = OfflineNote.Redeem(
             sourceNoteCommitment = current.noteCommitment(),
             inputNullifiers = listOf(inputNullifier),
@@ -1569,7 +1638,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
             recipient = recipient,
             assetId = current.assetId,
             amount = current.canonicalAmount,
-            recursiveProof = placeholderProof(),
+            recursiveProof = draftPlaceholderProof(redeemPublicInputs.publicInputsHash()),
         )
         val redemption = draft.replacingRecursiveProof(proofProvider.proveRedeem(draft))
         redemption.validateProofBinding()
@@ -1717,6 +1786,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
         require(audits.isNotEmpty() && audits.last().noritoEncoded().contentEquals(terminalAudit.noritoEncoded())) {
             "Offline Note bearer audit trail must end with the payment token audit"
         }
+        bearerCashPolicy.validateAuditTrail(audits, terminalAudit)
         val tokenIds = LinkedHashSet<String>()
         val nullifiers = LinkedHashSet<String>()
         val outputs = LinkedHashSet<String>()
@@ -1791,10 +1861,13 @@ class OfflineNoteWallet @JvmOverloads constructor(
     }
 }
 
-private fun placeholderProof(): OfflineNote.RecursiveProof =
+private fun draftPlaceholderProof(publicInputsHash: ByteArray): OfflineNote.RecursiveProof =
     OfflineNote.RecursiveProof(
-        publicInputsHash = OfflineNote.hash("offline-note-draft-proof".toByteArray(Charsets.UTF_8)),
-        proof = OfflineNote.ProofBox(OfflineNote.RECURSIVE_BACKEND, byteArrayOf(1)),
+        publicInputsHash = publicInputsHash,
+        proof = OfflineNote.ProofBox(
+            "offline-note/draft-placeholder",
+            byteArrayOf(0),
+        ),
     )
 
 private fun ensureSuccess(response: ClientResponse) {
@@ -1858,6 +1931,15 @@ private fun requiredString(value: Map<String, Any?>, field: String): String {
     require(raw is String && raw.isNotBlank()) { "$field must be a non-empty string" }
     return raw
 }
+
+private fun strictBase64UrlDecode(value: String, field: String): ByteArray {
+    require(value.trim().isNotEmpty() && !value.contains("=")) { "$field must be unpadded base64url" }
+    require(value.all(::isBase64UrlCharacter)) { "$field must be unpadded base64url" }
+    return Base64.getUrlDecoder().decode(value)
+}
+
+private fun isBase64UrlCharacter(value: Char): Boolean =
+    value in 'A'..'Z' || value in 'a'..'z' || value in '0'..'9' || value == '-' || value == '_'
 
 private fun hexBytes(value: String, field: String): ByteArray {
     val normalized = value.removePrefix("0x").removePrefix("0X").lowercase(Locale.ROOT)

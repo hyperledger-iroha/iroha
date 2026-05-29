@@ -114,8 +114,8 @@ public protocol OfflineNoteIssuerDeviceBindingProvider {
 }
 
 public final class ToriiOfflineNoteIssuerClient: OfflineNoteIssuerClient {
-    private static let keysRefillPath = "/v1/offline/keys/refill"
-    private static let notesIssuePath = "/v1/offline/notes/issue"
+    private static let keysRefillPath = ToriiOfflineCashAPI.Endpoint.keyRefill.path
+    private static let notesIssuePath = ToriiOfflineCashAPI.Endpoint.noteIssue.path
 
     private let baseURL: URL
     private let session: URLSession

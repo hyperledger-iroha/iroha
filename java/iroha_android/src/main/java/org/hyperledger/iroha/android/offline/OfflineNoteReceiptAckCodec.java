@@ -43,7 +43,9 @@ public final class OfflineNoteReceiptAckCodec {
     if (!trimmed.startsWith(TEXT_PREFIX)) {
       throw new IllegalArgumentException("Offline Note receipt ACK prefix missing");
     }
-    return decodeNorito(Base64.getUrlDecoder().decode(trimmed.substring(TEXT_PREFIX.length())));
+    return decodeNorito(
+        OfflineBase64Url.decodeUnpadded(
+            trimmed.substring(TEXT_PREFIX.length()), "Offline Note receipt ACK payload"));
   }
 
   public static List<byte[]> encodeQrFrameBytes(final OfflineNoteReceiptAck ack) {

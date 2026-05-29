@@ -44,6 +44,41 @@ public final class IdentifierReceiptCanonicalEncoder {
     return writer.toByteArray();
   }
 
+  static IdentifierResolutionPayload decodePayload(final byte[] encoded) {
+    final NoritoDecoder decoder =
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    final String policyId =
+        decodePolicyId(decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.policy_id"));
+    final IdentifierResolutionExecutionPayload execution =
+        decodeExecution(
+            decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.execution"));
+    final RamLfeOutputOpening opening =
+        decodeOutputOpening(
+            decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.opening"));
+    final String opaqueId =
+        decodeOpaqueHash(
+            decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.opaque_id"),
+            "opaque:",
+            "payload.opaque_id");
+    final String receiptHash =
+        hashHex(decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.receipt_hash"));
+    final String uaid =
+        decodeOpaqueHash(
+            decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.uaid"),
+            "uaid:",
+            "payload.uaid");
+    final String accountId =
+        TransferWirePayloadEncoder.decodeAccountIdPayload(
+            decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.account_id"),
+            decoder.flags(),
+            decoder.flagsHint());
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after identifier receipt payload");
+    }
+    return new IdentifierResolutionPayload(
+        policyId, execution, opening, opaqueId, receiptHash, uaid, accountId);
+  }
+
   public static byte[] encodeAttestation(final IdentifierReceiptAttestation attestation) {
     final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     switch (attestation.kind().toLowerCase(Locale.ROOT)) {
@@ -71,6 +106,29 @@ public final class IdentifierReceiptCanonicalEncoder {
     }
   }
 
+  static IdentifierReceiptAttestation decodeAttestation(final byte[] encoded) {
+    final NoritoDecoder decoder =
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    final long tag = decoder.readUInt(32);
+    final IdentifierReceiptAttestation attestation;
+    if (tag == 0L) {
+      final byte[] signature =
+          decodeSizedField(decoder, SIGNATURE_ADAPTER, "attestation.signature");
+      attestation = new IdentifierReceiptAttestation("signed", hexLower(signature), null, null);
+    } else if (tag == 1L) {
+      final ProofBoxPayload proof = decodeSizedField(decoder, ProofBoxAdapter.INSTANCE, "attestation.proof");
+      attestation =
+          new IdentifierReceiptAttestation(
+              "proof", null, proof.backend, Base64.getEncoder().encodeToString(proof.bytes));
+    } else {
+      throw new IllegalArgumentException("Unsupported identifier attestation tag: " + tag);
+    }
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after identifier receipt attestation");
+    }
+    return attestation;
+  }
+
   private static byte[] encodePolicyId(final String raw) {
     final String[] parts = raw.trim().split("#", 2);
     if (parts.length != 2 || parts[0].trim().isEmpty() || parts[1].trim().isEmpty()) {
@@ -80,6 +138,17 @@ public final class IdentifierReceiptCanonicalEncoder {
     encodeSizedField(writer, STRING_ADAPTER, parts[0].trim());
     encodeSizedField(writer, STRING_ADAPTER, parts[1].trim());
     return writer.toByteArray();
+  }
+
+  private static String decodePolicyId(final byte[] encoded) {
+    final NoritoDecoder decoder =
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    final String kind = decodeSizedField(decoder, STRING_ADAPTER, "payload.policy_id.kind");
+    final String rule = decodeSizedField(decoder, STRING_ADAPTER, "payload.policy_id.rule");
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after payload.policy_id");
+    }
+    return kind + "#" + rule;
   }
 
   private static byte[] encodeExecution(final IdentifierResolutionExecutionPayload execution) {
@@ -120,6 +189,79 @@ public final class IdentifierReceiptCanonicalEncoder {
     return writer.toByteArray();
   }
 
+  private static IdentifierResolutionExecutionPayload decodeExecution(final byte[] encoded) {
+    final NoritoDecoder decoder =
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    final String programId =
+        decodeProgramId(
+            decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.execution.program_id"));
+    final String programDigest =
+        hashHex(
+            decodeSizedField(
+                decoder, PassthroughBytesAdapter.INSTANCE, "payload.execution.program_digest"));
+    final String backend =
+        backendName(
+            Math.toIntExact(
+                decodeSizedField(decoder, U32Adapter.INSTANCE, "payload.execution.backend")));
+    final String verificationMode =
+        verificationModeName(
+            Math.toIntExact(
+                decodeSizedField(
+                    decoder, U32Adapter.INSTANCE, "payload.execution.verification_mode")));
+    final String inputCiphertextHash =
+        hashHex(
+            decodeSizedField(
+                decoder,
+                PassthroughBytesAdapter.INSTANCE,
+                "payload.execution.input_ciphertext_hash"));
+    final String outputCiphertextHash =
+        hashHex(
+            decodeSizedField(
+                decoder,
+                PassthroughBytesAdapter.INSTANCE,
+                "payload.execution.output_ciphertext_hash"));
+    final String parameterDigest =
+        hashHex(
+            decodeSizedField(
+                decoder, PassthroughBytesAdapter.INSTANCE, "payload.execution.parameter_digest"));
+    final String evaluationKeyDigest =
+        hashHex(
+            decodeSizedField(
+                decoder,
+                PassthroughBytesAdapter.INSTANCE,
+                "payload.execution.evaluation_key_digest"));
+    final String outputHash =
+        hashHex(
+            decodeSizedField(
+                decoder, PassthroughBytesAdapter.INSTANCE, "payload.execution.output_hash"));
+    final String associatedDataHash =
+        hashHex(
+            decodeSizedField(
+                decoder,
+                PassthroughBytesAdapter.INSTANCE,
+                "payload.execution.associated_data_hash"));
+    final long executedAtMs =
+        decodeSizedField(decoder, U64_ADAPTER, "payload.execution.executed_at_ms");
+    final Long expiresAtMs =
+        decodeSizedField(decoder, OptionalU64Adapter.INSTANCE, "payload.execution.expires_at_ms");
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after payload.execution");
+    }
+    return new IdentifierResolutionExecutionPayload(
+        programId,
+        programDigest,
+        backend,
+        verificationMode,
+        inputCiphertextHash,
+        outputCiphertextHash,
+        parameterDigest,
+        evaluationKeyDigest,
+        outputHash,
+        associatedDataHash,
+        executedAtMs,
+        expiresAtMs);
+  }
+
   private static byte[] encodeOutputOpening(final RamLfeOutputOpening opening) {
     final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     encodeSizedField(
@@ -131,6 +273,20 @@ public final class IdentifierReceiptCanonicalEncoder {
         SIGNATURE_ADAPTER,
         decodeHex(opening.signature(), "payload.opening.signature"));
     return writer.toByteArray();
+  }
+
+  private static RamLfeOutputOpening decodeOutputOpening(final byte[] encoded) {
+    final NoritoDecoder decoder =
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    final RamLfeOutputOpeningPayload payload =
+        decodeOutputOpeningPayload(
+            decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.opening.payload"));
+    final String signature =
+        hexLower(decodeSizedField(decoder, SIGNATURE_ADAPTER, "payload.opening.signature"));
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after payload.opening");
+    }
+    return new RamLfeOutputOpening(payload, signature);
   }
 
   private static byte[] encodeOutputOpeningPayload(final RamLfeOutputOpeningPayload payload) {
@@ -161,10 +317,75 @@ public final class IdentifierReceiptCanonicalEncoder {
     return writer.toByteArray();
   }
 
+  private static RamLfeOutputOpeningPayload decodeOutputOpeningPayload(final byte[] encoded) {
+    final NoritoDecoder decoder =
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    final String programId =
+        decodeProgramId(
+            decodeSizedField(
+                decoder, PassthroughBytesAdapter.INSTANCE, "payload.opening.payload.program_id"));
+    final String inputCiphertextHash =
+        hashHex(
+            decodeSizedField(
+                decoder,
+                PassthroughBytesAdapter.INSTANCE,
+                "payload.opening.payload.input_ciphertext_hash"));
+    final String outputCiphertextHash =
+        hashHex(
+            decodeSizedField(
+                decoder,
+                PassthroughBytesAdapter.INSTANCE,
+                "payload.opening.payload.output_ciphertext_hash"));
+    final String parameterDigest =
+        hashHex(
+            decodeSizedField(
+                decoder,
+                PassthroughBytesAdapter.INSTANCE,
+                "payload.opening.payload.parameter_digest"));
+    final String evaluationKeyDigest =
+        hashHex(
+            decodeSizedField(
+                decoder,
+                PassthroughBytesAdapter.INSTANCE,
+                "payload.opening.payload.evaluation_key_digest"));
+    final String openedOutputHash =
+        hashHex(
+            decodeSizedField(
+                decoder,
+                PassthroughBytesAdapter.INSTANCE,
+                "payload.opening.payload.opened_output_hash"));
+    final long openedAtMs =
+        decodeSizedField(decoder, U64_ADAPTER, "payload.opening.payload.opened_at_ms");
+    final Long expiresAtMs =
+        decodeSizedField(decoder, OptionalU64Adapter.INSTANCE, "payload.opening.payload.expires_at_ms");
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after payload.opening.payload");
+    }
+    return new RamLfeOutputOpeningPayload(
+        programId,
+        inputCiphertextHash,
+        outputCiphertextHash,
+        parameterDigest,
+        evaluationKeyDigest,
+        openedOutputHash,
+        openedAtMs,
+        expiresAtMs);
+  }
+
   private static byte[] encodeProgramId(final String raw) {
     final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     encodeSizedField(writer, STRING_ADAPTER, requireNonBlank(raw, "payload.execution.program_id"));
     return writer.toByteArray();
+  }
+
+  private static String decodeProgramId(final byte[] encoded) {
+    final NoritoDecoder decoder =
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    final String programId = decodeSizedField(decoder, STRING_ADAPTER, "program_id");
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after program_id");
+    }
+    return programId;
   }
 
   private static int backendTag(final String raw) {
@@ -191,6 +412,30 @@ public final class IdentifierReceiptCanonicalEncoder {
     }
   }
 
+  private static String backendName(final int tag) {
+    switch (tag) {
+      case 0:
+        return "hkdf-sha3-512-prf-v1";
+      case 1:
+        return "bfv-affine-sha3-256-v1";
+      case 2:
+        return "bfv-programmed-sha3-256-v1";
+      default:
+        throw new IllegalArgumentException("unsupported RAM-LFE backend tag: " + tag);
+    }
+  }
+
+  private static String verificationModeName(final int tag) {
+    switch (tag) {
+      case 0:
+        return "signed";
+      case 1:
+        return "proof";
+      default:
+        throw new IllegalArgumentException("unsupported RAM-LFE verification mode tag: " + tag);
+    }
+  }
+
   private static byte[] encodePrefixedHash(
       final String raw, final String prefix, final String field) {
     final String normalized = raw.trim().toLowerCase(Locale.ROOT);
@@ -206,6 +451,21 @@ public final class IdentifierReceiptCanonicalEncoder {
     writer.writeLength(hash.length, compact);
     writer.writeBytes(hash);
     return writer.toByteArray();
+  }
+
+  private static String decodeOpaqueHash(
+      final byte[] encoded, final String prefix, final String field) {
+    final NoritoDecoder decoder =
+        new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    final long length = decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0);
+    if (length != 32L) {
+      throw new IllegalArgumentException(field + " must contain 32 bytes");
+    }
+    final byte[] hash = decoder.readBytes(32);
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after " + field);
+    }
+    return prefix + hashHex(hash);
   }
 
   private static byte[] decodeHash(final String raw, final String field) {
@@ -262,6 +522,36 @@ public final class IdentifierReceiptCanonicalEncoder {
     encoder.writeBytes(payload);
   }
 
+  private static <T> T decodeSizedField(
+      final NoritoDecoder decoder, final TypeAdapter<T> adapter, final String fieldName) {
+    final long length = decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0);
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(fieldName + " payload too large");
+    }
+    final byte[] payload = decoder.readBytes((int) length);
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final T value = adapter.decode(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after " + fieldName + " payload");
+    }
+    return value;
+  }
+
+  private static String hashHex(final byte[] bytes) {
+    if (bytes.length != 32) {
+      throw new IllegalArgumentException("hash value must contain 32 bytes");
+    }
+    return hexLower(bytes);
+  }
+
+  private static String hexLower(final byte[] bytes) {
+    final StringBuilder builder = new StringBuilder(bytes.length * 2);
+    for (final byte value : bytes) {
+      builder.append(String.format("%02x", value & 0xFF));
+    }
+    return builder.toString();
+  }
+
   private enum U32Adapter implements TypeAdapter<Long> {
     INSTANCE;
 
@@ -272,7 +562,7 @@ public final class IdentifierReceiptCanonicalEncoder {
 
     @Override
     public Long decode(final NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("decode not supported");
+      return decoder.readUInt(32);
     }
   }
 
@@ -291,7 +581,14 @@ public final class IdentifierReceiptCanonicalEncoder {
 
     @Override
     public Long decode(final NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("decode not supported");
+      final int tag = decoder.readByte();
+      if (tag == 0) {
+        return null;
+      }
+      if (tag != 1) {
+        throw new IllegalArgumentException("Invalid optional u64 tag: " + tag);
+      }
+      return decodeSizedField(decoder, U64_ADAPTER, "optional u64");
     }
   }
 
@@ -305,7 +602,7 @@ public final class IdentifierReceiptCanonicalEncoder {
 
     @Override
     public byte[] decode(final NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("decode not supported");
+      return decoder.readBytes(decoder.remaining());
     }
   }
 
@@ -330,7 +627,9 @@ public final class IdentifierReceiptCanonicalEncoder {
 
     @Override
     public ProofBoxPayload decode(final NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("decode not supported");
+      final String backend = decodeSizedField(decoder, STRING_ADAPTER, "proof.backend");
+      final byte[] bytes = decodeSizedField(decoder, RAW_BYTE_VEC_ADAPTER, "proof.bytes");
+      return new ProofBoxPayload(backend, bytes);
     }
   }
 }

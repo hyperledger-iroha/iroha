@@ -42,8 +42,10 @@
   and fixed-length hash/signature handling with the Rust codec.
 - Streaming resume parity: `KeyUpdateState`/`ContentKeyState` snapshot helpers
   plus baseline RLE block decoding with explicit end-of-block validation.
-- Columnar helpers: NCB/AoS layouts for `(u64, String, boolean)`, `(u64, bytes)`
-  (including optional bytes), and `(u64, enum(Name|Code), boolean)` rows.
+- Columnar helpers: NCB/AoS layouts for `(u64, String, boolean)`,
+  `(u64, Optional<String>, boolean)`, `(u64, Optional<u32>, boolean)`,
+  `(u64, bytes)`, `(u64, bytes, boolean)` (including optional bytes), and
+  `(u64, enum(Name|Code), boolean)` rows.
 - Schema hashing: first 16 bytes of domain-separated SHA-256 over the canonical
   type name or structural schema JSON.
 - CLI utility: `NoritoDump` prints header fields for inspection.

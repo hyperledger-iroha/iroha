@@ -13,9 +13,14 @@ enum class OfflineBearerCashTransport {
     FRAMED_BYTE_TRANSPORT,
 }
 
+/** Derived policy metrics for an ordered Offline Bearer Cash audit trail. */
+data class OfflineBearerCashAuditTrailMetricsV1(
+    @JvmField val custodyHops: Int,
+    @JvmField val lineageSteps: Int,
+)
+
 /** Pilot policy defaults for Offline Bearer Cash v1 handoffs. */
 class OfflineBearerCashPolicyV1 @JvmOverloads constructor(
-    // TODO: Enforce custody and lineage limits when note audit payloads carry those counters.
     val maxCustodyHops: Int = 5,
     val maxLineageSteps: Int = 32,
     val maxSingleQrPayloadBytes: Int = 2_048,
@@ -47,10 +52,95 @@ class OfflineBearerCashPolicyV1 @JvmOverloads constructor(
         }
     }
 
+    @JvmOverloads
+    fun auditTrailMetrics(
+        audits: List<OfflineNote.AuditBundle>,
+        terminalAudit: OfflineNote.AuditBundle? = null,
+    ): OfflineBearerCashAuditTrailMetricsV1 {
+        if (terminalAudit != null) {
+            require(audits.isNotEmpty() && audits.last().noritoEncoded().contentEquals(terminalAudit.noritoEncoded())) {
+                "bearer audit trail must end with terminal audit"
+            }
+        }
+        if (audits.isEmpty()) {
+            return OfflineBearerCashAuditTrailMetricsV1(custodyHops = 0, lineageSteps = 0)
+        }
+
+        val tokenIds = LinkedHashSet<String>()
+        val nullifiers = LinkedHashSet<String>()
+        val outputProducerIndex = LinkedHashMap<String, Int>()
+        audits.forEachIndexed { index, audit ->
+            val tokenId = bearerCashHexLower(audit.tokenId())
+            require(tokenIds.add(tokenId)) { "bearer audit trail has duplicate token id: $tokenId" }
+            audit.inputNullifiers().forEach { nullifier ->
+                val key = bearerCashHexLower(nullifier)
+                require(nullifiers.add(key)) { "bearer audit trail has duplicate input nullifier: $key" }
+            }
+            val committed = audit.outputCommitments().map(::bearerCashHexLower).toSet()
+            audit.outputClaims.forEach { claim ->
+                val key = bearerCashHexLower(claim.noteCommitment())
+                require(key in committed) { "bearer audit trail output claim is not committed: $key" }
+            }
+            audit.outputCommitments().forEach { output ->
+                val key = bearerCashHexLower(output)
+                require(!outputProducerIndex.containsKey(key)) {
+                    "bearer audit trail has duplicate output commitment: $key"
+                }
+                outputProducerIndex[key] = index
+            }
+        }
+
+        val depths = ArrayList<Int>(audits.size)
+        var maxDepth = 0
+        audits.forEachIndexed { index, audit ->
+            var parentDepth = 0
+            audit.inputClaims.forEach { claim ->
+                val key = bearerCashHexLower(claim.noteCommitment())
+                val producerIndex = outputProducerIndex[key] ?: return@forEach
+                require(producerIndex < index) { "bearer audit trail input claim is out of order: $key" }
+                parentDepth = maxOf(parentDepth, depths[producerIndex])
+            }
+            val depth = parentDepth + 1
+            depths.add(depth)
+            maxDepth = maxOf(maxDepth, depth)
+        }
+
+        return OfflineBearerCashAuditTrailMetricsV1(
+            custodyHops = maxDepth,
+            lineageSteps = audits.size,
+        )
+    }
+
+    @JvmOverloads
+    fun validateAuditTrail(
+        audits: List<OfflineNote.AuditBundle>,
+        terminalAudit: OfflineNote.AuditBundle? = null,
+    ): OfflineBearerCashAuditTrailMetricsV1 {
+        val metrics = auditTrailMetrics(audits, terminalAudit)
+        require(metrics.custodyHops <= maxCustodyHops) {
+            "bearer audit trail custody hops ${metrics.custodyHops} exceed maxCustodyHops $maxCustodyHops"
+        }
+        require(metrics.lineageSteps <= maxLineageSteps) {
+            "bearer audit trail lineage steps ${metrics.lineageSteps} exceed maxLineageSteps $maxLineageSteps"
+        }
+        return metrics
+    }
+
     companion object {
         @JvmField
         val DEFAULT: OfflineBearerCashPolicyV1 = OfflineBearerCashPolicyV1()
     }
+}
+
+private fun bearerCashHexLower(bytes: ByteArray): String {
+    val chars = CharArray(bytes.size * 2)
+    val table = "0123456789abcdef"
+    for (i in bytes.indices) {
+        val value = bytes[i].toInt() and 0xFF
+        chars[i * 2] = table[value ushr 4]
+        chars[i * 2 + 1] = table[value and 0x0F]
+    }
+    return String(chars)
 }
 
 /** Text payload kind accepted by Offline Bearer Cash v1 app transports. */

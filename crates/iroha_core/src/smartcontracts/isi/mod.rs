@@ -202,6 +202,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::offline::IssueOfflineNote>,
     dispatch_instruction::<iroha_data_model::isi::offline::RedeemOfflineNote>,
     dispatch_instruction::<iroha_data_model::isi::offline::AuditOfflineNote>,
+    dispatch_instruction::<iroha_data_model::isi::offline::KagemushaTransfer>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
     dispatch_instruction::<iroha_data_model::isi::social::SendToTwitter>,
     dispatch_instruction::<iroha_data_model::isi::social::CancelTwitterEscrow>,

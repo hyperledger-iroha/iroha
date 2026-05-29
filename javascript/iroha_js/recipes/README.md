@@ -21,9 +21,9 @@ npm run build:native
 node ./recipes/batching.mjs
 ```
 
-The script uses placeholder key material; replace the sample authority/account
-values with real identities before attempting to submit transactions on a live
-network.
+The script uses deterministic sample key material; replace the sample
+authority/account values with real identities before attempting to submit
+transactions on a live network.
 
 ## nft_account_iteration.mjs
 

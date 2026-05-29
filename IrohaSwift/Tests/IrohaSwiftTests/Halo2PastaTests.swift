@@ -1555,6 +1555,57 @@ final class Halo2PastaTests: XCTestCase {
             XCTAssertEqual(error as? OfflineNoteInstanceError, .invalidCount(label: "audit output", count: 3, max: 2))
         }
 
+        XCTAssertThrowsError(try OfflineNoteAuditBundle(
+            tokenId: audit.tokenId,
+            senderKeyCertificate: audit.senderKeyCertificate,
+            inputNullifiers: audit.inputNullifiers,
+            inputClaims: audit.inputClaims,
+            outputCommitments: audit.outputCommitments + [Self.flippedHash(audit.outputCommitments[0])],
+            outputClaims: audit.outputClaims,
+            recursiveProof: audit.recursiveProof
+        )) { error in
+            XCTAssertEqual(
+                error as? OfflineNoteError,
+                .auditOutputCountMismatch(
+                    commitments: audit.outputCommitments.count + 1,
+                    claims: audit.outputClaims.count
+                )
+            )
+        }
+
+        XCTAssertGreaterThan(audit.outputCommitments.count, 1)
+        XCTAssertThrowsError(try OfflineNoteAuditBundle(
+            tokenId: audit.tokenId,
+            senderKeyCertificate: audit.senderKeyCertificate,
+            inputNullifiers: audit.inputNullifiers,
+            inputClaims: audit.inputClaims,
+            outputCommitments: Array(audit.outputCommitments.reversed()),
+            outputClaims: audit.outputClaims,
+            recursiveProof: audit.recursiveProof
+        )) { error in
+            XCTAssertEqual(error as? OfflineNoteError, .auditOutputClaimOrderMismatch(index: 0))
+        }
+
+        let forgedClaim = try OfflineNoteIssuedClaim(
+            domain: audit.inputClaims[0].domain,
+            noteCommitment: audit.inputClaims[0].noteCommitment,
+            keyCertificatePayloadHash: Self.flippedHash(audit.inputClaims[0].keyCertificatePayloadHash),
+            assetId: audit.inputClaims[0].assetId,
+            amount: audit.inputClaims[0].amount
+        )
+        let forgedAudit = try OfflineNoteAuditBundle(
+            tokenId: audit.tokenId,
+            senderKeyCertificate: audit.senderKeyCertificate,
+            inputNullifiers: audit.inputNullifiers,
+            inputClaims: [forgedClaim],
+            outputCommitments: audit.outputCommitments,
+            outputClaims: audit.outputClaims,
+            recursiveProof: audit.recursiveProof
+        )
+        XCTAssertThrowsError(try OfflineNoteInstanceBuilder.auditInstanceValues(for: forgedAudit)) { error in
+            XCTAssertEqual(error as? OfflineNoteInstanceError, .auditInputCertificateMismatch)
+        }
+
         var mismatchedOutputClaims = audit.outputClaims
         mismatchedOutputClaims[0] = try OfflineNoteAuditOutputClaim(
             noteCommitment: mismatchedOutputClaims[0].noteCommitment,
@@ -2001,6 +2052,12 @@ final class Halo2PastaTests: XCTestCase {
             }
         }
         return out
+    }
+
+    private static func flippedHash(_ hash: Data) -> Data {
+        var copy = hash
+        copy[copy.startIndex] ^= 0x01
+        return copy
     }
 
     private static func hashLimb0Sum(_ hashes: [Data]) throws -> UInt64 {

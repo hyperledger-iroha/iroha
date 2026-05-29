@@ -4,7 +4,8 @@
 //! This module provides:
 //! - Stable proof/verifying-key hash helpers (`hash_proof`, `hash_vk`).
 //! - Batch-local de-duplication cache (`DedupCache`) and a light pre-verifier.
-//! - Backend dispatch for Halo2 (Pasta/KZG, IPA) with tiny-circuit smoke tests.
+//! - Backend dispatch for transparent Halo2 IPA/STARK proof families with
+//!   tiny-circuit smoke tests.
 //! - A unified ZK envelope (`ZK1 | TLV*`) reader/writer helpers for tests and
 //!   clients.
 //!
@@ -45,8 +46,6 @@ use std::{
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub mod confidential_v2;
 
-#[cfg(feature = "zk-preverify")]
-use iroha_crypto::streaming::TransportCapabilityResolutionSnapshot;
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId};
 #[cfg(feature = "zk-preverify")]
 use ivm::halo2::VMExecutionCircuit;
@@ -54,8 +53,6 @@ use ivm::halo2::VMExecutionCircuit;
 use kaigi_zk::{
     KAIGI_ROSTER_BACKEND, KAIGI_USAGE_BACKEND, KaigiRosterJoinCircuit, KaigiUsageCommitmentCircuit,
 };
-#[cfg(feature = "zk-preverify")]
-use norito::streaming::CapabilityFlags;
 use sha2::{Digest, Sha256};
 #[cfg(feature = "zk-preverify")]
 use tokio::sync::mpsc;
@@ -87,6 +84,8 @@ use halo2_proofs::{
     SerdeFormat, poly::VerificationStrategy, poly::commitment::Params as _,
     transcript::TranscriptReadBuffer,
 };
+#[cfg(feature = "zk-halo2-ipa")]
+use norito::codec::{Decode, Encode};
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
@@ -166,12 +165,77 @@ where
     }
 }
 
+#[cfg(feature = "zk-halo2-ipa")]
+const HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION: u16 = 1;
+
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+struct Halo2IpaProvingKeyArchive {
+    version: u16,
+    circuit_family: String,
+    vk_commitment: [u8; 32],
+    proving_key: Vec<u8>,
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn encode_halo2_ipa_proving_key_archive(
+    circuit_family: &str,
+    vk_commitment: [u8; 32],
+    proving_key: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    if circuit_family.is_empty() {
+        return Err("proving key archive circuit family must be non-empty".to_owned());
+    }
+    if proving_key.is_empty() {
+        return Err("proving key archive payload must be non-empty".to_owned());
+    }
+    norito::to_bytes(&Halo2IpaProvingKeyArchive {
+        version: HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION,
+        circuit_family: circuit_family.to_owned(),
+        vk_commitment,
+        proving_key,
+    })
+    .map_err(|err| format!("failed to encode proving key archive: {err}"))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn decode_halo2_ipa_proving_key_archive(
+    bytes: &[u8],
+    expected_circuit_family: &str,
+    expected_vk_commitment: [u8; 32],
+) -> Result<Vec<u8>, String> {
+    let archive: Halo2IpaProvingKeyArchive = norito::decode_from_bytes(bytes)
+        .map_err(|err| format!("failed to decode proving key archive: {err}"))?;
+    if archive.version != HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION {
+        return Err(format!(
+            "unsupported proving key archive version {}",
+            archive.version
+        ));
+    }
+    if archive.circuit_family != expected_circuit_family {
+        return Err(format!(
+            "proving key archive circuit family `{}` does not match `{expected_circuit_family}`",
+            archive.circuit_family
+        ));
+    }
+    if archive.vk_commitment != expected_vk_commitment {
+        return Err("proving key archive verifier-key commitment mismatch".to_owned());
+    }
+    if archive.proving_key.is_empty() {
+        return Err("proving key archive payload must be non-empty".to_owned());
+    }
+    Ok(archive.proving_key)
+}
+
 /// Hard caps for TLV sections to preserve bounded parsing and determinism.
 /// These are generous relative to current tests and examples.
 const MAX_PROOF_LEN: usize = 8 * 1024 * 1024; // 8 MiB
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-const MAX_INST_COLS: usize = 16;
+/// Upper bound for parsed public instance columns. This covers current IVM
+/// proofs, Offline recursive proofs, and the 30-column Kagemusha folded token
+/// statement while keeping malformed envelopes bounded.
+const MAX_INST_COLS: usize = 32;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 const MAX_INST_ROWS: usize = 8192;
@@ -186,6 +250,27 @@ pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution-v1";
 pub const IVM_EXECUTION_V1_IPA_K: u32 = 7;
 /// Maximum encoded proof payload accepted for IVM execution proofs.
 pub const IVM_EXECUTION_V1_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn is_ivm_execution_v1_circuit_id(circuit_id: &str) -> bool {
+    let trimmed = circuit_id.trim();
+    trimmed == IVM_EXECUTION_V1_CIRCUIT_ID
+        || trimmed
+            .strip_prefix("halo2/ipa:")
+            .is_some_and(|suffix| suffix == IVM_EXECUTION_V1_CIRCUIT_ID)
+        || trimmed
+            .strip_prefix("halo2/ipa::")
+            .is_some_and(|suffix| suffix == IVM_EXECUTION_V1_CIRCUIT_ID)
+        || trimmed
+            .strip_prefix("halo2/ipa/")
+            .is_some_and(|suffix| suffix == IVM_EXECUTION_V1_CIRCUIT_ID)
+        || trimmed
+            .strip_prefix("halo2/pasta/")
+            .is_some_and(|suffix| suffix == IVM_EXECUTION_V1_CIRCUIT_ID)
+        || trimmed
+            .strip_prefix("halo2/pasta/ipa/")
+            .is_some_and(|suffix| suffix == IVM_EXECUTION_V1_CIRCUIT_ID)
+}
 
 /// Canonical public-input schema descriptor for `halo2/ipa:ivm-execution-v1`.
 ///
@@ -281,6 +366,14 @@ pub const OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID: &str = "offline-note-recursive";
 pub const OFFLINE_NOTE_RECURSIVE_IPA_K: u32 = 7;
 /// Maximum encoded proof payload accepted for Offline recursive note proofs.
 pub const OFFLINE_NOTE_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
+/// Canonical circuit identifier for compact Kagemusha folded proofs.
+pub const KAGEMUSHA_FOLDED_CIRCUIT_ID: &str = "kagemusha-folded-v1";
+/// Halo2 IPA parameter degree used by the canonical Kagemusha folded circuit.
+pub const KAGEMUSHA_FOLDED_IPA_K: u32 = 7;
+/// Maximum encoded proof payload accepted for Kagemusha folded proofs.
+pub const KAGEMUSHA_FOLDED_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
+/// Maximum encoded proof payload accepted for each checked Kagemusha private hop.
+pub const KAGEMUSHA_HOP_MAX_PROOF_BYTES: u32 = confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES;
 
 const OFFLINE_NOTE_MODE_REDEEM: u64 = 1;
 const OFFLINE_NOTE_MODE_AUDIT: u64 = 2;
@@ -290,6 +383,12 @@ pub const OFFLINE_NOTE_INSTANCE_COLUMNS: usize = 16;
 pub const OFFLINE_NOTE_MAX_INPUT_AMOUNTS: usize = 4;
 /// Maximum number of output amount witness slots supported by Offline proofs.
 pub const OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS: usize = 2;
+/// Number of public instance columns exposed by Kagemusha folded proofs.
+pub const KAGEMUSHA_FOLDED_INSTANCE_COLUMNS: usize = 30;
+/// Number of private boolean witness bits for `hop_count - 1` (0..=63).
+pub const KAGEMUSHA_FOLDED_HOP_COUNT_BITS: usize = 6;
+const KAGEMUSHA_FOLDED_AGGREGATION_MODE_INDEX: usize = 4;
+const KAGEMUSHA_FOLDED_HOP_COUNT_INDEX: usize = 5;
 
 /// Public and private witness values for the canonical Offline semantic circuit.
 ///
@@ -343,8 +442,61 @@ impl OfflineNoteInstanceValues {
     }
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
-fn is_offline_note_recursive_circuit_id(circuit_id: &str) -> bool {
+/// Public witness values for the canonical Kagemusha folded semantic circuit.
+///
+/// The first four limbs bind the canonical folded-public-input hash, and the
+/// remaining columns expose the aggregation mode and chain-visible
+/// transcript fields that the proof envelope must match.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KagemushaFoldedInstanceValues {
+    /// Public instance values encoded as single-row Pasta field columns.
+    pub public_values: [u64; KAGEMUSHA_FOLDED_INSTANCE_COLUMNS],
+}
+
+impl KagemushaFoldedInstanceValues {
+    /// Return public instances in the byte layout carried by Halo2 proof envelopes.
+    #[must_use]
+    pub fn public_instance_columns(&self) -> Vec<Vec<[u8; 32]>> {
+        self.public_values
+            .iter()
+            .copied()
+            .map(limb_as_instance_bytes)
+            .map(|value| vec![value])
+            .collect()
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn public_scalars(
+        &self,
+    ) -> [halo2_proofs::halo2curves::pasta::Fp; KAGEMUSHA_FOLDED_INSTANCE_COLUMNS] {
+        self.public_values
+            .map(halo2_proofs::halo2curves::pasta::Fp::from)
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn hop_count_minus_one_bits(
+        &self,
+    ) -> Result<[halo2_proofs::halo2curves::pasta::Fp; KAGEMUSHA_FOLDED_HOP_COUNT_BITS], String>
+    {
+        let hop_count = self.public_values[KAGEMUSHA_FOLDED_HOP_COUNT_INDEX];
+        if hop_count == 0
+            || hop_count > iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS as u64
+        {
+            return Err(format!(
+                "Kagemusha folded hop_count must be in 1..={}",
+                iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS
+            ));
+        }
+        let mut adjusted = hop_count - 1;
+        Ok(std::array::from_fn(|_| {
+            let bit = adjusted & 1;
+            adjusted >>= 1;
+            halo2_proofs::halo2curves::pasta::Fp::from(bit)
+        }))
+    }
+}
+
+pub(crate) fn is_offline_note_recursive_circuit_id(circuit_id: &str) -> bool {
     matches!(
         circuit_id,
         OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID
@@ -352,6 +504,17 @@ fn is_offline_note_recursive_circuit_id(circuit_id: &str) -> bool {
             | "halo2/ipa/offline-note-recursive"
             | "halo2/pasta/offline-note-recursive"
             | "halo2/pasta/ipa/offline-note-recursive"
+    )
+}
+
+fn is_kagemusha_folded_circuit_id(circuit_id: &str) -> bool {
+    matches!(
+        circuit_id,
+        KAGEMUSHA_FOLDED_CIRCUIT_ID
+            | "halo2/ipa:kagemusha-folded-v1"
+            | "halo2/ipa/kagemusha-folded-v1"
+            | "halo2/pasta/kagemusha-folded-v1"
+            | "halo2/pasta/ipa/kagemusha-folded-v1"
     )
 }
 
@@ -419,6 +582,77 @@ pub fn offline_note_recursive_vk_record(
     record.vk_len = u32::try_from(vk_box.bytes.len())
         .map_err(|_| "offline verifying key length overflowed u32".to_owned())?;
     record.max_proof_bytes = OFFLINE_NOTE_MAX_PROOF_BYTES;
+    record.gas_schedule_id = Some("halo2_default".to_owned());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+    record.namespace = namespace.into();
+    Ok(record)
+}
+
+/// Build the canonical inline verifier key for Kagemusha folded proofs.
+///
+/// The returned key is a real Halo2 IPA verifier key envelope (`IPAK` + `H2VK`)
+/// for `kagemusha-folded-v1`; it is suitable for WSV registration.
+///
+/// # Errors
+///
+/// Returns an error if Halo2 verifier-key generation fails.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn kagemusha_folded_vk_box() -> Result<VerifyingKeyBox, String> {
+    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            build_kagemusha_folded_vk_box().map_err(|err| {
+                format!("failed to generate kagemusha-folded-v1 verifying key: {err}")
+            })
+        })
+        .clone()
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn build_kagemusha_folded_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
+    use halo2_proofs::plonk::keygen_vk;
+
+    let params = pasta_params_new(KAGEMUSHA_FOLDED_IPA_K);
+    let circuit = pasta_tiny::KagemushaFoldedSemantic::default();
+    let vk = keygen_vk(&params, &circuit)?;
+    let mut bytes = zk1::wrap_start();
+    zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_FOLDED_IPA_K);
+    zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+    Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
+}
+
+/// Build a governance/WSV verifier-key record for Kagemusha folded proofs.
+///
+/// The record is active, embeds the real Halo2 IPA verifier key inline, and
+/// binds to the canonical Kagemusha folded public-input schema hash.
+///
+/// # Errors
+///
+/// Returns an error if verifier-key generation fails or the key length cannot be encoded.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn kagemusha_folded_vk_record(
+    namespace: impl Into<String>,
+    version: u32,
+) -> Result<iroha_data_model::proof::VerifyingKeyRecord, String> {
+    use iroha_data_model::{
+        confidential::ConfidentialStatus, offline::kagemusha_folded_public_inputs_schema_hash,
+        zk::BackendTag,
+    };
+
+    let vk_box = kagemusha_folded_vk_box()?;
+    let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
+        version,
+        KAGEMUSHA_FOLDED_CIRCUIT_ID,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        kagemusha_folded_public_inputs_schema_hash(),
+        hash_vk(&vk_box),
+    );
+    record.vk_len = u32::try_from(vk_box.bytes.len())
+        .map_err(|_| "Kagemusha folded verifying key length overflowed u32".to_owned())?;
+    record.max_proof_bytes = KAGEMUSHA_FOLDED_MAX_PROOF_BYTES;
     record.gas_schedule_id = Some("halo2_default".to_owned());
     record.key = Some(vk_box);
     record.status = ConfidentialStatus::Active;
@@ -602,6 +836,22 @@ pub fn offline_note_audit_instance_values(
     if audit.input_nullifiers.len() != audit.input_claims.len() {
         return Err("offline audit input claim count must match input nullifier count".to_owned());
     }
+    if audit.output_commitments.len() != audit.output_claims.len() {
+        return Err(
+            "offline audit output claim count must match output commitment count".to_owned(),
+        );
+    }
+    if audit
+        .output_commitments
+        .iter()
+        .zip(&audit.output_claims)
+        .any(|(commitment, claim)| commitment != &claim.note_commitment)
+    {
+        return Err(
+            "offline audit output claims must be ordered one-to-one with output commitments"
+                .to_owned(),
+        );
+    }
 
     let public_inputs_hash = audit
         .public_inputs_hash()
@@ -610,6 +860,25 @@ pub fn offline_note_audit_instance_values(
         .sender_key_certificate
         .payload_hash()
         .map_err(|err| format!("failed to encode Offline key certificate payload: {err}"))?;
+    for claim in &audit.input_claims {
+        if claim.key_certificate_payload_hash != key_certificate_payload_hash {
+            return Err("offline audit input claims must match sender key certificate".to_owned());
+        }
+    }
+    if let Some(input_claim) = audit.input_claims.first() {
+        let input_definition = input_claim.asset.definition();
+        if audit
+            .input_claims
+            .iter()
+            .any(|claim| claim.asset.definition() != input_definition)
+            || audit
+                .output_claims
+                .iter()
+                .any(|claim| claim.asset.definition() != input_definition)
+        {
+            return Err("offline audit input and output asset definitions must match".to_owned());
+        }
+    }
 
     let input_claim_hashes = audit
         .input_claims
@@ -677,6 +946,91 @@ pub fn offline_note_audit_instance_values(
     })
 }
 
+/// Build the public instance values expected for a Kagemusha folded proof.
+///
+/// # Errors
+///
+/// Returns an error if the public input context is unsupported, if the payload
+/// cannot be hashed, or if `hop_count` is outside the compact-token corridor.
+pub fn kagemusha_folded_public_input_instance_values(
+    public_inputs: &iroha_data_model::offline::KagemushaFoldedPublicInputs,
+) -> Result<KagemushaFoldedInstanceValues, String> {
+    public_inputs
+        .validate_supported_context()
+        .map_err(|err| err.to_string())?;
+    let public_inputs_hash = public_inputs
+        .public_inputs_hash()
+        .map_err(|err| format!("failed to hash Kagemusha folded public inputs: {err}"))?;
+    if public_inputs.hop_count == 0
+        || usize::try_from(public_inputs.hop_count).map_or(true, |count| {
+            count > iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS
+        })
+    {
+        return Err(format!(
+            "Kagemusha folded hop_count must be in 1..={}",
+            iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS
+        ));
+    }
+
+    let public_hash_limbs = hash_to_u64_limbs_le(&public_inputs_hash);
+    let initial_root_limbs = bytes_to_u64_limbs_le(&public_inputs.initial_root);
+    let final_root_limbs = bytes_to_u64_limbs_le(&public_inputs.final_root);
+    let nullifier_limbs = hash_to_u64_limbs_le(&public_inputs.nullifier_digest);
+    let output_limbs = hash_to_u64_limbs_le(&public_inputs.output_commitment_digest);
+    let fold_limbs = hash_to_u64_limbs_le(&public_inputs.fold_digest);
+    let aggregation_limbs = bytes_to_u64_limbs_le(&public_inputs.aggregation_transcript_digest);
+
+    Ok(KagemushaFoldedInstanceValues {
+        public_values: [
+            public_hash_limbs[0],
+            public_hash_limbs[1],
+            public_hash_limbs[2],
+            public_hash_limbs[3],
+            u64::from(public_inputs.aggregation_mode),
+            u64::from(public_inputs.hop_count),
+            initial_root_limbs[0],
+            initial_root_limbs[1],
+            initial_root_limbs[2],
+            initial_root_limbs[3],
+            final_root_limbs[0],
+            final_root_limbs[1],
+            final_root_limbs[2],
+            final_root_limbs[3],
+            nullifier_limbs[0],
+            nullifier_limbs[1],
+            nullifier_limbs[2],
+            nullifier_limbs[3],
+            output_limbs[0],
+            output_limbs[1],
+            output_limbs[2],
+            output_limbs[3],
+            fold_limbs[0],
+            fold_limbs[1],
+            fold_limbs[2],
+            fold_limbs[3],
+            aggregation_limbs[0],
+            aggregation_limbs[1],
+            aggregation_limbs[2],
+            aggregation_limbs[3],
+        ],
+    })
+}
+
+/// Build the public instance values expected for a compact Kagemusha token proof.
+///
+/// # Errors
+///
+/// Returns an error if the folded proof is not bound to the canonical public
+/// inputs or if the instance layout cannot be built.
+pub fn kagemusha_compact_token_instance_values(
+    token: &iroha_data_model::offline::KagemushaCompactPaymentToken,
+) -> Result<KagemushaFoldedInstanceValues, String> {
+    token
+        .validate_public_input_binding()
+        .map_err(|err| err.to_string())?;
+    kagemusha_folded_public_input_instance_values(&token.public_inputs)
+}
+
 fn hash_domain_separated_payload(domain: &[u8], backend: &str, bytes: &[u8]) -> [u8; 32] {
     let backend_len = u64::try_from(backend.len()).expect("backend length must fit into u64");
     let bytes_len = u64::try_from(bytes.len()).expect("payload length must fit into u64");
@@ -735,7 +1089,51 @@ pub(crate) fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
 /// additional suffixes under this prefix (e.g., `stark/fri/sha256-goldilocks`).
 #[inline]
 pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
-    backend == ZK_BACKEND_STARK_FRI_V1 || backend.starts_with("stark/fri/")
+    if is_trusted_setup_backend_label(backend) || is_developer_only_backend_label(backend) {
+        return false;
+    }
+    backend == ZK_BACKEND_STARK_FRI_V1
+        || backend
+            .strip_prefix("stark/fri/")
+            .is_some_and(|profile| !profile.is_empty())
+}
+
+/// Returns `true` for backend labels that require a trusted setup and are not
+/// admitted into the production verifier registry.
+#[inline]
+#[must_use]
+pub fn is_trusted_setup_backend_label(backend: &str) -> bool {
+    let backend = backend.to_ascii_lowercase();
+    let backend = backend.as_str();
+    backend == "groth16"
+        || backend.starts_with("groth16/")
+        || backend == "kzg"
+        || backend.starts_with("kzg/")
+        || backend == "bn254"
+        || backend == "bn256"
+        || backend == "bls12_381"
+        || backend == "bls12-381"
+        || backend == "halo2/bn254"
+        || backend.starts_with("halo2/bn254/")
+        || backend.contains("/bn254")
+        || backend.contains(":bn254")
+        || backend.contains("/bn256")
+        || backend.contains(":bn256")
+        || backend.contains("/bls12")
+        || backend.contains(":bls12")
+        || backend == "halo2/kzg"
+        || backend.starts_with("halo2/kzg/")
+        || backend.contains("/kzg")
+        || backend.contains(":kzg")
+}
+
+/// Returns `true` for developer-only backend labels that must not enter
+/// production proof admission, preverification, or verifier dispatch.
+#[inline]
+#[must_use]
+pub fn is_developer_only_backend_label(backend: &str) -> bool {
+    let backend = backend.to_ascii_lowercase();
+    backend.contains("debug") || backend.contains("mock")
 }
 
 /// Returns `true` when `backend` is accepted for `ivm-execution-v1` proofs.
@@ -746,8 +1144,12 @@ pub fn is_ivm_execution_backend(backend: &str) -> bool {
 }
 
 fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
-    let mut limbs = [0u64; 4];
     let bytes: &[u8; 32] = hash.as_ref();
+    bytes_to_u64_limbs_le(bytes)
+}
+
+fn bytes_to_u64_limbs_le(bytes: &[u8; 32]) -> [u64; 4] {
+    let mut limbs = [0u64; 4];
     for (idx, limb) in limbs.iter_mut().enumerate() {
         let start = idx * 8;
         let end = start + 8;
@@ -810,13 +1212,18 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     use halo2_proofs::{
         SerdeFormat,
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{ProvingKey, VerifyingKey, create_proof, keygen_pk},
+        plonk::{ProvingKey, VerifyingKey, create_proof},
         poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
         transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
     };
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
     use rand_core_06::OsRng;
 
+    if !is_ivm_execution_v1_circuit_id(circuit_id) {
+        return Err(format!(
+            "unsupported IVM execution circuit id `{circuit_id}`"
+        ));
+    }
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
         return Err("ivm execution proving requires halo2/ipa verifying key backend".to_owned());
     }
@@ -859,12 +1266,18 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
         instance_columns_owned.iter().map(Vec::as_slice).collect();
     let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
 
+    let vk_commitment = hash_vk(vk_box);
     let proving_key: ProvingKey<Curve> = if let Some(bytes) = proving_key_bytes {
-        let mut cursor = Cursor::new(bytes);
+        let proving_key_raw = decode_halo2_ipa_proving_key_archive(
+            bytes,
+            IVM_EXECUTION_V1_CIRCUIT_ID,
+            vk_commitment,
+        )?;
+        let mut cursor = Cursor::new(proving_key_raw.as_slice());
         let pk = read_proving_key::<pasta_tiny::IvmExecutionBindV1, _>(&mut cursor)
             .map_err(|err| format!("failed to decode proving key: {err}"))?;
         let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
-        if consumed != bytes.len() {
+        if consumed != proving_key_raw.len() {
             return Err("failed to decode proving key: trailing bytes".to_owned());
         }
         if pk.get_vk().get_domain().k() != params.k() {
@@ -877,7 +1290,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
         }
         pk
     } else {
-        keygen_pk(
+        halo2_proofs::plonk::keygen_pk(
             &params,
             parsed_vk.clone(),
             &pasta_tiny::IvmExecutionBindV1::default(),
@@ -906,7 +1319,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::Halo2IpaPasta,
         circuit_id: circuit_id.to_owned(),
-        vk_hash: hash_vk(vk_box),
+        vk_hash: vk_commitment,
         public_inputs,
         proof_bytes: proof_payload,
         aux: Vec::new(),
@@ -918,7 +1331,8 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
 
 /// Derive Halo2 IPA proving-key bytes for the canonical `ivm-execution-v1` circuit.
 ///
-/// The returned bytes are the Halo2 `ProvingKey` serialization using `SerdeFormat::Processed`,
+/// The returned bytes are a Norito archive containing the Halo2 `ProvingKey`
+/// serialization, canonical circuit family, and verifier-key commitment,
 /// suitable for persistence in the Torii prover key store (`<backend>__<name>.pk`).
 ///
 /// Note: this operation is expensive (key generation) and should be performed offline.
@@ -953,7 +1367,53 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
         &pasta_tiny::IvmExecutionBindV1::default(),
     )
     .map_err(|err| format!("failed to derive proving key: {err}"))?;
-    Ok(pk.to_bytes(SerdeFormat::Processed))
+    encode_halo2_ipa_proving_key_archive(
+        IVM_EXECUTION_V1_CIRCUIT_ID,
+        hash_vk(vk_box),
+        pk.to_bytes(SerdeFormat::Processed),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn cached_offline_note_proving_key(
+    params: &PastaParams,
+    parsed_vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    vk_commitment: [u8; 32],
+) -> Result<Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>, String>
+{
+    static CACHE: OnceLock<
+        Mutex<
+            BTreeMap<
+                [u8; 32],
+                Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>,
+            >,
+        >,
+    > = OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(proving_key) = cache
+        .lock()
+        .expect("offline note proving key cache mutex poisoned")
+        .get(&vk_commitment)
+        .cloned()
+    {
+        return Ok(proving_key);
+    }
+
+    let proving_key = halo2_proofs::plonk::keygen_pk(
+        params,
+        parsed_vk.clone(),
+        &pasta_tiny::OfflineNoteSemantic::default(),
+    )
+    .map_err(|err| format!("failed to derive proving key: {err}"))?;
+    let proving_key = Arc::new(proving_key);
+    let mut cache = cache
+        .lock()
+        .expect("offline note proving key cache mutex poisoned");
+    match cache.entry(vk_commitment) {
+        Entry::Occupied(entry) => Ok(Arc::clone(entry.get())),
+        Entry::Vacant(entry) => Ok(Arc::clone(entry.insert(proving_key))),
+    }
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -968,7 +1428,7 @@ fn prove_halo2_ipa_offline_note_envelope(
     use halo2_proofs::{
         SerdeFormat,
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{ProvingKey, VerifyingKey, create_proof, keygen_pk},
+        plonk::{ProvingKey, VerifyingKey, create_proof},
         poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
         transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
     };
@@ -1002,12 +1462,18 @@ fn prove_halo2_ipa_offline_note_envelope(
         instance_columns_owned.iter().map(Vec::as_slice).collect();
     let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
 
-    let proving_key: ProvingKey<Curve> = if let Some(bytes) = proving_key_bytes {
-        let mut cursor = Cursor::new(bytes);
+    let vk_commitment = hash_vk(vk_box);
+    let proving_key: Arc<ProvingKey<Curve>> = if let Some(bytes) = proving_key_bytes {
+        let proving_key_raw = decode_halo2_ipa_proving_key_archive(
+            bytes,
+            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+            vk_commitment,
+        )?;
+        let mut cursor = Cursor::new(proving_key_raw.as_slice());
         let pk = read_proving_key::<pasta_tiny::OfflineNoteSemantic, _>(&mut cursor)
             .map_err(|err| format!("failed to decode proving key: {err}"))?;
         let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
-        if consumed != bytes.len() {
+        if consumed != proving_key_raw.len() {
             return Err("failed to decode proving key: trailing bytes".to_owned());
         }
         if pk.get_vk().get_domain().k() != params.k() {
@@ -1018,14 +1484,9 @@ fn prove_halo2_ipa_offline_note_envelope(
         {
             return Err("proving key verifying key does not match vk_ref bytes".to_owned());
         }
-        pk
+        Arc::new(pk)
     } else {
-        keygen_pk(
-            &params,
-            parsed_vk.clone(),
-            &pasta_tiny::OfflineNoteSemantic::default(),
-        )
-        .map_err(|err| format!("failed to derive proving key: {err}"))?
+        cached_offline_note_proving_key(&params, &parsed_vk, vk_commitment)?
     };
 
     let circuit = pasta_tiny::OfflineNoteSemantic {
@@ -1036,7 +1497,7 @@ fn prove_halo2_ipa_offline_note_envelope(
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
     create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
         &params,
-        &proving_key,
+        proving_key.as_ref(),
         &[circuit],
         &instance_refs,
         OsRng,
@@ -1052,7 +1513,7 @@ fn prove_halo2_ipa_offline_note_envelope(
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::Halo2IpaPasta,
         circuit_id: circuit_id.to_owned(),
-        vk_hash: hash_vk(vk_box),
+        vk_hash: vk_commitment,
         public_inputs: OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA.to_vec(),
         proof_bytes: proof_payload,
         aux: Vec::new(),
@@ -1064,9 +1525,10 @@ fn prove_halo2_ipa_offline_note_envelope(
 
 /// Derive Halo2 IPA proving-key bytes for the canonical Offline recursive note circuit.
 ///
-/// The returned bytes are the Halo2 `ProvingKey` serialization using
-/// `SerdeFormat::Processed`. They are intended to be generated offline and
-/// supplied to the real prover path; no mock or debug prover is used.
+/// The returned bytes are a Norito archive containing the Halo2 `ProvingKey`
+/// serialization, canonical circuit family, and verifier-key commitment. They
+/// are intended to be generated offline and supplied to the real prover path; no
+/// mock or debug prover is used.
 #[cfg(feature = "zk-halo2-ipa")]
 pub fn derive_halo2_ipa_offline_note_proving_key_bytes(
     vk_box: &VerifyingKeyBox,
@@ -1097,7 +1559,11 @@ pub fn derive_halo2_ipa_offline_note_proving_key_bytes(
         &pasta_tiny::OfflineNoteSemantic::default(),
     )
     .map_err(|err| format!("failed to derive proving key: {err}"))?;
-    Ok(pk.to_bytes(SerdeFormat::Processed))
+    encode_halo2_ipa_proving_key_archive(
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+        hash_vk(vk_box),
+        pk.to_bytes(SerdeFormat::Processed),
+    )
 }
 
 /// Prove an Offline redemption with the real Halo2 IPA recursive-note circuit.
@@ -1132,6 +1598,1098 @@ pub fn prove_offline_note_audit(
 ) -> Result<ProofBox, String> {
     let instance_values = offline_note_audit_instance_values(audit)?;
     prove_halo2_ipa_offline_note_envelope(circuit_id, vk_box, instance_values, proving_key_bytes)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn cached_kagemusha_folded_proving_key(
+    params: &PastaParams,
+    parsed_vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    vk_commitment: [u8; 32],
+) -> Result<Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>, String>
+{
+    static CACHE: OnceLock<
+        Mutex<
+            BTreeMap<
+                [u8; 32],
+                Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>,
+            >,
+        >,
+    > = OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(proving_key) = cache
+        .lock()
+        .expect("Kagemusha folded proving key cache mutex poisoned")
+        .get(&vk_commitment)
+        .cloned()
+    {
+        return Ok(proving_key);
+    }
+
+    let proving_key = halo2_proofs::plonk::keygen_pk(
+        params,
+        parsed_vk.clone(),
+        &pasta_tiny::KagemushaFoldedSemantic::default(),
+    )
+    .map_err(|err| format!("failed to derive Kagemusha folded proving key: {err}"))?;
+    let proving_key = Arc::new(proving_key);
+    let mut cache = cache
+        .lock()
+        .expect("Kagemusha folded proving key cache mutex poisoned");
+    match cache.entry(vk_commitment) {
+        Entry::Occupied(entry) => Ok(Arc::clone(entry.get())),
+        Entry::Vacant(entry) => Ok(Arc::clone(entry.insert(proving_key))),
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_halo2_ipa_kagemusha_folded_envelope(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    instance_values: KagemushaFoldedInstanceValues,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<ProofBox, String> {
+    use std::io::Cursor;
+
+    use halo2_proofs::{
+        SerdeFormat,
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{ProvingKey, VerifyingKey, create_proof},
+        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+    };
+    use iroha_data_model::{
+        offline::KAGEMUSHA_FOLDED_PUBLIC_INPUTS_SCHEMA,
+        zk::{BackendTag, OpenVerifyEnvelope},
+    };
+    use rand_core_06::OsRng;
+
+    if !is_kagemusha_folded_circuit_id(circuit_id) {
+        return Err(format!(
+            "unsupported Kagemusha folded circuit id `{circuit_id}`"
+        ));
+    }
+    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
+        return Err("Kagemusha folded proving requires halo2/ipa verifying key backend".to_owned());
+    }
+
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+        pasta_tiny::KagemushaFoldedSemantic,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        "missing/invalid H2VK payload for kagemusha-folded-v1 verifying key".to_owned()
+    })?;
+
+    let public_values = instance_values.public_scalars();
+    let hop_count_minus_one_bits = instance_values.hop_count_minus_one_bits()?;
+    let instance_columns_owned: Vec<Vec<Scalar>> =
+        public_values.iter().map(|value| vec![*value]).collect();
+    let instance_columns: Vec<&[Scalar]> =
+        instance_columns_owned.iter().map(Vec::as_slice).collect();
+    let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
+
+    let vk_commitment = hash_vk(vk_box);
+    let proving_key: Arc<ProvingKey<Curve>> = if let Some(bytes) = proving_key_bytes {
+        let proving_key_raw = decode_halo2_ipa_proving_key_archive(
+            bytes,
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            vk_commitment,
+        )?;
+        let mut cursor = Cursor::new(proving_key_raw.as_slice());
+        let pk = read_proving_key::<pasta_tiny::KagemushaFoldedSemantic, _>(&mut cursor)
+            .map_err(|err| format!("failed to decode Kagemusha folded proving key: {err}"))?;
+        let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
+        if consumed != proving_key_raw.len() {
+            return Err("failed to decode Kagemusha folded proving key: trailing bytes".to_owned());
+        }
+        if pk.get_vk().get_domain().k() != params.k() {
+            return Err(
+                "Kagemusha folded proving key domain does not match IPAK parameters".to_owned(),
+            );
+        }
+        if pk.get_vk().to_bytes(SerdeFormat::Processed)
+            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        {
+            return Err(
+                "Kagemusha folded proving key verifying key does not match vk_ref bytes".to_owned(),
+            );
+        }
+        Arc::new(pk)
+    } else {
+        cached_kagemusha_folded_proving_key(&params, &parsed_vk, vk_commitment)?
+    };
+
+    let circuit = pasta_tiny::KagemushaFoldedSemantic {
+        public_values,
+        hop_count_minus_one_bits,
+    };
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        &params,
+        proving_key.as_ref(),
+        &[circuit],
+        &instance_refs,
+        OsRng,
+        &mut transcript,
+    )
+    .map_err(|err| format!("failed to create Kagemusha folded proof: {err}"))?;
+    let proof_raw = transcript.finalize();
+
+    let mut proof_payload = zk1::wrap_start();
+    zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
+    zk1::wrap_append_instances_pasta_fp_cols(instance_columns.as_slice(), &mut proof_payload);
+
+    let envelope = OpenVerifyEnvelope {
+        backend: BackendTag::Halo2IpaPasta,
+        circuit_id: circuit_id.to_owned(),
+        vk_hash: vk_commitment,
+        public_inputs: KAGEMUSHA_FOLDED_PUBLIC_INPUTS_SCHEMA.to_vec(),
+        proof_bytes: proof_payload,
+        aux: Vec::new(),
+    };
+    let encoded = norito::to_bytes(&envelope)
+        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
+    Ok(ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded))
+}
+
+/// Derive Halo2 IPA proving-key bytes for the canonical Kagemusha folded circuit.
+///
+/// The returned bytes are a Norito archive containing the Halo2 `ProvingKey`
+/// serialization, canonical circuit family, and verifier-key commitment. They
+/// are intended to be generated offline and supplied to the real prover path; no
+/// mock or debug prover is used.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_kagemusha_folded_proving_key_bytes(
+    vk_box: &VerifyingKeyBox,
+) -> Result<Vec<u8>, String> {
+    use halo2_proofs::{
+        SerdeFormat,
+        halo2curves::pasta::EqAffine as Curve,
+        plonk::{VerifyingKey, keygen_pk},
+    };
+
+    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
+        return Err(
+            "Kagemusha folded proving key derivation requires halo2/ipa verifying key backend"
+                .to_owned(),
+        );
+    }
+
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+        pasta_tiny::KagemushaFoldedSemantic,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        "missing/invalid H2VK payload for kagemusha-folded-v1 verifying key".to_owned()
+    })?;
+
+    let pk = keygen_pk(
+        &params,
+        parsed_vk,
+        &pasta_tiny::KagemushaFoldedSemantic::default(),
+    )
+    .map_err(|err| format!("failed to derive Kagemusha folded proving key: {err}"))?;
+    encode_halo2_ipa_proving_key_archive(
+        KAGEMUSHA_FOLDED_CIRCUIT_ID,
+        hash_vk(vk_box),
+        pk.to_bytes(SerdeFormat::Processed),
+    )
+}
+
+/// Prove compact Kagemusha folded public inputs with the real Halo2 IPA circuit.
+///
+/// # Errors
+///
+/// Returns an error if the verifier/proving key is incompatible, the folded
+/// transcript cannot be converted to the semantic instance layout, or proof
+/// generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn prove_kagemusha_folded_public_inputs(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    public_inputs: &iroha_data_model::offline::KagemushaFoldedPublicInputs,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaFoldedProof, String> {
+    let instance_values = kagemusha_folded_public_input_instance_values(public_inputs)?;
+    let proof = prove_halo2_ipa_kagemusha_folded_envelope(
+        circuit_id,
+        vk_box,
+        instance_values,
+        proving_key_bytes,
+    )?;
+    let public_inputs_hash = public_inputs
+        .public_inputs_hash()
+        .map_err(|err| format!("failed to hash Kagemusha folded public inputs: {err}"))?;
+    Ok(iroha_data_model::offline::KagemushaFoldedProof {
+        verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, circuit_id),
+        public_inputs_hash,
+        proof,
+    })
+}
+
+/// Prove a compact Kagemusha payment token with the real Halo2 IPA folded circuit.
+///
+/// # Errors
+///
+/// Returns an error if proof generation fails or the resulting token binding is invalid.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn prove_kagemusha_compact_payment_token(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    public_inputs: iroha_data_model::offline::KagemushaFoldedPublicInputs,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
+    let folded_proof = prove_kagemusha_folded_public_inputs(
+        circuit_id,
+        vk_box,
+        &public_inputs,
+        proving_key_bytes,
+    )?;
+    let token = iroha_data_model::offline::KagemushaCompactPaymentToken {
+        public_inputs,
+        folded_proof,
+    };
+    token
+        .validate_public_input_binding()
+        .map_err(|err| err.to_string())?;
+    Ok(token)
+}
+
+/// Private hop proof material used to construct a compact Kagemusha token.
+///
+/// Wallet/prover code should use this checked form when folding private hops so
+/// each hop proof is verified and its actual proof payload, public-input
+/// statement, and verifier-key binding are what enter the folded transcript
+/// digest.
+pub struct KagemushaFoldProofStep<'a> {
+    /// Recent shielded Merkle root before this private hop.
+    pub root_before: [u8; 32],
+    /// Input nullifiers consumed by this private hop.
+    pub input_nullifiers: &'a [[u8; 32]],
+    /// Output note commitments created by this private hop.
+    pub output_commitments: &'a [[u8; 32]],
+    /// Shielded Merkle root after this private hop.
+    pub root_after: [u8; 32],
+    /// Transparent per-hop proof attachment.
+    pub attachment: &'a iroha_data_model::proof::ProofAttachment,
+    /// Verifier key referenced by `attachment`.
+    pub vk_box: &'a VerifyingKeyBox,
+}
+
+/// Active verifier-record material for one checked Kagemusha hop.
+///
+/// This mirrors the WSV key/value split where the [`VerifyingKeyId`] is the
+/// storage key and [`VerifyingKeyRecord`] is the governance-managed metadata.
+/// Production bundle verification should use these records when available so
+/// private hop proofs are tied to active verifier governance, not only inline
+/// wallet-provided key bytes.
+pub struct KagemushaHopVerifierRecord<'a> {
+    /// Registry key that must match the hop proof attachment.
+    pub id: &'a VerifyingKeyId,
+    /// Active verifier metadata registered for [`Self::id`].
+    pub record: &'a iroha_data_model::proof::VerifyingKeyRecord,
+}
+
+/// Return true when `backend` is accepted for production Kagemusha proof material.
+#[must_use]
+pub fn is_kagemusha_transparent_backend(backend: &str) -> bool {
+    iroha_data_model::offline::is_supported_kagemusha_proof_backend(backend)
+}
+
+/// Compute the proof hash used by checked Kagemusha fold construction.
+///
+/// The hash covers the full `ProofBox`, including its backend label, so the
+/// folded transcript cannot silently move proof bytes between backend domains.
+///
+/// # Errors
+///
+/// Returns an error if the proof box cannot be encoded with Norito.
+pub fn kagemusha_fold_step_proof_hash(proof: &ProofBox) -> Result<iroha_crypto::Hash, String> {
+    let bytes = norito::to_bytes(proof)
+        .map_err(|err| format!("failed to encode Kagemusha proof box: {err}"))?;
+    Ok(iroha_crypto::Hash::new(bytes))
+}
+
+fn ensure_kagemusha_hop_proof_size(proof: &ProofBox) -> Result<(), String> {
+    if proof.bytes.len() > KAGEMUSHA_HOP_MAX_PROOF_BYTES as usize {
+        return Err(format!(
+            "Kagemusha fold proof exceeds max_proof_bytes of {}",
+            KAGEMUSHA_HOP_MAX_PROOF_BYTES
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_kagemusha_verified_step_count(step_count: usize) -> Result<(), String> {
+    let max = iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS;
+    if step_count == 0 {
+        return Err("Kagemusha folded token requires at least one hop".to_owned());
+    }
+    if step_count > max {
+        return Err(format!(
+            "Kagemusha folded token supports at most {max} hops (found {step_count})"
+        ));
+    }
+    Ok(())
+}
+
+fn kagemusha_fold_step_public_inputs_digest_impl(
+    proof: &ProofBox,
+    expected_vk_hash: Option<[u8; 32]>,
+) -> Result<[u8; 32], String> {
+    let envelope = kagemusha_fold_open_verify_envelope(proof)?;
+    if envelope.vk_hash == [0u8; 32] {
+        return Err(
+            "Kagemusha fold proof envelope verifier key commitment must be non-zero".to_owned(),
+        );
+    }
+    if !envelope.aux.is_empty() {
+        return Err("Kagemusha fold proof envelope must have empty auxiliary bytes".to_owned());
+    }
+    if let Some(expected_vk_hash) = expected_vk_hash {
+        if envelope.vk_hash != expected_vk_hash {
+            return Err(
+                "Kagemusha fold proof envelope verifier key commitment mismatch".to_owned(),
+            );
+        }
+    }
+
+    let instance_columns = if proof.backend == ZK_BACKEND_HALO2_IPA {
+        if envelope.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
+            return Err("Kagemusha Halo2/IPA proof envelope has the wrong backend tag".to_owned());
+        }
+        extract_pasta_instance_columns_bytes(&envelope.proof_bytes).ok_or_else(|| {
+            "Kagemusha Halo2/IPA proof public input statement cannot be extracted".to_owned()
+        })?
+    } else if iroha_data_model::offline::is_supported_kagemusha_proof_backend(&proof.backend) {
+        if envelope.backend != iroha_data_model::zk::BackendTag::Stark {
+            return Err("Kagemusha STARK/FRI proof envelope has the wrong backend tag".to_owned());
+        }
+        let open: iroha_data_model::zk::StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&envelope.proof_bytes).map_err(|err| {
+                format!("invalid Kagemusha STARK/FRI public input wrapper: {err}")
+            })?;
+        if open.version != 1 {
+            return Err("unsupported Kagemusha STARK/FRI public input wrapper version".to_owned());
+        }
+        open.public_inputs
+    } else {
+        return Err("Kagemusha fold proof uses an unsupported transparent backend".to_owned());
+    };
+
+    let statement = iroha_data_model::offline::KagemushaProofPublicInputsStatement {
+        proof_backend: proof.backend.clone(),
+        envelope_backend: envelope.backend,
+        circuit_id: envelope.circuit_id,
+        vk_hash: envelope.vk_hash,
+        public_inputs_schema: envelope.public_inputs,
+        envelope_aux: envelope.aux,
+        instance_columns,
+    };
+    iroha_data_model::offline::kagemusha_proof_public_inputs_statement_digest(&statement)
+        .map_err(|err| err.to_string())
+}
+
+fn kagemusha_fold_open_verify_envelope(
+    proof: &ProofBox,
+) -> Result<iroha_data_model::zk::OpenVerifyEnvelope, String> {
+    norito::decode_from_bytes(&proof.bytes).map_err(|err| {
+        format!("Kagemusha fold proof statement is not a valid OpenVerifyEnvelope: {err}")
+    })
+}
+
+/// Compute the Poseidon2 digest of the public input statement verified by a Kagemusha hop proof.
+///
+/// The digest covers the proof backend label, transparent `OpenVerifyEnvelope` metadata, and the
+/// backend-native public instance columns, but only after rejecting non-canonical auxiliary bytes
+/// and zero verifier-key commitments. The private proof payload itself is committed separately by
+/// [`kagemusha_fold_step_proof_hash`].
+///
+/// # Errors
+///
+/// Returns an error when the proof is not a supported transparent `OpenVerifyEnvelope`, or when
+/// the backend-native public input columns cannot be extracted.
+pub fn kagemusha_fold_step_public_inputs_digest(proof: &ProofBox) -> Result<[u8; 32], String> {
+    kagemusha_fold_step_public_inputs_digest_impl(proof, None)
+}
+
+fn kagemusha_fold_step_public_inputs_digest_checked(
+    step: &KagemushaFoldProofStep<'_>,
+) -> Result<[u8; 32], String> {
+    kagemusha_fold_step_public_inputs_digest_impl(
+        &step.attachment.proof,
+        Some(hash_vk(step.vk_box)),
+    )
+}
+
+fn validate_kagemusha_fold_step_shape(step: &KagemushaFoldProofStep<'_>) -> Result<(), String> {
+    if step.input_nullifiers.is_empty()
+        || step.input_nullifiers.len() > iroha_data_model::offline::KAGEMUSHA_FOLD_STEP_MAX_INPUTS
+        || step.output_commitments.is_empty()
+        || step.output_commitments.len()
+            > iroha_data_model::offline::KAGEMUSHA_FOLD_STEP_MAX_OUTPUTS
+    {
+        return Err(format!(
+            "Kagemusha fold hop requires 1 to {} inputs and 1 to {} outputs",
+            iroha_data_model::offline::KAGEMUSHA_FOLD_STEP_MAX_INPUTS,
+            iroha_data_model::offline::KAGEMUSHA_FOLD_STEP_MAX_OUTPUTS
+        ));
+    }
+    if step
+        .input_nullifiers
+        .iter()
+        .any(|nullifier| *nullifier == [0u8; 32])
+    {
+        return Err("Kagemusha fold input nullifiers must be non-zero".to_owned());
+    }
+    if step
+        .output_commitments
+        .iter()
+        .any(|commitment| *commitment == [0u8; 32])
+    {
+        return Err("Kagemusha fold output commitments must be non-zero".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_kagemusha_fold_metadata(steps: &[KagemushaFoldProofStep<'_>]) -> Result<(), String> {
+    ensure_kagemusha_verified_step_count(steps.len())?;
+    let mut expected_root = steps
+        .first()
+        .map(|step| step.root_before)
+        .expect("validated non-empty Kagemusha step list");
+    let mut seen_inputs = std::collections::BTreeSet::new();
+    let mut seen_outputs = std::collections::BTreeSet::new();
+    for (hop_index, step) in steps.iter().enumerate() {
+        validate_kagemusha_fold_step_shape(step)?;
+        if step.root_before != expected_root {
+            return Err(format!(
+                "Kagemusha fold hop {hop_index} does not continue from the previous root"
+            ));
+        }
+
+        let mut input_nullifiers = step.input_nullifiers.to_vec();
+        input_nullifiers.sort_unstable();
+        for input in input_nullifiers {
+            if !seen_inputs.insert(input) {
+                return Err(format!(
+                    "Kagemusha folded input nullifier is duplicated at hop {hop_index}"
+                ));
+            }
+        }
+
+        let mut output_commitments = step.output_commitments.to_vec();
+        output_commitments.sort_unstable();
+        for output in output_commitments {
+            if !seen_outputs.insert(output) {
+                return Err(format!(
+                    "Kagemusha folded output commitment is duplicated at hop {hop_index}"
+                ));
+            }
+        }
+
+        expected_root = step.root_after;
+    }
+    Ok(())
+}
+
+fn validate_kagemusha_fold_attachment(step: &KagemushaFoldProofStep<'_>) -> Result<(), String> {
+    let backend = step.attachment.backend.as_str();
+    if step.attachment.proof.backend != step.attachment.backend
+        || step.attachment.vk_ref.backend != step.attachment.backend
+    {
+        return Err(
+            "Kagemusha fold proof backend, proof payload backend, and verifier key backend must match"
+                .to_owned(),
+        );
+    }
+    if step.vk_box.backend != step.attachment.backend {
+        return Err(
+            "Kagemusha fold verifier key backend must match the proof attachment".to_owned(),
+        );
+    }
+    if step.vk_box.bytes.is_empty() {
+        return Err("Kagemusha fold verifier key bytes must be non-empty".to_owned());
+    }
+    if step.attachment.vk_ref.name.trim().is_empty() {
+        return Err("Kagemusha fold verifier key id name must be non-empty".to_owned());
+    }
+    if !is_kagemusha_transparent_backend(backend) {
+        return Err(
+            "Kagemusha fold proofs require a transparent halo2/ipa or stark/fri backend".to_owned(),
+        );
+    }
+    ensure_kagemusha_hop_proof_size(&step.attachment.proof)?;
+    let Some(expected) = step.attachment.vk_commitment else {
+        return Err("Kagemusha fold verifier key commitment is required".to_owned());
+    };
+    let actual = hash_vk(step.vk_box);
+    if actual != expected {
+        return Err("Kagemusha fold verifier key commitment mismatch".to_owned());
+    }
+    if let Some(envelope_hash) = step.attachment.envelope_hash {
+        let expected_hash: [u8; 32] = iroha_crypto::Hash::new(&step.attachment.proof.bytes).into();
+        if envelope_hash != expected_hash {
+            return Err(
+                "Kagemusha fold proof envelope hash does not match the submitted envelope"
+                    .to_owned(),
+            );
+        }
+    }
+    let envelope = kagemusha_fold_open_verify_envelope(&step.attachment.proof)?;
+    let expected_envelope_backend = kagemusha_record_backend_for_proof_backend(backend)
+        .ok_or_else(|| "Kagemusha fold proof envelope backend is unsupported".to_owned())?;
+    if envelope.backend != expected_envelope_backend {
+        return Err("Kagemusha fold proof envelope backend mismatch".to_owned());
+    }
+    if envelope.vk_hash != actual {
+        return Err("Kagemusha fold proof envelope verifier key commitment mismatch".to_owned());
+    }
+    if !verify_backend(backend, &step.attachment.proof, Some(step.vk_box)) {
+        return Err("Kagemusha fold hop proof verification failed".to_owned());
+    }
+    Ok(())
+}
+
+fn kagemusha_record_backend_for_proof_backend(
+    backend: &str,
+) -> Option<iroha_data_model::zk::BackendTag> {
+    if backend == ZK_BACKEND_HALO2_IPA {
+        Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+    } else if iroha_data_model::offline::is_supported_kagemusha_proof_backend(backend) {
+        Some(iroha_data_model::zk::BackendTag::Stark)
+    } else {
+        None
+    }
+}
+
+fn kagemusha_hop_verifier_record<'a>(
+    id: &VerifyingKeyId,
+    records: &'a [KagemushaHopVerifierRecord<'a>],
+) -> Result<&'a KagemushaHopVerifierRecord<'a>, String> {
+    let mut found = None;
+    for record in records {
+        if record.id == id {
+            if found.is_some() {
+                return Err(format!(
+                    "Kagemusha fold verifier record `{}`/`{}` is duplicated",
+                    id.backend, id.name
+                ));
+            }
+            found = Some(record);
+        }
+    }
+    found.ok_or_else(|| {
+        format!(
+            "Kagemusha fold verifier record `{}`/`{}` is missing",
+            id.backend, id.name
+        )
+    })
+}
+
+fn validate_kagemusha_hop_verifier_record_set(
+    steps: &[KagemushaFoldProofStep<'_>],
+    records: &[KagemushaHopVerifierRecord<'_>],
+) -> Result<(), String> {
+    let mut required = std::collections::BTreeSet::new();
+    for step in steps {
+        required.insert(step.attachment.vk_ref.clone());
+    }
+
+    let mut supplied = std::collections::BTreeSet::new();
+    for record in records {
+        let id = (*record.id).clone();
+        if !supplied.insert(id.clone()) {
+            return Err(format!(
+                "Kagemusha fold verifier record `{}`/`{}` is duplicated",
+                id.backend, id.name
+            ));
+        }
+        if !required.contains(&id) {
+            return Err(format!(
+                "Kagemusha fold verifier record `{}`/`{}` is not referenced by any hop",
+                id.backend, id.name
+            ));
+        }
+    }
+
+    for id in required {
+        if !supplied.contains(&id) {
+            return Err(format!(
+                "Kagemusha fold verifier record `{}`/`{}` is missing",
+                id.backend, id.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_kagemusha_fold_verifier_record(
+    step: &KagemushaFoldProofStep<'_>,
+    hop_record: &KagemushaHopVerifierRecord<'_>,
+) -> Result<(), String> {
+    if hop_record.id != &step.attachment.vk_ref {
+        return Err("Kagemusha fold verifier record id does not match hop vk_ref".to_owned());
+    }
+    let record = hop_record.record;
+    if !record.is_active() {
+        return Err("Kagemusha fold verifier record is not active".to_owned());
+    }
+    let expected_backend =
+        kagemusha_record_backend_for_proof_backend(step.attachment.backend.as_str())
+            .ok_or_else(|| "Kagemusha fold verifier record backend is unsupported".to_owned())?;
+    if record.backend != expected_backend {
+        return Err("Kagemusha fold verifier record backend mismatch".to_owned());
+    }
+    if record.max_proof_bytes == 0
+        || step.attachment.proof.bytes.len() > record.max_proof_bytes as usize
+    {
+        return Err("Kagemusha fold proof exceeds verifier record proof-size cap".to_owned());
+    }
+    let envelope = kagemusha_fold_open_verify_envelope(&step.attachment.proof)?;
+    if !confidential_v2::is_confidential_transfer_v2_circuit_id(&record.circuit_id)
+        || !confidential_v2::is_confidential_transfer_v2_circuit_id(&envelope.circuit_id)
+    {
+        return Err(
+            "Kagemusha fold verifier records must use the confidential-transfer-v2 circuit"
+                .to_owned(),
+        );
+    }
+    let expected_schema_hash: [u8; 32] =
+        iroha_crypto::Hash::new(confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1)
+            .into();
+    if record.public_inputs_schema_hash != expected_schema_hash {
+        return Err("Kagemusha fold verifier record public-input schema mismatch".to_owned());
+    }
+    if envelope.public_inputs != confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1 {
+        return Err(
+            "Kagemusha fold proof envelope public-input schema is not confidential-transfer-v2"
+                .to_owned(),
+        );
+    }
+    if record.circuit_id != envelope.circuit_id {
+        return Err("Kagemusha fold verifier record circuit id mismatch".to_owned());
+    }
+    let schema_hash: [u8; 32] = iroha_crypto::Hash::new(envelope.public_inputs.as_slice()).into();
+    if record.public_inputs_schema_hash != schema_hash {
+        return Err("Kagemusha fold verifier record public-input schema mismatch".to_owned());
+    }
+    if step.vk_box.bytes.is_empty() {
+        return Err("Kagemusha fold verifier key bytes must be non-empty".to_owned());
+    }
+    let commitment = hash_vk(step.vk_box);
+    if record.commitment != commitment {
+        return Err("Kagemusha fold verifier record commitment mismatch".to_owned());
+    }
+    if envelope.vk_hash != commitment {
+        return Err(
+            "Kagemusha fold proof envelope verifier key hash does not match record".to_owned(),
+        );
+    }
+    if u32::try_from(step.vk_box.bytes.len()).ok() != Some(record.vk_len) {
+        return Err("Kagemusha fold verifier record key length mismatch".to_owned());
+    }
+    if let Some(inline_key) = &record.key {
+        if inline_key != step.vk_box {
+            return Err("Kagemusha fold verifier record inline key mismatch".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn validate_required_kagemusha_confidential_v2_step_public_inputs(
+    chain_id: &iroha_data_model::ChainId,
+    asset: &iroha_data_model::asset::AssetDefinitionId,
+    step: &KagemushaFoldProofStep<'_>,
+) -> Result<(), String> {
+    ensure_kagemusha_hop_proof_size(&step.attachment.proof)?;
+    let envelope = kagemusha_fold_open_verify_envelope(&step.attachment.proof)?;
+    if step.attachment.backend.as_str() != ZK_BACKEND_HALO2_IPA
+        || envelope.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
+    {
+        return Err(
+            "Kagemusha fold confidential-transfer-v2 hops require halo2/ipa backend".to_owned(),
+        );
+    }
+    if !confidential_v2::is_confidential_transfer_v2_circuit_id(&envelope.circuit_id) {
+        return Err(
+            "Kagemusha fold hops must expose the confidential-transfer-v2 circuit".to_owned(),
+        );
+    }
+    if envelope.public_inputs != confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1 {
+        return Err("Kagemusha fold confidential-transfer-v2 proof schema mismatch".to_owned());
+    }
+    if !envelope.aux.is_empty() {
+        return Err(
+            "Kagemusha fold confidential-transfer-v2 proof envelope must have empty auxiliary bytes"
+                .to_owned(),
+        );
+    }
+    let Ok((_input_commitments, proof_nullifiers, proof_outputs, proof_root, asset_tag, chain_tag)) =
+        confidential_v2::parse_transfer_public_inputs(&step.attachment.proof.bytes)
+    else {
+        return Err(
+            "Kagemusha fold confidential-transfer-v2 public inputs cannot be decoded".to_owned(),
+        );
+    };
+    if proof_root != step.root_before {
+        return Err("Kagemusha fold confidential-v2 root mismatch".to_owned());
+    }
+    let zero = [0u8; 32];
+    for index in 0..iroha_data_model::offline::KAGEMUSHA_FOLD_STEP_MAX_INPUTS {
+        let expected = step.input_nullifiers.get(index).copied().unwrap_or(zero);
+        if proof_nullifiers[index] != expected {
+            return Err("Kagemusha fold confidential-v2 nullifier mismatch".to_owned());
+        }
+    }
+    for index in 0..iroha_data_model::offline::KAGEMUSHA_FOLD_STEP_MAX_OUTPUTS {
+        let expected = step.output_commitments.get(index).copied().unwrap_or(zero);
+        if proof_outputs[index] != expected {
+            return Err("Kagemusha fold confidential-v2 output commitment mismatch".to_owned());
+        }
+    }
+    let expected_asset_tag = confidential_v2::derive_confidential_asset_tag_v2(&asset.to_string());
+    if asset_tag != expected_asset_tag {
+        return Err("Kagemusha fold confidential-v2 asset tag mismatch".to_owned());
+    }
+    let expected_chain_tag = confidential_v2::derive_confidential_chain_tag_v2(chain_id.as_str());
+    if chain_tag != expected_chain_tag {
+        return Err("Kagemusha fold confidential-v2 chain tag mismatch".to_owned());
+    }
+    Ok(())
+}
+
+/// Verify one private hop proof and convert it into folded transcript witness material.
+///
+/// # Errors
+///
+/// Returns an error if the hop shape is outside the compact corridor, the proof
+/// attachment is not transparent and consistently bound, the verifier key
+/// commitment is missing or does not match, proof verification fails, or the
+/// proof box cannot be hashed.
+fn kagemusha_verified_fold_step(
+    step: &KagemushaFoldProofStep<'_>,
+) -> Result<iroha_data_model::offline::KagemushaFoldStep, String> {
+    validate_kagemusha_fold_step_shape(step)?;
+    validate_kagemusha_fold_attachment(step)?;
+    Ok(iroha_data_model::offline::KagemushaFoldStep {
+        root_before: step.root_before,
+        input_nullifiers: step.input_nullifiers.to_vec(),
+        output_commitments: step.output_commitments.to_vec(),
+        root_after: step.root_after,
+        proof_hash: kagemusha_fold_step_proof_hash(&step.attachment.proof)?,
+        proof_public_inputs_digest: kagemusha_fold_step_public_inputs_digest_checked(step)?,
+        verifier_key_id: step.attachment.vk_ref.clone(),
+        verifier_key_commitment: step
+            .attachment
+            .vk_commitment
+            .expect("validated Kagemusha fold attachment has verifier-key commitment"),
+        verifier_key_poseidon_digest:
+            iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                step.vk_box.backend.as_str(),
+                &step.vk_box.bytes,
+            )
+            .map_err(|err| err.to_string())?,
+    })
+}
+
+/// Verify private hop proofs and build folded public inputs for a compact token.
+///
+/// This requires confidential-transfer-v2 proof envelopes and checks that the
+/// public root, nullifier, output, asset, and chain tags exposed by each proof
+/// match the folded hop metadata.
+/// TODO: Replace checked pre-fold verification with transparent in-circuit
+/// recursive aggregation once the recursive verifier is available in-tree.
+///
+/// # Errors
+///
+/// Returns an error when any hop proof is invalid or the resulting folded
+/// transcript is malformed.
+pub fn kagemusha_verified_folded_public_inputs(
+    chain_id: &iroha_data_model::ChainId,
+    asset: &iroha_data_model::asset::AssetDefinitionId,
+    steps: &[KagemushaFoldProofStep<'_>],
+) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
+    validate_kagemusha_fold_metadata(steps)?;
+    let mut verified_steps = Vec::with_capacity(steps.len());
+    for step in steps {
+        validate_required_kagemusha_confidential_v2_step_public_inputs(chain_id, asset, step)?;
+        verified_steps.push(kagemusha_verified_fold_step(step)?);
+    }
+    iroha_data_model::offline::kagemusha_folded_public_inputs(chain_id, asset, &verified_steps)
+        .map_err(|err| err.to_string())
+}
+
+/// Verify a serializable Kagemusha fold bundle and build folded public inputs.
+///
+/// # Errors
+///
+/// Returns an error when any bundled hop proof is invalid, a verifier key does
+/// not match its proof attachment, or the resulting folded transcript is
+/// malformed.
+pub fn kagemusha_verified_folded_public_inputs_from_bundle(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
+    ensure_kagemusha_verified_step_count(bundle.steps.len())?;
+    let steps = bundle
+        .steps
+        .iter()
+        .map(|step| KagemushaFoldProofStep {
+            root_before: step.root_before,
+            input_nullifiers: &step.input_nullifiers,
+            output_commitments: &step.output_commitments,
+            root_after: step.root_after,
+            attachment: &step.attachment,
+            vk_box: &step.verifier_key,
+        })
+        .collect::<Vec<_>>();
+    kagemusha_verified_folded_public_inputs(&bundle.chain_id, &bundle.asset, &steps)
+}
+
+/// Verify a serializable Kagemusha fold bundle against active hop verifier records.
+///
+/// This is the WSV-ready checked path: each hop must reference an active
+/// verifier record whose backend, circuit id, schema hash, verifier-key
+/// commitment, key length, optional inline key, and proof-size cap match the
+/// bundled proof and verifier key before normal proof verification and folding
+/// run.
+///
+/// # Errors
+///
+/// Returns an error when a hop verifier record is missing, duplicated, inactive,
+/// inconsistent with the proof envelope/key material, or when any bundled hop
+/// proof fails normal checked folding.
+pub fn kagemusha_verified_folded_public_inputs_from_bundle_with_records(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
+    ensure_kagemusha_verified_step_count(bundle.steps.len())?;
+    let steps = bundle
+        .steps
+        .iter()
+        .map(|step| KagemushaFoldProofStep {
+            root_before: step.root_before,
+            input_nullifiers: &step.input_nullifiers,
+            output_commitments: &step.output_commitments,
+            root_after: step.root_after,
+            attachment: &step.attachment,
+            vk_box: &step.verifier_key,
+        })
+        .collect::<Vec<_>>();
+    validate_kagemusha_fold_metadata(&steps)?;
+    validate_kagemusha_hop_verifier_record_set(&steps, records)?;
+    for step in &steps {
+        let record = kagemusha_hop_verifier_record(&step.attachment.vk_ref, records)?;
+        validate_kagemusha_fold_verifier_record(step, record)?;
+        validate_required_kagemusha_confidential_v2_step_public_inputs(
+            &bundle.chain_id,
+            &bundle.asset,
+            step,
+        )?;
+    }
+    kagemusha_verified_folded_public_inputs(&bundle.chain_id, &bundle.asset, &steps)
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and build folded public inputs.
+///
+/// # Errors
+///
+/// Returns an error when the record-backed bundle fails verifier-record
+/// enforcement, hop proof verification, or folded transcript construction.
+pub fn kagemusha_verified_folded_public_inputs_from_record_bundle(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+) -> Result<iroha_data_model::offline::KagemushaFoldedPublicInputs, String> {
+    let records = record_bundle
+        .verifier_records
+        .iter()
+        .map(|entry| KagemushaHopVerifierRecord {
+            id: &entry.id,
+            record: &entry.record,
+        })
+        .collect::<Vec<_>>();
+    kagemusha_verified_folded_public_inputs_from_bundle_with_records(
+        &record_bundle.bundle,
+        &records,
+    )
+}
+
+/// Verify private hop proofs and prove the compact Kagemusha token in one path.
+///
+/// This is the production entry point for wallet/prover code: it verifies every
+/// private hop proof before deriving the folded public statement, then emits the
+/// transparent `kagemusha-folded-v1` Halo2 IPA proof for that statement.
+///
+/// # Errors
+///
+/// Returns an error when hop verification, folded public-input construction, or
+/// compact proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_compact_payment_token(
+    chain_id: &iroha_data_model::ChainId,
+    asset: &iroha_data_model::asset::AssetDefinitionId,
+    steps: &[KagemushaFoldProofStep<'_>],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
+    let public_inputs = kagemusha_verified_folded_public_inputs(chain_id, asset, steps)?;
+    prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
+}
+
+/// Verify a serializable Kagemusha fold bundle and prove one compact payment token.
+///
+/// # Errors
+///
+/// Returns an error when hop verification, folded public-input construction, or
+/// compact proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_compact_payment_token_from_bundle(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
+    let public_inputs = kagemusha_verified_folded_public_inputs_from_bundle(bundle)?;
+    prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
+}
+
+/// Verify a serializable Kagemusha fold bundle against active hop verifier
+/// records and prove one compact payment token.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop verification, folded
+/// public-input construction, or compact proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_compact_payment_token_from_bundle_with_records(
+    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    records: &[KagemushaHopVerifierRecord<'_>],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
+    let public_inputs =
+        kagemusha_verified_folded_public_inputs_from_bundle_with_records(bundle, records)?;
+    prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
+}
+
+/// Verify a serializable record-backed Kagemusha fold bundle and prove one compact payment token.
+///
+/// # Errors
+///
+/// Returns an error when verifier-record enforcement, hop verification, folded
+/// public-input construction, or compact proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_verified_kagemusha_compact_payment_token_from_record_bundle(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
+    let public_inputs = kagemusha_verified_folded_public_inputs_from_record_bundle(record_bundle)?;
+    prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
+}
+
+/// Verify a compact Kagemusha payment token against a transparent verifier key.
+///
+/// This checks the token/proof public-input binding, the proof envelope schema,
+/// the concrete instance columns, and the backend proof itself.
+#[must_use]
+pub fn verify_kagemusha_compact_payment_token(
+    token: &iroha_data_model::offline::KagemushaCompactPaymentToken,
+    vk_box: &VerifyingKeyBox,
+) -> bool {
+    if token.validate_public_input_binding().is_err() {
+        return false;
+    }
+    if token.folded_proof.proof.bytes.len() > KAGEMUSHA_FOLDED_MAX_PROOF_BYTES as usize {
+        return false;
+    }
+    if token.folded_proof.proof.backend != ZK_BACKEND_HALO2_IPA
+        || token.folded_proof.verifier_key_id.backend != ZK_BACKEND_HALO2_IPA
+        || vk_box.backend != ZK_BACKEND_HALO2_IPA
+        || token.folded_proof.proof.backend != token.folded_proof.verifier_key_id.backend
+        || token.folded_proof.proof.backend != vk_box.backend
+        || !is_kagemusha_folded_circuit_id(&token.folded_proof.verifier_key_id.name)
+    {
+        return false;
+    }
+    let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+        match norito::decode_from_bytes(&token.folded_proof.proof.bytes) {
+            Ok(envelope) => envelope,
+            Err(_) => return false,
+        };
+    if envelope.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
+        || envelope.circuit_id != token.folded_proof.verifier_key_id.name
+        || !is_kagemusha_folded_circuit_id(&envelope.circuit_id)
+        || envelope.vk_hash != hash_vk(vk_box)
+    {
+        return false;
+    }
+    if envelope.public_inputs.as_slice()
+        != iroha_data_model::offline::KAGEMUSHA_FOLDED_PUBLIC_INPUTS_SCHEMA
+    {
+        return false;
+    }
+    if !envelope.aux.is_empty() {
+        return false;
+    }
+    let expected_instances = match kagemusha_compact_token_instance_values(token) {
+        Ok(values) => values.public_instance_columns(),
+        Err(_) => return false,
+    };
+    let actual_instances = match extract_pasta_instance_columns_bytes(&envelope.proof_bytes) {
+        Some(instances) => instances,
+        None => return false,
+    };
+    if actual_instances != expected_instances {
+        return false;
+    }
+    verify_backend(
+        token.folded_proof.proof.backend.as_str(),
+        &token.folded_proof.proof,
+        Some(vk_box),
+    )
+}
+
+/// Verify a compact Kagemusha payment token against a registered verifier record.
+///
+/// This mirrors the WSV verifier-key checks used by chain-side proof admission:
+/// active status, transparent Halo2 IPA backend, folded circuit id, canonical
+/// public-input schema, non-zero proof-size limit, inline verifier key,
+/// verifier-key commitment, and token verifier-key id all have to match before
+/// the backend proof verifier runs.
+#[must_use]
+pub fn verify_kagemusha_compact_payment_token_with_record(
+    token: &iroha_data_model::offline::KagemushaCompactPaymentToken,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+) -> bool {
+    if !record.is_active()
+        || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
+        || !is_kagemusha_folded_circuit_id(&record.circuit_id)
+        || record.public_inputs_schema_hash
+            != iroha_data_model::offline::kagemusha_folded_public_inputs_schema_hash()
+        || record.max_proof_bytes == 0
+        || token.folded_proof.verifier_key_id.backend != ZK_BACKEND_HALO2_IPA
+        || token.folded_proof.verifier_key_id.name != record.circuit_id
+        || token.folded_proof.proof.bytes.len() > record.max_proof_bytes as usize
+    {
+        return false;
+    }
+    let Some(vk_box) = record.key.as_ref() else {
+        return false;
+    };
+    if vk_box.backend != ZK_BACKEND_HALO2_IPA
+        || vk_box.bytes.is_empty()
+        || u32::try_from(vk_box.bytes.len()).ok() != Some(record.vk_len)
+        || hash_vk(vk_box) != record.commitment
+    {
+        return false;
+    }
+    verify_kagemusha_compact_payment_token(token, vk_box)
 }
 
 #[cfg(feature = "zk-stark")]
@@ -4346,16 +5904,12 @@ pub fn make_trace_digest_artifact(
 }
 
 #[cfg(feature = "zk-preverify")]
-const TRACE_MOCK_BLOB_HEADER: &[u8; 4] = b"ZKMP";
-#[cfg(feature = "zk-preverify")]
-const TRACE_MOCK_BACKEND: &str = "zk-trace/mock-proof";
-#[cfg(feature = "zk-preverify")]
 const TRACE_QUEUE_MAX_SPINS: usize = 20;
 #[cfg(feature = "zk-preverify")]
 const TRACE_QUEUE_SLEEP_MS: u64 = 10;
 
 #[cfg(feature = "zk-preverify")]
-/// Captured trace metadata awaiting background proof generation.
+/// Captured trace metadata awaiting background validation and future proof generation.
 #[derive(Clone)]
 pub struct TraceForProving {
     digest: [u8; 32],
@@ -4364,8 +5918,6 @@ pub struct TraceForProving {
     constraints: Vec<ivm::zk::Constraint>,
     code_hash: [u8; 32],
     tx_hash: Option<[u8; 32]>,
-    transport_capabilities: Option<TransportCapabilityResolutionSnapshot>,
-    negotiated_capabilities: Option<CapabilityFlags>,
 }
 
 #[cfg(feature = "zk-preverify")]
@@ -4383,52 +5935,13 @@ impl TraceForProving {
                 arr.copy_from_slice(hash.as_ref());
                 arr
             }),
-            transport_capabilities: task.transport_capabilities,
-            negotiated_capabilities: task.negotiated_capabilities,
         }
     }
 
-    fn encode_mock_proof_bytes(&self) -> Vec<u8> {
-        let mut buf =
-            Vec::with_capacity(4 + 1 + 32 + 4 + 4 + 1 + 32 + 1 + 2 + 1 + 2 + 2 + 1 + 1 + 8);
-        buf.extend_from_slice(TRACE_MOCK_BLOB_HEADER);
-        buf.push(1);
-        buf.extend_from_slice(&self.digest);
-        buf.extend_from_slice(&(self.trace.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&(self.constraints.len() as u32).to_le_bytes());
-        match self.tx_hash {
-            Some(hash) => {
-                buf.push(1);
-                buf.extend_from_slice(&hash);
-            }
-            None => buf.push(0),
-        }
-        if let Some(caps) = self.transport_capabilities {
-            buf.push(1);
-            buf.extend_from_slice(&caps.hpke_suite.suite_id().to_le_bytes());
-            buf.push(u8::from(caps.use_datagram));
-            buf.extend_from_slice(&caps.max_segment_datagram_size.to_le_bytes());
-            buf.extend_from_slice(&caps.fec_feedback_interval_ms.to_le_bytes());
-            buf.push(caps.privacy_bucket_granularity as u8);
-        } else {
-            buf.push(0);
-        }
-        if let Some(flags) = self.negotiated_capabilities {
-            buf.push(1);
-            buf.extend_from_slice(&flags.bits().to_le_bytes());
-        } else {
-            buf.push(0);
-        }
-        buf
-    }
-
-    fn into_snapshot(self) -> PipelineProofSnapshot {
-        PipelineProofSnapshot {
-            backend: TRACE_MOCK_BACKEND.to_string(),
-            proof: self.encode_mock_proof_bytes(),
-            code_hash: self.code_hash,
-            tx_hash: self.tx_hash,
-        }
+    fn validate(&self) -> Result<(), String> {
+        VMExecutionCircuit::new(self.program.as_slice(), &self.trace, &self.constraints)
+            .verify()
+            .map_err(|err| err.to_string())
     }
 }
 
@@ -4441,7 +5954,7 @@ fn trace_proving_queue() -> &'static Mutex<BTreeMap<u64, Vec<TraceForProving>>> 
 }
 
 #[cfg(feature = "zk-preverify")]
-/// Persist a proving job until the background lane receives the matching block header.
+/// Persist a trace-validation job until the background lane receives the matching block header.
 pub fn queue_trace_for_proving(height: u64, job: TraceForProving) {
     let mut guard = trace_proving_queue()
         .lock()
@@ -4523,7 +6036,7 @@ pub(crate) fn reset_trace_proving_state_for_tests() {
 #[cfg(feature = "zk-preverify")]
 static ZK_SENDER: OnceLock<mpsc::Sender<iroha_data_model::block::BlockHeader>> = OnceLock::new();
 
-/// Start the background ZK proving lane that enriches blocks with mock proofs.
+/// Start the background ZK trace lane that revalidates queued traces.
 #[cfg(feature = "zk-preverify")]
 pub fn start_lane() {
     if ZK_SENDER.get().is_some() {
@@ -4554,36 +6067,31 @@ pub fn start_lane() {
             }
 
             for entry in entries {
-                let circuit = VMExecutionCircuit::new(
-                    entry.program.as_slice(),
-                    &entry.trace,
-                    &entry.constraints,
-                );
-                match circuit.verify() {
+                match entry.validate() {
                     Ok(()) => {
                         let digest = entry.digest;
                         let trace_len = entry.trace.len();
                         let constraint_len = entry.constraints.len();
+                        let code_hash_hex = hex::encode(entry.code_hash);
                         let tx_hash_hex = entry
                             .tx_hash
                             .map(|bytes| hex::encode(bytes))
                             .unwrap_or_else(|| "none".to_string());
-                        let artifact = entry.into_snapshot();
-                        queue_trace_proof(height, artifact);
                         iroha_logger::info!(
                             height,
+                            %code_hash_hex,
                             %tx_hash_hex,
                             digest = %hex::encode(digest),
                             trace_len,
                             constraint_len,
-                            "zk_lane: generated mock proof for block trace"
+                            "zk_lane: validated queued block trace"
                         );
                     }
                     Err(err) => {
                         iroha_logger::warn!(
                             height,
                             error = err,
-                            "zk_lane: failed to validate trace prior to proof emission"
+                            "zk_lane: failed to revalidate queued block trace"
                         );
                     }
                 }
@@ -5129,6 +6637,57 @@ impl DedupCache {
     }
 }
 
+fn expected_preverify_envelope_backend_tag(
+    backend: &str,
+) -> Option<iroha_data_model::zk::BackendTag> {
+    if is_stark_fri_v1_backend(backend) {
+        return Some(iroha_data_model::zk::BackendTag::Stark);
+    }
+    if backend == ZK_BACKEND_HALO2_IPA
+        || backend.starts_with("halo2/ipa/")
+        || backend.starts_with("halo2/ipa:")
+        || backend.starts_with("halo2/pasta/")
+    {
+        return Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta);
+    }
+    None
+}
+
+fn preverify_open_verify_envelope_metadata(
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+    vk_commitment: Option<[u8; 32]>,
+    expected_vk_commitment: Option<[u8; 32]>,
+) -> Result<(), PreverifyResult> {
+    let Some(expected_tag) = expected_preverify_envelope_backend_tag(proof.backend.as_str()) else {
+        return Ok(());
+    };
+    let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+        norito::decode_from_bytes(&proof.bytes).map_err(|_| PreverifyResult::MalformedProof)?;
+    if envelope.backend != expected_tag || !envelope.aux.is_empty() {
+        return Err(PreverifyResult::MalformedProof);
+    }
+    if envelope.vk_hash == [0u8; 32] {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    if let Some(vk_box) = vk
+        && hash_vk(vk_box) != envelope.vk_hash
+    {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    if let Some(commitment) = vk_commitment
+        && commitment != envelope.vk_hash
+    {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    if let Some(expected) = expected_vk_commitment
+        && expected != envelope.vk_hash
+    {
+        return Err(PreverifyResult::VerifyingKeyMismatch);
+    }
+    Ok(())
+}
+
 /// Result of a pre-verification step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreverifyResult {
@@ -5173,6 +6732,12 @@ pub fn preverify_with_budget(
     if proof.backend.is_empty() {
         return PreverifyResult::UnsupportedBackend;
     }
+    if is_trusted_setup_backend_label(proof.backend.as_str()) {
+        return PreverifyResult::UnsupportedBackend;
+    }
+    if is_developer_only_backend_label(proof.backend.as_str()) {
+        return PreverifyResult::UnsupportedBackend;
+    }
     if !vk_active {
         return PreverifyResult::VerifyingKeyInactive;
     }
@@ -5195,6 +6760,11 @@ pub fn preverify_with_budget(
         if expected != commit {
             return PreverifyResult::VerifyingKeyMismatch;
         }
+    }
+    if let Err(err) =
+        preverify_open_verify_envelope_metadata(proof, vk, vk_commitment, expected_vk_commitment)
+    {
+        return err;
     }
     if !dedup.check_and_insert_with_commitment(proof, vk_commitment) {
         return PreverifyResult::Duplicate;
@@ -5243,6 +6813,13 @@ fn verify_halo2_ipa_envelope(proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> 
         Err(_) => return false,
     };
     if env.backend != BackendTag::Halo2IpaPasta {
+        return false;
+    }
+    if !env.aux.is_empty() {
+        return false;
+    }
+    let expected_vk_hash = hash_vk(vk_box);
+    if env.vk_hash == [0u8; 32] || env.vk_hash != expected_vk_hash {
         return false;
     }
     let backend = match halo2_ipa_backend_from_circuit_id(&env.circuit_id) {
@@ -5429,6 +7006,10 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
 
 /// Verify a zero-knowledge proof using the requested backend, returning `true` when supported.
 pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
+    if proof.backend.as_str() != backend {
+        return false;
+    }
+
     // Prefer built-in registry when available
     if let Some(ok) = verify_with_registry(backend, proof, vk) {
         return ok;
@@ -5535,13 +7116,28 @@ mod debug_backend_tests {
 
 #[cfg(test)]
 mod stark_backend_tag_tests {
-    use super::{is_ivm_execution_backend, is_stark_fri_v1_backend};
+    use super::{
+        is_developer_only_backend_label, is_ivm_execution_backend, is_stark_fri_v1_backend,
+        is_trusted_setup_backend_label,
+    };
 
     #[test]
     fn detects_base_and_variant_backends() {
         assert!(is_stark_fri_v1_backend("stark/fri"));
         assert!(is_stark_fri_v1_backend("stark/fri/sha256-goldilocks"));
         assert!(is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/kzg"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/KZG"));
+        assert!(!is_stark_fri_v1_backend("stark/fri:kzg"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/bn254"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/bls12_381"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/debug"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/Debug"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/debug-proof"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/mock"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/Mock"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/mock-proof"));
         assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
         assert!(!is_stark_fri_v1_backend("stark/fri-v10"));
     }
@@ -5551,8 +7147,74 @@ mod stark_backend_tag_tests {
         assert!(is_ivm_execution_backend("halo2/ipa"));
         assert!(is_ivm_execution_backend("stark/fri"));
         assert!(is_ivm_execution_backend("stark/fri/sha256-goldilocks"));
+        assert!(!is_ivm_execution_backend("stark/fri/kzg"));
+        assert!(!is_ivm_execution_backend("stark/fri/debug"));
+        assert!(!is_ivm_execution_backend("stark/fri/debug-proof"));
         assert!(!is_ivm_execution_backend("groth16/bn254"));
         assert!(!is_ivm_execution_backend("halo2/kzg"));
+    }
+
+    #[test]
+    fn trusted_setup_classifier_catches_standalone_and_profile_labels() {
+        for backend in [
+            "kzg",
+            "KZG",
+            "kzg/ceremony-v1",
+            "KZG/ceremony-v1",
+            "bn254",
+            "BN254",
+            "bn256",
+            "bls12_381",
+            "BLS12_381",
+            "bls12-381",
+            "halo2/ipa:kzg",
+            "halo2/ipa:KZG",
+            "Halo2/IPA:KZG",
+            "halo2/pasta/ipa:kzg",
+            "stark/fri:kzg",
+            "stark/fri:KZG",
+            "halo2/ipa:bn254",
+            "halo2/ipa:BN254",
+            "stark/fri:bls12_381",
+        ] {
+            assert!(
+                is_trusted_setup_backend_label(backend),
+                "trusted-setup backend {backend} must be classified before allowlist checks"
+            );
+        }
+
+        for backend in [
+            "halo2/ipa",
+            "halo2/pasta/ipa/tiny-add",
+            "stark/fri",
+            "stark/fri/poseidon2-goldilocks",
+        ] {
+            assert!(
+                !is_trusted_setup_backend_label(backend),
+                "transparent backend {backend} must not be classified as trusted setup"
+            );
+        }
+    }
+
+    #[test]
+    fn developer_only_classifier_is_ascii_case_insensitive() {
+        for backend in [
+            "debug",
+            "Debug",
+            "DEBUG",
+            "mock",
+            "Mock",
+            "MOCK",
+            "halo2/ipa:Debug-Proof",
+            "halo2/ipa:Mock-Proof",
+            "stark/fri/Debug",
+            "stark/fri/Mock",
+        ] {
+            assert!(
+                is_developer_only_backend_label(backend),
+                "developer-only backend {backend} must be classified before allowlist checks"
+            );
+        }
     }
 }
 
@@ -5816,6 +7478,27 @@ pub fn verify_backend_with_timing_guardrails(
     vk: Option<&VerifyingKeyBox>,
     guardrails: ZkVerifyGuardrails,
 ) -> VerifyReport {
+    if is_trusted_setup_backend_label(backend) {
+        iroha_logger::debug!(
+            backend,
+            "trusted-setup proof backends are not admitted by production guardrails"
+        );
+        return VerifyReport {
+            ok: false,
+            elapsed: Duration::ZERO,
+        };
+    }
+    if is_developer_only_backend_label(backend) {
+        iroha_logger::debug!(
+            backend,
+            "developer-only proof backends are not admitted by production guardrails"
+        );
+        return VerifyReport {
+            ok: false,
+            elapsed: Duration::ZERO,
+        };
+    }
+
     if backend == ZK_BACKEND_HALO2_IPA || backend.starts_with("halo2/") {
         if !guardrails.halo2_enabled {
             iroha_logger::debug!(
@@ -5957,6 +7640,78 @@ mod guardrails_tests {
         );
         assert!(!report.ok);
         assert_eq!(report.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn guardrails_reject_trusted_setup_backends_before_dispatch() {
+        for backend in [
+            "kzg",
+            "KZG",
+            "bn254",
+            "BN254",
+            "bls12_381",
+            "halo2/kzg",
+            "halo2/ipa:kzg",
+            "halo2/ipa:KZG",
+            "halo2/bn254",
+            "groth16/bn254",
+        ] {
+            let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
+            let report = verify_backend_with_timing_guardrails(
+                backend,
+                &proof,
+                None,
+                ZkVerifyGuardrails {
+                    halo2_enabled: true,
+                    halo2_max_envelope_bytes: 1024,
+                    halo2_max_proof_bytes: 1024,
+                    stark_enabled: true,
+                    stark_max_envelope_bytes: 1024,
+                    stark_max_proof_bytes: 1024,
+                },
+            );
+            assert!(!report.ok, "case {backend}");
+            assert_eq!(report.elapsed, Duration::ZERO, "case {backend}");
+        }
+    }
+
+    #[test]
+    fn guardrails_reject_developer_only_backends_before_dispatch() {
+        for backend in [
+            "debug",
+            "debug-proof",
+            "Debug-Proof",
+            "debug/ok",
+            "halo2/debug",
+            "halo2/ipa:debug-proof",
+            "halo2/ipa:DEBUG-Proof",
+            "stark/fri/debug",
+            "stark/fri/Debug",
+            "mock",
+            "mock-proof",
+            "Mock-Proof",
+            "halo2/mock",
+            "halo2/ipa:mock-proof",
+            "halo2/ipa:Mock-Proof",
+            "zk-trace/mock-proof",
+        ] {
+            let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
+            let report = verify_backend_with_timing_guardrails(
+                backend,
+                &proof,
+                None,
+                ZkVerifyGuardrails {
+                    halo2_enabled: true,
+                    halo2_max_envelope_bytes: 1024,
+                    halo2_max_proof_bytes: 1024,
+                    stark_enabled: true,
+                    stark_max_envelope_bytes: 1024,
+                    stark_max_proof_bytes: 1024,
+                },
+            );
+            assert!(!report.ok, "case {backend}");
+            assert_eq!(report.elapsed, Duration::ZERO, "case {backend}");
+        }
     }
 
     #[test]
@@ -6139,6 +7894,344 @@ mod guardrails_tests {
     }
 }
 
+#[cfg(test)]
+mod offline_note_instance_guardrail_tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+    use iroha_data_model::{
+        account::AccountId,
+        asset::{AssetDefinitionId, AssetId},
+        domain::DomainId,
+        offline::{
+            OfflineNoteAuditBundle, OfflineNoteAuditOutputClaim, OfflineNoteIssue,
+            OfflineNoteIssuedClaim, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
+        },
+        proof::{ProofBox, VerifyingKeyId},
+    };
+    use iroha_primitives::numeric::Numeric;
+
+    fn sample_signature(seed: u8) -> Signature {
+        let mut bytes = [0u8; 64];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = seed.wrapping_add(u8::try_from(index).expect("signature index fits"));
+        }
+        Signature::from_bytes(&bytes)
+    }
+
+    fn sample_account(seed: u8) -> AccountId {
+        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    fn sample_asset(account: AccountId, definition_name: &str) -> AssetId {
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            definition_name.parse().expect("asset definition name"),
+        );
+        AssetId::new(definition, account)
+    }
+
+    fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
+        let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
+        OfflineNoteKeyCertificate {
+            version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
+            platform: "ios-appattest".to_owned(),
+            key_id: format!("one-use-key-{seed}"),
+            device_id: "device-1".to_owned(),
+            account_id: account.clone(),
+            public_key: public_key.to_vec(),
+            assertion_scheme: "apple-appattest-counter".to_owned(),
+            assertion_key_algorithm: "app-attest-p256".to_owned(),
+            assertion_public_key: vec![0x04; 65],
+            assertion_usage_count_limit: None,
+            one_use: true,
+            issuer_signature: sample_signature(seed.wrapping_add(1)),
+        }
+    }
+
+    fn placeholder_recursive_proof() -> OfflineNoteRecursiveProof {
+        OfflineNoteRecursiveProof {
+            verifier_key_id: VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+            ),
+            public_inputs_hash: Hash::new(b"placeholder-offline-note-public-inputs"),
+            proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new()),
+        }
+    }
+
+    fn sample_audit() -> OfflineNoteAuditBundle {
+        let account = sample_account(0xC1);
+        let asset = sample_asset(account.clone(), "xor");
+        let certificate = sample_certificate(&account, 0xD1);
+        let issue = OfflineNoteIssue {
+            note_commitment: Hash::new(b"offline-note-audit-input-note"),
+            key_certificate: certificate.clone(),
+            asset: asset.clone(),
+            amount: Numeric::new(10, 0),
+        };
+        OfflineNoteAuditBundle {
+            token_id: Hash::new(b"offline-note-audit-token"),
+            sender_key_certificate: certificate.clone(),
+            input_nullifiers: vec![Hash::new(b"offline-note-audit-nullifier")],
+            input_claims: vec![OfflineNoteIssuedClaim::from_issue(&issue).expect("input claim")],
+            output_commitments: vec![Hash::new(b"offline-note-audit-output-note")],
+            output_claims: vec![OfflineNoteAuditOutputClaim {
+                note_commitment: Hash::new(b"offline-note-audit-output-note"),
+                key_certificate: certificate,
+                asset,
+                amount: Numeric::new(10, 0),
+            }],
+            recursive_proof: placeholder_recursive_proof(),
+        }
+    }
+
+    #[test]
+    fn audit_instance_values_reject_hidden_output_commitments() {
+        let mut audit = sample_audit();
+        audit
+            .output_commitments
+            .push(Hash::new(b"offline-note-hidden-output-note"));
+
+        let err = offline_note_audit_instance_values(&audit)
+            .expect_err("hidden audit commitments must be rejected");
+        assert!(err.contains("output claim count must match output commitment count"));
+    }
+
+    #[test]
+    fn audit_instance_values_reject_reordered_or_forged_output_claims() {
+        let mut audit = sample_audit();
+        audit.output_claims[0].note_commitment = Hash::new(b"offline-note-forged-output-note");
+
+        let err = offline_note_audit_instance_values(&audit)
+            .expect_err("output claims must bind exactly to output commitments");
+        assert!(err.contains("ordered one-to-one"));
+    }
+
+    #[test]
+    fn audit_instance_values_reject_input_claim_count_mismatch() {
+        let mut audit = sample_audit();
+        audit
+            .input_nullifiers
+            .push(Hash::new(b"offline-note-extra-input-nullifier"));
+
+        let err = offline_note_audit_instance_values(&audit)
+            .expect_err("input claim/nullifier count mismatch must reject");
+        assert!(err.contains("input claim count must match input nullifier count"));
+    }
+
+    #[test]
+    fn audit_instance_values_reject_sender_claim_mismatch() {
+        let mut audit = sample_audit();
+        audit.sender_key_certificate.key_id = "different-sender-key".to_owned();
+
+        let err = offline_note_audit_instance_values(&audit)
+            .expect_err("audit input claims must match sender certificate hash");
+        assert!(err.contains("input claims must match sender key certificate"));
+    }
+
+    #[test]
+    fn audit_instance_values_reject_cross_asset_conservation() {
+        let mut audit = sample_audit();
+        let account = audit.sender_key_certificate.account_id.clone();
+        audit.output_claims[0].asset = sample_asset(account, "other_xor");
+
+        let err = offline_note_audit_instance_values(&audit)
+            .expect_err("offline audit cannot conserve across asset definitions");
+        assert!(err.contains("asset definitions must match"));
+    }
+
+    #[test]
+    fn audit_instance_values_reject_public_amount_imbalance() {
+        let mut audit = sample_audit();
+        audit.output_claims[0].amount = Numeric::new(9, 0);
+
+        let err = offline_note_audit_instance_values(&audit)
+            .expect_err("offline audit proof values must conserve amounts");
+        assert!(err.contains("amounts are not conserved"));
+    }
+}
+
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod offline_note_semantic_circuit_tests {
+    use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
+
+    use super::*;
+
+    fn base_values() -> OfflineNoteInstanceValues {
+        OfflineNoteInstanceValues {
+            public_values: [
+                0,
+                0,
+                0,
+                0,
+                OFFLINE_NOTE_MODE_AUDIT,
+                2,
+                2,
+                10,
+                10,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+            input_amounts: [7, 3, 0, 0],
+            output_amounts: [6, 4],
+        }
+    }
+
+    fn verify(values: OfflineNoteInstanceValues) -> bool {
+        let public_values = values.public_values.map(Scalar::from);
+        let instances = public_values
+            .iter()
+            .copied()
+            .map(|value| vec![value])
+            .collect::<Vec<_>>();
+        let circuit = pasta_tiny::OfflineNoteSemantic {
+            public_values,
+            input_amounts: values.input_amounts.map(Scalar::from),
+            output_amounts: values.output_amounts.map(Scalar::from),
+        };
+        MockProver::run(OFFLINE_NOTE_RECURSIVE_IPA_K, &circuit, instances)
+            .expect("offline semantic mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    #[test]
+    fn offline_semantic_circuit_accepts_valid_audit_corridor() {
+        assert!(verify(base_values()));
+    }
+
+    #[test]
+    fn offline_semantic_circuit_rejects_invalid_mode() {
+        let mut values = base_values();
+        values.public_values[4] = 99;
+        assert!(!verify(values));
+    }
+
+    #[test]
+    fn offline_semantic_circuit_rejects_unused_amount_slots() {
+        let mut values = base_values();
+        values.public_values[5] = 1;
+        values.input_amounts = [10, 1, 0, 0];
+        assert!(!verify(values));
+    }
+
+    #[test]
+    fn offline_semantic_circuit_rejects_private_public_sum_mismatch() {
+        let mut values = base_values();
+        values.public_values[7] = 11;
+        assert!(!verify(values));
+    }
+
+    #[test]
+    fn offline_semantic_circuit_rejects_input_output_imbalance() {
+        let mut values = base_values();
+        values.output_amounts = [5, 4];
+        values.public_values[8] = 9;
+        assert!(!verify(values));
+    }
+}
+
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod kagemusha_folded_semantic_circuit_tests {
+    use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
+
+    use super::*;
+
+    fn base_values() -> KagemushaFoldedInstanceValues {
+        let mut public_values = [0u64; KAGEMUSHA_FOLDED_INSTANCE_COLUMNS];
+        public_values[0] = 11;
+        public_values[1] = 12;
+        public_values[2] = 13;
+        public_values[3] = 14;
+        public_values[KAGEMUSHA_FOLDED_AGGREGATION_MODE_INDEX] =
+            u64::from(iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1);
+        public_values[KAGEMUSHA_FOLDED_HOP_COUNT_INDEX] = 2;
+        public_values[6] = 21;
+        public_values[10] = 31;
+        public_values[14] = 41;
+        public_values[18] = 51;
+        public_values[22] = 61;
+        public_values[26] = 71;
+        KagemushaFoldedInstanceValues { public_values }
+    }
+
+    fn bits(values: KagemushaFoldedInstanceValues) -> [Scalar; KAGEMUSHA_FOLDED_HOP_COUNT_BITS] {
+        values
+            .hop_count_minus_one_bits()
+            .expect("valid hop_count bits")
+    }
+
+    fn verify(
+        values: KagemushaFoldedInstanceValues,
+        hop_count_bits: [Scalar; KAGEMUSHA_FOLDED_HOP_COUNT_BITS],
+    ) -> bool {
+        let public_values = values.public_values.map(Scalar::from);
+        let instances = public_values
+            .iter()
+            .copied()
+            .map(|value| vec![value])
+            .collect::<Vec<_>>();
+        let circuit = pasta_tiny::KagemushaFoldedSemantic {
+            public_values,
+            hop_count_minus_one_bits: hop_count_bits,
+        };
+        MockProver::run(KAGEMUSHA_FOLDED_IPA_K, &circuit, instances)
+            .expect("Kagemusha folded mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    #[test]
+    fn kagemusha_folded_semantic_circuit_accepts_valid_corridor() {
+        let values = base_values();
+        assert!(verify(values, bits(values)));
+    }
+
+    #[test]
+    fn kagemusha_folded_semantic_circuit_rejects_zero_hop_count() {
+        let mut values = base_values();
+        values.public_values[KAGEMUSHA_FOLDED_HOP_COUNT_INDEX] = 0;
+        assert!(!verify(
+            values,
+            [Scalar::from(0); KAGEMUSHA_FOLDED_HOP_COUNT_BITS]
+        ));
+    }
+
+    #[test]
+    fn kagemusha_folded_semantic_circuit_rejects_oversized_hop_count() {
+        let mut values = base_values();
+        values.public_values[KAGEMUSHA_FOLDED_HOP_COUNT_INDEX] = 65;
+        assert!(!verify(
+            values,
+            [Scalar::from(1); KAGEMUSHA_FOLDED_HOP_COUNT_BITS]
+        ));
+    }
+
+    #[test]
+    fn kagemusha_folded_semantic_circuit_rejects_unsupported_aggregation_mode() {
+        let mut values = base_values();
+        values.public_values[KAGEMUSHA_FOLDED_AGGREGATION_MODE_INDEX] = u64::from(
+            iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
+        );
+        assert!(!verify(values, bits(values)));
+    }
+
+    #[test]
+    fn kagemusha_folded_semantic_circuit_rejects_non_boolean_bit_witness() {
+        let values = base_values();
+        let mut bit_witness = bits(values);
+        bit_witness[0] = Scalar::from(2);
+        assert!(!verify(values, bit_witness));
+    }
+}
+
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 mod halo2_ipa_alias_tests {
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
@@ -6179,6 +8272,84 @@ mod halo2_ipa_alias_tests {
         let proof_bytes = norito::to_bytes(&env).expect("encode envelope");
         let proof = ProofBox::new("halo2/ipa".into(), proof_bytes);
         assert!(!verify_backend("halo2/ipa", &proof, None));
+    }
+
+    #[test]
+    fn verifier_rejects_proof_backend_mismatch_before_dispatch() {
+        let env = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "halo2/ipa:tiny-add".into(),
+            vk_hash: [0x42; 32],
+            public_inputs: Vec::new(),
+            proof_bytes: vec![0xAA, 0xBB],
+            aux: Vec::new(),
+        };
+        let proof_bytes = norito::to_bytes(&env).expect("encode envelope");
+        let proof = ProofBox::new("halo2/ipa/other".into(), proof_bytes);
+        let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![0xCC, 0xDD]);
+        assert!(!verify_backend("halo2/ipa", &proof, Some(&vk)));
+    }
+}
+
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+mod halo2_ipa_proving_key_archive_tests {
+    use super::*;
+
+    #[test]
+    fn ivm_execution_prover_rejects_wrong_circuit_family() {
+        let vk_box = halo2_ipa_ivm_execution_vk_box().expect("ivm execution verifying key");
+        let err = prove_halo2_ipa_ivm_execution_envelope(
+            "halo2/ipa:not-ivm-execution-v1",
+            &vk_box,
+            iroha_crypto::Hash::new(b"code"),
+            iroha_crypto::Hash::new(b"overlay"),
+            iroha_crypto::Hash::new(b"events"),
+            iroha_crypto::Hash::new(b"gas"),
+            None,
+        )
+        .expect_err("wrong IVM circuit family must reject before proving");
+        assert!(
+            err.contains("unsupported IVM execution circuit id"),
+            "unexpected circuit id error: {err}"
+        );
+    }
+
+    #[test]
+    fn halo2_ipa_proving_key_archive_binds_family_and_verifier_commitment() {
+        let vk_commitment = [0x42; 32];
+        let archive =
+            encode_halo2_ipa_proving_key_archive("kagemusha-folded-v1", vk_commitment, vec![1, 2])
+                .expect("encode proving key archive");
+
+        assert_eq!(
+            decode_halo2_ipa_proving_key_archive(&archive, "kagemusha-folded-v1", vk_commitment)
+                .expect("decode matching archive"),
+            vec![1, 2]
+        );
+
+        let family_err =
+            decode_halo2_ipa_proving_key_archive(&archive, "offline-note-recursive", vk_commitment)
+                .expect_err("wrong circuit family must reject");
+        assert!(
+            family_err.contains("circuit family"),
+            "unexpected family error: {family_err}"
+        );
+
+        let commitment_err =
+            decode_halo2_ipa_proving_key_archive(&archive, "kagemusha-folded-v1", [0x24; 32])
+                .expect_err("wrong verifier-key commitment must reject");
+        assert!(
+            commitment_err.contains("verifier-key commitment mismatch"),
+            "unexpected commitment error: {commitment_err}"
+        );
+
+        let raw_err =
+            decode_halo2_ipa_proving_key_archive(&[1, 2], "kagemusha-folded-v1", vk_commitment)
+                .expect_err("raw Halo2 key bytes must not decode as an archive");
+        assert!(
+            raw_err.contains("failed to decode proving key archive"),
+            "unexpected raw-key error: {raw_err}"
+        );
     }
 }
 
@@ -6229,7 +8400,7 @@ mod offline_note_real_prover_tests {
         let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
         OfflineNoteKeyCertificate {
-            version: 2,
+            version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),
             key_id: format!("one-use-key-{seed}"),
             device_id: "device-1".to_owned(),
@@ -6301,6 +8472,16 @@ mod offline_note_real_prover_tests {
         extract_pasta_instance_columns_bytes(&envelope.proof_bytes).expect("public instances")
     }
 
+    fn mutate_open_verify_envelope(
+        proof: &mut ProofBox,
+        mutate: impl FnOnce(&mut OpenVerifyEnvelope),
+    ) {
+        let mut envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("OpenVerifyEnvelope");
+        mutate(&mut envelope);
+        proof.bytes = norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode");
+    }
+
     #[test]
     fn swift_native_offline_note_proof_verifies_against_rust() {
         let Some(path) = std::env::var_os("SWIFT_OFFLINE_PROOF") else {
@@ -6370,6 +8551,42 @@ mod offline_note_real_prover_tests {
     }
 
     #[test]
+    fn offline_note_real_proof_rejects_envelope_metadata_substitution() {
+        let vk_box = offline_note_vk_box();
+        let redemption = sample_redemption();
+        let proof = prove_offline_note_redeem(
+            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+            &vk_box,
+            &redemption,
+            None,
+        )
+        .expect("real offline note redemption proof");
+
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 4] = [
+            ("backend", |envelope| {
+                envelope.backend = iroha_data_model::zk::BackendTag::Stark;
+            }),
+            ("aux", |envelope| {
+                envelope.aux = b"unbound-metadata".to_vec();
+            }),
+            ("zero_vk_hash", |envelope| {
+                envelope.vk_hash = [0u8; 32];
+            }),
+            ("wrong_vk_hash", |envelope| {
+                envelope.vk_hash[0] ^= 0x80;
+            }),
+        ];
+        for (case, mutate) in cases {
+            let mut tampered = proof.clone();
+            mutate_open_verify_envelope(&mut tampered, mutate);
+            assert!(
+                !verify_backend(ZK_BACKEND_HALO2_IPA, &tampered, Some(&vk_box)),
+                "case {case} should fail before accepting Halo2 IPA proof"
+            );
+        }
+    }
+
+    #[test]
     fn offline_note_vk_record_embeds_real_active_verifier_key() {
         let record = offline_note_recursive_vk_record("offline_note", 7).expect("vk record");
         let vk_box = record.key.as_ref().expect("inline verifier key");
@@ -6387,6 +8604,1645 @@ mod offline_note_real_prover_tests {
         let proof = prove_offline_note_redeem(&record.circuit_id, vk_box, &redemption, None)
             .expect("real redeem proof");
         assert!(verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(vk_box)));
+    }
+}
+
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+mod kagemusha_folded_real_prover_tests {
+    use super::*;
+    use iroha_crypto::Hash;
+    use iroha_data_model::{
+        ChainId,
+        asset::AssetDefinitionId,
+        confidential::ConfidentialStatus,
+        domain::DomainId,
+        offline::{
+            KagemushaFoldStep, KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
+            KagemushaVerifiedFoldStep, KagemushaVerifiedFoldVerifierRecord,
+            kagemusha_folded_public_inputs,
+        },
+        proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+        zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
+    };
+
+    fn kagemusha_vk_box() -> VerifyingKeyBox {
+        kagemusha_folded_vk_box().expect("Kagemusha folded verifying key")
+    }
+
+    fn fixed_bytes(label: &[u8]) -> [u8; 32] {
+        Hash::new(label).into()
+    }
+
+    fn sample_public_inputs() -> iroha_data_model::offline::KagemushaFoldedPublicInputs {
+        let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm".parse().expect("asset definition name"),
+        );
+        let root0 = fixed_bytes(b"kagemusha-root-0");
+        let root1 = fixed_bytes(b"kagemusha-root-1");
+        let root2 = fixed_bytes(b"kagemusha-root-2");
+        let steps = vec![
+            KagemushaFoldStep {
+                root_before: root0,
+                input_nullifiers: vec![[0x11; 32]],
+                output_commitments: vec![[0x22; 32], [0x33; 32]],
+                root_after: root1,
+                proof_hash: Hash::new(b"kagemusha-hop-proof-0"),
+                proof_public_inputs_digest: fixed_bytes(b"kagemusha-hop-public-inputs-0"),
+                verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "kagemusha-hop-fixture"),
+                verifier_key_commitment: fixed_bytes(b"kagemusha-hop-vk-0"),
+                verifier_key_poseidon_digest:
+                    iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                        ZK_BACKEND_HALO2_IPA,
+                        b"kagemusha-hop-vk-0",
+                    )
+                    .expect("hop verifier-key digest"),
+            },
+            KagemushaFoldStep {
+                root_before: root1,
+                input_nullifiers: vec![[0x44; 32], [0x55; 32]],
+                output_commitments: vec![[0x66; 32]],
+                root_after: root2,
+                proof_hash: Hash::new(b"kagemusha-hop-proof-1"),
+                proof_public_inputs_digest: fixed_bytes(b"kagemusha-hop-public-inputs-1"),
+                verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "kagemusha-hop-fixture"),
+                verifier_key_commitment: fixed_bytes(b"kagemusha-hop-vk-1"),
+                verifier_key_poseidon_digest:
+                    iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                        ZK_BACKEND_HALO2_IPA,
+                        b"kagemusha-hop-vk-1",
+                    )
+                    .expect("hop verifier-key digest"),
+            },
+        ];
+        kagemusha_folded_public_inputs(&chain_id, &asset, &steps).expect("folded public inputs")
+    }
+
+    #[derive(Clone)]
+    struct OwnedFoldHop {
+        root_before: [u8; 32],
+        input_nullifiers: Vec<[u8; 32]>,
+        output_commitments: Vec<[u8; 32]>,
+        root_after: [u8; 32],
+        attachment: ProofAttachment,
+        vk_box: VerifyingKeyBox,
+    }
+
+    impl OwnedFoldHop {
+        fn as_step(&self) -> KagemushaFoldProofStep<'_> {
+            KagemushaFoldProofStep {
+                root_before: self.root_before,
+                input_nullifiers: &self.input_nullifiers,
+                output_commitments: &self.output_commitments,
+                root_after: self.root_after,
+                attachment: &self.attachment,
+                vk_box: &self.vk_box,
+            }
+        }
+
+        fn as_bundle_step(&self) -> KagemushaVerifiedFoldStep {
+            KagemushaVerifiedFoldStep {
+                root_before: self.root_before,
+                input_nullifiers: self.input_nullifiers.clone(),
+                output_commitments: self.output_commitments.clone(),
+                root_after: self.root_after,
+                attachment: self.attachment.clone(),
+                verifier_key: self.vk_box.clone(),
+            }
+        }
+    }
+
+    fn sample_verified_hop(root_before: [u8; 32], root_after: [u8; 32], seed: u8) -> OwnedFoldHop {
+        let circuit_id = "halo2/ipa:tiny-add-public";
+        let fixture_seed = test_utils::halo2_fixture_envelope(circuit_id, [0u8; 32]);
+        let vk_box = fixture_seed
+            .vk_box(ZK_BACKEND_HALO2_IPA)
+            .expect("tiny-add fixture must include a verifying key");
+        let vk_commitment = hash_vk(&vk_box);
+        let fixture = test_utils::halo2_fixture_envelope(circuit_id, vk_commitment);
+        let mut attachment = ProofAttachment::new_ref(
+            ZK_BACKEND_HALO2_IPA.into(),
+            fixture.proof_box(ZK_BACKEND_HALO2_IPA),
+            VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "kagemusha-hop-fixture"),
+        );
+        attachment.vk_commitment = Some(vk_commitment);
+
+        OwnedFoldHop {
+            root_before,
+            input_nullifiers: vec![[seed; 32]],
+            output_commitments: vec![[seed.wrapping_add(1); 32]],
+            root_after,
+            attachment,
+            vk_box,
+        }
+    }
+
+    fn sample_confidential_v2_verified_hop()
+    -> (ChainId, AssetDefinitionId, OwnedFoldHop, VerifyingKeyRecord) {
+        let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm".parse().expect("asset definition name"),
+        );
+        let record = confidential_v2::confidential_transfer_v2_vk_record("offline_kagemusha", 3)
+            .expect("confidential transfer v2 verifier record");
+        let vk_box = record.key.clone().expect("inline transfer verifier key");
+        let spend_key = [0x11_u8; 32];
+        let input_rho = [0x21_u8; 32];
+        let input_diversifier =
+            confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-input");
+        let input_owner_tag = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+            &spend_key,
+            input_diversifier,
+        )
+        .expect("input owner tag");
+        let input_commitment = confidential_v2::derive_confidential_note_v2(
+            &asset.to_string(),
+            7,
+            input_rho,
+            input_owner_tag,
+        )
+        .expect("input commitment");
+        let tree_commitments = vec![input_commitment];
+        let root_before =
+            confidential_v2::compute_confidential_root_v2(&tree_commitments).expect("root before");
+        let output_rho = [0x31_u8; 32];
+        let output_owner_tag = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+            &[0x41_u8; 32],
+            confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-output"),
+        )
+        .expect("output owner tag");
+        let proof = confidential_v2::build_confidential_transfer_proof_v2(
+            &chain_id,
+            &asset.to_string(),
+            &spend_key,
+            &tree_commitments,
+            &[confidential_v2::ConfidentialTransferInputV2 {
+                amount: 7,
+                rho: input_rho,
+                diversifier: input_diversifier,
+                leaf_index: 0,
+            }],
+            &[confidential_v2::ConfidentialTransferOutputV2 {
+                amount: 7,
+                rho: output_rho,
+                owner_tag: output_owner_tag,
+            }],
+            root_before,
+            &record.circuit_id,
+            &vk_box,
+        )
+        .expect("confidential transfer v2 proof");
+        let mut next_tree = tree_commitments;
+        next_tree.extend(proof.output_commitments.iter().copied());
+        let root_after =
+            confidential_v2::compute_confidential_root_v2(&next_tree).expect("root after");
+        let vk_commitment = hash_vk(&vk_box);
+        let mut attachment = ProofAttachment::new_ref(
+            ZK_BACKEND_HALO2_IPA.into(),
+            proof.proof,
+            VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                "kagemusha-hop-confidential-transfer-v2",
+            ),
+        );
+        attachment.vk_commitment = Some(vk_commitment);
+        (
+            chain_id,
+            asset,
+            OwnedFoldHop {
+                root_before,
+                input_nullifiers: proof.nullifiers,
+                output_commitments: proof.output_commitments,
+                root_after,
+                attachment,
+                vk_box,
+            },
+            record,
+        )
+    }
+
+    fn envelope_instances(proof: &ProofBox) -> Vec<Vec<[u8; 32]>> {
+        let envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("OpenVerifyEnvelope");
+        extract_pasta_instance_columns_bytes(&envelope.proof_bytes).expect("public instances")
+    }
+
+    fn hop_envelope(hop: &OwnedFoldHop) -> OpenVerifyEnvelope {
+        norito::decode_from_bytes(&hop.attachment.proof.bytes).expect("OpenVerifyEnvelope")
+    }
+
+    fn sample_hop_record(hop: &OwnedFoldHop) -> VerifyingKeyRecord {
+        let envelope = hop_envelope(hop);
+        let schema_hash: [u8; 32] = Hash::new(envelope.public_inputs.as_slice()).into();
+        let mut record = VerifyingKeyRecord::new(
+            1,
+            envelope.circuit_id,
+            envelope.backend,
+            "pasta",
+            schema_hash,
+            hash_vk(&hop.vk_box),
+        );
+        record.status = ConfidentialStatus::Active;
+        record.vk_len = u32::try_from(hop.vk_box.bytes.len()).expect("vk length fits u32");
+        record.max_proof_bytes =
+            u32::try_from(hop.attachment.proof.bytes.len()).expect("proof length fits u32");
+        record.key = Some(hop.vk_box.clone());
+        record
+    }
+
+    fn mutate_open_verify_envelope(
+        proof: &mut ProofBox,
+        mutate: impl FnOnce(&mut OpenVerifyEnvelope),
+    ) {
+        let mut envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("OpenVerifyEnvelope");
+        mutate(&mut envelope);
+        proof.bytes = norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode");
+    }
+
+    fn stark_statement_proof(
+        public_inputs: Vec<Vec<[u8; 32]>>,
+        wrapper_version: u16,
+        backend: &str,
+    ) -> ProofBox {
+        let open = StarkFriOpenProofV1 {
+            version: wrapper_version,
+            public_inputs,
+            envelope_bytes: vec![0xAA, 0xBB, 0xCC],
+        };
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Stark,
+            circuit_id: "stark/fri/sha256-goldilocks:kagemusha-hop-fixture".to_owned(),
+            vk_hash: fixed_bytes(b"kagemusha-stark-hop-vk"),
+            public_inputs: b"kagemusha-stark-hop-schema".to_vec(),
+            proof_bytes: norito::to_bytes(&open).expect("STARK wrapper encode"),
+            aux: Vec::new(),
+        };
+        ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode"),
+        )
+    }
+
+    #[test]
+    fn prove_kagemusha_compact_payment_token_emits_real_halo2_ipa_proof() {
+        let vk_box = kagemusha_vk_box();
+        let proving_key = derive_halo2_ipa_kagemusha_folded_proving_key_bytes(&vk_box)
+            .expect("Kagemusha folded proving key");
+        let public_inputs = sample_public_inputs();
+        let token = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs,
+            Some(&proving_key),
+        )
+        .expect("real Kagemusha folded proof");
+
+        assert!(verify_kagemusha_compact_payment_token(&token, &vk_box));
+        assert_eq!(
+            envelope_instances(&token.folded_proof.proof),
+            kagemusha_compact_token_instance_values(&token)
+                .expect("Kagemusha folded instance values")
+                .public_instance_columns()
+        );
+    }
+
+    #[test]
+    fn prove_kagemusha_compact_payment_token_rejects_bad_final_prover_metadata() {
+        let vk_box = kagemusha_vk_box();
+        let public_inputs = sample_public_inputs();
+
+        let err = prove_kagemusha_compact_payment_token(
+            "kagemusha-folded-v1:forged",
+            &vk_box,
+            public_inputs.clone(),
+            None,
+        )
+        .expect_err("forged folded circuit id must reject before proving");
+        assert!(
+            err.contains("unsupported Kagemusha folded circuit id"),
+            "unexpected forged-circuit error: {err}"
+        );
+
+        let mut wrong_backend_vk = vk_box.clone();
+        wrong_backend_vk.backend = "halo2/kzg".to_owned();
+        let err = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &wrong_backend_vk,
+            public_inputs.clone(),
+            None,
+        )
+        .expect_err("trusted-setup final verifier backend must reject before proving");
+        assert!(
+            err.contains("requires halo2/ipa verifying key backend"),
+            "unexpected backend error: {err}"
+        );
+
+        let mut wrong_backend_vk = vk_box.clone();
+        wrong_backend_vk.backend = "mock-proof".to_owned();
+        let err = derive_halo2_ipa_kagemusha_folded_proving_key_bytes(&wrong_backend_vk)
+            .expect_err("developer-only final verifier backend must reject key derivation");
+        assert!(
+            err.contains("requires halo2/ipa verifying key backend"),
+            "unexpected key-derivation backend error: {err}"
+        );
+    }
+
+    #[test]
+    fn prove_kagemusha_compact_payment_token_rejects_bad_final_proving_key_bytes() {
+        let vk_box = kagemusha_vk_box();
+        let public_inputs = sample_public_inputs();
+        let archive_bytes = derive_halo2_ipa_kagemusha_folded_proving_key_bytes(&vk_box)
+            .expect("Kagemusha folded proving key");
+        let mut trailing_archive: Halo2IpaProvingKeyArchive =
+            norito::decode_from_bytes(&archive_bytes).expect("proving key archive");
+        trailing_archive.proving_key.push(0xA5);
+        let trailing_key =
+            norito::to_bytes(&trailing_archive).expect("encode trailing proving key archive");
+
+        let err = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs.clone(),
+            Some(&trailing_key),
+        )
+        .expect_err("trailing proving-key bytes must reject");
+        assert!(
+            err.contains("trailing bytes"),
+            "unexpected trailing-key error: {err}"
+        );
+
+        let offline_vk = offline_note_recursive_vk_box().expect("offline note verifying key");
+        let offline_key = derive_halo2_ipa_offline_note_proving_key_bytes(&offline_vk)
+            .expect("offline note proving key");
+        let err = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs,
+            Some(&offline_key),
+        )
+        .expect_err("cross-circuit proving key must reject");
+        assert!(
+            err.contains("circuit family"),
+            "unexpected cross-circuit key error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_rejects_tampered_real_proof() {
+        let vk_box = kagemusha_vk_box();
+        let public_inputs = sample_public_inputs();
+        let mut token = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs,
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+        let last = token
+            .folded_proof
+            .proof
+            .bytes
+            .last_mut()
+            .expect("proof bytes");
+        *last ^= 0x01;
+
+        assert!(!verify_kagemusha_compact_payment_token(&token, &vk_box));
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_rejects_oversized_folded_proof() {
+        let vk_box = kagemusha_vk_box();
+        let public_inputs = sample_public_inputs();
+        let mut token = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs,
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+        token
+            .folded_proof
+            .proof
+            .bytes
+            .resize(KAGEMUSHA_FOLDED_MAX_PROOF_BYTES as usize + 1, 0xA7);
+
+        assert!(!verify_kagemusha_compact_payment_token(&token, &vk_box));
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_rejects_public_input_substitution() {
+        let vk_box = kagemusha_vk_box();
+        let public_inputs = sample_public_inputs();
+        let mut token = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs,
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+        token.public_inputs.final_root = fixed_bytes(b"kagemusha-forged-final-root");
+
+        assert!(!verify_kagemusha_compact_payment_token(&token, &vk_box));
+
+        let public_inputs = sample_public_inputs();
+        let mut token = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs,
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+        token.public_inputs.aggregation_transcript_digest =
+            fixed_bytes(b"kagemusha-forged-aggregation-transcript");
+        assert!(!verify_kagemusha_compact_payment_token(&token, &vk_box));
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_rejects_context_substitution() {
+        let vk_box = kagemusha_vk_box();
+        let public_inputs = sample_public_inputs();
+        let token = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs,
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+
+        let mut forged_domain = token.clone();
+        forged_domain.public_inputs.domain = "iroha:kagemusha:forged-domain".to_owned();
+        forged_domain.folded_proof.public_inputs_hash = forged_domain
+            .public_inputs
+            .public_inputs_hash()
+            .expect("forged-domain hash");
+        assert!(!verify_kagemusha_compact_payment_token(
+            &forged_domain,
+            &vk_box
+        ));
+
+        let mut forged_mode = token;
+        forged_mode.public_inputs.aggregation_mode =
+            iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1;
+        forged_mode.folded_proof.public_inputs_hash = forged_mode
+            .public_inputs
+            .public_inputs_hash()
+            .expect("forged-mode hash");
+        assert!(!verify_kagemusha_compact_payment_token(
+            &forged_mode,
+            &vk_box
+        ));
+    }
+
+    #[test]
+    fn prove_kagemusha_compact_payment_token_rejects_reserved_recursive_mode() {
+        let vk_box = kagemusha_vk_box();
+        let mut public_inputs = sample_public_inputs();
+        public_inputs.aggregation_mode =
+            iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1;
+
+        let err = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs,
+            None,
+        )
+        .expect_err("reserved recursive aggregation mode must reject before proving");
+
+        assert!(
+            err.contains("reserved for future in-circuit recursive aggregation"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_rejects_wrong_verifier_key_id() {
+        let vk_box = kagemusha_vk_box();
+        let public_inputs = sample_public_inputs();
+        let mut token = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs,
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+
+        token.folded_proof.verifier_key_id =
+            VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "not-kagemusha-folded");
+        assert!(!verify_kagemusha_compact_payment_token(&token, &vk_box));
+
+        token.folded_proof.verifier_key_id =
+            VerifyingKeyId::new("stark/fri", KAGEMUSHA_FOLDED_CIRCUIT_ID);
+        assert!(!verify_kagemusha_compact_payment_token(&token, &vk_box));
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_rejects_non_production_folded_backend_labels() {
+        let record = kagemusha_folded_vk_record("offline_kagemusha", 3).expect("vk record");
+        let vk_box = record.key.as_ref().expect("inline verifier key");
+        let public_inputs = sample_public_inputs();
+        let token =
+            prove_kagemusha_compact_payment_token(&record.circuit_id, vk_box, public_inputs, None)
+                .expect("real Kagemusha folded proof");
+
+        for backend in [
+            "groth16/bn254",
+            "halo2/kzg",
+            "halo2/bn254",
+            "debug-proof",
+            "mock-proof",
+            "halo2/ipa:mock-proof",
+        ] {
+            let mut forged = token.clone();
+            forged.folded_proof.proof.backend = backend.to_owned();
+            forged.folded_proof.verifier_key_id =
+                VerifyingKeyId::new(backend, KAGEMUSHA_FOLDED_CIRCUIT_ID);
+
+            assert!(
+                !verify_kagemusha_compact_payment_token(&forged, vk_box),
+                "folded token verifier accepted non-production backend {backend:?}"
+            );
+            assert!(
+                !verify_kagemusha_compact_payment_token_with_record(&forged, &record),
+                "record-backed folded token verifier accepted non-production backend {backend:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_rejects_envelope_circuit_substitution() {
+        let vk_box = kagemusha_vk_box();
+        let public_inputs = sample_public_inputs();
+        let mut token = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs,
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+
+        mutate_open_verify_envelope(&mut token.folded_proof.proof, |envelope| {
+            envelope.circuit_id = "tiny-add".to_owned();
+        });
+        assert!(!verify_kagemusha_compact_payment_token(&token, &vk_box));
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_rejects_envelope_backend_and_vk_hash_substitution() {
+        let vk_box = kagemusha_vk_box();
+        let public_inputs = sample_public_inputs();
+        let mut wrong_backend = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs.clone(),
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+        mutate_open_verify_envelope(&mut wrong_backend.folded_proof.proof, |envelope| {
+            envelope.backend = BackendTag::Stark;
+        });
+        assert!(!verify_kagemusha_compact_payment_token(
+            &wrong_backend,
+            &vk_box
+        ));
+
+        let mut wrong_vk_hash = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            public_inputs,
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+        mutate_open_verify_envelope(&mut wrong_vk_hash.folded_proof.proof, |envelope| {
+            envelope.vk_hash = [0xA5; 32];
+        });
+        assert!(!verify_kagemusha_compact_payment_token(
+            &wrong_vk_hash,
+            &vk_box
+        ));
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_rejects_envelope_aux_substitution() {
+        let record = kagemusha_folded_vk_record("offline_kagemusha", 3).expect("vk record");
+        let vk_box = record.key.as_ref().expect("inline verifier key");
+        let public_inputs = sample_public_inputs();
+        let mut token =
+            prove_kagemusha_compact_payment_token(&record.circuit_id, vk_box, public_inputs, None)
+                .expect("real Kagemusha folded proof");
+
+        mutate_open_verify_envelope(&mut token.folded_proof.proof, |envelope| {
+            envelope.aux = b"kagemusha-forged-final-folded-aux".to_vec();
+        });
+
+        assert!(!verify_kagemusha_compact_payment_token(&token, vk_box));
+        assert!(!verify_kagemusha_compact_payment_token_with_record(
+            &token, &record
+        ));
+    }
+
+    #[test]
+    fn kagemusha_folded_vk_record_embeds_real_active_verifier_key() {
+        let record = kagemusha_folded_vk_record("offline_kagemusha", 3).expect("vk record");
+        let vk_box = record.key.as_ref().expect("inline verifier key");
+
+        assert_eq!(record.version, 3);
+        assert_eq!(record.circuit_id, KAGEMUSHA_FOLDED_CIRCUIT_ID);
+        assert_eq!(record.namespace, "offline_kagemusha");
+        assert!(record.is_active());
+        assert_eq!(record.max_proof_bytes, KAGEMUSHA_FOLDED_MAX_PROOF_BYTES);
+        assert_eq!(record.vk_len as usize, vk_box.bytes.len());
+        assert_eq!(record.commitment, hash_vk(vk_box));
+        assert_eq!(vk_box.backend, ZK_BACKEND_HALO2_IPA);
+
+        let token = prove_kagemusha_compact_payment_token(
+            &record.circuit_id,
+            vk_box,
+            sample_public_inputs(),
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+        assert!(verify_kagemusha_compact_payment_token(&token, vk_box));
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_verifies_against_active_vk_record() {
+        let record = kagemusha_folded_vk_record("offline_kagemusha", 3).expect("vk record");
+        let vk_box = record.key.as_ref().expect("inline verifier key");
+        let token = prove_kagemusha_compact_payment_token(
+            &record.circuit_id,
+            vk_box,
+            sample_public_inputs(),
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+
+        assert!(verify_kagemusha_compact_payment_token_with_record(
+            &token, &record
+        ));
+    }
+
+    #[test]
+    fn kagemusha_compact_payment_token_record_verifier_rejects_registry_mismatches() {
+        let record = kagemusha_folded_vk_record("offline_kagemusha", 3).expect("vk record");
+        let vk_box = record.key.as_ref().expect("inline verifier key");
+        let token = prove_kagemusha_compact_payment_token(
+            &record.circuit_id,
+            vk_box,
+            sample_public_inputs(),
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+
+        let mut inactive = record.clone();
+        inactive.status = ConfidentialStatus::Withdrawn;
+        assert!(!verify_kagemusha_compact_payment_token_with_record(
+            &token, &inactive
+        ));
+
+        let mut wrong_schema = record.clone();
+        wrong_schema.public_inputs_schema_hash = [0x11; 32];
+        assert!(!verify_kagemusha_compact_payment_token_with_record(
+            &token,
+            &wrong_schema
+        ));
+
+        let mut missing_key = record.clone();
+        missing_key.key = None;
+        assert!(!verify_kagemusha_compact_payment_token_with_record(
+            &token,
+            &missing_key
+        ));
+
+        let mut wrong_commitment = record.clone();
+        wrong_commitment.commitment = [0x22; 32];
+        assert!(!verify_kagemusha_compact_payment_token_with_record(
+            &token,
+            &wrong_commitment
+        ));
+
+        let mut too_small = record;
+        too_small.max_proof_bytes =
+            u32::try_from(token.folded_proof.proof.bytes.len() - 1).expect("proof length fits u32");
+        assert!(!verify_kagemusha_compact_payment_token_with_record(
+            &token, &too_small
+        ));
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_verifies_hop_proofs() {
+        let (chain_id, asset, hop, _record) = sample_confidential_v2_verified_hop();
+        let step = hop.as_step();
+
+        let public_inputs = kagemusha_verified_folded_public_inputs(&chain_id, &asset, &[step])
+            .expect("verified folded public inputs");
+        let verified_hop = kagemusha_verified_fold_step(&hop.as_step()).expect("verified hop");
+
+        assert_eq!(public_inputs.initial_root, hop.root_before);
+        assert_eq!(public_inputs.final_root, hop.root_after);
+        assert_eq!(public_inputs.hop_count, 1);
+        assert_eq!(
+            verified_hop.proof_hash,
+            kagemusha_fold_step_proof_hash(&hop.attachment.proof).expect("proof hash")
+        );
+        assert_eq!(
+            verified_hop.proof_public_inputs_digest,
+            kagemusha_fold_step_public_inputs_digest(&hop.attachment.proof)
+                .expect("proof public inputs digest")
+        );
+        assert_eq!(verified_hop.verifier_key_id, hop.attachment.vk_ref);
+        assert_eq!(
+            verified_hop.verifier_key_commitment,
+            hop.attachment
+                .vk_commitment
+                .expect("sample hop has verifier-key commitment")
+        );
+        assert_eq!(
+            verified_hop.verifier_key_poseidon_digest,
+            iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                hop.vk_box.backend.as_str(),
+                &hop.vk_box.bytes,
+            )
+            .expect("verifier-key Poseidon digest")
+        );
+
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        assert_eq!(
+            public_inputs,
+            kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+                .expect("bundle verified folded public inputs")
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_generic_hop_circuits() {
+        let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm".parse().expect("asset definition name"),
+        );
+        let root0 = fixed_bytes(b"kagemusha-generic-hop-root-0");
+        let root1 = fixed_bytes(b"kagemusha-generic-hop-root-1");
+        let hop = sample_verified_hop(root0, root1, 0x71);
+
+        let err = kagemusha_verified_folded_public_inputs(&chain_id, &asset, &[hop.as_step()])
+            .expect_err("generic transparent hop circuit must not fold into Kagemusha");
+        assert!(
+            err.contains("confidential-transfer-v2"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_from_bundle_rejects_tampered_hop_proof() {
+        let (chain_id, asset, hop, _record) = sample_confidential_v2_verified_hop();
+        let mut bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let last = bundle.steps[0]
+            .attachment
+            .proof
+            .bytes
+            .last_mut()
+            .expect("proof bytes");
+        *last ^= 0x01;
+
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect_err("tampered bundled proof must fail");
+        assert!(
+            err.contains("Kagemusha fold hop proof verification failed")
+                || err.contains("not a valid OpenVerifyEnvelope"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_from_bundle_binds_envelope_hash_metadata() {
+        let (chain_id, asset, mut hop, _record) = sample_confidential_v2_verified_hop();
+        hop.attachment.envelope_hash = Some(Hash::new(&hop.attachment.proof.bytes).into());
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id: chain_id.clone(),
+            asset: asset.clone(),
+            steps: vec![hop.as_bundle_step()],
+        };
+        kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect("matching envelope hash metadata must be accepted");
+
+        let mut forged = bundle;
+        forged.steps[0].attachment.envelope_hash = Some([0xA7; 32]);
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&forged)
+            .expect_err("forged envelope hash metadata must reject");
+        assert!(err.contains("envelope hash"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_hop_envelope_aux_substitution() {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let mut bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        mutate_open_verify_envelope(&mut bundle.steps[0].attachment.proof, |envelope| {
+            envelope.aux = b"kagemusha-forged-hop-aux".to_vec();
+        });
+
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect_err("non-canonical confidential-v2 hop aux must reject");
+        assert!(err.contains("auxiliary bytes"), "unexpected error: {err}");
+
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("record-backed non-canonical confidential-v2 hop aux must reject");
+        assert!(err.contains("auxiliary bytes"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_from_bundle_rejects_oversized_hop_proof() {
+        let (chain_id, asset, hop, _record) = sample_confidential_v2_verified_hop();
+        let mut bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        bundle.steps[0]
+            .attachment
+            .proof
+            .bytes
+            .resize(KAGEMUSHA_HOP_MAX_PROOF_BYTES as usize + 1, 0xA7);
+
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect_err("oversized hop proof must reject before compact proof generation");
+        assert!(err.contains("max_proof_bytes"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_oversized_bundle_before_proof_decode() {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let mut step = hop.as_bundle_step();
+        step.attachment.proof.bytes = vec![0xA7];
+        let too_many = iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1;
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![step; too_many],
+        };
+
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect_err("oversized bundle must reject before proof decode");
+        assert!(err.contains("at most"), "unexpected error: {err}");
+
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("record-backed oversized bundle must reject before proof decode");
+        assert!(err.contains("at most"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_bad_shape_before_proof_decode() {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let mut step = hop.as_bundle_step();
+        step.input_nullifiers.clear();
+        step.attachment.proof.bytes = vec![0xA7];
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![step],
+        };
+
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect_err("bad hop shape must reject before proof decode");
+        assert!(err.contains("requires 1 to"), "unexpected error: {err}");
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "shape error should come before proof decoding: {err}"
+        );
+
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("record-backed bad hop shape must reject before proof decode");
+        assert!(err.contains("requires 1 to"), "unexpected error: {err}");
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "record-backed shape error should come before proof decoding: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_zero_sets_before_proof_decode() {
+        let cases: [(&str, fn(&mut KagemushaVerifiedFoldStep)); 2] = [
+            ("input nullifiers must be non-zero", |step| {
+                step.input_nullifiers[0] = [0u8; 32];
+            }),
+            ("output commitments must be non-zero", |step| {
+                step.output_commitments[0] = [0u8; 32];
+            }),
+        ];
+
+        for (detail, mutate) in cases {
+            let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+            let mut step = hop.as_bundle_step();
+            mutate(&mut step);
+            step.attachment.proof.bytes = vec![0xA7];
+            let bundle = KagemushaVerifiedFoldBundle {
+                chain_id,
+                asset,
+                steps: vec![step],
+            };
+
+            let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+                .expect_err("zero Kagemusha fold set entry must reject before proof decode");
+            assert!(err.contains(detail), "unexpected error: {err}");
+            assert!(
+                !err.contains("OpenVerifyEnvelope"),
+                "zero-set error should come before proof decoding: {err}"
+            );
+
+            let id = hop.attachment.vk_ref.clone();
+            let records = [KagemushaHopVerifierRecord {
+                id: &id,
+                record: &record,
+            }];
+            let err = kagemusha_verified_folded_public_inputs_from_bundle_with_records(
+                &bundle, &records,
+            )
+            .expect_err(
+                "record-backed zero Kagemusha fold set entry must reject before proof decode",
+            );
+            assert!(err.contains(detail), "unexpected error: {err}");
+            assert!(
+                !err.contains("OpenVerifyEnvelope"),
+                "record-backed zero-set error should come before proof decoding: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_root_discontinuity_before_proof_decode() {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let mut step0 = hop.as_bundle_step();
+        let mut step1 = hop.as_bundle_step();
+        step0.attachment.proof.bytes = vec![0xA7];
+        step1.attachment.proof.bytes = vec![0xA7];
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![step0, step1],
+        };
+
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect_err("root discontinuity must reject before proof decode");
+        assert!(
+            err.contains("does not continue from the previous root"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "root-continuity error should come before proof decoding: {err}"
+        );
+
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("record-backed root discontinuity must reject before proof decode");
+        assert!(
+            err.contains("does not continue from the previous root"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "record-backed root-continuity error should come before proof decoding: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_duplicate_sets_before_proof_decode() {
+        let (chain_id, asset, hop, _record) = sample_confidential_v2_verified_hop();
+
+        let mut duplicate_input_0 = hop.as_bundle_step();
+        let mut duplicate_input_1 = hop.as_bundle_step();
+        duplicate_input_1.root_before = duplicate_input_0.root_after;
+        duplicate_input_1.root_after = fixed_bytes(b"kagemusha-duplicate-input-root-after");
+        duplicate_input_0.attachment.proof.bytes = vec![0xA7];
+        duplicate_input_1.attachment.proof.bytes = vec![0xA7];
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id: chain_id.clone(),
+            asset: asset.clone(),
+            steps: vec![duplicate_input_0, duplicate_input_1],
+        };
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect_err("duplicate input nullifier must reject before proof decode");
+        assert!(
+            err.contains("input nullifier is duplicated"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "duplicate-input error should come before proof decoding: {err}"
+        );
+
+        let mut duplicate_output_0 = hop.as_bundle_step();
+        let mut duplicate_output_1 = hop.as_bundle_step();
+        duplicate_output_1.root_before = duplicate_output_0.root_after;
+        duplicate_output_1.root_after = fixed_bytes(b"kagemusha-duplicate-output-root-after");
+        duplicate_output_1.input_nullifiers = vec![fixed_bytes(b"kagemusha-distinct-nullifier")];
+        duplicate_output_0.attachment.proof.bytes = vec![0xA7];
+        duplicate_output_1.attachment.proof.bytes = vec![0xA7];
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![duplicate_output_0, duplicate_output_1],
+        };
+        let err = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+            .expect_err("duplicate output commitment must reject before proof decode");
+        assert!(
+            err.contains("output commitment is duplicated"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.contains("OpenVerifyEnvelope"),
+            "duplicate-output error should come before proof decoding: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_from_bundle_with_records_accepts_active_records() {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+
+        assert_eq!(
+            kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
+                .expect("bundle verified folded public inputs"),
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect("record-backed bundle verification")
+        );
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: bundle.clone(),
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: id.clone(),
+                record: record.clone(),
+            }],
+        };
+        assert_eq!(
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect("record-backed bundle verification"),
+            kagemusha_verified_folded_public_inputs_from_record_bundle(&record_bundle)
+                .expect("serializable record bundle verification")
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_from_bundle_with_records_rejects_generic_circuits() {
+        let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm".parse().expect("asset definition name"),
+        );
+        let hop = sample_verified_hop(
+            fixed_bytes(b"kagemusha-generic-root-0"),
+            fixed_bytes(b"kagemusha-generic-root-1"),
+            0x52,
+        );
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+        let record = sample_hop_record(&hop);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("generic active verifier records must fail");
+        assert!(
+            err.contains("confidential-transfer-v2"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_from_bundle_with_records_rejects_bad_records() {
+        let (chain_id, asset, hop, valid) = sample_confidential_v2_verified_hop();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let id = hop.attachment.vk_ref.clone();
+
+        let missing: [KagemushaHopVerifierRecord<'_>; 0] = [];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &missing)
+                .expect_err("missing hop verifier record must fail");
+        assert!(err.contains("missing"), "unexpected error: {err}");
+
+        let extra_id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "unused-kagemusha-hop-vk");
+        let records = [
+            KagemushaHopVerifierRecord {
+                id: &id,
+                record: &valid,
+            },
+            KagemushaHopVerifierRecord {
+                id: &extra_id,
+                record: &valid,
+            },
+        ];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("extraneous hop verifier record must fail");
+        assert!(
+            err.contains("not referenced by any hop"),
+            "unexpected error: {err}"
+        );
+
+        let extra_record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: bundle.clone(),
+            verifier_records: vec![
+                KagemushaVerifiedFoldVerifierRecord {
+                    id: id.clone(),
+                    record: valid.clone(),
+                },
+                KagemushaVerifiedFoldVerifierRecord {
+                    id: extra_id,
+                    record: valid.clone(),
+                },
+            ],
+        };
+        let err = kagemusha_verified_folded_public_inputs_from_record_bundle(&extra_record_bundle)
+            .expect_err("serializable extraneous hop verifier record must fail");
+        assert!(
+            err.contains("not referenced by any hop"),
+            "unexpected error: {err}"
+        );
+
+        let mut inactive = valid.clone();
+        inactive.status = ConfidentialStatus::Withdrawn;
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &inactive,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("inactive hop verifier record must fail");
+        assert!(err.contains("not active"), "unexpected error: {err}");
+
+        let mut wrong_schema = valid.clone();
+        wrong_schema.public_inputs_schema_hash = [0x11; 32];
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &wrong_schema,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("schema mismatch must fail");
+        assert!(err.contains("schema"), "unexpected error: {err}");
+
+        let mut wrong_circuit = valid.clone();
+        wrong_circuit.circuit_id = "halo2/ipa:other-hop".to_owned();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &wrong_circuit,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("circuit mismatch must fail");
+        assert!(
+            err.contains("circuit id") || err.contains("confidential-transfer-v2"),
+            "unexpected error: {err}"
+        );
+
+        let mut wrong_commitment = valid.clone();
+        wrong_commitment.commitment = [0x22; 32];
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &wrong_commitment,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("commitment mismatch must fail");
+        assert!(err.contains("commitment"), "unexpected error: {err}");
+
+        let mut wrong_len = valid.clone();
+        wrong_len.vk_len = wrong_len.vk_len.saturating_sub(1);
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &wrong_len,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("key length mismatch must fail");
+        assert!(err.contains("key length"), "unexpected error: {err}");
+
+        let mut too_small = valid.clone();
+        too_small.max_proof_bytes =
+            u32::try_from(hop.attachment.proof.bytes.len().saturating_sub(1))
+                .expect("proof length fits u32");
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &too_small,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("proof size cap violation must fail");
+        assert!(err.contains("proof-size cap"), "unexpected error: {err}");
+
+        let mut wrong_inline_key = valid.clone();
+        wrong_inline_key.key = Some(VerifyingKeyBox::new(
+            ZK_BACKEND_HALO2_IPA.to_owned(),
+            b"not-the-hop-verifier-key".to_vec(),
+        ));
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &wrong_inline_key,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("inline key mismatch must fail");
+        assert!(err.contains("inline key"), "unexpected error: {err}");
+
+        let records = [
+            KagemushaHopVerifierRecord {
+                id: &id,
+                record: &valid,
+            },
+            KagemushaHopVerifierRecord {
+                id: &id,
+                record: &valid,
+            },
+        ];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("duplicate hop verifier records must fail");
+        assert!(err.contains("duplicated"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn prove_verified_kagemusha_compact_payment_token_verifies_hops_and_emits_real_proof() {
+        let (chain_id, asset, hop, _record) = sample_confidential_v2_verified_hop();
+        let step = hop.as_step();
+        let vk_box = kagemusha_vk_box();
+
+        let token = prove_verified_kagemusha_compact_payment_token(
+            &chain_id,
+            &asset,
+            &[step],
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            None,
+        )
+        .expect("verified compact Kagemusha token");
+
+        assert!(verify_kagemusha_compact_payment_token(&token, &vk_box));
+        assert_eq!(token.public_inputs.initial_root, hop.root_before);
+        assert_eq!(token.public_inputs.final_root, hop.root_after);
+        assert_eq!(token.public_inputs.hop_count, 1);
+    }
+
+    #[test]
+    fn prove_verified_kagemusha_compact_payment_token_from_bundle_with_records_emits_real_proof() {
+        let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
+        let id = hop.attachment.vk_ref.clone();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
+        let vk_box = kagemusha_vk_box();
+
+        let token = prove_verified_kagemusha_compact_payment_token_from_bundle_with_records(
+            &bundle,
+            &records,
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            None,
+        )
+        .expect("record-backed verified compact Kagemusha token");
+
+        assert!(verify_kagemusha_compact_payment_token(&token, &vk_box));
+        assert_eq!(token.public_inputs.initial_root, hop.root_before);
+        assert_eq!(token.public_inputs.final_root, hop.root_after);
+        assert_eq!(token.public_inputs.hop_count, 1);
+
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle,
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord { id, record }],
+        };
+        let record_token = prove_verified_kagemusha_compact_payment_token_from_record_bundle(
+            &record_bundle,
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            None,
+        )
+        .expect("serializable record-backed verified compact Kagemusha token");
+        assert!(verify_kagemusha_compact_payment_token(
+            &record_token,
+            &vk_box
+        ));
+        assert_eq!(record_token.public_inputs, token.public_inputs);
+    }
+
+    #[test]
+    fn prove_verified_kagemusha_compact_payment_token_rejects_tampered_hop_proof() {
+        let (chain_id, asset, mut hop, _record) = sample_confidential_v2_verified_hop();
+        let last = hop.attachment.proof.bytes.last_mut().expect("proof bytes");
+        *last ^= 0x01;
+        let vk_box = kagemusha_vk_box();
+
+        let err = prove_verified_kagemusha_compact_payment_token(
+            &chain_id,
+            &asset,
+            &[hop.as_step()],
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            None,
+        )
+        .expect_err("verified compact prover must reject tampered hop proof");
+        assert!(
+            err.contains("verification failed") || err.contains("not a valid OpenVerifyEnvelope"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn prove_verified_kagemusha_compact_payment_token_rejects_root_discontinuity() {
+        let (chain_id, asset, hop0, _record0) = sample_confidential_v2_verified_hop();
+        let (_other_chain_id, _other_asset, hop1, _record1) = sample_confidential_v2_verified_hop();
+        let step0 = hop0.as_step();
+        let step1 = hop1.as_step();
+        let vk_box = kagemusha_vk_box();
+
+        let err = prove_verified_kagemusha_compact_payment_token(
+            &chain_id,
+            &asset,
+            &[step0, step1],
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            None,
+        )
+        .expect_err("verified compact prover must reject discontinuous folded roots");
+        assert!(err.contains("does not continue from the previous root"));
+    }
+
+    #[test]
+    fn kagemusha_verified_fold_step_rejects_tampered_hop_proof() {
+        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
+        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
+        let mut hop = sample_verified_hop(root0, root1, 0x91);
+        let last = hop.attachment.proof.bytes.last_mut().expect("proof bytes");
+        *last ^= 0x01;
+
+        let err = kagemusha_verified_fold_step(&hop.as_step())
+            .expect_err("tampered hop proof must reject");
+        assert!(
+            err.contains("verification failed") || err.contains("not a valid OpenVerifyEnvelope"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_fold_step_binds_public_input_statement_metadata() {
+        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
+        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
+        let hop = sample_verified_hop(root0, root1, 0x92);
+        let mut mutated = sample_verified_hop(root0, root1, 0x92);
+
+        let original = kagemusha_verified_fold_step(&hop.as_step()).expect("original verified hop");
+        mutate_open_verify_envelope(&mut mutated.attachment.proof, |envelope| {
+            envelope.public_inputs.extend_from_slice(b":forged-schema");
+        });
+        let changed =
+            kagemusha_verified_fold_step(&mutated.as_step()).expect("mutated verified hop");
+
+        assert_ne!(
+            original.proof_public_inputs_digest,
+            changed.proof_public_inputs_digest
+        );
+    }
+
+    #[test]
+    fn kagemusha_proof_statement_digest_binds_stark_public_inputs() {
+        let proof = stark_statement_proof(vec![vec![[0x11; 32]], vec![[0x22; 32]]], 1, "stark/fri");
+        let changed =
+            stark_statement_proof(vec![vec![[0x11; 32]], vec![[0x23; 32]]], 1, "stark/fri");
+
+        assert_ne!(
+            kagemusha_fold_step_public_inputs_digest(&proof).expect("STARK statement digest"),
+            kagemusha_fold_step_public_inputs_digest(&changed)
+                .expect("changed STARK statement digest")
+        );
+    }
+
+    #[test]
+    fn kagemusha_proof_statement_digest_rejects_bad_stark_wrapper_version() {
+        let proof = stark_statement_proof(vec![vec![[0x11; 32]]], 2, "stark/fri");
+
+        let err = kagemusha_fold_step_public_inputs_digest(&proof)
+            .expect_err("unsupported STARK wrapper version must reject");
+        assert!(err.contains("unsupported Kagemusha STARK/FRI public input wrapper version"));
+    }
+
+    #[test]
+    fn kagemusha_proof_statement_digest_rejects_noncanonical_envelope_metadata() {
+        let mut aux = stark_statement_proof(vec![vec![[0x11; 32]]], 1, "stark/fri");
+        mutate_open_verify_envelope(&mut aux, |envelope| {
+            envelope.aux = b"forged-kagemusha-aux".to_vec();
+        });
+        let err = kagemusha_fold_step_public_inputs_digest(&aux)
+            .expect_err("non-empty Kagemusha proof aux must reject");
+        assert!(err.contains("auxiliary bytes"), "unexpected error: {err}");
+
+        let mut zero_vk = stark_statement_proof(vec![vec![[0x11; 32]]], 1, "stark/fri");
+        mutate_open_verify_envelope(&mut zero_vk, |envelope| {
+            envelope.vk_hash = [0u8; 32];
+        });
+        let err = kagemusha_fold_step_public_inputs_digest(&zero_vk)
+            .expect_err("zero Kagemusha proof verifier-key hash must reject");
+        assert!(err.contains("non-zero"), "unexpected error: {err}");
+
+        let mut empty_circuit_id = stark_statement_proof(vec![vec![[0x11; 32]]], 1, "stark/fri");
+        mutate_open_verify_envelope(&mut empty_circuit_id, |envelope| {
+            envelope.circuit_id = "   ".to_owned();
+        });
+        let err = kagemusha_fold_step_public_inputs_digest(&empty_circuit_id)
+            .expect_err("empty Kagemusha proof circuit id must reject");
+        assert!(err.contains("circuit id"), "unexpected error: {err}");
+
+        let mut empty_schema = stark_statement_proof(vec![vec![[0x11; 32]]], 1, "stark/fri");
+        mutate_open_verify_envelope(&mut empty_schema, |envelope| {
+            envelope.public_inputs.clear();
+        });
+        let err = kagemusha_fold_step_public_inputs_digest(&empty_schema)
+            .expect_err("empty Kagemusha proof public-input schema must reject");
+        assert!(err.contains("schema"), "unexpected error: {err}");
+
+        let no_instance_columns = stark_statement_proof(Vec::new(), 1, "stark/fri");
+        let err = kagemusha_fold_step_public_inputs_digest(&no_instance_columns)
+            .expect_err("missing Kagemusha proof instance columns must reject");
+        assert!(err.contains("instance columns"), "unexpected error: {err}");
+
+        let empty_instance_column = stark_statement_proof(vec![Vec::new()], 1, "stark/fri");
+        let err = kagemusha_fold_step_public_inputs_digest(&empty_instance_column)
+            .expect_err("empty Kagemusha proof instance column must reject");
+        assert!(err.contains("instance column"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn kagemusha_proof_statement_digest_rejects_unsupported_backend() {
+        let proof = stark_statement_proof(vec![vec![[0x11; 32]]], 1, "halo2/pasta");
+
+        let err = kagemusha_fold_step_public_inputs_digest(&proof)
+            .expect_err("trusted setup backend must reject statement digesting");
+        assert!(err.contains("unsupported transparent backend"));
+
+        let proof = stark_statement_proof(vec![vec![[0x11; 32]]], 1, "stark/fri/");
+        let err = kagemusha_fold_step_public_inputs_digest(&proof)
+            .expect_err("profile-less STARK backend prefix must reject statement digesting");
+        assert!(err.contains("unsupported transparent backend"));
+
+        let proof = stark_statement_proof(vec![vec![[0x11; 32]]], 1, "stark/fri/debug-proof");
+        let err = kagemusha_fold_step_public_inputs_digest(&proof)
+            .expect_err("developer-only STARK backend profile must reject statement digesting");
+        assert!(err.contains("unsupported transparent backend"));
+    }
+
+    #[test]
+    fn kagemusha_verified_fold_step_rejects_vk_commitment_mismatch() {
+        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
+        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
+        let mut hop = sample_verified_hop(root0, root1, 0xA1);
+        hop.attachment.vk_commitment = Some([0xFE; 32]);
+
+        let err = kagemusha_verified_fold_step(&hop.as_step())
+            .expect_err("wrong verifier key commitment must reject");
+        assert!(err.contains("commitment mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_verified_fold_step_rejects_envelope_vk_hash_mismatch() {
+        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
+        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
+        let mut hop = sample_verified_hop(root0, root1, 0xA3);
+        mutate_open_verify_envelope(&mut hop.attachment.proof, |envelope| {
+            envelope.vk_hash = [0xA5; 32];
+            let last = envelope.proof_bytes.last_mut().expect("proof payload");
+            *last ^= 0x01;
+        });
+
+        let err = kagemusha_verified_fold_step(&hop.as_step())
+            .expect_err("wrong envelope verifier key hash must reject");
+        assert!(err.contains("envelope verifier key commitment mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_verified_fold_step_rejects_envelope_backend_mismatch_before_proof_verify() {
+        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
+        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
+        let mut hop = sample_verified_hop(root0, root1, 0xA4);
+        mutate_open_verify_envelope(&mut hop.attachment.proof, |envelope| {
+            envelope.backend = BackendTag::Stark;
+            let last = envelope.proof_bytes.last_mut().expect("proof payload");
+            *last ^= 0x01;
+        });
+
+        let err = kagemusha_verified_fold_step(&hop.as_step())
+            .expect_err("wrong envelope backend must reject before proof verification");
+        assert!(err.contains("envelope backend mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_verified_fold_step_rejects_missing_vk_commitment() {
+        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
+        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
+        let mut hop = sample_verified_hop(root0, root1, 0xA2);
+        hop.attachment.vk_commitment = None;
+
+        let err = kagemusha_verified_fold_step(&hop.as_step())
+            .expect_err("missing verifier key commitment must reject");
+        assert!(err.contains("commitment is required"));
+    }
+
+    #[test]
+    fn kagemusha_verified_fold_step_rejects_empty_verifier_key_id_name() {
+        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
+        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
+        let mut hop = sample_verified_hop(root0, root1, 0xA5);
+        hop.attachment.vk_ref.name = "   ".to_owned();
+
+        let err = kagemusha_verified_fold_step(&hop.as_step())
+            .expect_err("empty verifier-key id name must reject");
+        assert!(err.contains("verifier key id name"));
+    }
+
+    #[test]
+    fn kagemusha_verified_fold_step_rejects_empty_verifier_key_bytes() {
+        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
+        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
+        let mut hop = sample_verified_hop(root0, root1, 0xA6);
+        hop.vk_box.bytes.clear();
+
+        let err = kagemusha_verified_fold_step(&hop.as_step())
+            .expect_err("empty verifier-key bytes must reject");
+        assert!(err.contains("verifier key bytes"));
+    }
+
+    #[test]
+    fn kagemusha_verified_fold_step_rejects_trusted_setup_backend() {
+        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
+        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
+        let mut hop = sample_verified_hop(root0, root1, 0xB1);
+        hop.attachment.backend = "halo2/pasta".into();
+        hop.attachment.proof.backend = "halo2/pasta".into();
+        hop.attachment.vk_ref = VerifyingKeyId::new("halo2/pasta", "kagemusha-hop-fixture");
+        hop.vk_box.backend = "halo2/pasta".into();
+        hop.attachment.vk_commitment = None;
+
+        let err = kagemusha_verified_fold_step(&hop.as_step())
+            .expect_err("trusted setup backend must reject");
+        assert!(err.contains("transparent"));
     }
 }
 
@@ -6670,7 +10526,7 @@ fn extract_pasta_fp_instances_impl(
     None
 }
 
-// Tiny pasta circuits used for dispatch verification across KZG and IPA
+// Tiny pasta circuits used for dispatch verification across transparent IPA paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod pasta_tiny {
     use halo2_proofs::{
@@ -7548,6 +11404,136 @@ mod pasta_tiny {
                             *column,
                             0,
                             || Value::known(output_amounts[i]),
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    /// Real semantic circuit for compact Kagemusha folded proofs.
+    ///
+    /// The circuit binds every chain-visible folded transcript column to the
+    /// proof envelope, constrains the aggregation mode to checked pre-fold v1,
+    /// and constrains `hop_count` to the compact-token corridor `1..=64` using
+    /// a six-bit decomposition of `hop_count - 1`.
+    #[derive(Clone)]
+    pub struct KagemushaFoldedSemantic {
+        /// Public instance values constrained to equal the proof envelope.
+        pub public_values: [Scalar; super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS],
+        /// Private boolean bits for `hop_count - 1`.
+        pub hop_count_minus_one_bits: [Scalar; super::KAGEMUSHA_FOLDED_HOP_COUNT_BITS],
+    }
+
+    impl Default for KagemushaFoldedSemantic {
+        fn default() -> Self {
+            Self {
+                public_values: [Scalar::from(0); super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS],
+                hop_count_minus_one_bits: [Scalar::from(0); super::KAGEMUSHA_FOLDED_HOP_COUNT_BITS],
+            }
+        }
+    }
+
+    impl Circuit<Scalar> for KagemushaFoldedSemantic {
+        type Config = (
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::KAGEMUSHA_FOLDED_HOP_COUNT_BITS],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
+                super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS],
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            meta.set_minimum_degree(3);
+            let public_adv = std::array::from_fn(|_| meta.advice_column());
+            let bit_adv = std::array::from_fn(|_| meta.advice_column());
+            let inst = std::array::from_fn(|_| meta.instance_column());
+            let s = meta.selector();
+            meta.create_gate("kagemusha_folded_semantic", |meta| {
+                let s = meta.query_selector(s);
+                let mut public = Vec::with_capacity(super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS);
+                for column in &public_adv {
+                    public.push(meta.query_advice(*column, Rotation::cur()));
+                }
+                let mut bits = Vec::with_capacity(super::KAGEMUSHA_FOLDED_HOP_COUNT_BITS);
+                for column in &bit_adv {
+                    bits.push(meta.query_advice(*column, Rotation::cur()));
+                }
+
+                let mut cons = Vec::with_capacity(
+                    super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS
+                        + super::KAGEMUSHA_FOLDED_HOP_COUNT_BITS
+                        + 2,
+                );
+                for i in 0..super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS {
+                    let instance = meta.query_instance(inst[i], Rotation::cur());
+                    cons.push(s.clone() * (public[i].clone() - instance));
+                }
+                for bit in &bits {
+                    cons.push(
+                        s.clone()
+                            * bit.clone()
+                            * (bit.clone() - Expression::Constant(Scalar::from(1))),
+                    );
+                }
+                let mut bit_sum = Expression::Constant(Scalar::from(0));
+                for (index, bit) in bits.iter().enumerate() {
+                    bit_sum = bit_sum
+                        + bit.clone()
+                            * Expression::Constant(Scalar::from(
+                                1u64 << u32::try_from(index).expect("bit index fits"),
+                            ));
+                }
+                let aggregation_mode =
+                    public[super::KAGEMUSHA_FOLDED_AGGREGATION_MODE_INDEX].clone();
+                cons.push(
+                    s.clone()
+                        * (aggregation_mode
+                            - Expression::Constant(Scalar::from(u64::from(
+                                iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1,
+                            )))),
+                );
+                let hop_count = public[super::KAGEMUSHA_FOLDED_HOP_COUNT_INDEX].clone();
+                cons.push(s * (hop_count - Expression::Constant(Scalar::from(1)) - bit_sum));
+                cons
+            });
+            (public_adv, bit_adv, inst, s)
+        }
+        fn synthesize(
+            &self,
+            (public_adv, bit_adv, _inst, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let public_values = self.public_values;
+            let hop_count_minus_one_bits = self.hop_count_minus_one_bits;
+            layouter.assign_region(
+                || "kagemusha_folded_semantic",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    for (i, column) in public_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("public{i}"),
+                            *column,
+                            0,
+                            || Value::known(public_values[i]),
+                        )?;
+                    }
+                    for (i, column) in bit_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("hop_count_minus_one_bit{i}"),
+                            *column,
+                            0,
+                            || Value::known(hop_count_minus_one_bits[i]),
                         )?;
                     }
                     Ok(())
@@ -10695,6 +14681,26 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 }
             )
         }
+        "halo2/pasta/kagemusha-folded-v1" => {
+            if col_refs.len() != KAGEMUSHA_FOLDED_INSTANCE_COLUMNS
+                || col_refs.iter().any(|col| col.len() != 1)
+            {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::KagemushaFoldedSemantic::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                }
+            )
+        }
         "halo2/pasta/tiny-anon-transfer-2x2" => {
             let circuit = pasta_tiny::AnonTransfer2x2;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -11261,7 +15267,7 @@ mod trace_proving_queue_tests {
     }
 
     #[test]
-    fn mock_proof_snapshot_encodes_digest() {
+    fn trace_job_validation_does_not_emit_mock_proof_artifacts() {
         reset_trace_proof_state_for_tests();
         reset_trace_proving_state_for_tests();
 
@@ -11277,27 +15283,63 @@ mod trace_proving_queue_tests {
         let mut entries = collect_traces_for_proving(height.get());
         assert_eq!(entries.len(), 1);
         let entry = entries.pop().expect("trace entry");
-        let circuit = VMExecutionCircuit::new(&entry.program, &entry.trace, &entry.constraints);
-        assert!(circuit.verify().is_ok());
-        let snapshot = entry.into_snapshot();
-        assert_eq!(snapshot.backend, TRACE_MOCK_BACKEND);
-        queue_trace_proof(height.get(), snapshot);
+        entry.validate().expect("trace validates");
 
         let collected = collect_trace_proofs_for_height(height.get());
         assert!(
-            collected.iter().any(|p| p.backend == TRACE_MOCK_BACKEND),
-            "expected mock proof backend, got {:?}",
-            collected
-                .iter()
-                .map(|p| p.backend.clone())
-                .collect::<Vec<_>>()
+            collected.is_empty(),
+            "validation-only trace jobs must not emit proof artifacts: {collected:?}"
+        );
+    }
+
+    #[test]
+    fn trace_job_validation_rejects_tampered_trace() {
+        let task = sample_zk_task();
+        let digest = task.digest();
+        let mut entry = TraceForProving::from_task(&task, digest);
+        entry.trace[1].pc = 0;
+
+        let err = entry
+            .validate()
+            .expect_err("tampered trace must not validate");
+        assert!(
+            err.contains("pc") || err.contains("trace") || err.contains("constraint"),
+            "unexpected validation error: {err}"
         );
     }
 }
 
 #[cfg(test)]
 mod preverified_key_tests {
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+
     use super::*;
+
+    fn preverify_enveloped_proof(vk_hash: [u8; 32]) -> ProofBox {
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "halo2/ipa:preverify-test".to_owned(),
+            vk_hash,
+            public_inputs: Vec::new(),
+            proof_bytes: vec![0xAA, 0xBB, 0xCC],
+            aux: Vec::new(),
+        };
+        ProofBox::new(
+            ZK_BACKEND_HALO2_IPA.to_owned(),
+            norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
+        )
+    }
+
+    fn mutate_preverify_envelope(
+        mut proof: ProofBox,
+        mutate: impl FnOnce(&mut OpenVerifyEnvelope),
+    ) -> ProofBox {
+        let mut envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode OpenVerifyEnvelope");
+        mutate(&mut envelope);
+        proof.bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
+        proof
+    }
 
     #[test]
     fn preverified_proof_key_binds_vk_reference_and_commitment() {
@@ -11402,9 +15444,9 @@ mod preverified_key_tests {
 
     #[test]
     fn failed_preverify_attempts_do_not_poison_dedup_cache() {
-        let proof = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
         let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 6, 7, 8]);
         let expected = hash_vk(&vk);
+        let proof = preverify_enveloped_proof(expected);
 
         let mut budget_dedup = DedupCache::new();
         assert_eq!(
@@ -11512,6 +15554,145 @@ mod preverified_key_tests {
             ),
             PreverifyResult::Accepted
         );
+    }
+
+    #[test]
+    fn preverify_rejects_noncanonical_envelope_metadata_before_dedup() {
+        let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA5, 0x5A]);
+        let expected = hash_vk(&vk);
+        let proof = preverify_enveloped_proof(expected);
+
+        for (case, tampered, expected_result) in [
+            (
+                "raw_payload",
+                ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![1, 2, 3, 4]),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "backend_tag",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.backend = BackendTag::Stark;
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "aux",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.aux = b"side-channel".to_vec();
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "zero_vk_hash",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.vk_hash = [0u8; 32];
+                }),
+                PreverifyResult::VerifyingKeyMismatch,
+            ),
+            (
+                "wrong_vk_hash",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.vk_hash[0] ^= 0x80;
+                }),
+                PreverifyResult::VerifyingKeyMismatch,
+            ),
+        ] {
+            let mut dedup = DedupCache::new();
+            assert_eq!(
+                preverify_with_budget(
+                    &tampered,
+                    Some(&vk),
+                    &mut dedup,
+                    0,
+                    Some(expected),
+                    Some(expected),
+                    true,
+                ),
+                expected_result,
+                "case {case}"
+            );
+            assert_eq!(
+                preverify_with_budget(
+                    &proof,
+                    Some(&vk),
+                    &mut dedup,
+                    0,
+                    Some(expected),
+                    Some(expected),
+                    true,
+                ),
+                PreverifyResult::Accepted,
+                "case {case} should not poison dedup cache"
+            );
+        }
+    }
+
+    #[test]
+    fn preverify_rejects_trusted_setup_backends_before_dedup() {
+        for backend in [
+            "kzg",
+            "KZG",
+            "kzg/ceremony-v1",
+            "KZG/ceremony-v1",
+            "bn254",
+            "BN254",
+            "bn256",
+            "bls12_381",
+            "halo2/bn254",
+            "halo2/bn254/vote",
+            "halo2/kzg",
+            "halo2/ipa:kzg",
+            "halo2/ipa:KZG",
+            "groth16/bn254",
+        ] {
+            let mut dedup = DedupCache::new();
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend}"
+            );
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend} should not poison dedup cache"
+            );
+        }
+    }
+
+    #[test]
+    fn preverify_rejects_developer_only_backends_before_dedup() {
+        for backend in [
+            "debug",
+            "debug-proof",
+            "Debug-Proof",
+            "debug/ok",
+            "halo2/debug",
+            "halo2/ipa:debug-proof",
+            "halo2/ipa:DEBUG-Proof",
+            "stark/fri/debug",
+            "stark/fri/Debug",
+            "mock",
+            "mock-proof",
+            "Mock-Proof",
+            "halo2/mock",
+            "halo2/ipa:mock-proof",
+            "halo2/ipa:Mock-Proof",
+            "zk-trace/mock-proof",
+        ] {
+            let mut dedup = DedupCache::new();
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend}"
+            );
+            assert_eq!(
+                preverify_with_budget(&proof, None, &mut dedup, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend} should not poison dedup cache"
+            );
+        }
     }
 
     #[test]
