@@ -2,6 +2,15 @@
 
 Last updated: 2026-05-28
 
+## 2026-05-28 Torii push bridge test data-dir stabilization
+
+- `push_bridge` endpoint smoke tests now use `TestDataDirGuard` instead of a
+  bare temp directory, so push persistence goes through the serialized Torii
+  test data-dir override and cannot race another test's removed temp path.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features app_api,push --test push_bridge -- --nocapture`
+
 ## 2026-05-28 Torii Sumeragi collectors negotiation fix
 
 - `/v1/sumeragi/collectors` now uses the JSON-preferred REST response
