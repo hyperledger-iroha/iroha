@@ -2,6 +2,15 @@
 
 Last updated: 2026-05-29
 
+## 2026-05-29 Torii Sumeragi leader negotiation fix
+
+- `/v1/sumeragi/leader` now uses JSON-preferred response negotiation, matching
+  the router-level endpoint shape test and preserving explicit
+  `Accept: application/x-norito` support for binary callers.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_leader_endpoint sumeragi_leader_endpoint_shape -- --nocapture`
+
 ## 2026-05-29 Torii proof query fixture
 
 - `routing::query_endpoint_tests::proofs_roundtrip_and_query_via_torii`
