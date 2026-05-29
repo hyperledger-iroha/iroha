@@ -1,6 +1,16 @@
 # Status
 
-Last updated: 2026-05-28
+Last updated: 2026-05-29
+
+## 2026-05-29 Torii Sumeragi evidence count endpoint test fix
+
+- The router-level `/v1/sumeragi/evidence/count` test now forwards the
+  request `Accept` header into the handler and requests `application/json`
+  before decoding with the Norito JSON codec, matching the endpoint contract
+  while preserving Norito as the default wire format.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test sumeragi_evidence_count_endpoint --features telemetry -- --nocapture`
 
 ## 2026-05-28 Torii push bridge test data-dir stabilization
 

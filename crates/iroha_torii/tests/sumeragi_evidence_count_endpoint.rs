@@ -69,15 +69,19 @@ async fn evidence_count_endpoint_reports_increase() {
         let app = Router::new()
             .route(
                 "/v1/sumeragi/evidence/count",
-                get(|state: State<Arc<CoreState>>| async move {
-                    handle_v1_sumeragi_evidence_count(state, None).await
-                }),
+                get(
+                    |state: State<Arc<CoreState>>, headers: http::HeaderMap| async move {
+                        let accept = headers.get(http::header::ACCEPT).cloned();
+                        handle_v1_sumeragi_evidence_count(state, accept).await
+                    },
+                ),
             )
             .with_state(state.clone());
 
         let req0 = http::Request::builder()
             .method("GET")
             .uri("/v1/sumeragi/evidence/count")
+            .header(http::header::ACCEPT, "application/json")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp0 = app.clone().oneshot(req0).await.unwrap();
@@ -112,15 +116,19 @@ async fn evidence_count_endpoint_reports_increase() {
     let app = Router::new()
         .route(
             "/v1/sumeragi/evidence/count",
-            get(|state: State<Arc<CoreState>>| async move {
-                handle_v1_sumeragi_evidence_count(state, None).await
-            }),
+            get(
+                |state: State<Arc<CoreState>>, headers: http::HeaderMap| async move {
+                    let accept = headers.get(http::header::ACCEPT).cloned();
+                    handle_v1_sumeragi_evidence_count(state, accept).await
+                },
+            ),
         )
         .with_state(state.clone());
 
     let req1 = http::Request::builder()
         .method("GET")
         .uri("/v1/sumeragi/evidence/count")
+        .header(http::header::ACCEPT, "application/json")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp1 = app.clone().oneshot(req1).await.unwrap();
