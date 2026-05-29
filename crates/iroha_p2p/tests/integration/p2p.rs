@@ -2165,17 +2165,43 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
 
     let peer2 = Peer::new(address2.clone(), key_pair2.public_key().clone());
     network1.update_topology(UpdateTopology([peer2.id().clone()].into_iter().collect()));
-    // Provide two addresses: one unreachable (closed port) and one correct.
-    // On localhost a closed port rejects quickly, but this still exercises
-    // parallel attempts without delaying the good path.
-    let unreachable = socket_addr!(127.0.0.1: {next_port()});
+    let blackhole_listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(e) => {
+            eprintln!(
+                "Skipping happy_eyeballs_parallel_dials: cannot bind blackhole listener: {e:?}"
+            );
+            return;
+        }
+    };
+    let blackhole_port = blackhole_listener
+        .local_addr()
+        .expect("blackhole listener should have a local address")
+        .port();
+    let blackhole =
+        iroha_primitives::addr::SocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
+            host: "127.0.0.1".into(),
+            port: blackhole_port,
+        });
+    let blackhole_task = tokio::spawn(async move {
+        let mut held_connections = Vec::new();
+        while let Ok((stream, _)) = blackhole_listener.accept().await {
+            held_connections.push(stream);
+        }
+    });
+
+    // Provide two addresses: one TCP endpoint that accepts and never completes
+    // the P2P handshake, and one correct endpoint. The blackhole address is a
+    // host address so address preference schedules it before the IPv4 endpoint;
+    // a serial dialer would wait for the stalled handshake path and time out.
     network1.update_peers_addresses(UpdatePeers(vec![
-        (peer2.id().clone(), unreachable.clone()),
+        (peer2.id().clone(), blackhole),
         (peer2.id().clone(), address2.clone()),
     ]));
 
-    // Expect a quick connect (well under the 1s periodic tick).
-    tokio::time::timeout(Duration::from_millis(500), async {
+    // Expect a quick connect well before the 5s dial timeout that would gate a
+    // serial implementation.
+    tokio::time::timeout(Duration::from_secs(2), async {
         let mut n = network1
             .wait_online_peers_update(std::collections::HashSet::len)
             .await
@@ -2188,8 +2214,9 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         }
     })
     .await
-    .expect("expected fast connect despite an unreachable alternative address");
+    .expect("expected fast connect despite a stalled alternative address");
 
+    blackhole_task.abort();
     assert_eq!(network1.online_peers(std::collections::HashSet::len), 1);
 }
 

@@ -8197,7 +8197,7 @@ pub async fn handle_v1_sumeragi_collectors(
                 epoch_seed: epoch_seed_hex,
             },
         };
-        let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+        let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
             Ok(fmt) => fmt,
             Err(resp) => return Ok(resp),
         };
@@ -8286,7 +8286,7 @@ pub async fn handle_v1_sumeragi_collectors(
             epoch_seed: epoch_seed_hex,
         },
     };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8878,7 +8878,7 @@ pub async fn handle_v1_sumeragi_evidence_list(
         let end = core::cmp::min(total, offset + limit);
         &records[offset..end]
     };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -73752,9 +73752,10 @@ pub async fn handle_post_nexus_lane_lifecycle(
         "lane_count".into(),
         norito::json::Value::from(nexus.lane_catalog.lane_count().get()),
     );
-    Ok((
+    Ok(utils::respond_json_document_with_status_and_format(
         StatusCode::ACCEPTED,
-        utils::JsonValueBody(norito::json::Value::Object(payload)),
+        norito::json::Value::Object(payload),
+        utils::current_response_format(),
     ))
 }
 

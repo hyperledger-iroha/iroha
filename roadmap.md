@@ -14,8 +14,8 @@ and completed history lives in [`status.md`](./status.md).
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
 - Keep focused validation green for the core transaction pipeline, Torii query
-  APIs, Norito wire formats, and SDK fixtures before broader workspace test
-  runs.
+  and control-plane APIs, Norito wire formats, and SDK fixtures before broader
+  workspace test runs.
 - Complete the first-release Offline Bearer Cash pilot over the ZK note and
   nullifier engine. Swift, Kotlin, and Java Android now expose the Bearer Cash
   v1 wallet, note, receive-request, payment-token, ACK, text-codec, and policy

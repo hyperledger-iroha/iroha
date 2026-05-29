@@ -356,6 +356,32 @@ pub fn respond_json_value_with_status(status: StatusCode, value: Value) -> Respo
     }
 }
 
+/// Encode a dynamically constructed JSON document using the negotiated response format.
+///
+/// Dynamic values do not carry a stable Norito object schema. For Norito responses, the
+/// JSON document is encoded as a Norito string so clients still receive a checksummed
+/// Norito envelope without relying on a dynamic schema.
+pub fn respond_json_document_with_status_and_format(
+    status: StatusCode,
+    value: Value,
+    format: ResponseFormat,
+) -> Response {
+    match format {
+        ResponseFormat::Json => respond_json_value_with_status(status, value),
+        ResponseFormat::Norito => match norito::json::to_string(&value) {
+            Ok(json) => respond_with_status_and_format(status, json, ResponseFormat::Norito),
+            Err(err) => {
+                iroha_logger::error!(?err, "failed to serialise response payload");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to serialise response",
+                )
+                    .into_response()
+            }
+        },
+    }
+}
+
 /// Encode a dynamically constructed Norito JSON value.
 ///
 /// Dynamic values do not carry a stable Norito schema, so they remain JSON-only.
@@ -425,6 +451,53 @@ mod response_format_tests {
         let bytes = body.collect().await.expect("collect JSON body").to_bytes();
         let parsed: json::Value = json::from_slice(&bytes).expect("decode JSON payload");
         assert_eq!(parsed, json::Value::from(7_u64));
+    }
+
+    #[tokio::test]
+    async fn respond_json_document_with_format_wraps_json_string_as_norito() {
+        let mut object = json::Map::new();
+        object.insert("ok".to_owned(), json::Value::Bool(true));
+        let (parts, body) = respond_json_document_with_status_and_format(
+            StatusCode::ACCEPTED,
+            json::Value::Object(object),
+            ResponseFormat::Norito,
+        )
+        .into_parts();
+
+        assert_eq!(parts.status, StatusCode::ACCEPTED);
+        assert_eq!(
+            parts.headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static(NORITO_MIME_TYPE))
+        );
+        let bytes = body
+            .collect()
+            .await
+            .expect("collect Norito body")
+            .to_bytes();
+        let json: String = norito::decode_from_bytes(&bytes).expect("decode Norito JSON string");
+        let decoded: json::Value = json::from_str(&json).expect("decode JSON document");
+        assert_eq!(decoded["ok"].as_bool(), Some(true));
+    }
+
+    #[tokio::test]
+    async fn respond_json_document_with_format_renders_json() {
+        let mut object = json::Map::new();
+        object.insert("ok".to_owned(), json::Value::Bool(true));
+        let (parts, body) = respond_json_document_with_status_and_format(
+            StatusCode::ACCEPTED,
+            json::Value::Object(object),
+            ResponseFormat::Json,
+        )
+        .into_parts();
+
+        assert_eq!(parts.status, StatusCode::ACCEPTED);
+        assert_eq!(
+            parts.headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static(JSON_MIME_TYPE))
+        );
+        let bytes = body.collect().await.expect("collect JSON body").to_bytes();
+        let decoded: json::Value = json::from_slice(&bytes).expect("decode JSON document");
+        assert_eq!(decoded["ok"].as_bool(), Some(true));
     }
 }
 
@@ -752,6 +825,21 @@ pub mod extractors {
     #[derive(Clone, Copy, Debug)]
     pub struct JsonOrNoritoVersioned<T>(pub T);
 
+    fn versioned_decode_rejection<T: 'static>(versioned_err: impl std::fmt::Display) -> Response {
+        let message = format!("Could not decode versioned request: {versioned_err}");
+        if TypeId::of::<T>() == TypeId::of::<SignedTransaction>() {
+            return super::respond_with_status_and_format(
+                StatusCode::BAD_REQUEST,
+                iroha_torii_shared::ErrorEnvelope::new(
+                    "invalid_transaction_payload",
+                    format!("transaction payload could not be decoded: {message}"),
+                ),
+                super::current_response_format(),
+            );
+        }
+        (StatusCode::BAD_REQUEST, message).into_response()
+    }
+
     impl<S, T> FromRequest<S> for JsonOrNoritoVersioned<T>
     where
         Bytes: FromRequest<S>,
@@ -787,13 +875,7 @@ pub mod extractors {
             if super::is_norito_media_type(raw) {
                 return <T as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&body)
                     .map(JsonOrNoritoVersioned)
-                    .map_err(|versioned_err| {
-                        (
-                            StatusCode::BAD_REQUEST,
-                            format!("Could not decode versioned request: {versioned_err}"),
-                        )
-                            .into_response()
-                    });
+                    .map_err(versioned_decode_rejection::<T>);
             }
 
             if super::is_json_media_type(raw) {
@@ -1151,7 +1233,7 @@ pub mod extractors {
     mod tests {
         use axum::{
             body::Body,
-            http::{Request, StatusCode, header::CONTENT_TYPE},
+            http::{HeaderValue, Request, StatusCode, header::CONTENT_TYPE},
         };
         use http_body_util::BodyExt as _;
         use iroha_version::{RawVersioned, UnsupportedVersion, Version};
@@ -1233,6 +1315,36 @@ pub mod extractors {
             assert!(
                 body_text.to_ascii_lowercase().contains("version"),
                 "body should mention versioned decode reason: {body_text}"
+            );
+        }
+
+        #[tokio::test]
+        async fn signed_transaction_versioned_decode_error_returns_error_envelope() {
+            let req = Request::builder()
+                .header(CONTENT_TYPE, super::super::NORITO_MIME_TYPE)
+                .body(Body::from(Vec::<u8>::new()))
+                .expect("request");
+            let err = JsonOrNoritoVersioned::<SignedTransaction>::from_request(req, &())
+                .await
+                .expect_err("should fail");
+            assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                err.headers().get(CONTENT_TYPE),
+                Some(&HeaderValue::from_static(super::super::NORITO_MIME_TYPE))
+            );
+
+            let body = http_body_util::BodyExt::collect(err.into_body())
+                .await
+                .expect("collect error body")
+                .to_bytes();
+            let envelope: iroha_torii_shared::ErrorEnvelope =
+                norito::decode_from_bytes(&body).expect("decode error envelope");
+            assert_eq!(envelope.code(), "invalid_transaction_payload");
+            assert!(
+                envelope
+                    .message()
+                    .contains("transaction payload could not be decoded"),
+                "unexpected error envelope: {envelope:?}"
             );
         }
 

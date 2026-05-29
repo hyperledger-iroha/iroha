@@ -220,7 +220,7 @@ Last updated: 2026-05-29
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha --lib` (17 tests, including JNI-helper record checks, exact verifier-record-set enforcement, missing trust-anchor metadata rejection, forged envelope-hash metadata and hop auxiliary-byte rejection for both bridge entry points, oversized-hop rejection, oversized-bundle early rejection, malformed-hop-shape early rejection, and root-discontinuity early rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_proof_public_inputs_statement_digest --lib` (2 tests, including data-model canonical proof-statement auxiliary-byte and zero verifier-key-hash rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha --lib` (11 tests, including data-model trusted-setup, developer-only debug/mock substring, and profile-less STARK backend rejection for proof statements, verifier-key digests, and folded-step verifier ids, standalone KZG/pairing label rejection for verifier-key Poseidon digests, empty proof-statement metadata, verifier-key ids, and verifier-key bytes rejection, direct aggregation-statement canonical-shape rejection, zero digest/commitment rejection, and compact folded public-input hop-count rejection)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_verifier_key_poseidon_digest_binds_backend_and_bytes --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_verifier_key_poseidon_digest_binds_backend_and_bytes --lib` (1 test, including mixed-case trusted-setup and developer-only Kagemusha verifier-key digest rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model offline --lib` (16 tests)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_proof_statement_digest --lib` (4 tests, including standalone Kagemusha proof-statement auxiliary-byte, zero verifier-key-hash, empty circuit-id, empty schema, and empty instance-column rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer --lib` (20 tests, including chain-side missing verifier-key commitment metadata and empty verifier-key id rejection)
@@ -236,15 +236,19 @@ Last updated: 2026-05-29
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core private_kaigi --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core anonymous_escrow --lib` (8 tests, including anonymous escrow close envelope metadata rejection before public-input trust)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify_rejects_trusted_setup_backends_before_dedup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify_rejects_developer_only_backends_before_dedup --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify --lib` (6 tests, including malformed envelope metadata and trusted-setup backend rejection before dedup insertion)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails_reject --lib` (2 tests, including mixed-case trusted-setup and developer-only rejection before verifier dispatch)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails_reject_trusted_setup_backends_before_dispatch --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails --lib` (8 tests, including trusted-setup and developer-only backend rejection before verifier dispatch)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core set_verifying_keys_rejects_trusted_setup_backend_labels --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core trusted_setup_classifier_catches_standalone_and_profile_labels --lib`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core stark_backend_tag_tests --lib` (3 tests, including profile-less, trusted-setup, and developer-only debug/mock STARK/FRI profile rejection plus standalone KZG/pairing and colon-profile trusted-setup classification)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core stark_backend_tag_tests --lib` (4 tests, including profile-less, trusted-setup, and developer-only debug/mock STARK/FRI profile rejection plus standalone KZG/pairing, colon-profile, and mixed-case trusted-setup/developer-only classification)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii stark_fri_backend_labels_require_non_empty_profile --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_does_not_classify_profileless_stark_prefix_as_stark --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects --lib` (2 tests, including standalone, colon-profile, and mixed-case trusted-setup/developer-only labels under broad prover allowlists)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects_trusted_setup_labels --lib` (includes standalone KZG/pairing labels and `halo2/ipa:kzg` under a broad `halo2/` allowlist)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects --lib` (3 tests, including mixed-case trusted-setup and developer-only rejection before registry lookup)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects_trusted_setup_backend_before_registry_lookup --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects_developer_only_labels --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects_developer_only_backend_before_registry_lookup --lib`
@@ -268,6 +272,8 @@ Last updated: 2026-05-29
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_trusted_setup_halo2_backend_labels --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_developer_only_backend_labels --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_trusted_setup_stark_backend_labels --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_non_production_backend_labels_before_registry_lookup --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_trusted_setup_backend_labels --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core update_vk_rejects_non_production_existing_backend_labels --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core vk_ --lib` (30 tests, including trusted-setup Halo2/STARK and developer-only backend-label rejection at VK admission and update)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core validate_proof_attachment_rejects_mismatched_attachment_triples --lib`
@@ -523,6 +529,56 @@ Last updated: 2026-05-29
   claim-identifier, set-primary-account-alias, and identifier receipt canonical
   payloads. No TODO, placeholder, or draft-proof markers remain in the audited
   main SDK source trees.
+
+## 2026-05-29 Torii Sumeragi evidence count endpoint test fix
+
+- The router-level `/v1/sumeragi/evidence/count` test now forwards the
+  request `Accept` header into the handler and requests `application/json`
+  before decoding with the Norito JSON codec, matching the endpoint contract
+  while preserving Norito as the default wire format.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test sumeragi_evidence_count_endpoint --features telemetry -- --nocapture`
+
+## 2026-05-28 Torii push bridge test data-dir stabilization
+
+- `push_bridge` endpoint smoke tests now use `TestDataDirGuard` instead of a
+  bare temp directory, so push persistence goes through the serialized Torii
+  test data-dir override and cannot race another test's removed temp path.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features app_api,push --test push_bridge -- --nocapture`
+
+## 2026-05-28 Torii Sumeragi collectors negotiation fix
+
+- `/v1/sumeragi/collectors` now uses the JSON-preferred REST response
+  negotiation path, so omitted or wildcard `Accept` headers return JSON while
+  explicit `application/x-norito` requests still receive Norito.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_collectors_endpoint sumeragi_collectors_endpoint_shape -- --nocapture`
+
+## 2026-05-28 Torii public transaction decode errors
+
+- Public `/v1/pipeline/transactions` Norito decode failures now return the
+  structured `invalid_transaction_payload` error envelope even when the generic
+  versioned extractor rejects the body before the handler runs. Query decode
+  rejection behavior remains unchanged.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib utils::extractors::tests -- --nocapture`
+  - `cargo test -p iroha_torii --test norito_ingress -- --nocapture`
+
+## 2026-05-28 Torii Nexus lifecycle response negotiation
+
+- `/v1/nexus/lifecycle` now honors the current Torii response negotiation for
+  its dynamic control-plane payload: JSON clients receive JSON, while Norito
+  clients receive a Norito-framed JSON document string instead of plain JSON
+  bytes.
+- Focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features app_api --test nexus_lifecycle_endpoint -- --nocapture`
+  - `cargo test -p iroha_torii --features app_api --lib response_format_tests::respond_json_document_with_format`
 
 ## 2026-05-28 Queue-aware Torii status and pipeline preflight
 
