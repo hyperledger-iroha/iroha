@@ -49,14 +49,15 @@ and completed history lives in [`status.md`](./status.md).
   guardrail wrapper rejects the same trusted-setup labels before backend
   dispatch.
   The production audit path is now topup-anchored and rejects unbound input
-  claims, hidden output commitments, cross-asset audits, and public amount
-  mismatches; audit output certificates are signature-checked against their
-  declared output account before lineage is issued. Audit output certificate
-  replay keys are checked against existing topup/audit lineage before recursive
-  proof verification, so a one-use certificate anchored by the online-to-offline
-  topup cannot be recycled as a new bearer output. Note commitments are also
-  replay-checked across both topup issue and audit-output domains, so commitments
-  cannot move between online-to-offline loading and P2P bearer outputs.
+  claims, exact-claim mutations under an issued topup certificate, hidden output
+  commitments, cross-asset audits, and public amount mismatches; audit output
+  certificates are signature-checked against their declared output account
+  before lineage is issued. Audit output certificate replay keys are checked
+  against existing topup/audit lineage before recursive proof verification, so a
+  one-use certificate anchored by the online-to-offline topup cannot be recycled
+  as a new bearer output. Note commitments are also replay-checked across both
+  topup issue and audit-output domains, so commitments cannot move between
+  online-to-offline loading and P2P bearer outputs.
   Recursive proof envelopes now require exact active verifier-key commitment
   binding, inline verifier-key length consistency, the literal canonical
   `offline-note-recursive` circuit id with alias spellings rejected, canonical
@@ -283,7 +284,41 @@ and completed history lives in [`status.md`](./status.md).
   multi-round non-native Vesta IPA verifier now composes that accumulator and
   links its challenge rows back to the verifier's decomposed `b`-reduction
   challenge columns, so self-consistent transcript witnesses cannot be spliced
-  onto a verifier using different challenges. Alias
+  onto a verifier using different challenges. The host bridge now accepts native
+  Pallas IPA verifier witnesses, validates their transcript, `b`-reduction, and
+  accumulator projections, round ordering, and canonical compressed point
+  encodings through a cheap preflight path, recomputes the native Pallas `b`,
+  `Q`, `G`, `H`, and final-term fold relations with the deterministic optimized
+  Pallas MSM backend, and translates their scalars and compressed Vesta points
+  through canonical byte encodings before building the recursive Vesta verifier
+  witness. The same bridge now validates ordered batches of native Pallas
+  verifier witnesses and emits a compact streaming Poseidon2
+  domain-separated aggregate digest that binds the transparent parameter
+  fingerprint, witness order, transcript projections, `b` reductions,
+  accumulator folds, final terms, and proof-final scalars after each witness
+  passes preflight. The data model now exposes a
+  reserved-mode recursive aggregation evidence statement that
+  Norito/Poseidon-binds that batch digest, parameter fingerprint, and canonical
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3` verifier-witness
+  profile to the same ordered hop transcript while keeping mode `2` rejected
+  for compact-token admission, with Norito roundtrip, decoded-profile, and
+  truncated-archive negative coverage plus empty-transcript, over-cap,
+  duplicate-nullifier, and duplicate-commitment rejection. Core record-backed
+  evidence builders now enforce active WSV-style confidential-transfer-v2
+  verifier records, verify every private hop proof, reject mismatched witness
+  counts or all-zero native batch metadata before hop proof decoding, and then
+  bind the batch preflight digest to the canonical hop transcript for both
+  borrowed and serializable record bundles. A public Pallas
+  IPA batch preflight helper now accepts only the current production
+  no-trusted-setup width corridor `2..=128` plus the 64-hop compact-token cap,
+  keeps the aggregate batch digest on the same Poseidon2-backed transcript
+  family as reserved recursive evidence, and the combined record-backed
+  builders can take native verifier witnesses directly, re-derive the stored
+  batch digest with the ordered checked-hop proof hashes, and reject detached,
+  wrong-width, or spliced batch evidence before hop proof decoding. This closes
+  cross-hop-transcript replay for reserved evidence, but deriving each IPA
+  verifier witness from the corresponding hop proof envelope remains part of
+  the mode-2 recursive circuit work. Alias
   spellings are rejected at compact-token proving
   and verification boundaries. Derived Halo2 IPA proving keys for IVM,
   Offline Note, and Kagemusha now use Norito archives
@@ -325,10 +360,12 @@ and completed history lives in [`status.md`](./status.md).
   fixed-window multi-term MSM plus bounded native-scalar MSM, fixed-window IPA
   final-comparison MSM, IPA scalar/vector-fold, full `b`-vector reduction,
   generator-fold, round-accumulator, final-comparison composition, and one-round
-  and generic multi-round verifier composition with transcript binding are
-  present, but production-width composed circuit evidence and private-hop
-  recursive aggregation are still not complete, so aggregation mode `2` stays a
-  reserved, explicitly rejected wire value until that verifier evidence exists.
+  and generic multi-round verifier composition with transcript binding plus
+  native Pallas verifier-witness translation, batch preflight binding, and
+  reserved-mode recursive aggregation evidence binding are present, but
+  production-width composed circuit evidence and private-hop recursive
+  aggregation are still not complete, so aggregation mode `2` stays a reserved,
+  explicitly rejected wire value until that verifier evidence exists.
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 
