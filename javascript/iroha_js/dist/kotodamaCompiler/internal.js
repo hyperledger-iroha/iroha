@@ -171,6 +171,8 @@ const VIEW_INSTRUCTION_EMITTING_CALL_NAMES = new Set([
 ]);
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const ASSET_DEFINITION_ADDRESS_LEN = 21;
+const ASSET_DEFINITION_CHECKSUM_OFFSET = 17;
+const ASSET_DEFINITION_CHECKSUM_LEN = 4;
 const ASSET_DEFINITION_UUID_VERSION_INDEX = 7;
 const ASSET_DEFINITION_UUID_VARIANT_INDEX = 9;
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -1211,6 +1213,15 @@ function decodeBase58(value) {
     }
     return out;
 }
+function hasValidAssetDefinitionChecksum(decoded) {
+    const expected = blake3(decoded.subarray(0, ASSET_DEFINITION_CHECKSUM_OFFSET))
+        .subarray(0, ASSET_DEFINITION_CHECKSUM_LEN);
+    for (let index = 0; index < ASSET_DEFINITION_CHECKSUM_LEN; index += 1) {
+        if (decoded[ASSET_DEFINITION_CHECKSUM_OFFSET + index] !== expected[index])
+            return false;
+    }
+    return true;
+}
 function parseAssetDefinitionIdBytes(value, line, column) {
     const trimmed = value.trim();
     const decoded = decodeBase58(trimmed);
@@ -1225,6 +1236,9 @@ function parseAssetDefinitionIdBytes(value, line, column) {
     }
     if ((decoded[ASSET_DEFINITION_UUID_VARIANT_INDEX] & 0b1100_0000) !== 0b1000_0000) {
         throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID must be valid Base58`, line, column);
+    }
+    if (!hasValidAssetDefinitionChecksum(decoded)) {
+        throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID checksum is invalid`, line, column);
     }
     return decoded.slice(1, 17);
 }
@@ -16119,17 +16133,34 @@ class StudioCodeGenerator {
                     amountInt = this.compileExpressionAsInt(statement.amount, callStack, locals);
                     amountReg = this.emitNumericFromInt(amountInt);
                 }
-                const accountReg = this.compileExpressionAsAccountPointer(statement.account, callStack, locals);
+                const accountLiteral = this.resolveRematerializableAccountLiteral(statement.account, locals);
+                const useDirectAccountLiteral = accountLiteral !== null && isDirectAccountPointerLiteral(accountLiteral);
+                const accountReg = useDirectAccountLiteral
+                    ? 10
+                    : this.compileExpressionAsAccountPointer(statement.account, callStack, locals);
+                if (useDirectAccountLiteral) {
+                    this.emitAccountLiteralPointerIntoRegister(accountLiteral, statement.line, 1, accountReg);
+                }
                 if (amountInt !== null && !liveBeforeStatement.has(amountInt)) {
                     this.assembler.releaseRegister(amountInt);
                 }
                 const assetLiteral = this.resolveRematerializableAssetDefinitionLiteral(statement.asset, locals);
                 if (assetLiteral !== null) {
-                    this.emitThreeArgAssetSyscallWithLiteral(accountReg, assetLiteral, amountReg, SYSCALL_MINT_ASSET, statement.line, 1);
+                    if (useDirectAccountLiteral) {
+                        this.emitThreeArgAssetSyscallWithAccountInR10AndAssetLiteral(assetLiteral, amountReg, SYSCALL_MINT_ASSET, statement.line, 1);
+                    }
+                    else {
+                        this.emitThreeArgAssetSyscallWithLiteral(accountReg, assetLiteral, amountReg, SYSCALL_MINT_ASSET, statement.line, 1);
+                    }
                 }
                 else {
                     const assetReg = this.compileExpressionAsAssetDefinitionPointer(statement.asset, callStack, locals);
-                    this.emitThreeArgAssetSyscall(accountReg, assetReg, amountReg, SYSCALL_MINT_ASSET);
+                    if (useDirectAccountLiteral) {
+                        this.emitThreeArgAssetSyscallWithAccountInR10(assetReg, amountReg, SYSCALL_MINT_ASSET);
+                    }
+                    else {
+                        this.emitThreeArgAssetSyscall(accountReg, assetReg, amountReg, SYSCALL_MINT_ASSET);
+                    }
                 }
                 this.emitDiscardedVoidIntrinsicResult(amountReg);
                 this.tryPatchFrame168DepositMintLp(statement);
@@ -17015,6 +17046,32 @@ class StudioCodeGenerator {
     }
     emitThreeArgAssetSyscallWithLiteral(accountReg, assetLiteral, amountReg, syscall, line, column) {
         this.assembler.emitMove(10, accountReg);
+        this.emitAssetDefinitionLiteralPointerIntoRegister(11, assetLiteral, line, column);
+        this.assembler.emitMove(12, amountReg);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(13, 10);
+        this.assembler.emitMove(10, 11);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(11, 10);
+        this.assembler.emitMove(10, 12);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(12, 10);
+        this.emitPublishedThreeArgAssetSyscall(syscall);
+    }
+    emitThreeArgAssetSyscallWithAccountInR10(assetReg, amountReg, syscall) {
+        this.assembler.emitMove(11, assetReg);
+        this.assembler.emitMove(12, amountReg);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(13, 10);
+        this.assembler.emitMove(10, 11);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(11, 10);
+        this.assembler.emitMove(10, 12);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(12, 10);
+        this.emitPublishedThreeArgAssetSyscall(syscall);
+    }
+    emitThreeArgAssetSyscallWithAccountInR10AndAssetLiteral(assetLiteral, amountReg, syscall, line, column) {
         this.emitAssetDefinitionLiteralPointerIntoRegister(11, assetLiteral, line, column);
         this.assembler.emitMove(12, amountReg);
         this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
@@ -21737,7 +21794,9 @@ class StudioCodeGenerator {
                     const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[0], callStack, locals);
                     this.emitRegisterAssetDefinitionSyscall(assetReg, symbolReg, quantityReg, mintableReg);
                 }
-                this.emitDiscardedVoidIntrinsicResult(this.isExpressionRegisterTemporary(mintableReg, locals)
+                this.emitDiscardedVoidIntrinsicResult(this.isExpressionRegisterTemporary(quantityReg, locals)
+                    ? quantityReg
+                    : this.isExpressionRegisterTemporary(mintableReg, locals)
                     ? mintableReg
                     : this.assembler.allocRegister());
                 if (!allowVoidResult) {
@@ -24975,6 +25034,13 @@ class StudioCodeGenerator {
             && sourceBinding.kind !== 'map'
             && !(expression.kind === 'stateReference' && liveAfterStatement.has(expression.name));
     }
+    shouldReuseDirectLiteralLocalBinding(expression, sourceBinding) {
+        return this.directVoidReturnHalts
+            && sourceBinding.kind !== 'map'
+            && (expression.kind === 'number'
+                || expression.kind === 'boolean'
+                || expression.kind === 'string');
+    }
     expressionIndexesLocalMap(expression, locals) {
         if (expression.kind !== 'index' || expression.object.kind !== 'stateReference') {
             return false;
@@ -25578,6 +25644,7 @@ class StudioCodeGenerator {
                     && !liveAfterStatement.has(expression.name)
                     && sourceBinding.kind !== 'map')
                 || this.shouldReuseDeadDirectLocalBinding(name, expression, sourceBinding, liveAfterStatement)
+                || this.shouldReuseDirectLiteralLocalBinding(expression, sourceBinding)
                 || this.shouldReuseDirectLocalMapReadBinding(expression, sourceBinding, locals)
                 || (typeof resolvedDeclaredType === 'string'
                     && isAxtPointerValueType(resolvedDeclaredType)
@@ -25808,6 +25875,7 @@ class StudioCodeGenerator {
                 && !liveAfterStatement.has(expression.name)
                 && sourceBinding.kind !== 'map')
             || this.shouldReuseDeadDirectLocalBinding(name, expression, sourceBinding, liveAfterStatement)
+            || this.shouldReuseDirectLiteralLocalBinding(expression, sourceBinding)
             || this.shouldReuseDirectLocalMapReadBinding(expression, sourceBinding, locals)
             || (typeof valueType === 'string'
                 && isAxtPointerValueType(valueType)

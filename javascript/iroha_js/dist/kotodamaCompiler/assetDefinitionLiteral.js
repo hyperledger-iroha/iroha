@@ -1,9 +1,12 @@
+import { blake3 } from '@noble/hashes/blake3.js';
 import { normalizeAccountIdLiteral } from './accountLiteral.js';
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]+$/;
 const ASSET_ALIAS_FORBIDDEN_SEGMENT_CHARS_RE = /[@#$:\s]/u;
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const ASSET_DEFINITION_ADDRESS_LEN = 21;
+const ASSET_DEFINITION_CHECKSUM_OFFSET = 17;
+const ASSET_DEFINITION_CHECKSUM_LEN = 4;
 const ASSET_DEFINITION_UUID_VERSION_INDEX = 7;
 const ASSET_DEFINITION_UUID_VARIANT_INDEX = 9;
 const DATASPACE_SCOPE_RE = /^dataspace:\d+$/u;
@@ -53,6 +56,15 @@ function decodeBase58(value) {
     }
     return out;
 }
+function hasValidAssetDefinitionChecksum(decoded) {
+    const expected = blake3(decoded.subarray(0, ASSET_DEFINITION_CHECKSUM_OFFSET))
+        .subarray(0, ASSET_DEFINITION_CHECKSUM_LEN);
+    for (let index = 0; index < ASSET_DEFINITION_CHECKSUM_LEN; index += 1) {
+        if (decoded[ASSET_DEFINITION_CHECKSUM_OFFSET + index] !== expected[index])
+            return false;
+    }
+    return true;
+}
 export function normalizeAssetDefinitionIdLiteral(value) {
     const trimmed = value.trim();
     if (!trimmed)
@@ -69,6 +81,8 @@ export function normalizeAssetDefinitionIdLiteral(value) {
     if ((decoded[ASSET_DEFINITION_UUID_VERSION_INDEX] >> 4) !== 0b0100)
         return null;
     if ((decoded[ASSET_DEFINITION_UUID_VARIANT_INDEX] & 0b1100_0000) !== 0b1000_0000)
+        return null;
+    if (!hasValidAssetDefinitionChecksum(decoded))
         return null;
     return trimmed;
 }

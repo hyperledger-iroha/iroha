@@ -8,6 +8,7 @@ import {
   normalizeKotodamaParitySource,
 } from "../src/kotodamaCompiler/index.js";
 import { renderCanonicalAccountIdLiteralFromPublicKeyLiteral } from "../src/kotodamaCompiler/accountLiteral.js";
+import { normalizeAssetDefinitionIdLiteral } from "../src/kotodamaCompiler/assetDefinitionLiteral.js";
 import { blake2b256 } from "../src/blake2b.js";
 
 const CURRENT_ABI_V1_HASH_HEX = "73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d";
@@ -6146,6 +6147,14 @@ seiyaku InvalidAssetDefinitionLocal {
   }
 }
 `);
+  const invalidChecksum = compileKotodamaProgram(`
+seiyaku InvalidAssetDefinitionChecksum {
+  kotoage fn run() permission(Admin) {
+    let asset = asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjN");
+    mint_asset(authority(), asset, 1);
+  }
+}
+`);
   const valid = compileKotodamaProgram(`
 seiyaku ValidAssetDefinitionAddress {
   kotoage fn run() permission(Admin) {
@@ -6161,6 +6170,10 @@ seiyaku ValidAssetDefinitionAddress {
   assert.equal(invalidUnusedLocal.artifactBytes.length, 0);
   assert.equal(invalidUnusedLocal.diagnostics.length, 1);
   assert.match(invalidUnusedLocal.diagnostics[0].message, /invalid AssetDefinitionId literal `rose#wonderland`/);
+  assert.equal(normalizeAssetDefinitionIdLiteral("62Fk4FPcMuLvW5QjDGNF2a4jAmjN"), null);
+  assert.equal(invalidChecksum.artifactBytes.length, 0);
+  assert.equal(invalidChecksum.diagnostics.length, 1);
+  assert.match(invalidChecksum.diagnostics[0].message, /invalid AssetDefinitionId literal `62Fk4FPcMuLvW5QjDGNF2a4jAmjN`.*checksum/is);
   assert.deepEqual(valid.diagnostics, []);
   assert.notEqual(readArtifactCode(valid.artifactBytes).indexOf(syscallNeedle(0x22)), -1);
 });

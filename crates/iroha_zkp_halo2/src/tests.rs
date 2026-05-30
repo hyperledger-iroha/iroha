@@ -1897,8 +1897,10 @@ fn ipa_verifier_witness_validation_rejects_transcript_binding_substitution() {
         &proof,
     )
     .expect("recursive verifier witness derives");
-    witness.transcript_binding.binding_digest =
-        witness.transcript_binding.binding_digest.add(pallas::Scalar::one());
+    witness.transcript_binding.binding_digest = witness
+        .transcript_binding
+        .binding_digest
+        .add(pallas::Scalar::one());
 
     let mut validation = Transcript::new("witness-binding");
     absorb_pallas_poly_statement(

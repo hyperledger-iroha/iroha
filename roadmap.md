@@ -279,7 +279,11 @@ and completed history lives in [`status.md`](./status.md).
   challenge/inverse pairs, and final transcript state into Pasta/Fp scalars and
   folds them through a transparent Pow5 accumulator; a matching native Pasta/Fp
   circuit enforces that accumulator over public projection/challenge inputs and
-  rejects public substitution or intermediate-state tampering. Alias
+  rejects public substitution or intermediate-state tampering. The generic
+  multi-round non-native Vesta IPA verifier now composes that accumulator and
+  links its challenge rows back to the verifier's decomposed `b`-reduction
+  challenge columns, so self-consistent transcript witnesses cannot be spliced
+  onto a verifier using different challenges. Alias
   spellings are rejected at compact-token proving
   and verification boundaries. Derived Halo2 IPA proving keys for IVM,
   Offline Note, and Kagemusha now use Norito archives
@@ -321,11 +325,10 @@ and completed history lives in [`status.md`](./status.md).
   fixed-window multi-term MSM plus bounded native-scalar MSM, fixed-window IPA
   final-comparison MSM, IPA scalar/vector-fold, full `b`-vector reduction,
   generator-fold, round-accumulator, final-comparison composition, and one-round
-  and generic multi-round verifier composition are present, but in-circuit
-  transcript binding still needs to be composed into the full production-width
-  verifier, and production-width composed circuit evidence is still not
-  complete, so aggregation mode `2` stays a reserved, explicitly rejected wire
-  value until that verifier exists.
+  and generic multi-round verifier composition with transcript binding are
+  present, but production-width composed circuit evidence and private-hop
+  recursive aggregation are still not complete, so aggregation mode `2` stays a
+  reserved, explicitly rejected wire value until that verifier evidence exists.
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 
