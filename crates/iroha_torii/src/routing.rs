@@ -8464,7 +8464,7 @@ pub async fn handle_v1_zk_submit_proof(
         hex::encode::<[u8; 32]>(h.into())
     };
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
