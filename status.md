@@ -123,14 +123,14 @@ Last updated: 2026-05-30
   supplied challenge/inverse pairs that are not multiplicative inverses before
   using them in `Q' = x^2*L + Q + x^{-2}*R`.
 - The native zkp crate now derives and validates a combined IPA verifier witness
-  bundling a public transcript projection, full `b`-vector reduction,
-  scalar-multiplication accumulation projection, and final proof scalars. The
-  transcript projection records the `ipa.n` state boundary, each round's `L/R`
-  bytes, domain-separated round-byte digest, transcript states, challenge,
-  inverse, and final transcript state. Validation rejects transcript-state,
-  round-byte, round-digest, round-order, challenge, reduction, accumulator, and
-  final-scalar substitution before those values can feed the recursive-circuit
-  witness path.
+  bundling a public transcript projection, field-friendly transcript binding,
+  full `b`-vector reduction, scalar-multiplication accumulation projection, and
+  final proof scalars. The transcript projection records the `ipa.n` state
+  boundary, each round's `L/R` bytes, domain-separated round-byte digest,
+  transcript states, challenge, inverse, and final transcript state. Validation
+  rejects transcript-state, transcript-binding, round-byte, round-digest,
+  round-order, challenge, reduction, accumulator, and final-scalar substitution
+  before those values can feed the recursive-circuit witness path.
 - The native zkp crate also derives and validates a field-friendly IPA
   transcript binding from the SHA3-validated projection. The binding maps the
   transcript header, every full round projection, each challenge/inverse pair,
@@ -159,6 +159,11 @@ Last updated: 2026-05-30
   `b`, wrong round counts, fixed-window width overflow, and self-consistent but
   spliced challenge, accumulator, or generator-fold witnesses for a two-round
   statement.
+- The generic multi-round IPA verifier composition now also includes the native
+  Pasta/Fp transcript-binding accumulator. Its link gate ties the binding's
+  challenge and inverse rows back to the decomposed `b`-reduction challenge
+  columns, so a self-consistent Pow5 transcript-binding witness cannot be
+  spliced onto a verifier that uses different IPA challenges.
 - A native Pasta/Fp transcript-binding accumulator circuit now enforces the
   same Pow5 binding over public header/final/round projection scalars and
   public challenge/inverse scalars. Public-instance gates bind each projected
@@ -179,11 +184,11 @@ Last updated: 2026-05-30
   `a`, `b`, and `a*b` private and canonical, and adds a product-link gate so a
   self-consistent MSM cannot substitute the third scalar.
 - This is still a correctness foundation, not the completed recursive verifier:
-  the transcript-binding circuit still needs to be composed into the full
-  production-width recursive verifier and backed by production-width composed
-  evidence, so Kagemusha aggregation mode `2` remains reserved and public
-  compact-token prover/verifier entry points continue to accept only checked
-  pre-fold mode `1`.
+  the transcript-binding accumulator is now composed into the multi-round
+  verifier witness/circuit surface, but production-width composed evidence and
+  private-hop recursive aggregation are not complete. Kagemusha aggregation mode
+  `2` remains reserved and public compact-token prover/verifier entry points
+  continue to accept only checked pre-fold mode `1`.
 - Focused validation passed:
   - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_native_scalar_msm --lib` (10 tests, including two-term one-bit and two-bit MSM acceptance plus output-mismatch, high-scalar-bit, public base/output substitution, conditional-bit, sum-chain, noncanonical-scalar, and double-ladder tamper rejection; finished in 3513.80s)
   - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_msm --lib` (4 tests, including one-bit IPA final-comparison acceptance plus output-mismatch, product-high-bit, and forged-product-link rejection; finished in 1662.51s)
@@ -206,17 +211,18 @@ Last updated: 2026-05-30
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_four_point_builder --lib` (4 fixed-window tests covering a two-round four-point verifier builder plus final-`b`, round-count, and high-bit builder rejection; finished in 0.31s compile plus 9.00s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_four_point_host_links --lib` (3 host-link splice checks for challenge, accumulator, and generator substitution; finished in 0.31s compile plus 10.86s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_transcript_projection --lib` (5 tests covering transcript projection state/round-byte recording plus round-byte, round-digest, state-boundary, and round-order substitution rejection; finished in 6.59s compile plus 0.09s test time)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_transcript_binding --lib` (4 tests covering transcript-binding acceptance plus round-projection, challenge, and digest substitution rejection; finished in 8.03s compile plus 0.09s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_transcript_binding --lib` (4 tests covering transcript-binding acceptance plus round-projection, challenge, and digest substitution rejection; finished in 9.00s compile plus 0.10s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_b_vector_reduction --lib` (5 tests covering native reduction projection, bad shape, round-index substitution, inverse substitution, and challenge rebinding; finished in 6.27s compile plus 0.15s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_rejects_substituted_b_final --lib` (1 test; finished in 0.20s compile plus 0.13s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 backend_msm --lib` (2 tests comparing optimized Pallas/BN254 MSM with naive accumulation and checking dimension-mismatch rejection; finished in 6.27s compile plus 0.08s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_accumulation_projection_rejects_inverse_substitution --lib` (1 test; finished in 6.26s compile plus 0.11s test time)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_witness --lib` (6 tests covering full verifier-witness projection plus transcript projection, transcript challenge, `b`-reduction, accumulator, and final-scalar substitution rejection; finished in 0.21s compile plus 0.24s test time)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_transcript_binding --lib` (11 tests covering transcript-binding circuit acceptance plus round-count, inverse, digest, public header/round/challenge/inverse/final/digest substitution, and intermediate-state tamper rejection; finished in 1m 55s compile plus 0.02s test time)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 --lib` (76 tests; finished in 2.61s)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_zkp_halo2` (finished in 12.28s)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_core` (finished in 40.91s after adding the transcript-binding circuit)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_cli` (finished in 2m 35s after adding the transcript-binding circuit)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_witness --lib` (7 tests covering full verifier-witness projection plus transcript projection, transcript binding, transcript challenge, `b`-reduction, accumulator, and final-scalar substitution rejection; finished in 9.04s compile plus 0.25s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_transcript_binding --lib` (11 tests covering transcript-binding circuit acceptance plus round-count, inverse, digest, public header/round/challenge/inverse/final/digest substitution, and intermediate-state tamper rejection; finished in 0.37s compile plus 0.02s test time on the post-composition rerun)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier --lib` (9 tests covering the transcript-bound two-round four-point verifier builder plus final-`b`, transcript-digest, round-count, high-bit, challenge-splice, transcript-challenge-splice, accumulator-splice, and generator-splice rejection; finished in 2m 11s compile plus 11.42s test time on the post-rename rerun)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 --lib` (81 tests; finished in 8.08s compile plus 2.83s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_zkp_halo2` (finished in 1.18s on the post-witness-binding rerun)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_core` (finished in 57.04s after composing the transcript-binding accumulator into the multi-round verifier)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_cli` (finished in 2m 39s after composing the transcript-binding accumulator into the multi-round verifier)
   - `cargo fmt --all -- --check`
   - `git diff --check`
 

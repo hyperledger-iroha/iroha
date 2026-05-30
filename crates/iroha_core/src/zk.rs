@@ -10077,10 +10077,8 @@ mod kagemusha_non_native_limb_circuit_tests {
                 challenge_inverses[round_index],
             );
         }
-        let binding_digest = pasta_tiny::native_pasta_fp_ipa_transcript_binding_compress(
-            state,
-            final_projection,
-        );
+        let binding_digest =
+            pasta_tiny::native_pasta_fp_ipa_transcript_binding_compress(state, final_projection);
         (
             header_projection,
             round_projections,
@@ -10094,16 +10092,15 @@ mod kagemusha_non_native_limb_circuit_tests {
         const WINDOWS: usize,
         const WINDOW_BITS: usize,
     >(
-        circuit: &mut pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<
-            LEN,
-            WINDOWS,
-            WINDOW_BITS,
-        >,
+        circuit: &mut pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
         challenges: Vec<Scalar>,
         challenge_inverses: Vec<Scalar>,
     ) {
         assert_eq!(challenges.len(), circuit.transcript_round_projections.len());
-        assert_eq!(challenge_inverses.len(), circuit.transcript_round_projections.len());
+        assert_eq!(
+            challenge_inverses.len(),
+            circuit.transcript_round_projections.len()
+        );
         circuit.transcript_challenges = challenges;
         circuit.transcript_challenge_inverses = challenge_inverses;
         circuit.transcript_round_states.clear();
@@ -10123,41 +10120,6 @@ mod kagemusha_non_native_limb_circuit_tests {
                 state,
                 circuit.transcript_final_projection,
             );
-    }
-
-    fn vesta_affine_ipa_verifier_two_point_valid_circuit()
-    -> pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<2, 1, 1> {
-        let g_points = [vesta_generator_multiple(1), vesta_generator_multiple(2)];
-        let h_points = [vesta_generator_multiple(3), vesta_generator_multiple(4)];
-        let u = vesta_generator_multiple(1);
-        let expected_q =
-            vesta_affine_sum(&[vesta_affine_sum(&g_points), vesta_affine_sum(&h_points), u]);
-        let challenges = vec![Scalar::from(1)];
-        let inverses = vec![Scalar::from(1)];
-        let (
-            transcript_header_projection,
-            transcript_round_projections,
-            transcript_final_projection,
-            transcript_binding_digest,
-        ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
-        pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<2, 1, 1>::try_from_statement(
-            [Scalar::from(1), Scalar::from(0)],
-            challenges,
-            inverses,
-            transcript_header_projection,
-            transcript_round_projections,
-            transcript_final_projection,
-            transcript_binding_digest,
-            Scalar::from(1),
-            Scalar::from(1),
-            vec![vesta_identity_limbs()],
-            vesta_non_identity_limbs(expected_q),
-            vec![vesta_identity_limbs()],
-            g_points.map(vesta_non_identity_limbs),
-            h_points.map(vesta_non_identity_limbs),
-            vesta_non_identity_limbs(u),
-        )
-        .expect("valid one-round IPA verifier composition with transcript binding")
     }
 
     fn vesta_affine_ipa_verifier_four_point_valid_circuit()
@@ -10352,82 +10314,6 @@ mod kagemusha_non_native_limb_circuit_tests {
         true
     }
 
-    fn vesta_affine_ipa_verifier_instances<
-        const LEN: usize,
-        const WINDOWS: usize,
-        const WINDOW_BITS: usize,
-    >(
-        circuit: &pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
-    ) -> Vec<Vec<Scalar>> {
-        fn instance_at(row: usize, value: Scalar) -> Vec<Scalar> {
-            let mut values = vec![Scalar::from(0); row + 1];
-            values[row] = value;
-            values
-        }
-
-        let rounds = circuit.transcript_round_projections.len();
-        let final_row = rounds * 3;
-        let mut instances = vec![
-            instance_at(0, circuit.transcript_header_projection),
-            instance_at(final_row, circuit.transcript_final_projection),
-            instance_at(final_row, circuit.transcript_binding_digest),
-        ];
-        instances.extend(
-            circuit
-                .transcript_round_projections
-                .iter()
-                .enumerate()
-                .map(|(round_index, value)| instance_at(round_index * 3, *value)),
-        );
-        instances.extend(
-            circuit
-                .transcript_challenges
-                .iter()
-                .enumerate()
-                .map(|(round_index, value)| instance_at(round_index * 3 + 1, *value)),
-        );
-        instances.extend(
-            circuit
-                .transcript_challenge_inverses
-                .iter()
-                .enumerate()
-                .map(|(round_index, value)| instance_at(round_index * 3 + 2, *value)),
-        );
-        instances.extend(native_pasta_fp_ipa_b_vector_reduction_instances(
-            circuit.b_reduction.as_ref(),
-        ));
-        for round_accumulator in &circuit.round_accumulators {
-            instances.extend(vesta_affine_ipa_round_accumulator_instances(
-                round_accumulator,
-            ));
-        }
-        for round in &circuit.generator_folds {
-            for generator_fold in round {
-                instances.extend(vesta_affine_ipa_generator_fold_instances(
-                    generator_fold,
-                ));
-            }
-        }
-        instances.extend(vesta_affine_ipa_final_windowed_msm_instances(
-            circuit.final_msm.as_ref(),
-        ));
-        instances
-    }
-
-    fn verify_vesta_affine_ipa_verifier<
-        const LEN: usize,
-        const WINDOWS: usize,
-        const WINDOW_BITS: usize,
-    >(
-        circuit: pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
-    ) -> bool {
-        let instances = vesta_affine_ipa_verifier_instances(&circuit);
-        MockProver::run(8, &circuit, instances)
-            .expect("non-native Vesta IPA verifier mock prover")
-            .verify()
-            .is_ok()
-    }
-
     fn run_vesta_affine_ipa_verifier_test(test: impl FnOnce() + Send + 'static) {
         std::thread::Builder::new()
             .name("non-native-vesta-affine-ipa-verifier-test".to_owned())
@@ -10436,6 +10322,99 @@ mod kagemusha_non_native_limb_circuit_tests {
             .expect("spawn Vesta IPA verifier test")
             .join()
             .expect("Vesta IPA verifier test panicked");
+    }
+
+    fn sample_pallas_coeffs(n: usize) -> Vec<iroha_zkp_halo2::pallas::Scalar> {
+        (0..n)
+            .map(|index| iroha_zkp_halo2::pallas::Scalar::from((index + 1) as u64))
+            .collect()
+    }
+
+    fn absorb_optional_pallas_metadata(
+        transcript: &mut iroha_zkp_halo2::Transcript,
+        scope: &str,
+        value: Option<[u8; 32]>,
+    ) {
+        let mut payload = [0u8; 33];
+        if let Some(bytes) = value {
+            payload[0] = 1;
+            payload[1..].copy_from_slice(&bytes);
+        }
+        transcript.absorb(scope, &payload);
+    }
+
+    fn absorb_pallas_poly_statement(
+        transcript: &mut iroha_zkp_halo2::Transcript,
+        params: &iroha_zkp_halo2::pallas::Params,
+        z: iroha_zkp_halo2::pallas::Scalar,
+        commitment: iroha_zkp_halo2::pallas::Group,
+        t: iroha_zkp_halo2::pallas::Scalar,
+        metadata: iroha_zkp_halo2::PolyOpenTranscriptMetadata,
+    ) {
+        transcript.absorb(
+            "poly.curve_id",
+            &<iroha_zkp_halo2::pallas::PallasBackend as iroha_zkp_halo2::IpaBackend>::CURVE_ID
+                .as_u16()
+                .to_le_bytes(),
+        );
+        transcript.absorb("poly.n", &(params.n() as u32).to_le_bytes());
+        transcript.absorb("poly.z", &z.to_bytes());
+        transcript.absorb("poly.t", &t.to_bytes());
+        transcript.absorb("poly.p_g", &commitment.to_bytes());
+        absorb_optional_pallas_metadata(transcript, "poly.vk_commitment", metadata.vk_commitment);
+        absorb_optional_pallas_metadata(
+            transcript,
+            "poly.public_inputs_schema_hash",
+            metadata.public_inputs_schema_hash,
+        );
+        absorb_optional_pallas_metadata(transcript, "poly.domain_tag", metadata.domain_tag);
+    }
+
+    fn pallas_evaluation_vector(
+        n: usize,
+        z: iroha_zkp_halo2::pallas::Scalar,
+    ) -> Vec<iroha_zkp_halo2::pallas::Scalar> {
+        let mut b = Vec::with_capacity(n);
+        let mut pow = iroha_zkp_halo2::pallas::Scalar::one();
+        for _ in 0..n {
+            b.push(pow);
+            pow = pow.mul(z);
+        }
+        b
+    }
+
+    fn sample_pallas_verifier_witness(
+        n: usize,
+        label: &str,
+    ) -> (
+        iroha_zkp_halo2::pallas::Params,
+        iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+    ) {
+        let params = iroha_zkp_halo2::pallas::Params::new(n).expect("Pallas params");
+        let poly = iroha_zkp_halo2::pallas::Polynomial::from_coeffs(sample_pallas_coeffs(n));
+        let commitment = poly.commit(&params).expect("Pallas commitment");
+        let z = iroha_zkp_halo2::pallas::Scalar::from(5u64);
+        let mut prover_transcript = iroha_zkp_halo2::Transcript::new(label);
+        let (proof, t) = poly
+            .open(&params, &mut prover_transcript, z, commitment)
+            .expect("Pallas opening proof");
+
+        let mut verifier_transcript = iroha_zkp_halo2::Transcript::new(label);
+        absorb_pallas_poly_statement(
+            &mut verifier_transcript,
+            &params,
+            z,
+            commitment,
+            t,
+            iroha_zkp_halo2::PolyOpenTranscriptMetadata::default(),
+        );
+        let b = pallas_evaluation_vector(params.n(), z);
+        let witness = iroha_zkp_halo2::derive_ipa_verifier_witness::<
+            iroha_zkp_halo2::pallas::PallasBackend,
+        >(&params, &mut verifier_transcript, &b, commitment, t, &proof)
+        .expect("Pallas verifier witness");
+
+        (params, witness)
     }
 
     #[test]
@@ -13911,26 +13890,86 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
-    fn kagemusha_non_native_vesta_ipa_verifier_two_point_accepts_transcript_bound_circuit() {
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_accepts_four_point_opening() {
         run_vesta_affine_ipa_verifier_test(|| {
-            let circuit = vesta_affine_ipa_verifier_two_point_valid_circuit();
+            let (params, witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-recursive-witness");
+            let circuit =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 85, 3>::try_from_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .expect("Pallas verifier witness translates into recursive Vesta witness");
+            assert_eq!(circuit.round_accumulators.len(), 2);
+            assert_eq!(circuit.generator_folds.len(), 2);
+            assert_eq!(circuit.generator_folds[0].len(), 2);
+            assert_eq!(circuit.generator_folds[1].len(), 1);
             assert!(vesta_affine_ipa_verifier_host_links_hold(&circuit));
-            assert!(verify_vesta_affine_ipa_verifier(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_length_mismatch() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-length-mismatch");
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<8, 85, 3>::try_from_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas witness length mismatch must be rejected");
+            assert!(err.contains("params length mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_transcript_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-transcript-splice");
+            witness.transcript_binding.challenges[0] = witness.transcript_binding.challenges[0]
+                .add(iroha_zkp_halo2::pallas::Scalar::from(1u64));
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 85, 3>::try_from_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas transcript challenge splice must be rejected");
+            assert!(err.contains("transcript binding challenges mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_accumulator_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, mut witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-accumulator-splice");
+            witness.accumulation.final_q = witness.accumulation.initial_q;
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 85, 3>::try_from_pallas_verifier_witness(
+                    &params,
+                    &witness,
+                )
+                .err()
+                .expect("Pallas accumulator splice must be rejected");
+            assert!(err.contains("accumulator final Q mismatch"));
         });
     }
 
     #[test]
     fn kagemusha_non_native_vesta_ipa_verifier_rejects_transcript_challenge_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
-            let mut circuit = vesta_affine_ipa_verifier_two_point_valid_circuit();
+            let mut circuit = vesta_affine_ipa_verifier_four_point_valid_circuit();
             let challenge = Scalar::from(2);
             rewrite_vesta_affine_ipa_verifier_transcript_binding(
                 &mut circuit,
-                vec![challenge],
-                vec![scalar_inverse(challenge)],
+                vec![challenge, Scalar::from(1)],
+                vec![scalar_inverse(challenge), Scalar::from(1)],
             );
             assert!(!vesta_affine_ipa_verifier_host_links_hold(&circuit));
-            assert!(!verify_vesta_affine_ipa_verifier(circuit));
         });
     }
 
@@ -16895,7 +16934,7 @@ mod pasta_tiny {
         circuit::{Layouter, SimpleFloorPlanner, Value},
         halo2curves::{
             CurveAffine as _,
-            group::{Curve as _, prime::PrimeCurveAffine as _},
+            group::{Curve as _, GroupEncoding as _, prime::PrimeCurveAffine as _},
             pasta::{EqAffine as VestaAffine, Fp as Scalar},
         },
         plonk::{Circuit, ConstraintSystem, Error as PlonkError, Expression, Selector},
@@ -20339,6 +20378,15 @@ mod pasta_tiny {
         })
     }
 
+    fn pasta_scalar_from_pallas_scalar(
+        value: iroha_zkp_halo2::pallas::Scalar,
+    ) -> Result<Scalar, String> {
+        let mut repr = <Scalar as halo2_proofs::halo2curves::ff::PrimeField>::Repr::default();
+        repr.as_mut().copy_from_slice(&value.to_bytes());
+        Option::from(<Scalar as halo2_proofs::halo2curves::ff::PrimeField>::from_repr(repr))
+            .ok_or_else(|| "Pallas IPA scalar failed canonical Pasta Fp decoding".to_owned())
+    }
+
     fn vesta_affine_from_limbs(point: VestaPointEncoding) -> Result<VestaAffine, String> {
         if point.2 {
             if point.0 != [0; NON_NATIVE_PASTA_FIELD_LIMBS]
@@ -20367,6 +20415,26 @@ mod pasta_tiny {
             vesta_fq_to_limbs(*coordinates.y()),
             false,
         )
+    }
+
+    fn vesta_encoding_from_pallas_group(
+        group: iroha_zkp_halo2::pallas::Group,
+    ) -> Result<VestaPointEncoding, String> {
+        vesta_encoding_from_pallas_compressed(&group.to_bytes())
+    }
+
+    fn vesta_encoding_from_pallas_compressed(
+        bytes: &[u8; 32],
+    ) -> Result<VestaPointEncoding, String> {
+        let mut repr =
+            <VestaAffine as halo2_proofs::halo2curves::group::GroupEncoding>::Repr::default();
+        repr.as_mut().copy_from_slice(bytes);
+        let affine = VestaAffine::from_bytes(&repr)
+            .into_option()
+            .ok_or_else(|| {
+                "Pallas IPA point encoding failed canonical Vesta decoding".to_owned()
+            })?;
+        Ok(vesta_affine_to_limbs(affine))
     }
 
     fn quotient_and_remainder_limbs(
@@ -28077,6 +28145,276 @@ mod pasta_tiny {
                 final_msm: Box::new(final_msm),
             })
         }
+
+        /// Build this recursive Vesta verifier witness from a native Pallas IPA verifier witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the native witness shape does not match `LEN`, if
+        /// its transcript, `b`-reduction, or accumulator projections are not
+        /// internally consistent, if any point encoding is invalid, or if the
+        /// translated statement fails the composed recursive verifier witness
+        /// checks.
+        pub fn try_from_pallas_verifier_witness(
+            params: &iroha_zkp_halo2::pallas::Params,
+            witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+        ) -> Result<Self, String> {
+            let rounds = ipa_power_of_two_rounds(LEN).ok_or_else(|| {
+                "IPA verifier length must be a power of two greater than one".to_owned()
+            })?;
+            if params.n() != LEN {
+                return Err(format!(
+                    "Pallas IPA params length mismatch: expected {LEN}, found {}",
+                    params.n()
+                ));
+            }
+            if witness.transcript_projection.n != LEN {
+                return Err(format!(
+                    "Pallas IPA transcript length mismatch: expected {LEN}, found {}",
+                    witness.transcript_projection.n
+                ));
+            }
+            if witness.transcript_binding.n != LEN {
+                return Err(format!(
+                    "Pallas IPA transcript binding length mismatch: expected {LEN}, found {}",
+                    witness.transcript_binding.n
+                ));
+            }
+            if witness.round_challenges.len() != rounds {
+                return Err(format!(
+                    "Pallas IPA round challenge count mismatch: expected {rounds}, found {}",
+                    witness.round_challenges.len()
+                ));
+            }
+            if witness.transcript_projection.rounds != witness.round_challenges {
+                return Err(
+                    "Pallas IPA transcript projection rounds mismatch verified rounds".to_owned(),
+                );
+            }
+            if witness.transcript_binding.round_projections.len() != rounds {
+                return Err(format!(
+                    "Pallas IPA transcript binding projection count mismatch: expected {rounds}, found {}",
+                    witness.transcript_binding.round_projections.len()
+                ));
+            }
+            let round_challenges = witness
+                .round_challenges
+                .iter()
+                .map(|round| round.challenge)
+                .collect::<Vec<_>>();
+            let round_challenge_inverses = witness
+                .round_challenges
+                .iter()
+                .map(|round| round.challenge_inverse)
+                .collect::<Vec<_>>();
+            if witness.transcript_binding.challenges != round_challenges {
+                return Err(
+                    "Pallas IPA transcript binding challenges mismatch verified rounds".to_owned(),
+                );
+            }
+            if witness.transcript_binding.challenge_inverses != round_challenge_inverses {
+                return Err(
+                    "Pallas IPA transcript binding inverses mismatch verified rounds".to_owned(),
+                );
+            }
+            if witness.b_reduction.initial_b.len() != LEN {
+                return Err(format!(
+                    "Pallas IPA b vector length mismatch: expected {LEN}, found {}",
+                    witness.b_reduction.initial_b.len()
+                ));
+            }
+            if witness.b_reduction.rounds.len() != rounds {
+                return Err(format!(
+                    "Pallas IPA b reduction round count mismatch: expected {rounds}, found {}",
+                    witness.b_reduction.rounds.len()
+                ));
+            }
+            if witness.b_reduction.final_b != witness.proof_b_final {
+                return Err("Pallas IPA b reduction final scalar mismatch".to_owned());
+            }
+
+            let mut b_layer = witness.b_reduction.initial_b.as_slice();
+            let mut b_layer_len = LEN;
+            for (round_index, round) in witness.b_reduction.rounds.iter().enumerate() {
+                if round.round_index != round_index {
+                    return Err(format!(
+                        "Pallas IPA b reduction round index mismatch: expected {round_index}, found {}",
+                        round.round_index
+                    ));
+                }
+                if round.b_before.as_slice() != b_layer {
+                    return Err(
+                        "Pallas IPA b reduction input layer mismatch previous round".to_owned()
+                    );
+                }
+                if round.b_before.len() != b_layer_len || round.b_after.len() != b_layer_len / 2 {
+                    return Err(format!(
+                        "Pallas IPA b reduction layer shape mismatch at round {round_index}"
+                    ));
+                }
+                let challenge = witness.round_challenges[round_index].challenge;
+                let challenge_inverse = witness.round_challenges[round_index].challenge_inverse;
+                if round.challenge != challenge || round.challenge_inverse != challenge_inverse {
+                    return Err(format!(
+                        "Pallas IPA b reduction challenge mismatch at round {round_index}"
+                    ));
+                }
+                b_layer = round.b_after.as_slice();
+                b_layer_len /= 2;
+            }
+            if b_layer.len() != 1 || b_layer[0] != witness.b_reduction.final_b {
+                return Err("Pallas IPA b reduction final layer mismatch".to_owned());
+            }
+
+            if witness.accumulation.rounds.len() != rounds {
+                return Err(format!(
+                    "Pallas IPA accumulator round count mismatch: expected {rounds}, found {}",
+                    witness.accumulation.rounds.len()
+                ));
+            }
+            let mut q_current = witness.accumulation.initial_q;
+            let mut generator_layer_len = LEN;
+            for (round_index, round) in witness.accumulation.rounds.iter().enumerate() {
+                if round.round_index != round_index {
+                    return Err(format!(
+                        "Pallas IPA accumulator round index mismatch: expected {round_index}, found {}",
+                        round.round_index
+                    ));
+                }
+                if round.q_before != q_current {
+                    return Err("Pallas IPA accumulator input mismatch previous round".to_owned());
+                }
+                let challenge = witness.round_challenges[round_index].challenge;
+                let challenge_inverse = witness.round_challenges[round_index].challenge_inverse;
+                if round.challenge_square != challenge.mul(challenge)
+                    || round.challenge_inverse_square != challenge_inverse.mul(challenge_inverse)
+                {
+                    return Err(format!(
+                        "Pallas IPA accumulator challenge-square mismatch at round {round_index}"
+                    ));
+                }
+                if round.g_after.len() != generator_layer_len / 2
+                    || round.h_after.len() != generator_layer_len / 2
+                {
+                    return Err(format!(
+                        "Pallas IPA accumulator generator layer shape mismatch at round {round_index}"
+                    ));
+                }
+                q_current = round.q_after;
+                generator_layer_len /= 2;
+            }
+            if q_current != witness.accumulation.final_q {
+                return Err("Pallas IPA accumulator final Q mismatch".to_owned());
+            }
+            let final_round = witness
+                .accumulation
+                .rounds
+                .last()
+                .ok_or_else(|| "Pallas IPA accumulator has no final round".to_owned())?;
+            if final_round.g_after.len() != 1
+                || final_round.h_after.len() != 1
+                || final_round.g_after[0] != witness.accumulation.final_g
+                || final_round.h_after[0] != witness.accumulation.final_h
+            {
+                return Err("Pallas IPA accumulator final generator mismatch".to_owned());
+            }
+            if witness.accumulation.final_q != witness.accumulation.expected_term {
+                return Err("Pallas IPA accumulator final term mismatch".to_owned());
+            }
+
+            let b_initial_vec = witness
+                .b_reduction
+                .initial_b
+                .iter()
+                .copied()
+                .map(pasta_scalar_from_pallas_scalar)
+                .collect::<Result<Vec<_>, _>>()?;
+            let b_initial = b_initial_vec.try_into().map_err(|values: Vec<Scalar>| {
+                format!(
+                    "Pallas IPA b vector length mismatch: expected {LEN}, found {}",
+                    values.len()
+                )
+            })?;
+            let challenges = witness
+                .transcript_binding
+                .challenges
+                .iter()
+                .copied()
+                .map(pasta_scalar_from_pallas_scalar)
+                .collect::<Result<Vec<_>, _>>()?;
+            let challenge_inverses = witness
+                .transcript_binding
+                .challenge_inverses
+                .iter()
+                .copied()
+                .map(pasta_scalar_from_pallas_scalar)
+                .collect::<Result<Vec<_>, _>>()?;
+            let transcript_round_projections = witness
+                .transcript_binding
+                .round_projections
+                .iter()
+                .copied()
+                .map(pasta_scalar_from_pallas_scalar)
+                .collect::<Result<Vec<_>, _>>()?;
+            let l_vec = witness
+                .round_challenges
+                .iter()
+                .map(|round| vesta_encoding_from_pallas_compressed(&round.l_bytes))
+                .collect::<Result<Vec<_>, _>>()?;
+            let r_vec = witness
+                .round_challenges
+                .iter()
+                .map(|round| vesta_encoding_from_pallas_compressed(&round.r_bytes))
+                .collect::<Result<Vec<_>, _>>()?;
+            let g_initial_vec = params
+                .g()
+                .iter()
+                .copied()
+                .map(vesta_encoding_from_pallas_group)
+                .collect::<Result<Vec<_>, _>>()?;
+            let g_initial =
+                g_initial_vec
+                    .try_into()
+                    .map_err(|values: Vec<VestaPointEncoding>| {
+                        format!(
+                            "Pallas IPA G generator length mismatch: expected {LEN}, found {}",
+                            values.len()
+                        )
+                    })?;
+            let h_initial_vec = params
+                .h()
+                .iter()
+                .copied()
+                .map(vesta_encoding_from_pallas_group)
+                .collect::<Result<Vec<_>, _>>()?;
+            let h_initial =
+                h_initial_vec
+                    .try_into()
+                    .map_err(|values: Vec<VestaPointEncoding>| {
+                        format!(
+                            "Pallas IPA H generator length mismatch: expected {LEN}, found {}",
+                            values.len()
+                        )
+                    })?;
+
+            Self::try_from_statement(
+                b_initial,
+                challenges,
+                challenge_inverses,
+                pasta_scalar_from_pallas_scalar(witness.transcript_binding.header_projection)?,
+                transcript_round_projections,
+                pasta_scalar_from_pallas_scalar(witness.transcript_binding.final_projection)?,
+                pasta_scalar_from_pallas_scalar(witness.transcript_binding.binding_digest)?,
+                pasta_scalar_from_pallas_scalar(witness.proof_a_final)?,
+                pasta_scalar_from_pallas_scalar(witness.proof_b_final)?,
+                l_vec,
+                vesta_encoding_from_pallas_group(witness.accumulation.initial_q)?,
+                r_vec,
+                g_initial,
+                h_initial,
+                vesta_encoding_from_pallas_group(params.u())?,
+            )
+        }
     }
 
     fn configure_non_native_vesta_ipa_verifier_native_scalar<
@@ -28146,9 +28484,8 @@ mod pasta_tiny {
                     Rotation((round_index * 3 + 2) as i32),
                 );
                 constraints.push(s.clone() * (b_challenge.clone() - transcript_challenge));
-                constraints.push(
-                    s.clone() * (b_challenge_inverse.clone() - transcript_challenge_inverse),
-                );
+                constraints
+                    .push(s.clone() * (b_challenge_inverse.clone() - transcript_challenge_inverse));
                 let round_challenge = meta.query_advice(
                     round_accumulators[round_index].challenge.value,
                     Rotation::cur(),

@@ -463,15 +463,17 @@ different intermediate values. A generic power-of-two multi-round composition
 wrapper now extends that linking across all IPA rounds: every round shares its
 challenge pair across `b`, `Q`, and every generator-fold pair, each round's
 `Q`, `G`, and `H` outputs feed the next round, and the last folded values feed
-the final fixed-window IPA comparison.
+the final fixed-window IPA comparison. The same wrapper now composes the
+transcript-binding accumulator and links its public challenge/inverse rows back
+to the decomposed `b`-reduction challenge columns, so a self-consistent binding
+digest cannot be paired with different verifier challenges.
 Native Pasta/Fp scalar decomposition, fixed-window scalar decomposition,
 fixed-window Vesta point selection, table derivation, and scalar-multiplication
 composition, fixed-window multi-term MSM, native IPA scalar/vector-fold, full
 `b`-vector reduction, bounded MSM, fixed-window final IPA MSM, IPA
 generator-fold, round-accumulator, and final IPA comparison composition plus
-one-round and generic multi-round verifier composition are present. The
-remaining recursive-circuit work is composing the transcript-binding accumulator
-into the full production-width verifier and producing production-width composed
-circuit evidence, so aggregation mode `2` remains a reserved wire value with a
-stable rejection reason, and public prover/verifier entry points accept only
-checked pre-fold mode `1`.
+one-round and generic multi-round verifier composition with transcript binding
+are present. The remaining recursive-circuit work is producing production-width
+composed circuit evidence and private-hop recursive aggregation, so aggregation
+mode `2` remains a reserved wire value with a stable rejection reason, and
+public prover/verifier entry points accept only checked pre-fold mode `1`.

@@ -177,6 +177,8 @@ const VIEW_INSTRUCTION_EMITTING_CALL_NAMES = new Set([
 ]);
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const ASSET_DEFINITION_ADDRESS_LEN = 21;
+const ASSET_DEFINITION_CHECKSUM_OFFSET = 17;
+const ASSET_DEFINITION_CHECKSUM_LEN = 4;
 const ASSET_DEFINITION_UUID_VERSION_INDEX = 7;
 const ASSET_DEFINITION_UUID_VARIANT_INDEX = 9;
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -1285,6 +1287,15 @@ function decodeBase58(value) {
     }
     return out;
 }
+function hasValidAssetDefinitionChecksum(decoded) {
+    const expected = blake3(decoded.subarray(0, ASSET_DEFINITION_CHECKSUM_OFFSET))
+        .subarray(0, ASSET_DEFINITION_CHECKSUM_LEN);
+    for (let index = 0; index < ASSET_DEFINITION_CHECKSUM_LEN; index += 1) {
+        if (decoded[ASSET_DEFINITION_CHECKSUM_OFFSET + index] !== expected[index])
+            return false;
+    }
+    return true;
+}
 function parseAssetDefinitionIdBytes(value, line, column) {
     const trimmed = value.trim();
     const decoded = decodeBase58(trimmed);
@@ -1299,6 +1310,9 @@ function parseAssetDefinitionIdBytes(value, line, column) {
     }
     if ((decoded[ASSET_DEFINITION_UUID_VARIANT_INDEX] & 0b1100_0000) !== 0b1000_0000) {
         throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID must be valid Base58`, line, column);
+    }
+    if (!hasValidAssetDefinitionChecksum(decoded)) {
+        throw new StudioCompileError(`semantic error: invalid AssetDefinitionId literal \`${value}\`: Asset Definition ID checksum is invalid`, line, column);
     }
     return decoded.slice(1, 17);
 }
