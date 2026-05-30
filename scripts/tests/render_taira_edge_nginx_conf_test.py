@@ -136,6 +136,16 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     assert "proxy_pass http://taira_public_edge_upstream;" in rendered
     assert "proxy_pass http://taira_public_edge_upstream$soradns_target_path$is_args$args;" in rendered
     assert "proxy_pass http://taira_validator_1_upstream;" in rendered
+    assert "location = /v1/connect/session" in rendered
+    assert "location ^~ /v1/connect/session/" in rendered
+    public_server = rendered.split("server_name taira.sora.org;", 1)[1].split(
+        "server_name mon.taira.sora.net;", 1
+    )[0]
+    assert "location = /v1/connect/ws" in public_server
+    assert "proxy_pass http://taira_validator_2_upstream;" in public_server
+    assert "proxy_next_upstream" not in public_server.split("location = /v1/connect/ws", 1)[1].split(
+        "location = /v1/mcp", 1
+    )[0]
     assert "location = /v1/mcp" in rendered
     assert "location ^~ /v1/app-api/" in rendered
     assert "client_max_body_size 1g;" in rendered

@@ -280,6 +280,11 @@ def render_edge_nginx_conf(
         public_upstream_host = (
             validators[1].validator_host if len(validators) > 1 else validators[0].validator_host
         )
+    connect_validator = next(
+        (validator for validator in validators if validator.validator_host == public_upstream_host),
+        validators[1] if len(validators) > 1 else validators[0],
+    )
+    connect_upstream = f"{connect_validator.upstream_name}_upstream"
 
     escaped_mon_host_suffix = mon_host_suffix.replace(".", r"\.")
     mon_host_pattern = f"~^.+\\.{escaped_mon_host_suffix}$"
@@ -361,12 +366,35 @@ def render_edge_nginx_conf(
         ]
     )
     lines.extend(
+        [
+            "  # IrohaConnect session tokens are node-local; keep session creation and websocket",
+            "  # authorization on the same Torii process.",
+        ]
+    )
+    lines.extend(
+        _render_exact_proxy_location(
+            "/v1/connect/session",
+            connect_upstream,
+            host_expr=public_upstream_host,
+            forwarded_host_expr="$host",
+        )
+    )
+    lines.append("")
+    lines.extend(
+        _render_prefix_proxy_location(
+            "/v1/connect/session/",
+            connect_upstream,
+            host_expr=public_upstream_host,
+            forwarded_host_expr="$host",
+        )
+    )
+    lines.append("")
+    lines.extend(
         _render_exact_proxy_location(
             "/v1/connect/ws",
-            "taira_public_edge_upstream",
+            connect_upstream,
             host_expr=public_upstream_host,
             websocket=True,
-            retry_non_idempotent=True,
             forwarded_host_expr="$host",
         )
     )
@@ -575,12 +603,35 @@ def render_edge_nginx_conf(
         ]
     )
     lines.extend(
+        [
+            "  # IrohaConnect session tokens are node-local; keep session creation and websocket",
+            "  # authorization on the same Torii process.",
+        ]
+    )
+    lines.extend(
+        _render_exact_proxy_location(
+            "/v1/connect/session",
+            connect_upstream,
+            host_expr=public_upstream_host,
+            forwarded_host_expr=public_host,
+        )
+    )
+    lines.append("")
+    lines.extend(
+        _render_prefix_proxy_location(
+            "/v1/connect/session/",
+            connect_upstream,
+            host_expr=public_upstream_host,
+            forwarded_host_expr=public_host,
+        )
+    )
+    lines.append("")
+    lines.extend(
         _render_exact_proxy_location(
             "/v1/connect/ws",
-            "taira_public_edge_upstream",
+            connect_upstream,
             host_expr=public_upstream_host,
             websocket=True,
-            retry_non_idempotent=True,
             forwarded_host_expr=public_host,
         )
     )
