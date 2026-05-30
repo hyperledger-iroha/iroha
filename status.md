@@ -2,6 +2,18 @@
 
 Last updated: 2026-05-30
 
+## 2026-05-30 JS Kotodama ABI hash refresh
+
+- Updated the JS Kotodama compiler and regenerated `javascript/iroha_js/dist`
+  so compiled contract outputs now emit the current V1 ABI hash
+  `73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d`
+  in both `abiHashHex` and manifest `abi_hash`. Added JS regression coverage
+  against the canonical manifest hash literal.
+- Validation:
+  `node --test --test-name-pattern "Kotodama compiler SDK compiles a minimal contract artifact" javascript/iroha_js/test/kotodamaCompiler.test.js`
+  and
+  `cargo test -p ivm --test abi_hash_versions abi_hash_matches_v1_golden -- --nocapture`.
+
 ## 2026-05-30 Kagemusha recursive-verifier MSM foundation
 
 - The Pasta circuit module now includes a bounded native-scalar Vesta MSM

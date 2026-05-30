@@ -22,7 +22,7 @@ const INSTRUCTION_BOX_PAIR_TYPE_NAME = '(alloc::string::String, alloc::vec::Vec<
 const SUBMIT_BALLOT_TYPE_NAME = 'iroha_data_model::isi::zk::SubmitBallot';
 const UNSHIELD_TYPE_NAME = 'iroha_data_model::isi::zk::Unshield';
 const NORITO_TYPE_NAME_SCHEMA_HASH_DOMAIN = 'norito:v1:type-name\0';
-const ABI_HASH_HEX = '1f66277e8e673cd8b44f3659a7b878255ceaf1f532591b1ddc471a3416f614e9';
+const ABI_HASH_HEX = '73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d';
 const COMPILER_FINGERPRINT = 'kotodama_lang/2.0.0-rc.2.0';
 const DEFAULT_MAX_CYCLES = 1_000_000;
 const I64_MAX = 9_223_372_036_854_775_807n;
@@ -16623,12 +16623,19 @@ class StudioCodeGenerator {
                 }
                 const loopLocals = new Map(locals);
                 const loopPhiBindings = new Map();
-                for (const [name, binding] of [...locals.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+                const loopPhiSourceEntries = [...locals.entries()].sort(([left], [right]) => left.localeCompare(right));
+                for (const [entryIndex, [name, binding]] of loopPhiSourceEntries.entries()) {
                     if ((binding.kind === 'int' || binding.kind === 'pointer' || binding.kind === 'numeric')
                         && binding.valueType !== null) {
                         const phiBinding = this.createBindingForType(binding.valueType);
                         if (binding.register !== null) {
                             this.moveBinding(phiBinding, binding, statement.line, 1);
+                            const sourceUsedByLaterPhi = loopPhiSourceEntries
+                                .slice(entryIndex + 1)
+                                .some(([, laterBinding]) => laterBinding.register === binding.register);
+                            if (!sourceUsedByLaterPhi) {
+                                this.assembler.releaseRegister(binding.register);
+                            }
                         }
                         else if (binding.spillFrameOffset !== undefined) {
                             const sourceReg = this.bindingRegister(binding, [binding.kind], statement.line, 1, 'Cannot copy stack-spilled loop binding in the browser compiler.');
@@ -18447,20 +18454,50 @@ class StudioCodeGenerator {
                 throw new StudioCompileError(`State value type \`${renderValueType(valueType)}\` is not supported in the browser compiler.`, line, column);
         }
     }
-    emitScalarStateAggregateSetBinding(baseLiteral, valueType, binding) {
+    countScalarStateAggregateLeaves(valueType) {
+        if (isTupleValueType(valueType)) {
+            return valueType.elements.reduce((total, element) => total + this.countScalarStateAggregateLeaves(element), 0);
+        }
+        if (isStructValueType(valueType)) {
+            return (valueType.fields ?? []).reduce((total, field) => total + this.countScalarStateAggregateLeaves(field.type), 0);
+        }
+        return valueType === 'int' || valueType === 'bool' ? 1 : 0;
+    }
+    scalarStateAggregateEncodeRegisters(context) {
+        if (context === null) {
+            return { source: null, result: null };
+        }
+        const index = context.scalarLeafIndex;
+        context.scalarLeafIndex += 1;
+        if (context.scalarLeafCount === 1) {
+            return { source: 9, result: 23 };
+        }
+        if (context.scalarLeafCount === 2) {
+            return { source: 8, result: index === 0 ? 7 : 9 };
+        }
+        return { source: null, result: null };
+    }
+    emitScalarStateAggregateSetBinding(baseLiteral, valueType, binding, context = null) {
+        const aggregateContext = context ?? {
+            scalarLeafCount: this.countScalarStateAggregateLeaves(valueType),
+            scalarLeafIndex: 0,
+        };
         if (isTupleValueType(valueType)) {
             valueType.elements.forEach((element, index) => {
-                this.emitScalarStateAggregateSetBinding(`${baseLiteral}_${index}`, element, binding.items[index]);
+                this.emitScalarStateAggregateSetBinding(`${baseLiteral}_${index}`, element, binding.items[index], aggregateContext);
             });
             return;
         }
         if (isStructValueType(valueType)) {
             (valueType.fields ?? []).forEach((field, index) => {
-                this.emitScalarStateAggregateSetBinding(`${baseLiteral}_${field.name}`, field.type, binding.items[index]);
+                this.emitScalarStateAggregateSetBinding(`${baseLiteral}_${field.name}`, field.type, binding.items[index], aggregateContext);
             });
             return;
         }
-        const valueReg = this.encodeStateMapBindingValue(binding, valueType);
+        const encodeRegisters = valueType === 'int' || valueType === 'bool'
+            ? this.scalarStateAggregateEncodeRegisters(aggregateContext)
+            : { source: null, result: null };
+        const valueReg = this.encodeStateMapBindingValue(binding, valueType, encodeRegisters.result, encodeRegisters.source);
         this.emitDirectNameLiteralPointerIntoRegister(baseLiteral, 10);
         this.emitStateSetPathInRegister(valueReg);
     }
@@ -18773,14 +18810,14 @@ class StudioCodeGenerator {
         const valueReg = this.encodeStateMapBindingValue(binding, valueType);
         this.emitStateSet(pathReg, valueReg);
     }
-    encodeStateMapBindingValue(binding, valueType, preferredEncodedIntRegister = null) {
+    encodeStateMapBindingValue(binding, valueType, preferredEncodedIntRegister = null, preferredEncodedIntSourceRegister = null) {
         if (isTupleValueType(valueType) || isStructValueType(valueType)) {
             throw new Error('Aggregate map values must be flattened before encoding.');
         }
         switch (valueType) {
             case 'int':
             case 'bool':
-                return this.emitEncodedIntPointer(this.bindingRegister(binding, ['int'], 1, 1, 'Map value is not numeric in the browser compiler.'), preferredEncodedIntRegister ?? this.preferredStateMapEncodedIntRegister());
+                return this.emitEncodedIntPointer(this.bindingRegister(binding, ['int'], 1, 1, 'Map value is not numeric in the browser compiler.'), preferredEncodedIntRegister ?? this.preferredStateMapEncodedIntRegister(), preferredEncodedIntSourceRegister);
             case 'Json':
                 return this.emitJsonEncodePointer(this.bindingRegister(binding, ['pointer'], 1, 1, 'Map value is not Json-like in the browser compiler.'));
             case 'Blob':
@@ -26093,10 +26130,17 @@ class StudioCodeGenerator {
         this.assembler.emitMove(register, 10);
         return register;
     }
-    emitEncodedIntPointer(valueReg, preferredResultRegister = null) {
-        this.assembler.emitMove(10, valueReg);
+    emitEncodedIntPointer(valueReg, preferredResultRegister = null, preferredSourceRegister = null) {
+        let sourceReg = valueReg;
+        if (preferredSourceRegister !== null
+            && preferredSourceRegister !== valueReg
+            && this.assembler.canClaimRegister(preferredSourceRegister)) {
+            sourceReg = preferredSourceRegister;
+            this.assembler.emitMove(sourceReg, valueReg);
+        }
+        this.assembler.emitMove(10, sourceReg);
         this.assembler.emitSyscall(SYSCALL_ENCODE_INT);
-        const register = this.allocPreferredResultRegister(preferredResultRegister, [valueReg]);
+        const register = this.allocPreferredResultRegister(preferredResultRegister, [valueReg, sourceReg]);
         this.assembler.emitMove(register, 10);
         return register;
     }

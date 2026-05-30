@@ -10,6 +10,10 @@ import {
 import { renderCanonicalAccountIdLiteralFromPublicKeyLiteral } from "../src/kotodamaCompiler/accountLiteral.js";
 import { blake2b256 } from "../src/blake2b.js";
 
+const CURRENT_ABI_V1_HASH_HEX = "73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d";
+const CURRENT_ABI_V1_HASH_LITERAL =
+  "hash:73CEFB1B419F97B9E2864CDC6545D3F80AE2328DC0FBE2FBD034CD51A837BA0D#4D00";
+
 function irohaHashHex(bytes) {
   const digest = Buffer.from(blake2b256(bytes));
   if (digest.length > 0) {
@@ -144,9 +148,11 @@ seiyaku SdkSmoke {
 
   assert.deepEqual(compiled.diagnostics, []);
   assert.equal(compiled.abiHashHex.length, 64);
+  assert.equal(compiled.abiHashHex, CURRENT_ABI_V1_HASH_HEX);
   assert.equal(compiled.codeHashHex.length, 64);
   assert.equal(compiled.codeHashHex, irohaHashHex(compiled.artifactBytes.slice(17)));
   assert.ok(compiled.artifactBytes.length > 32);
+  assert.equal(compiled.manifest?.abi_hash, CURRENT_ABI_V1_HASH_LITERAL);
   assert.equal(compiled.manifest?.compiler_fingerprint, compiled.compilerFingerprint);
   assert.equal(compiled.sourceMap[0]?.function_name, "hajimari");
 });
@@ -9852,6 +9858,145 @@ test("Kotodama compiler SDK matches docs detail-transfer literal frame rows", ()
       entry.frame_bytes,
     ])),
     [["set_cursor_and_transfer", 624, 48]],
+  );
+});
+
+test("Kotodama compiler SDK matches Rust aggregate scalar state rows", () => {
+  const cases = [
+    [
+      "one_field_struct_state",
+      "seiyaku T { struct One { value: int } state One stored; kotoage fn f(a: int) { stored = One(a); } }",
+      [
+        ["f", 348, 32],
+        ["__entrypoint_impl__f", 300, 40],
+      ],
+    ],
+    [
+      "two_field_struct_state",
+      "seiyaku T { struct Pair { first: int, second: int } state Pair stored; kotoage fn f(a: int, b: int) { stored = Pair(a, b); } }",
+      [
+        ["f", 480, 40],
+        ["__entrypoint_impl__f", 468, 64],
+      ],
+    ],
+    [
+      "two_field_literal_struct_state",
+      "seiyaku T { struct Pair { first: int, second: int } state Pair stored; kotoage fn f() { stored = Pair(1, 2); } }",
+      [["f", 312, 48]],
+    ],
+  ];
+
+  for (const [name, source, rows] of cases) {
+    const sourcePath = `/tmp/${name}.ko`;
+    const compiled = compileKotodamaProgram(source, { sourceName: sourcePath });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => ({
+        function_name: entry.function_name,
+        bytecode_bytes: entry.bytecode_bytes,
+        frame_bytes: entry.frame_bytes,
+        source_path: entry.source_path,
+      })),
+      rows.map(([functionName, bytecodeBytes, frameBytes]) => ({
+        function_name: functionName,
+        bytecode_bytes: bytecodeBytes,
+        frame_bytes: frameBytes,
+        source_path: sourcePath,
+      })),
+    );
+  }
+});
+
+test("Kotodama compiler SDK matches docs struct-state budget rows", () => {
+  const source = readFileSync(
+    new URL("../../../crates/ivm/docs/examples/09_struct_and_state.ko", import.meta.url),
+    "utf8",
+  );
+  const compiled = compileKotodamaProgram(source, { sourceName: "09_struct_and_state.ko" });
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(
+    compiled.budgetReport.map((entry) => ([
+      entry.function_name,
+      entry.bytecode_bytes,
+      entry.frame_bytes,
+    ])),
+    [
+      ["set_pair", 480, 40],
+      ["__entrypoint_impl__set_pair", 576, 64],
+    ],
+  );
+});
+
+test("Kotodama compiler SDK matches Rust-style for-loop wrapper rows", () => {
+  const cases = [
+    [
+      "sum_to",
+      "seiyaku T { kotoage fn sum_to(n: int) -> int { let acc = 0; for let i = 0; i < n; i++ { acc = acc + i; } return acc; } }",
+      [
+        ["sum_to", 356, 32],
+        ["__entrypoint_impl__sum_to", 772, 56],
+      ],
+    ],
+    [
+      "sum_to_step_assign",
+      "seiyaku T { kotoage fn sum_to(n: int) -> int { let acc = 0; for let i = 0; i < n; i = i + 1 { acc = acc + i; } return acc; } }",
+      [
+        ["sum_to", 356, 32],
+        ["__entrypoint_impl__sum_to", 772, 56],
+      ],
+    ],
+    [
+      "loop_with_extra_local",
+      "seiyaku T { kotoage fn f(n: int) -> int { let acc = 0; let extra = 2; for let i = 0; i < n; i++ { acc = acc + i + extra; } return acc; } }",
+      [
+        ["f", 356, 32],
+        ["__entrypoint_impl__f", 800, 64],
+      ],
+    ],
+  ];
+
+  for (const [name, source, rows] of cases) {
+    const sourcePath = `/tmp/${name}.ko`;
+    const compiled = compileKotodamaProgram(source, { sourceName: sourcePath });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => ({
+        function_name: entry.function_name,
+        bytecode_bytes: entry.bytecode_bytes,
+        frame_bytes: entry.frame_bytes,
+        source_path: entry.source_path,
+      })),
+      rows.map(([functionName, bytecodeBytes, frameBytes]) => ({
+        function_name: functionName,
+        bytecode_bytes: bytecodeBytes,
+        frame_bytes: frameBytes,
+        source_path: sourcePath,
+      })),
+    );
+  }
+});
+
+test("Kotodama compiler SDK matches docs range-for budget rows", () => {
+  const source = readFileSync(
+    new URL("../../../crates/ivm/docs/examples/05_range_for.ko", import.meta.url),
+    "utf8",
+  );
+  const compiled = compileKotodamaProgram(source, { sourceName: "05_range_for.ko" });
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(
+    compiled.budgetReport.map((entry) => ([
+      entry.function_name,
+      entry.bytecode_bytes,
+      entry.frame_bytes,
+    ])),
+    [
+      ["sum_to", 356, 32],
+      ["__entrypoint_impl__sum_to", 772, 56],
+    ],
   );
 });
 
