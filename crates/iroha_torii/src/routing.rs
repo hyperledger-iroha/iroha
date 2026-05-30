@@ -32652,31 +32652,35 @@ fn instruction_matches_account_id(
 }
 
 #[cfg(feature = "app_api")]
-fn instruction_matches_domain_id(
+fn instruction_matches_domain_predicate<F>(
     instr: &iroha_data_model::isi::InstructionBox,
-    expected: &DomainId,
-) -> bool {
+    matches_domain: &F,
+) -> bool
+where
+    F: Fn(&DomainId) -> bool,
+{
     use iroha_data_model::isi::{
-        BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, RemoveKeyValueBox,
-        SetAssetKeyValue, SetKeyValueBox, TransferAssetBatch, TransferBox,
-        staking::RecordPublicLaneRewards,
+        BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, SetAssetKeyValue,
+        TransferAssetBatch, TransferBox, staking::RecordPublicLaneRewards,
     };
     use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 
     let matches_asset_definition_domain =
         |definition: &iroha_data_model::asset::AssetDefinitionId| {
-            definition.try_domain() == Some(expected)
+            definition
+                .try_domain()
+                .is_some_and(|domain_id| matches_domain(domain_id))
         };
 
     let any = instr.as_any();
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         return match transfer {
-            TransferBox::Domain(inner) => inner.object() == expected,
+            TransferBox::Domain(inner) => matches_domain(inner.object()),
             TransferBox::AssetDefinition(inner) => matches_asset_definition_domain(inner.object()),
             TransferBox::Asset(inner) => {
                 matches_asset_definition_domain(inner.source().definition())
             }
-            TransferBox::Nft(inner) => inner.object().domain() == expected,
+            TransferBox::Nft(inner) => matches_domain(inner.object().domain()),
         };
     }
     if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
@@ -32709,15 +32713,16 @@ fn instruction_matches_domain_id(
     if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
         if let Ok(multisig) = MultisigInstructionBox::try_from(custom.payload()) {
             return match multisig {
-                MultisigInstructionBox::Register(register) => {
-                    register.home_domain.as_ref() == Some(expected)
-                }
+                MultisigInstructionBox::Register(register) => register
+                    .home_domain
+                    .as_ref()
+                    .is_some_and(|domain_id| matches_domain(domain_id)),
                 MultisigInstructionBox::Approve(_approve) => false,
                 MultisigInstructionBox::Cancel(_cancel) => false,
                 MultisigInstructionBox::Propose(propose) => propose
                     .instructions
                     .iter()
-                    .any(|nested| instruction_matches_domain_id(nested, expected)),
+                    .any(|nested| instruction_matches_domain_predicate(nested, matches_domain)),
             };
         }
         return false;
@@ -32740,15 +32745,18 @@ fn executable_contains_account_id(
 }
 
 #[cfg(feature = "app_api")]
-fn executable_contains_domain_id(
+fn executable_contains_domain_predicate<F>(
     executable: &iroha_data_model::transaction::Executable,
-    expected: &DomainId,
-) -> bool {
+    matches_domain: &F,
+) -> bool
+where
+    F: Fn(&DomainId) -> bool,
+{
     use iroha_data_model::transaction::Executable;
     match executable {
         Executable::Instructions(instructions) => instructions
             .iter()
-            .any(|instruction| instruction_matches_domain_id(instruction, expected)),
+            .any(|instruction| instruction_matches_domain_predicate(instruction, matches_domain)),
         _ => false,
     }
 }
@@ -32778,34 +32786,55 @@ fn tx_references_account_id(
 }
 
 #[cfg(feature = "app_api")]
-fn tx_references_domain_id(
+fn tx_references_domain_predicate<F>(
     tx: &iroha_data_model::query::CommittedTransaction,
-    expected: &DomainId,
-) -> bool {
+    matches_domain: &F,
+) -> bool
+where
+    F: Fn(&DomainId) -> bool,
+{
     match tx.entrypoint() {
         TransactionEntrypoint::External(signed) => {
-            executable_contains_domain_id(signed.instructions(), expected)
+            executable_contains_domain_predicate(signed.instructions(), matches_domain)
         }
         TransactionEntrypoint::SealedCommitment(_) => false,
-        TransactionEntrypoint::SealedReveal(reveal) => {
-            executable_contains_domain_id(reveal.signed_transaction().instructions(), expected)
-        }
+        TransactionEntrypoint::SealedReveal(reveal) => executable_contains_domain_predicate(
+            reveal.signed_transaction().instructions(),
+            matches_domain,
+        ),
         TransactionEntrypoint::PrivateKaigi(private) => match &private.action {
             iroha_data_model::transaction::PrivateKaigiAction::Create(create) => {
-                create.call.id.domain_id == *expected
+                matches_domain(&create.call.id.domain_id)
             }
             iroha_data_model::transaction::PrivateKaigiAction::Join(join) => {
-                join.call_id.domain_id == *expected
+                matches_domain(&join.call_id.domain_id)
             }
             iroha_data_model::transaction::PrivateKaigiAction::End(end) => {
-                end.call_id.domain_id == *expected
+                matches_domain(&end.call_id.domain_id)
             }
         },
         TransactionEntrypoint::Time(entry) => entry
             .instructions
             .iter()
-            .any(|instruction| instruction_matches_domain_id(instruction, expected)),
+            .any(|instruction| instruction_matches_domain_predicate(instruction, matches_domain)),
     }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_references_dataspace_alias(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    expected_dataspace_alias: &str,
+) -> bool {
+    let expected_dataspace_alias = expected_dataspace_alias.trim();
+    if expected_dataspace_alias.is_empty() {
+        return false;
+    }
+    tx_references_domain_predicate(tx, &|domain_id| {
+        domain_id
+            .dataspace()
+            .as_ref()
+            .eq_ignore_ascii_case(expected_dataspace_alias)
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -32834,10 +32863,9 @@ pub(crate) struct TxHistoryVisibilityScope {
 fn tx_matches_history_visibility_scope(
     tx: &iroha_data_model::query::CommittedTransaction,
     visibility: &TxHistoryVisibilityScope,
-    dataspace_domain: Option<&DomainId>,
 ) -> bool {
-    if let Some(domain_id) = dataspace_domain {
-        return tx_references_domain_id(tx, domain_id);
+    if visibility.allow_dataspace_wide {
+        return tx_references_dataspace_alias(tx, &visibility.viewer_dataspace_id);
     }
     visibility
         .viewer_account_ids
@@ -35610,12 +35638,6 @@ async fn handle_v1_transactions_query_scoped_with_policy(
     let allowed_asset_selector = allowed_asset_definition_id
         .clone()
         .map(TxHistoryAssetSelector::DefinitionId);
-    let dataspace_domain = visibility.as_ref().and_then(|scope| {
-        scope
-            .allow_dataspace_wide
-            .then(|| DomainId::parse_fully_qualified(&scope.viewer_dataspace_id).ok())
-            .flatten()
-    });
 
     if envelope.select.is_some() || envelope.aggregate.is_some() {
         if let Some(ref expr) = envelope.filter {
@@ -35645,9 +35667,9 @@ async fn handle_v1_transactions_query_scoped_with_policy(
         let rows = committed_txs
             .iter()
             .filter(|tx| {
-                visibility.as_ref().is_none_or(|scope| {
-                    tx_matches_history_visibility_scope(tx, scope, dataspace_domain.as_ref())
-                })
+                visibility
+                    .as_ref()
+                    .is_none_or(|scope| tx_matches_history_visibility_scope(tx, scope))
             })
             .filter(|tx| {
                 allowed_asset_selector
@@ -35711,9 +35733,10 @@ async fn handle_v1_transactions_query_scoped_with_policy(
                 if !predicate.applies(tx) {
                     return None;
                 }
-                if visibility.as_ref().is_some_and(|scope| {
-                    !tx_matches_history_visibility_scope(tx, scope, dataspace_domain.as_ref())
-                }) {
+                if visibility
+                    .as_ref()
+                    .is_some_and(|scope| !tx_matches_history_visibility_scope(tx, scope))
+                {
                     return None;
                 }
                 if let Some(expected) = allowed_asset_selector.as_ref() {
@@ -35743,9 +35766,10 @@ async fn handle_v1_transactions_query_scoped_with_policy(
                 if !predicate.applies(tx) {
                     continue;
                 }
-                if visibility.as_ref().is_some_and(|scope| {
-                    !tx_matches_history_visibility_scope(tx, scope, dataspace_domain.as_ref())
-                }) {
+                if visibility
+                    .as_ref()
+                    .is_some_and(|scope| !tx_matches_history_visibility_scope(tx, scope))
+                {
                     continue;
                 }
                 if let Some(expected) = allowed_asset_selector.as_ref() {
@@ -36015,10 +36039,6 @@ pub async fn handle_v1_transactions_history_get(
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
     let cap = app_query_page_cap(&state);
-    let dataspace_domain = visibility
-        .allow_dataspace_wide
-        .then(|| DomainId::parse_fully_qualified(&visibility.viewer_dataspace_id).ok())
-        .flatten();
 
     let count_mode = app_count_mode(params.count_mode.as_deref(), "/v1/transactions/history");
     let page = {
@@ -36038,23 +36058,15 @@ pub async fn handle_v1_transactions_history_get(
             .clamp_fetch_size(None)?
             .map(|v| v.min(pagination.cap));
         let filtered = committed_txs.iter().filter_map({
-            let viewer_account_ids = visibility.viewer_account_ids.clone();
+            let visibility = visibility.clone();
             let asset_filter = asset_filter.clone();
-            let dataspace_domain = dataspace_domain.clone();
             move |tx| {
                 if let Some(expected) = asset_filter.as_ref() {
                     if !tx_matches_asset_selector(tx, expected) {
                         return None;
                     }
                 }
-                let visible = if let Some(domain_id) = dataspace_domain.as_ref() {
-                    tx_references_domain_id(tx, domain_id)
-                } else {
-                    viewer_account_ids
-                        .iter()
-                        .any(|account_id| tx_references_account_id(tx, account_id))
-                };
-                if !visible {
+                if !tx_matches_history_visibility_scope(tx, &visibility) {
                     return None;
                 }
                 Some(project_tx(tx, &None))
@@ -36918,6 +36930,34 @@ mod tx_query_filter_tests {
             result_proof: dummy_proof(),
             result,
         }
+    }
+
+    #[test]
+    fn tx_history_visibility_dataspace_wide_matches_dataspace_alias() {
+        let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
+        let banka_domain = DomainId::try_new("treasury", "banka").expect("banka domain");
+        let bankb_domain = DomainId::try_new("treasury", "bankb").expect("bankb domain");
+        let scope = TxHistoryVisibilityScope {
+            viewer_account_ids: Vec::new(),
+            viewer_dataspace_id: "banka".to_owned(),
+            allow_dataspace_wide: true,
+        };
+
+        let banka_tx = make_external_tx_with_instructions(
+            &authority,
+            &keypair,
+            1_710_000_000_000,
+            vec![dm::Transfer::domain(authority.clone(), banka_domain, authority.clone()).into()],
+        );
+        let bankb_tx = make_external_tx_with_instructions(
+            &authority,
+            &keypair,
+            1_710_000_001_000,
+            vec![dm::Transfer::domain(authority.clone(), bankb_domain, authority.clone()).into()],
+        );
+
+        assert!(tx_matches_history_visibility_scope(&banka_tx, &scope));
+        assert!(!tx_matches_history_visibility_scope(&bankb_tx, &scope));
     }
 
     #[test]

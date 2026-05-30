@@ -2,6 +2,23 @@
 
 Last updated: 2026-05-30
 
+## 2026-05-30 Torii transaction query routing and visibility
+
+- `/v1/transactions/query` ingress now encodes the clamped query envelope and
+  uses the existing Torii read-fanout list merge for `TransactionsQuery`, so
+  routed/private-dataspace deployments do not return only the ingress node's
+  local transaction page.
+- Mandatory-alias transaction history visibility now compares the viewer's JWT
+  dataspace alias against referenced `DomainId` dataspace segments. Claims such
+  as `banka` therefore cover transactions in any `*.banka` domain even when the
+  alias has no resolved account binding; account-scoped visibility is
+  unchanged.
+- Focused validation passed:
+  - `cargo test -p iroha_torii handler_transactions_query_fan_outs_across_dataspaces -- --nocapture`
+  - `cargo test -p iroha_torii tx_history_visibility_dataspace_wide_matches_dataspace_alias -- --nocapture`
+  - `cargo test -p iroha_torii transactions_query -- --nocapture`
+  - `cargo test -p iroha_torii transactions_visible_query -- --nocapture`
+
 ## 2026-05-30 Kagemusha recursive-verifier MSM foundation
 
 - The Pasta circuit module now includes a bounded native-scalar Vesta MSM
