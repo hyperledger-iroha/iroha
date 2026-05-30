@@ -11,9 +11,11 @@ tests.
 The current hardening keeps the production `AuditOfflineNote` lineage anchored to
 the original online-to-offline topup. Audit submitters no longer need to be the
 note account, but every input claim must match the sender key certificate that was
-anchored by an earlier topup or audit output. Audit outputs are now one-to-one
-with public output commitments, and public asset definitions and amount totals
-must conserve before proof verification. Output certificates are signature
+anchored by an earlier topup or audit output, and the exact input-claim hash
+must have been issued by that lineage. A claim mutation under a legitimately
+issued certificate is rejected before recursive proof verification. Audit outputs
+are now one-to-one with public output commitments, and public asset definitions
+and amount totals must conserve before proof verification. Output certificates are signature
 checked against the output account they claim before their lineage is recorded,
 so a relayer can submit audit metadata without becoming a certificate issuer.
 Audit output key certificates must also be fresh one-use certificates: any
@@ -36,8 +38,9 @@ verifier record cannot silently anchor to absent key material.
 Focused core coverage executes a real online-to-offline topup, an audit
 submitted by an unrelated relayer, and a second audit whose input is the first
 audit's output claim. It also rejects certificate-only or missing-certificate
-lineage, reused topup certificates as audit outputs, and cross-domain
-note-commitment reuse before proof verification.
+lineage, exact-claim mutations under an issued topup certificate, reused topup
+certificates as audit outputs, and cross-domain note-commitment reuse before
+proof verification.
 
 `KagemushaTransfer` is the chain-side shielded offline-offline instruction. It
 reuses the existing ZK asset accumulator in WSV instead of introducing a second
@@ -466,14 +469,72 @@ challenge pair across `b`, `Q`, and every generator-fold pair, each round's
 the final fixed-window IPA comparison. The same wrapper now composes the
 transcript-binding accumulator and links its public challenge/inverse rows back
 to the decomposed `b`-reduction challenge columns, so a self-consistent binding
-digest cannot be paired with different verifier challenges.
+digest cannot be paired with different verifier challenges. The host-side
+bridge can now translate native Pallas IPA verifier witnesses into this Vesta
+recursive witness shape by validating the transcript, `b`-reduction, and
+accumulator projections, round ordering, and canonical compressed point
+encodings in a cheap preflight path. That preflight also recomputes the native
+Pallas `b`, `Q`, `G`, `H`, and final-term fold relations before converting
+scalars and compressed points only through canonical byte encodings. The group
+relation recomputation uses the deterministic optimized Pallas MSM backend, so
+the production preflight follows the same no-trusted-setup IPA backend path used
+by native verification. The same bridge can now validate an ordered batch of
+native Pallas verifier witnesses and emit a compact domain-separated aggregate
+digest using the streaming Poseidon2 byte sponge. That digest binds the
+transparent parameter fingerprint, witness order, transcript projections, `b`
+reductions, accumulator folds, final terms, and proof-final scalars after every
+witness passes the single-witness preflight.
+That batch summary is the host-side evidence surface intended to feed the
+future private-hop recursive aggregation circuit while mode `2` remains
+reserved. The data model now also has a reserved-mode recursive aggregation
+evidence statement that Norito/Poseidon-binds that batch digest and parameter
+fingerprint to the same ordered hop transcript and to the canonical
+`pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3` verifier-witness
+profile. It validates mode `2` evidence shape, hop continuity, witness count,
+profile, and non-zero batch fields without making mode `2` accepted for
+compact-token admission. Focused data-model coverage also roundtrips the
+evidence through Norito, validates the decoded profile-bound digest, rejects
+decoded unsupported-profile evidence, and rejects truncated evidence archives.
+The reserved evidence validator also has explicit adversarial coverage for
+empty transcripts, over-cap hop lists, duplicate input nullifiers, and duplicate
+output commitments.
+Core exposes record-backed evidence builders for that reserved path. They first
+enforce the same active WSV-style confidential-transfer-v2 hop verifier records
+used by production compact-token proving, verify every private hop proof, and
+then bind the supplied native verifier-witness batch digest and parameter
+fingerprint to the canonical hop transcript. Witness-count mismatches and
+all-zero batch metadata are rejected before hop proof decoding, and the
+serializable `KagemushaVerifiedFoldRecordBundle` wrapper follows the same
+checked path.
+Core also exposes a public Pallas IPA batch preflight helper and record-backed
+evidence builders that take the native verifier witnesses directly instead of a
+detached digest tuple. The helper accepts only power-of-two opening widths
+`2..=128` and at most 64 witnesses, matching the current `k = 7` transparent
+Halo2 IPA corridor and compact-token hop cap, and uses the 85-by-3 fixed-window
+Vesta verifier witness profile that covers the 255-bit Pasta scalar width
+without a trusted setup. Its aggregate digest is Poseidon2-backed rather than a
+generic hash transcript, so the host-side reserved evidence path stays aligned
+with the field-friendly no-trusted-setup Kagemusha transcript surface. The
+combined builders re-derive that digest with the ordered checked-hop proof
+hashes before storing it in reserved evidence, so a valid detached native batch
+cannot be replayed against a different folded-hop proof transcript without
+changing the evidence digest. This is still a reserved evidence binding, not
+the final derivation of IPA verifier witnesses from each hop proof envelope.
+The combined builders reject native witness-count
+mismatches before native preflight or hop proof decoding, the public preflight
+rejects empty witness batches directly, and native preflight then rejects
+wrong-width witness/parameter pairings, transcript, reduction, accumulator, or
+final-term splices before constructing reserved-mode evidence whose digest is
+profile-bound and hop-proof-hash-bound.
 Native Pasta/Fp scalar decomposition, fixed-window scalar decomposition,
 fixed-window Vesta point selection, table derivation, and scalar-multiplication
 composition, fixed-window multi-term MSM, native IPA scalar/vector-fold, full
 `b`-vector reduction, bounded MSM, fixed-window final IPA MSM, IPA
 generator-fold, round-accumulator, and final IPA comparison composition plus
-one-round and generic multi-round verifier composition with transcript binding
-are present. The remaining recursive-circuit work is producing production-width
-composed circuit evidence and private-hop recursive aggregation, so aggregation
-mode `2` remains a reserved wire value with a stable rejection reason, and
-public prover/verifier entry points accept only checked pre-fold mode `1`.
+one-round and generic multi-round verifier composition with transcript binding,
+native Pallas witness translation, batch preflight binding, and reserved-mode
+recursive aggregation evidence binding are present. The
+remaining recursive-circuit work is producing production-width composed circuit
+evidence and private-hop recursive aggregation, so aggregation mode `2` remains a
+reserved wire value with a stable rejection reason, and public prover/verifier
+entry points accept only checked pre-fold mode `1`.
