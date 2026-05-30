@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -95,6 +95,37 @@ function readLiteralTableEntries(artifactBytes) {
   }
 
   return [];
+}
+
+function discoverKotodamaCorpusFiles(relativeRoot) {
+  const rootUrl = new URL(`../../../${relativeRoot}/`, import.meta.url);
+  const files = [];
+  const walk = (dirUrl, relativeDir) => {
+    for (const entry of readdirSync(dirUrl, { withFileTypes: true })) {
+      const relativePath = `${relativeDir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        walk(new URL(`${entry.name}/`, dirUrl), relativePath);
+      } else if (entry.isFile() && entry.name.endsWith(".ko")) {
+        files.push(relativePath);
+      }
+    }
+  };
+
+  walk(rootUrl, relativeRoot);
+  return files.sort();
+}
+
+function discoverTrackedKotodamaCorpusFiles() {
+  return [
+    "crates/ivm/docs/examples",
+    "crates/ivm/tests/data",
+    "crates/kotodama_lang/src/samples",
+    "demo",
+    "docs/portal/static/norito-snippets",
+    "examples",
+    "fuzz/attachments/zk/kotodama",
+    "tools/kotodama_linguist/samples",
+  ].flatMap((relativeRoot) => discoverKotodamaCorpusFiles(relativeRoot)).sort();
 }
 
 function noritoPayloadBody(payload) {
@@ -9927,6 +9958,8 @@ test("Kotodama compiler SDK matches docs struct-state budget rows", () => {
     "utf8",
   );
   const compiled = compileKotodamaProgram(source, { sourceName: "09_struct_and_state.ko" });
+  const code = readArtifactCode(compiled.artifactBytes);
+  const impl = compiled.budgetReport.find((entry) => entry.function_name === "__entrypoint_impl__set_pair");
 
   assert.deepEqual(compiled.diagnostics, []);
   assert.deepEqual(
@@ -9938,6 +9971,14 @@ test("Kotodama compiler SDK matches docs struct-state budget rows", () => {
     [
       ["set_pair", 480, 40],
       ["__entrypoint_impl__set_pair", 576, 64],
+    ],
+  );
+  assert.ok(impl);
+  assert.deepEqual(
+    [50, 75].map((rel) => code.readUInt32LE(impl.pc_start + rel * 4)),
+    [
+      ivmWord(0x20, 9, 10, 0),
+      ivmWord(0x20, 11, 9, 0),
     ],
   );
 });
@@ -10013,6 +10054,232 @@ test("Kotodama compiler SDK matches docs range-for budget rows", () => {
   );
 });
 
+test("Kotodama compiler SDK matches Rust register-and-mint literal local rows", () => {
+  const cases = [
+    [
+      "register_only_literal_locals",
+      'seiyaku T { kotoage fn f() permission(Admin) { let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"); let symbol = "ROSE"; let qty = 1000; let mintable = 1; register_asset(asset, symbol, qty, mintable); } }',
+      [["f", 288, 48]],
+    ],
+    [
+      "direct_literal_int_info",
+      "seiyaku T { kotoage fn f() { let qty = 1000; info(qty); } }",
+      [["f", 76, 24]],
+    ],
+    [
+      "direct_literal_int_return",
+      "seiyaku T { kotoage fn f() -> int { let qty = 1000; return qty; } }",
+      [["f", 60, 16]],
+    ],
+    [
+      "docs_shaped_register_and_mint",
+      'seiyaku RegisterAndMint { kotoage fn register_and_mint() permission(AssetManager) { let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"); let symbol = "ROSE"; let qty = 1000; let mintable = 1; register_asset(asset, symbol, qty, mintable); let to = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"); mint_asset(to, asset, 250); } }',
+      [["register_and_mint", 560, 48]],
+    ],
+  ];
+
+  for (const [name, source, rows] of cases) {
+    const sourcePath = `/tmp/${name}.ko`;
+    const compiled = compileKotodamaProgram(source, { sourceName: sourcePath });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => ({
+        function_name: entry.function_name,
+        bytecode_bytes: entry.bytecode_bytes,
+        frame_bytes: entry.frame_bytes,
+        source_path: entry.source_path,
+      })),
+      rows.map(([functionName, bytecodeBytes, frameBytes]) => ({
+        function_name: functionName,
+        bytecode_bytes: bytecodeBytes,
+        frame_bytes: frameBytes,
+        source_path: sourcePath,
+      })),
+    );
+  }
+});
+
+test("Kotodama compiler SDK matches docs register-and-mint budget rows", () => {
+  const source = readFileSync(
+    new URL("../../../crates/ivm/docs/examples/13_register_and_mint.ko", import.meta.url),
+    "utf8",
+  );
+  const compiled = compileKotodamaProgram(source, { sourceName: "13_register_and_mint.ko" });
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(
+    compiled.budgetReport.map((entry) => ([
+      entry.function_name,
+      entry.bytecode_bytes,
+      entry.frame_bytes,
+    ])),
+    [["register_and_mint", 560, 48]],
+  );
+});
+
+test("Kotodama compiler SDK matches Rust ZK and direct mint frame rows", () => {
+  const account = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+  const asset = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+  const proof = 'norito_bytes("ENV-UNSHIELD")';
+  const proofEnv = 'norito_bytes("ENV-SHIELD")';
+  const cases = [
+    [
+      "zk_then_set_detail_direct_all",
+      `fn run() { zk_verify_unshield(${proof}); set_account_detail(account!("${account}"), name!("zk_demo"), json!{ attempt: true }); }`,
+      [["run", 448, 32]],
+    ],
+    [
+      "account_zk_then_set_detail_local_name",
+      `fn run() { let to = account!("${account}"); let key = name!("zk_demo"); zk_verify_unshield(${proof}); set_account_detail(to, key, json!{ attempt: true }); }`,
+      [["run", 448, 32]],
+    ],
+    [
+      "mint_direct_no_meta",
+      `fn run() { mint_asset(account!("${account}"), asset_definition!("${asset}"), 1); }`,
+      [["run", 268, 40]],
+    ],
+    [
+      "zk_then_mint_direct",
+      `fn run() { zk_verify_transfer(${proofEnv}); mint_asset(account!("${account}"), asset_definition!("${asset}"), 1); }`,
+      [["run", 376, 40]],
+    ],
+    [
+      "to_proof_key_info_zk_set",
+      `fn run() { let to = account!("${account}"); let proof = ${proof}; let key = name!("zk_demo"); info("check"); zk_verify_unshield(proof); set_account_detail(to, key, json!{ attempt: true }); }`,
+      [["run", 556, 40]],
+    ],
+  ];
+
+  for (const [name, source, rows] of cases) {
+    const sourcePath = `/tmp/${name}.ko`;
+    const compiled = compileKotodamaProgram(source, { sourceName: sourcePath });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => ({
+        function_name: entry.function_name,
+        bytecode_bytes: entry.bytecode_bytes,
+        frame_bytes: entry.frame_bytes,
+        source_path: entry.source_path,
+      })),
+      rows.map(([functionName, bytecodeBytes, frameBytes]) => ({
+        function_name: functionName,
+        bytecode_bytes: bytecodeBytes,
+        frame_bytes: frameBytes,
+        source_path: sourcePath,
+      })),
+    );
+  }
+});
+
+test("Kotodama compiler SDK matches ZK attachment budget rows", () => {
+  const cases = [
+    [
+      "fuzz/attachments/zk/kotodama/zk_shield_example.ko",
+      [["run", 924, 40]],
+    ],
+    [
+      "fuzz/attachments/zk/kotodama/zk_unshield_verify_example.ko",
+      [["run", 772, 40]],
+    ],
+  ];
+
+  for (const [sourcePath, rows] of cases) {
+    const source = readFileSync(new URL(`../../../${sourcePath}`, import.meta.url), "utf8");
+    const compiled = compileKotodamaProgram(source, { sourceName: sourcePath });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => ([
+        entry.function_name,
+        entry.bytecode_bytes,
+        entry.frame_bytes,
+      ])),
+      rows,
+    );
+  }
+});
+
+test("Kotodama compiler SDK matches Rust wrapped void for-loop control rows", () => {
+  const cases = [
+    [
+      "loop_empty",
+      "seiyaku Example { kotoage fn control(a, b) { for let i = a; i < b; ++i { } } }",
+      [
+        ["control", 480, 40],
+        ["__entrypoint_impl__control", 728, 64],
+      ],
+    ],
+    [
+      "loop_if_no_else",
+      "seiyaku Example { kotoage fn control(a, b) { for let i = a; i < b; ++i { if i == b { info(i); } } } }",
+      [
+        ["control", 480, 40],
+        ["__entrypoint_impl__control", 1160, 64],
+      ],
+    ],
+    [
+      "loop_if_empty_else",
+      "seiyaku Example { kotoage fn control(a, b) { for let i = a; i < b; ++i { if i == b { } else { } } } }",
+      [
+        ["control", 480, 40],
+        ["__entrypoint_impl__control", 1136, 64],
+      ],
+    ],
+    [
+      "loop_if_poseidon_valcom",
+      "seiyaku Example { kotoage fn control(a, b) { for let i = a; i < b; ++i { if i == b { let c = poseidon2(i, b); } else { let c = valcom(i, b); } } } }",
+      [
+        ["control", 480, 40],
+        ["__entrypoint_impl__control", 1144, 64],
+      ],
+    ],
+  ];
+
+  for (const [name, source, rows] of cases) {
+    const sourcePath = `/tmp/${name}.ko`;
+    const compiled = compileKotodamaProgram(source, { sourceName: sourcePath });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => ({
+        function_name: entry.function_name,
+        bytecode_bytes: entry.bytecode_bytes,
+        frame_bytes: entry.frame_bytes,
+        source_path: entry.source_path,
+      })),
+      rows.map(([functionName, bytecodeBytes, frameBytes]) => ({
+        function_name: functionName,
+        bytecode_bytes: bytecodeBytes,
+        frame_bytes: frameBytes,
+        source_path: sourcePath,
+      })),
+    );
+  }
+});
+
+test("Kotodama compiler SDK matches control-flow fixture budget rows", () => {
+  const source = readFileSync(
+    new URL("../../../crates/ivm/tests/data/control.ko", import.meta.url),
+    "utf8",
+  );
+  const compiled = compileKotodamaProgram(source, { sourceName: "control.ko" });
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(
+    compiled.budgetReport.map((entry) => ([
+      entry.function_name,
+      entry.bytecode_bytes,
+      entry.frame_bytes,
+    ])),
+    [
+      ["control", 480, 40],
+      ["__entrypoint_impl__control", 1144, 64],
+    ],
+  );
+});
+
 test("Kotodama compiler SDK matches Rust local map frame rows", () => {
   const cases = [
     [
@@ -10079,6 +10346,231 @@ test("Kotodama compiler SDK matches docs map-ops budget rows", () => {
       entry.frame_bytes,
     ])),
     [["map_example", 100, 32]],
+  );
+});
+
+test("Kotodama compiler SDK matches Rust static durable map iteration rows", () => {
+  const cases = [
+    [
+      "state_map_take_empty",
+      "seiyaku T { state Entries: Map<int, int>; kotoage fn f() -> int { let acc = 0; for (k, v) in Entries.take(2) { } return acc; } }",
+      [["f", 924, 64]],
+    ],
+    [
+      "state_map_take_value",
+      "seiyaku T { state Entries: Map<int, int>; kotoage fn f() -> int { let acc = 0; for (k, v) in Entries.take(2) { acc = acc + v; } return acc; } }",
+      [["f", 928, 64]],
+    ],
+    [
+      "state_map_take_increment_literal",
+      "seiyaku T { state Entries: Map<int, int>; kotoage fn f() -> int { let acc = 0; for (k, v) in Entries.take(2) { acc = acc + 1; } return acc; } }",
+      [["f", 936, 64]],
+    ],
+  ];
+
+  for (const [name, source, rows] of cases) {
+    const sourcePath = `/tmp/${name}.ko`;
+    const compiled = compileKotodamaProgram(source, { sourceName: sourcePath });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => ({
+        function_name: entry.function_name,
+        bytecode_bytes: entry.bytecode_bytes,
+        frame_bytes: entry.frame_bytes,
+        source_path: entry.source_path,
+      })),
+      rows.map(([functionName, bytecodeBytes, frameBytes]) => ({
+        function_name: functionName,
+        bytecode_bytes: bytecodeBytes,
+        frame_bytes: frameBytes,
+        source_path: sourcePath,
+      })),
+    );
+  }
+});
+
+test("Kotodama compiler SDK matches docs/example static map iteration rows", () => {
+  const cases = [
+    [
+      "../../../crates/ivm/docs/examples/14_map_sum_take2.ko",
+      "14_map_sum_take2.ko",
+      [["sum_two", 928, 64]],
+    ],
+    [
+      "../../../examples/map/map.ko",
+      "map.ko",
+      [["sum_first_two", 928, 64]],
+    ],
+  ];
+
+  for (const [relativePath, sourceName, rows] of cases) {
+    const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+    const compiled = compileKotodamaProgram(source, { sourceName });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => ([
+        entry.function_name,
+        entry.bytecode_bytes,
+        entry.frame_bytes,
+      ])),
+      rows,
+    );
+  }
+});
+
+test("Kotodama compiler SDK matches Rust static NFT syscall rows", () => {
+  const owner = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+  const recipient = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
+  const nft = "n0$wonderland.universal";
+  const cases = [
+    [
+      "nft_id_local",
+      `seiyaku NftFlow { kotoage fn f() permission(NftAuthority) { let nft = nft_id!("${nft}"); } }`,
+      [["f", 8, 16]],
+    ],
+    [
+      "nft_mint",
+      `seiyaku NftFlow { kotoage fn f() permission(NftAuthority) { let owner = account!("${owner}"); let nft = nft_id!("${nft}"); nft_mint_asset(nft, owner); } }`,
+      [["f", 232, 24]],
+    ],
+    [
+      "nft_mint_transfer",
+      `seiyaku NftFlow { kotoage fn f() permission(NftAuthority) { let owner = account!("${owner}"); let nft = nft_id!("${nft}"); nft_mint_asset(nft, owner); let to = account!("${recipient}"); nft_transfer_asset(owner, nft, to); } }`,
+      [["f", 564, 32]],
+    ],
+    [
+      "nft_full",
+      `seiyaku NftFlow { kotoage fn f() permission(NftAuthority) { let owner = account!("${owner}"); let nft = nft_id!("${nft}"); nft_mint_asset(nft, owner); let to = account!("${recipient}"); nft_transfer_asset(owner, nft, to); nft_set_metadata(nft, name!("issued"), json!{ issued: "demo" }); nft_burn_asset(nft); } }`,
+      [["f", 1008, 32]],
+    ],
+  ];
+
+  for (const [name, source, rows] of cases) {
+    const sourcePath = `/tmp/${name}.ko`;
+    const compiled = compileKotodamaProgram(source, { sourceName: sourcePath });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => ({
+        function_name: entry.function_name,
+        bytecode_bytes: entry.bytecode_bytes,
+        frame_bytes: entry.frame_bytes,
+        source_path: entry.source_path,
+      })),
+      rows.map(([functionName, bytecodeBytes, frameBytes]) => ({
+        function_name: functionName,
+        bytecode_bytes: bytecodeBytes,
+        frame_bytes: frameBytes,
+        source_path: sourcePath,
+      })),
+    );
+  }
+});
+
+test("Kotodama compiler SDK matches docs NFT-flow rows", () => {
+  const cases = [
+    [
+      "../../../crates/ivm/docs/examples/12_nft_flow.ko",
+      "12_nft_flow.ko",
+      [["nft_issue_and_transfer", 1008, 32]],
+    ],
+    [
+      "../../../docs/portal/static/norito-snippets/nft-flow.ko",
+      "nft-flow.ko",
+      [["nft_issue_and_transfer", 1008, 32]],
+    ],
+  ];
+
+  for (const [relativePath, sourceName, rows] of cases) {
+    const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+    const compiled = compileKotodamaProgram(source, { sourceName });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => ([
+        entry.function_name,
+        entry.bytecode_bytes,
+        entry.frame_bytes,
+      ])),
+      rows,
+    );
+  }
+});
+
+test("Kotodama compiler SDK matches Rust raw asset helper rows", () => {
+  const cases = [
+    [
+      "raw_if_arith",
+      "fn f(src_balance: int, dst_balance: int, wad: int) { if src_balance >= wad { let new_src = src_balance - wad; let new_dst = dst_balance + wad; } else { assert_eq(1, 0); } }",
+      [["f", 488, 64]],
+    ],
+    [
+      "raw_transfer_if",
+      "fn transfer(src_balance: int, dst_balance: int, from_account: AccountId, to_account: AccountId, asset: AssetDefinitionId, wad: int) { if src_balance >= wad { let new_src = src_balance - wad; let new_dst = dst_balance + wad; transfer_asset(from_account, to_account, asset, wad); } else { assert_eq(1, 0); } }",
+      [["transfer", 596, 112]],
+    ],
+    [
+      "helper_mint",
+      "fn entry() { } fn mint(account: AccountId, asset: AssetDefinitionId, wad: int) { mint_asset(account, asset, wad); }",
+      [["entry", 8, 8], ["mint", 248, 64]],
+    ],
+    [
+      "helper_burn_if",
+      "fn entry() { } fn burn(balance: int, total_supply: int, account: AccountId, asset: AssetDefinitionId, wad: int) { if balance >= wad { let new_balance = balance - wad; let new_supply = total_supply - wad; burn_asset(account, asset, wad); } else { assert_eq(1, 0); } }",
+      [["entry", 8, 8], ["burn", 736, 96]],
+    ],
+    [
+      "helper_transfer_nested",
+      "fn entry() { } fn transfer_from(src_balance: int, dst_balance: int, allowance: int, from_account: AccountId, to_account: AccountId, asset: AssetDefinitionId, wad: int) { if src_balance >= wad { if allowance >= wad { let new_src = src_balance - wad; let new_dst = dst_balance + wad; let new_allowance = allowance - wad; transfer_asset(from_account, to_account, asset, wad); } else { assert_eq(1, 0); } } else { assert_eq(1, 0); } }",
+      [["entry", 8, 8], ["transfer_from", 1240, 128]],
+    ],
+  ];
+
+  for (const [name, source, rows] of cases) {
+    const sourcePath = `/tmp/${name}.ko`;
+    const compiled = compileKotodamaProgram(source, { sourceName: sourcePath });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => ({
+        function_name: entry.function_name,
+        bytecode_bytes: entry.bytecode_bytes,
+        frame_bytes: entry.frame_bytes,
+        source_path: entry.source_path,
+      })),
+      rows.map(([functionName, bytecodeBytes, frameBytes]) => ({
+        function_name: functionName,
+        bytecode_bytes: bytecodeBytes,
+        frame_bytes: frameBytes,
+        source_path: sourcePath,
+      })),
+    );
+  }
+});
+
+test("Kotodama compiler SDK matches Rust DAI budget rows", () => {
+  const source = readFileSync(
+    new URL("../../../crates/ivm/tests/data/dai.ko", import.meta.url),
+    "utf8",
+  );
+  const compiled = compileKotodamaProgram(source, { sourceName: "dai.ko" });
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(
+    compiled.budgetReport.map((entry) => ([
+      entry.function_name,
+      entry.bytecode_bytes,
+      entry.frame_bytes,
+    ])),
+    [
+      ["transfer", 596, 112],
+      ["approve", 44, 32],
+      ["transfer_from", 1136, 128],
+      ["mint", 144, 64],
+      ["burn", 1048, 96],
+    ],
   );
 });
 
@@ -11564,6 +12056,100 @@ test("Kotodama compiler SDK keeps PredictionMarket direct account intervals Rust
       ivmWord(0x41, 6, 0, 26),
     ],
   );
+});
+
+test("Kotodama compiler SDK matches the tracked upstream corpus budget shape", () => {
+  const rustBudgetRows = new Map([
+    ["crates/ivm/docs/examples/01_hajimari.ko", [["hajimari", 116, 16]]],
+    ["crates/ivm/docs/examples/02_kotoage_public_fn.ko", [["inc", 356, 32], ["__entrypoint_impl__inc", 196, 40]]],
+    ["crates/ivm/docs/examples/03_kaizen_permission.ko", [["kaizen", 124, 24]]],
+    ["crates/ivm/docs/examples/04_foreach_map.ko", null],
+    ["crates/ivm/docs/examples/05_range_for.ko", [["sum_to", 356, 32], ["__entrypoint_impl__sum_to", 772, 56]]],
+    ["crates/ivm/docs/examples/06_map_ops.ko", [["map_example", 100, 32]]],
+    ["crates/ivm/docs/examples/07_set_detail_authority.ko", [["write_cursor", 256, 32]]],
+    ["crates/ivm/docs/examples/08_call_transfer_asset.ko", [["pay", 376, 48]]],
+    ["crates/ivm/docs/examples/09_struct_and_state.ko", [["set_pair", 480, 40], ["__entrypoint_impl__set_pair", 576, 64]]],
+    ["crates/ivm/docs/examples/10_meta_header.ko", [["hajimari", 52, 32]]],
+    ["crates/ivm/docs/examples/11_detail_and_transfer.ko", [["set_cursor_and_transfer", 624, 48]]],
+    ["crates/ivm/docs/examples/12_nft_flow.ko", [["nft_issue_and_transfer", 1008, 32]]],
+    ["crates/ivm/docs/examples/13_register_and_mint.ko", [["register_and_mint", 560, 48]]],
+    ["crates/ivm/docs/examples/14_map_sum_take2.ko", [["sum_two", 928, 64]]],
+    ["crates/ivm/docs/examples/15_modulo.ko", [["remainder", 488, 40], ["__entrypoint_impl__remainder", 196, 48]]],
+    ["crates/ivm/docs/examples/16_dynamic_take.ko", [["bounded_take_sum", 356, 32], ["__entrypoint_impl__bounded_take_sum", 1212, 72]]],
+    ["crates/ivm/docs/examples/16_register_domain.ko", null],
+    ["crates/ivm/docs/examples/17_dynamic_range.ko", [["bounded_range_sum", 488, 40], ["__entrypoint_impl__bounded_range_sum", 1248, 80]]],
+    ["crates/ivm/docs/examples/18_ternary.ko", [["choose_min", 488, 40], ["__entrypoint_impl__choose_min", 640, 56]]],
+    ["crates/ivm/docs/examples/19_contract_flow_test.ko", [["hajimari", 156, 24], ["increment", 320, 32], ["remember_caller", 188, 24], ["reject_me", 368, 24]]],
+    ["crates/ivm/docs/examples/19_contract_flow_test.test.ko", null],
+    ["crates/ivm/tests/data/add.ko", [["add", 480, 40], ["__entrypoint_impl__add", 168, 48]]],
+    ["crates/ivm/tests/data/amm.ko", [["swap", 612, 48], ["__entrypoint_impl__swap", 204, 72]]],
+    ["crates/ivm/tests/data/complex.ko", [["complex", 480, 40], ["__entrypoint_impl__complex", 192, 56]]],
+    ["crates/ivm/tests/data/control.ko", [["control", 480, 40], ["__entrypoint_impl__control", 1144, 64]]],
+    ["crates/ivm/tests/data/dai.ko", [["transfer", 596, 112], ["approve", 44, 32], ["transfer_from", 1136, 128], ["mint", 144, 64], ["burn", 1048, 96]]],
+    ["crates/ivm/tests/data/mfc.ko", [["main", 940, 72], ["send_mfc", 364, 72], ["loop_mfc", 1000, 72], ["mfc_asset", 452, 16]]],
+    ["crates/kotodama_lang/src/samples/asset_ops.ko", [["execute", 600, 48]]],
+    ["crates/kotodama_lang/src/samples/create_nft_for_every_user_trigger.ko", [["run", 16, 16]]],
+    ["crates/kotodama_lang/src/samples/dex_contract.ko", [["swap", 1148, 80], ["quote_sell", 228, 72], ["__entrypoint_impl__swap", 688, 128]]],
+    ["crates/kotodama_lang/src/samples/dex_simple.ko", [["swap", 1148, 80], ["quote_sell", 228, 72], ["__entrypoint_impl__swap", 480, 128], ["__entrypoint_impl__order_id", 92, 48], ["order_id", 948, 40]]],
+    ["crates/kotodama_lang/src/samples/domain_ops.ko", [["run", 364, 24]]],
+    ["crates/kotodama_lang/src/samples/irohaswap.ko", [["init_pool", 876, 64], ["min", 536, 48], ["reserve_of", 800, 64], ["ensure_pool", 332, 40], ["__entrypoint_impl__init_pool", 2056, 112], ["__entrypoint_impl__deposit_liquidity", 3532, 168], ["deposit_liquidity", 804, 56], ["__entrypoint_impl__withdraw_liquidity", 3124, 144], ["withdraw_liquidity", 664, 48], ["__entrypoint_impl__swap", 4480, 160], ["swap", 1992, 64]]],
+    ["crates/kotodama_lang/src/samples/kotodama_jp.ko", [["hajimari", 116, 16], ["__entrypoint_impl__swap", 548, 144], ["swap", 1440, 80]]],
+    ["crates/kotodama_lang/src/samples/lending_simple.ko", [["borrow", 1140, 80], ["collateral_ratio_bps", 684, 56], ["__entrypoint_impl__borrow", 788, 120], ["__entrypoint_impl__repay", 244, 80], ["repay", 1220, 56]]],
+    ["crates/kotodama_lang/src/samples/mint_rose_trigger.ko", [["run", 168, 32]]],
+    ["crates/kotodama_lang/src/samples/native_escrow.ko", [["main", 8, 8], ["__entrypoint_impl__open_offer", 284, 72], ["open_offer", 664, 48], ["__entrypoint_impl__accept", 52, 24], ["accept", 384, 32], ["__entrypoint_impl__mark_payment_sent", 52, 24], ["mark_payment_sent", 384, 32], ["__entrypoint_impl__release", 52, 24], ["release", 384, 32], ["__entrypoint_impl__cancel", 52, 24], ["cancel", 384, 32], ["__entrypoint_impl__dispute", 56, 24], ["dispute", 384, 32], ["__entrypoint_impl__resolve_dispute", 160, 64], ["resolve_dispute", 2120, 48]]],
+    ["crates/kotodama_lang/src/samples/perp_funding.ko", [["settle_funding", 1140, 80], ["funding_payment", 224, 80], ["__entrypoint_impl__settle_funding", 864, 128], ["__entrypoint_impl__is_liquidatable", 676, 72], ["is_liquidatable", 1088, 48]]],
+    ["crates/kotodama_lang/src/samples/query_assets_and_save_cursor.ko", [["run", 256, 32]]],
+    ["crates/kotodama_lang/src/samples/smart_contract_can_filter_queries.ko", [["run", 256, 32]]],
+    ["crates/kotodama_lang/src/samples/stablecoin_simple.ko", [["mintable_amount", 620, 48], ["__entrypoint_impl__mintable_amount", 200, 64], ["__entrypoint_impl__mint_stable", 928, 144], ["mint_stable", 1676, 88]]],
+    ["crates/kotodama_lang/src/samples/subscription_billing_trigger.ko", null],
+    ["crates/kotodama_lang/src/samples/subscription_usage_recorder.ko", null],
+    ["crates/kotodama_lang/src/samples/threshold_escrow.ko", [["main", 8, 8], ["assert_unopened", 776, 32], ["assert_open", 772, 32], ["assert_payer", 320, 32], ["__entrypoint_impl__open_escrow", 2140, 40], ["open_escrow", 384, 32], ["__entrypoint_impl__deposit", 1208, 64], ["deposit", 384, 32], ["release_if_ready", 1176, 48], ["refund", 2320, 48]]],
+    ["crates/kotodama_lang/src/samples/trigger_cat_and_mouse.ko", [["run", 28, 16]]],
+    ["crates/kotodama_lang/src/samples/tuple_return_demo.ko", [["compute", 432, 48], ["pair", 300, 80]]],
+    ["crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko", [["demo", 1088, 80], ["verify_and_submit_ballot", 268, 40], ["verify_and_unshield", 476, 40]]],
+    ["demo/authority_probe.ko", [["main", 1024, 40]]],
+    ["demo/ivm_smoke.ko", [["main", 376, 48]]],
+    ["demo/prediction_market.ko", [["main", 6992, 88], ["hajimari", 572, 24]]],
+    ["docs/portal/static/norito-snippets/call-transfer-asset.ko", [["pay", 376, 48]]],
+    ["docs/portal/static/norito-snippets/hajimari-entrypoint.ko", [["hajimari", 116, 16]]],
+    ["docs/portal/static/norito-snippets/nft-flow.ko", [["nft_issue_and_transfer", 1008, 32]]],
+    ["docs/portal/static/norito-snippets/register-and-mint.ko", [["register_and_mint", 560, 48]]],
+    ["docs/portal/static/norito-snippets/threshold-escrow.ko", [["main", 8, 8], ["assert_unopened", 776, 32], ["assert_open", 772, 32], ["assert_payer", 320, 32], ["__entrypoint_impl__open_escrow", 2140, 40], ["open_escrow", 384, 32], ["__entrypoint_impl__deposit", 1208, 64], ["deposit", 384, 32], ["release_if_ready", 1176, 48], ["refund", 2320, 48]]],
+    ["docs/portal/static/norito-snippets/transfer-asset.ko", [["do_transfer", 376, 48]]],
+    ["examples/hello/hello.ko", [["main", 220, 16], ["hajimari", 136, 16], ["write_detail", 500, 32]]],
+    ["examples/map/map.ko", [["sum_first_two", 928, 64]]],
+    ["examples/nft/nft.ko", null],
+    ["examples/transfer/transfer.ko", [["do_transfer", 376, 48]]],
+    ["fuzz/attachments/zk/kotodama/zk_shield_example.ko", [["run", 924, 40]]],
+    ["fuzz/attachments/zk/kotodama/zk_unshield_verify_example.ko", [["run", 772, 40]]],
+    ["tools/kotodama_linguist/samples/pool_manager.ko", null],
+    ["tools/kotodama_linguist/samples/treasury_sweep.ko", null],
+    ["tools/kotodama_linguist/samples/zk_bridge.ko", null],
+  ]);
+
+  assert.deepEqual(discoverTrackedKotodamaCorpusFiles(), [...rustBudgetRows.keys()].sort());
+
+  for (const [relativePath, expectedRows] of rustBudgetRows) {
+    const source = readFileSync(new URL(`../../../${relativePath}`, import.meta.url), "utf8");
+    const sourceName = relativePath.split("/").at(-1);
+    const compiled = compileKotodamaProgram(source, { sourceName });
+
+    if (expectedRows === null) {
+      assert.notDeepEqual(compiled.diagnostics, [], `${relativePath} should fail like Rust`);
+      continue;
+    }
+
+    assert.deepEqual(compiled.diagnostics, [], relativePath);
+    assert.deepEqual(
+      compiled.budgetReport.map((entry) => [
+        entry.function_name,
+        entry.bytecode_bytes,
+        entry.frame_bytes,
+      ]),
+      expectedRows,
+      relativePath,
+    );
+  }
 });
 
 test("Kotodama parity source normalization is exported by the SDK", () => {
