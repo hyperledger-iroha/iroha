@@ -33,12 +33,26 @@ public final class KagemushaCompactPaymentTokenProver {
   }
 
   private static boolean loadLibrary() {
+    return detectNativeAvailability(
+        () -> System.loadLibrary(LIBRARY_NAME),
+        () -> nativeProveVerifiedCompactPaymentTokenWithRecords(new byte[0]));
+  }
+
+  static boolean detectNativeAvailability(
+      final NativeProbe loadLibrary, final NativeProbe probeSymbol) {
     try {
-      System.loadLibrary(LIBRARY_NAME);
+      loadLibrary.run();
+      probeSymbol.run();
+      return true;
+    } catch (final IllegalArgumentException error) {
       return true;
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     }
+  }
+
+  interface NativeProbe {
+    void run();
   }
 
   private static native byte[] nativeProveVerifiedCompactPaymentTokenWithRecords(

@@ -78,7 +78,8 @@ pub fn is_supported_kagemusha_proof_backend(backend: &str) -> bool {
 fn is_trusted_setup_kagemusha_backend(backend: &str) -> bool {
     let backend = backend.to_ascii_lowercase();
     let backend = backend.as_str();
-    backend == "groth16"
+    has_trusted_setup_kagemusha_backend_segment(backend)
+        || backend == "groth16"
         || backend.starts_with("groth16/")
         || backend == "kzg"
         || backend.starts_with("kzg/")
@@ -98,6 +99,17 @@ fn is_trusted_setup_kagemusha_backend(backend: &str) -> bool {
         || backend.starts_with("halo2/kzg/")
         || backend.contains("/kzg")
         || backend.contains(":kzg")
+}
+
+fn has_trusted_setup_kagemusha_backend_segment(backend: &str) -> bool {
+    backend
+        .split(|ch: char| ch == '/' || ch == ':' || ch.is_ascii_whitespace())
+        .any(|segment| {
+            matches!(
+                segment,
+                "groth16" | "kzg" | "bn254" | "bn256" | "bls12" | "bls12_381" | "bls12-381"
+            )
+        })
 }
 
 fn is_developer_only_kagemusha_backend(backend: &str) -> bool {
@@ -253,6 +265,18 @@ pub enum KagemushaFoldError {
         /// Zero-based hop index where the zero digest was detected.
         hop_index: usize,
     },
+    /// A folded transcript Merkle root is all-zero.
+    ZeroFoldedRoot {
+        /// Name of the all-zero root field.
+        field: &'static str,
+    },
+    /// A folded hop root transition does not change the Merkle root.
+    UnchangedFoldedRootTransition {
+        /// Zero-based hop index where the unchanged transition was detected.
+        hop_index: usize,
+    },
+    /// Folded public inputs carry the same initial and final root.
+    UnchangedFoldedPublicRoots,
     /// A direct aggregation transcript statement has a non-canonical hop count.
     HopCountMismatch {
         /// Expected hop count from the statement step list.
@@ -306,6 +330,16 @@ pub enum KagemushaFoldError {
         expected: Hash,
         /// Hash declared by the folded proof.
         actual: Hash,
+    },
+    /// Folded public inputs are not the canonical projection of the aggregation transcript.
+    FoldedPublicInputTranscriptMismatch {
+        /// Name of the mismatched folded public-input field.
+        field: &'static str,
+    },
+    /// A folded public-input digest column group is all-zero.
+    ZeroFoldedPublicInputDigest {
+        /// Name of the all-zero folded public-input digest field.
+        field: &'static str,
     },
     /// Folded public inputs exceed the compact-token public transcript size budget.
     EncodedSizeExceeded {
@@ -420,6 +454,19 @@ impl core::fmt::Display for KagemushaFoldError {
                 f,
                 "Kagemusha fold hop {hop_index} has a zero verifier-key Poseidon2 digest"
             ),
+            Self::ZeroFoldedRoot { field } => {
+                write!(f, "Kagemusha folded root field {field:?} must be non-zero")
+            }
+            Self::UnchangedFoldedRootTransition { hop_index } => {
+                write!(
+                    f,
+                    "Kagemusha fold hop {hop_index} must change the Merkle root"
+                )
+            }
+            Self::UnchangedFoldedPublicRoots => write!(
+                f,
+                "Kagemusha folded public inputs require distinct initial and final roots"
+            ),
             Self::HopCountMismatch { expected, actual } => write!(
                 f,
                 "Kagemusha aggregation transcript hop_count must be {expected} (found {actual})"
@@ -451,6 +498,14 @@ impl core::fmt::Display for KagemushaFoldError {
             Self::PublicInputHashMismatch { .. } => write!(
                 f,
                 "Kagemusha folded proof public-input hash does not match the compact token"
+            ),
+            Self::FoldedPublicInputTranscriptMismatch { field } => write!(
+                f,
+                "Kagemusha folded public input field {field:?} does not match the aggregation transcript"
+            ),
+            Self::ZeroFoldedPublicInputDigest { field } => write!(
+                f,
+                "Kagemusha folded public input digest field {field:?} must be non-zero"
             ),
             Self::EncodedSizeExceeded { max, actual } => write!(
                 f,
@@ -1637,6 +1692,27 @@ fn validate_kagemusha_step_digest_bindings(
     Ok(())
 }
 
+fn validate_kagemusha_fold_root(
+    field: &'static str,
+    root: [u8; Hash::LENGTH],
+) -> Result<(), KagemushaFoldError> {
+    if root == [0u8; Hash::LENGTH] {
+        return Err(KagemushaFoldError::ZeroFoldedRoot { field });
+    }
+    Ok(())
+}
+
+fn validate_kagemusha_root_transition(
+    hop_index: usize,
+    root_before: [u8; Hash::LENGTH],
+    root_after: [u8; Hash::LENGTH],
+) -> Result<(), KagemushaFoldError> {
+    if root_before == root_after {
+        return Err(KagemushaFoldError::UnchangedFoldedRootTransition { hop_index });
+    }
+    Ok(())
+}
+
 fn validate_kagemusha_verifier_key_id(
     hop_index: usize,
     verifier_key_id: &VerifyingKeyId,
@@ -1679,6 +1755,11 @@ fn validate_kagemusha_aggregation_transcript_statement(
     }
 
     let first = statement.steps.first().expect("validated non-empty steps");
+    validate_kagemusha_fold_root("initial_root", statement.initial_root)?;
+    validate_kagemusha_fold_root("final_root", statement.final_root)?;
+    if statement.initial_root == statement.final_root {
+        return Err(KagemushaFoldError::UnchangedFoldedPublicRoots);
+    }
     if statement.initial_root != first.root_before {
         return Err(KagemushaFoldError::InitialRootMismatch {
             expected: first.root_before,
@@ -1696,6 +1777,9 @@ fn validate_kagemusha_aggregation_transcript_statement(
                 actual: step.hop_index,
             });
         }
+        validate_kagemusha_fold_root("root_before", step.root_before)?;
+        validate_kagemusha_fold_root("root_after", step.root_after)?;
+        validate_kagemusha_root_transition(hop_index, step.root_before, step.root_after)?;
         validate_kagemusha_verifier_key_id(hop_index, &step.verifier_key_id)?;
         validate_kagemusha_step_shape_and_sets(
             hop_index,
@@ -1765,6 +1849,7 @@ fn kagemusha_canonical_fold_parts(
     }
 
     let initial_root = steps[0].root_before;
+    validate_kagemusha_fold_root("initial_root", initial_root)?;
     let mut expected_root = initial_root;
     let mut all_inputs = Vec::new();
     let mut all_outputs = Vec::new();
@@ -1786,6 +1871,9 @@ fn kagemusha_canonical_fold_parts(
             step.verifier_key_commitment,
             step.verifier_key_poseidon_digest,
         )?;
+        validate_kagemusha_fold_root("root_before", step.root_before)?;
+        validate_kagemusha_fold_root("root_after", step.root_after)?;
+        validate_kagemusha_root_transition(hop_index, step.root_before, step.root_after)?;
         if step.root_before != expected_root {
             return Err(KagemushaFoldError::RootDiscontinuity {
                 hop_index,
@@ -1851,6 +1939,9 @@ fn kagemusha_canonical_fold_parts(
         asset: asset.clone(),
         step_digests,
     })?;
+    if initial_root == expected_root {
+        return Err(KagemushaFoldError::UnchangedFoldedPublicRoots);
+    }
     let hop_count = u32::try_from(steps.len()).expect("hop count is bounded to u32");
     Ok(KagemushaCanonicalFoldParts {
         nullifier_digest,
@@ -1885,6 +1976,129 @@ pub fn kagemusha_poseidon_aggregation_transcript_statement(
     steps: &[KagemushaFoldStep],
 ) -> Result<KagemushaPoseidonAggregationTranscriptStatement, KagemushaFoldError> {
     Ok(kagemusha_canonical_fold_parts(chain_id, asset, steps)?.aggregation_statement)
+}
+
+struct KagemushaFoldDigestParts {
+    nullifier_digest: Hash,
+    output_commitment_digest: Hash,
+    fold_digest: Hash,
+}
+
+fn kagemusha_fold_digest_parts_from_aggregation_statement(
+    statement: &KagemushaPoseidonAggregationTranscriptStatement,
+) -> Result<KagemushaFoldDigestParts, KagemushaFoldError> {
+    validate_kagemusha_aggregation_transcript_statement(statement)?;
+
+    let mut all_inputs = Vec::new();
+    let mut all_outputs = Vec::new();
+    let mut step_digests = Vec::with_capacity(statement.steps.len());
+
+    for step in &statement.steps {
+        let step_digest = kagemusha_hash_preimage(&KagemushaFoldStepDigestPreimage {
+            domain: KAGEMUSHA_FOLD_STEP_DIGEST_DOMAIN.to_owned(),
+            hop_index: step.hop_index,
+            root_before: step.root_before,
+            input_nullifiers: step.input_nullifiers.clone(),
+            output_commitments: step.output_commitments.clone(),
+            root_after: step.root_after,
+            proof_hash: step.proof_hash,
+            proof_public_inputs_digest: step.proof_public_inputs_digest,
+            verifier_key_id: step.verifier_key_id.clone(),
+            verifier_key_commitment: step.verifier_key_commitment,
+            verifier_key_poseidon_digest: step.verifier_key_poseidon_digest,
+        })?;
+        step_digests.push(step_digest);
+        all_inputs.extend(step.input_nullifiers.iter().copied());
+        all_outputs.extend(step.output_commitments.iter().copied());
+    }
+
+    Ok(KagemushaFoldDigestParts {
+        nullifier_digest: kagemusha_list_digest(
+            KAGEMUSHA_FOLD_NULLIFIER_DIGEST_DOMAIN,
+            all_inputs,
+        )?,
+        output_commitment_digest: kagemusha_list_digest(
+            KAGEMUSHA_FOLD_OUTPUT_DIGEST_DOMAIN,
+            all_outputs,
+        )?,
+        fold_digest: kagemusha_hash_preimage(&KagemushaFoldTranscriptDigestPreimage {
+            domain: KAGEMUSHA_FOLD_TRANSCRIPT_DIGEST_DOMAIN.to_owned(),
+            chain_id: statement.chain_id.clone(),
+            asset: statement.asset.clone(),
+            step_digests,
+        })?,
+    })
+}
+
+/// Project a canonical aggregation transcript statement into folded public inputs.
+///
+/// Future recursive verifier circuits should produce the same public projection
+/// from their private hop witness before proving `kagemusha-folded-v1`.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when the statement is non-canonical or cannot
+/// be encoded with Norito.
+pub fn kagemusha_folded_public_inputs_from_aggregation_statement(
+    statement: &KagemushaPoseidonAggregationTranscriptStatement,
+) -> Result<KagemushaFoldedPublicInputs, KagemushaFoldError> {
+    let parts = kagemusha_fold_digest_parts_from_aggregation_statement(statement)?;
+    let aggregation_transcript_digest =
+        kagemusha_poseidon_aggregation_transcript_digest(statement)?;
+
+    Ok(KagemushaFoldedPublicInputs {
+        domain: KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN.to_owned(),
+        aggregation_mode: statement.aggregation_mode,
+        chain_id: statement.chain_id.clone(),
+        asset: statement.asset.clone(),
+        initial_root: statement.initial_root,
+        final_root: statement.final_root,
+        hop_count: statement.hop_count,
+        nullifier_digest: parts.nullifier_digest,
+        output_commitment_digest: parts.output_commitment_digest,
+        fold_digest: parts.fold_digest,
+        aggregation_transcript_digest,
+    })
+}
+
+/// Validate that folded public inputs are the canonical projection of an aggregation transcript.
+///
+/// This is the host-side equivalent of the public projection that recursive
+/// Kagemusha verifier circuits must enforce in-circuit.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when either side is non-canonical or when any
+/// folded public-input field differs from the aggregation transcript projection.
+pub fn kagemusha_validate_folded_public_inputs_against_aggregation_statement(
+    public_inputs: &KagemushaFoldedPublicInputs,
+    statement: &KagemushaPoseidonAggregationTranscriptStatement,
+) -> Result<(), KagemushaFoldError> {
+    public_inputs.validate_supported_context()?;
+    let expected = kagemusha_folded_public_inputs_from_aggregation_statement(statement)?;
+
+    macro_rules! ensure_field {
+        ($field:ident) => {
+            if public_inputs.$field != expected.$field {
+                return Err(KagemushaFoldError::FoldedPublicInputTranscriptMismatch {
+                    field: stringify!($field),
+                });
+            }
+        };
+    }
+
+    ensure_field!(chain_id);
+    ensure_field!(asset);
+    ensure_field!(aggregation_mode);
+    ensure_field!(initial_root);
+    ensure_field!(final_root);
+    ensure_field!(hop_count);
+    ensure_field!(nullifier_digest);
+    ensure_field!(output_commitment_digest);
+    ensure_field!(fold_digest);
+    ensure_field!(aggregation_transcript_digest);
+
+    Ok(())
 }
 
 /// Build the chain-visible public inputs for a compact folded Kagemusha token.
@@ -1953,6 +2167,16 @@ impl KagemushaFoldedPublicInputs {
             return Err(KagemushaFoldError::TooManyHops {
                 max: KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
                 actual: usize::try_from(self.hop_count).unwrap_or(usize::MAX),
+            });
+        }
+        validate_kagemusha_fold_root("initial_root", self.initial_root)?;
+        validate_kagemusha_fold_root("final_root", self.final_root)?;
+        if self.initial_root == self.final_root {
+            return Err(KagemushaFoldError::UnchangedFoldedPublicRoots);
+        }
+        if self.aggregation_transcript_digest == [0u8; Hash::LENGTH] {
+            return Err(KagemushaFoldError::ZeroFoldedPublicInputDigest {
+                field: "aggregation_transcript_digest",
             });
         }
         let encoded_len = self.norito_encoded_len()?;
@@ -2607,18 +2831,23 @@ mod offline_note_tests {
         for backend in [
             "kzg",
             "KZG",
+            " kzg ",
             "kzg/ceremony-v1",
             "KZG/ceremony-v1",
             "bn254",
             "BN254",
+            "\tBN254\n",
             "bn256",
             "bls12_381",
             "halo2/ipa:kzg",
             "halo2/ipa:KZG",
+            "halo2/ipa: KZG",
             "stark/fri:kzg",
             "stark/fri:KZG",
+            "stark/fri: KZG",
             "stark/fri/kzg",
             "stark/fri/KZG",
+            "stark/fri/ KZG",
             "stark/fri/bn254",
             "stark/fri/bls12_381",
         ] {
@@ -2790,6 +3019,44 @@ mod offline_note_tests {
         assert!(matches!(
             kagemusha_poseidon_aggregation_transcript_digest(&bad_final_root),
             Err(KagemushaFoldError::FinalRootMismatch { .. })
+        ));
+
+        let mut zero_initial_root = statement.clone();
+        zero_initial_root.initial_root = [0u8; Hash::LENGTH];
+        zero_initial_root.steps[0].root_before = [0u8; Hash::LENGTH];
+        assert!(matches!(
+            kagemusha_poseidon_aggregation_transcript_digest(&zero_initial_root),
+            Err(KagemushaFoldError::ZeroFoldedRoot {
+                field: "initial_root"
+            })
+        ));
+
+        let mut zero_final_root = statement.clone();
+        zero_final_root.final_root = [0u8; Hash::LENGTH];
+        zero_final_root.steps[1].root_after = [0u8; Hash::LENGTH];
+        assert!(matches!(
+            kagemusha_poseidon_aggregation_transcript_digest(&zero_final_root),
+            Err(KagemushaFoldError::ZeroFoldedRoot {
+                field: "final_root"
+            })
+        ));
+
+        let mut zero_intermediate_root = statement.clone();
+        zero_intermediate_root.steps[0].root_after = [0u8; Hash::LENGTH];
+        zero_intermediate_root.steps[1].root_before = [0u8; Hash::LENGTH];
+        assert!(matches!(
+            kagemusha_poseidon_aggregation_transcript_digest(&zero_intermediate_root),
+            Err(KagemushaFoldError::ZeroFoldedRoot {
+                field: "root_after"
+            })
+        ));
+
+        let mut unchanged_public_roots = statement.clone();
+        unchanged_public_roots.final_root = unchanged_public_roots.initial_root;
+        unchanged_public_roots.steps[1].root_after = unchanged_public_roots.initial_root;
+        assert!(matches!(
+            kagemusha_poseidon_aggregation_transcript_digest(&unchanged_public_roots),
+            Err(KagemushaFoldError::UnchangedFoldedPublicRoots)
         ));
 
         let mut discontinuous = statement.clone();
@@ -2969,6 +3236,16 @@ mod offline_note_tests {
             kagemusha_poseidon_aggregation_transcript_digest(&aggregation_statement)
                 .expect("aggregation statement digest")
         );
+        assert_eq!(
+            public_inputs,
+            kagemusha_folded_public_inputs_from_aggregation_statement(&aggregation_statement)
+                .expect("aggregation statement projection")
+        );
+        kagemusha_validate_folded_public_inputs_against_aggregation_statement(
+            &public_inputs,
+            &aggregation_statement,
+        )
+        .expect("aggregation statement must bind folded public inputs");
 
         let mut reordered = steps.clone();
         reordered[0].input_nullifiers.reverse();
@@ -3098,6 +3375,121 @@ mod offline_note_tests {
     }
 
     #[test]
+    fn kagemusha_folded_public_inputs_reject_transcript_projection_mismatches() {
+        let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
+        let asset = kagemusha_asset("kgm");
+        let root0 = fixed_hash(b"kagemusha-root-0");
+        let root1 = fixed_hash(b"kagemusha-root-1");
+        let root2 = fixed_hash(b"kagemusha-root-2");
+        let steps = vec![
+            kagemusha_step(root0, root1, 0x20, 0x40, b"proof-hop-0"),
+            kagemusha_step(root1, root2, 0x60, 0x80, b"proof-hop-1"),
+        ];
+        let public_inputs =
+            kagemusha_folded_public_inputs(&chain_id, &asset, &steps).expect("folded inputs");
+        let statement =
+            kagemusha_poseidon_aggregation_transcript_statement(&chain_id, &asset, &steps)
+                .expect("aggregation statement");
+
+        let expect_mismatch = |forged: KagemushaFoldedPublicInputs, field: &'static str| {
+            forged
+                .public_inputs_hash()
+                .expect("forged public inputs remain encodable");
+            assert!(matches!(
+                kagemusha_validate_folded_public_inputs_against_aggregation_statement(
+                    &forged,
+                    &statement,
+                ),
+                Err(KagemushaFoldError::FoldedPublicInputTranscriptMismatch {
+                    field: actual
+                }) if actual == field
+            ));
+        };
+
+        let mut forged_chain = public_inputs.clone();
+        forged_chain.chain_id = "kagemusha-forged-chain".parse().expect("chain id");
+        expect_mismatch(forged_chain, "chain_id");
+
+        let mut forged_asset = public_inputs.clone();
+        forged_asset.asset = kagemusha_asset("kgm-forged");
+        expect_mismatch(forged_asset, "asset");
+
+        let mut forged_initial_root = public_inputs.clone();
+        forged_initial_root.initial_root = fixed_hash(b"kagemusha-forged-initial-root");
+        expect_mismatch(forged_initial_root, "initial_root");
+
+        let mut forged_final_root = public_inputs.clone();
+        forged_final_root.final_root = fixed_hash(b"kagemusha-forged-final-root");
+        expect_mismatch(forged_final_root, "final_root");
+
+        let mut forged_hop_count = public_inputs.clone();
+        forged_hop_count.hop_count = 1;
+        expect_mismatch(forged_hop_count, "hop_count");
+
+        let mut forged_nullifiers = public_inputs.clone();
+        forged_nullifiers.nullifier_digest = Hash::new(b"kagemusha-forged-nullifiers");
+        expect_mismatch(forged_nullifiers, "nullifier_digest");
+
+        let mut forged_outputs = public_inputs.clone();
+        forged_outputs.output_commitment_digest = Hash::new(b"kagemusha-forged-outputs");
+        expect_mismatch(forged_outputs, "output_commitment_digest");
+
+        let mut forged_fold = public_inputs.clone();
+        forged_fold.fold_digest = Hash::new(b"kagemusha-forged-fold");
+        expect_mismatch(forged_fold, "fold_digest");
+
+        let mut forged_aggregation = public_inputs.clone();
+        forged_aggregation.aggregation_transcript_digest =
+            fixed_hash(b"kagemusha-forged-aggregation");
+        expect_mismatch(forged_aggregation, "aggregation_transcript_digest");
+
+        let mut zero_aggregation = public_inputs.clone();
+        zero_aggregation.aggregation_transcript_digest = [0u8; Hash::LENGTH];
+        assert!(matches!(
+            kagemusha_validate_folded_public_inputs_against_aggregation_statement(
+                &zero_aggregation,
+                &statement,
+            ),
+            Err(KagemushaFoldError::ZeroFoldedPublicInputDigest {
+                field: "aggregation_transcript_digest"
+            })
+        ));
+
+        let mut forged_domain = public_inputs.clone();
+        forged_domain.domain = "iroha:kagemusha:forged-domain".to_owned();
+        assert!(matches!(
+            kagemusha_validate_folded_public_inputs_against_aggregation_statement(
+                &forged_domain,
+                &statement,
+            ),
+            Err(KagemushaFoldError::InvalidPublicInputDomain { .. })
+        ));
+
+        let mut forged_mode = public_inputs.clone();
+        forged_mode.aggregation_mode = KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1;
+        assert!(matches!(
+            kagemusha_validate_folded_public_inputs_against_aggregation_statement(
+                &forged_mode,
+                &statement,
+            ),
+            Err(KagemushaFoldError::UnsupportedAggregationMode { actual, .. })
+                if actual == KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+        ));
+
+        let mut forged_statement = statement;
+        forged_statement.steps[1].proof_hash = Hash::new(b"kagemusha-forged-hop-proof");
+        assert!(matches!(
+            kagemusha_validate_folded_public_inputs_against_aggregation_statement(
+                &public_inputs,
+                &forged_statement,
+            ),
+            Err(KagemushaFoldError::FoldedPublicInputTranscriptMismatch {
+                field: "fold_digest"
+            })
+        ));
+    }
+
+    #[test]
     fn kagemusha_compact_token_binds_folded_proof_public_inputs() {
         let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
         let asset = kagemusha_asset("kgm");
@@ -3124,7 +3516,7 @@ mod offline_note_tests {
             .validate_public_input_binding()
             .expect("matching compact token binding");
 
-        let mut forged = token;
+        let mut forged = token.clone();
         forged.folded_proof.public_inputs_hash = Hash::new(b"forged-folded-public-inputs");
         assert!(matches!(
             forged.validate_public_input_binding(),
@@ -3152,6 +3544,60 @@ mod offline_note_tests {
         assert!(matches!(
             forged_zero_hops.validate_public_input_binding(),
             Err(KagemushaFoldError::Empty)
+        ));
+
+        let mut forged_zero_aggregation = forged_zero_hops.clone();
+        forged_zero_aggregation.public_inputs.hop_count = 1;
+        forged_zero_aggregation
+            .public_inputs
+            .aggregation_transcript_digest = [0u8; Hash::LENGTH];
+        forged_zero_aggregation.folded_proof.public_inputs_hash = forged_zero_aggregation
+            .public_inputs
+            .public_inputs_hash()
+            .expect("forged-zero-aggregation hash");
+        assert!(matches!(
+            forged_zero_aggregation.validate_public_input_binding(),
+            Err(KagemushaFoldError::ZeroFoldedPublicInputDigest {
+                field: "aggregation_transcript_digest"
+            })
+        ));
+
+        let mut forged_zero_initial_root = token.clone();
+        forged_zero_initial_root.public_inputs.initial_root = [0u8; Hash::LENGTH];
+        forged_zero_initial_root.folded_proof.public_inputs_hash = forged_zero_initial_root
+            .public_inputs
+            .public_inputs_hash()
+            .expect("forged-zero-initial-root hash");
+        assert!(matches!(
+            forged_zero_initial_root.validate_public_input_binding(),
+            Err(KagemushaFoldError::ZeroFoldedRoot {
+                field: "initial_root"
+            })
+        ));
+
+        let mut forged_zero_final_root = token.clone();
+        forged_zero_final_root.public_inputs.final_root = [0u8; Hash::LENGTH];
+        forged_zero_final_root.folded_proof.public_inputs_hash = forged_zero_final_root
+            .public_inputs
+            .public_inputs_hash()
+            .expect("forged-zero-final-root hash");
+        assert!(matches!(
+            forged_zero_final_root.validate_public_input_binding(),
+            Err(KagemushaFoldError::ZeroFoldedRoot {
+                field: "final_root"
+            })
+        ));
+
+        let mut forged_unchanged_roots = token.clone();
+        forged_unchanged_roots.public_inputs.final_root =
+            forged_unchanged_roots.public_inputs.initial_root;
+        forged_unchanged_roots.folded_proof.public_inputs_hash = forged_unchanged_roots
+            .public_inputs
+            .public_inputs_hash()
+            .expect("forged-unchanged-root hash");
+        assert!(matches!(
+            forged_unchanged_roots.validate_public_input_binding(),
+            Err(KagemushaFoldError::UnchangedFoldedPublicRoots)
         ));
 
         let mut forged_too_many_hops = forged_zero_hops.clone();
@@ -3441,6 +3887,62 @@ mod offline_note_tests {
                 &zero_vk_poseidon_steps
             ),
             Err(KagemushaFoldError::ZeroVerifierKeyPoseidonDigest { hop_index: 0 })
+        ));
+
+        let mut zero_initial_root = step0.clone();
+        zero_initial_root.root_before = [0u8; Hash::LENGTH];
+        let zero_initial_root_steps = [zero_initial_root];
+        assert!(matches!(
+            kagemusha_folded_public_inputs(&chain_id, &asset, &zero_initial_root_steps),
+            Err(KagemushaFoldError::ZeroFoldedRoot {
+                field: "initial_root"
+            })
+        ));
+        assert!(matches!(
+            kagemusha_poseidon_aggregation_transcript_statement(
+                &chain_id,
+                &asset,
+                &zero_initial_root_steps
+            ),
+            Err(KagemushaFoldError::ZeroFoldedRoot {
+                field: "initial_root"
+            })
+        ));
+
+        let mut zero_root_after = step0.clone();
+        zero_root_after.root_after = [0u8; Hash::LENGTH];
+        let zero_root_after_steps = [zero_root_after];
+        assert!(matches!(
+            kagemusha_folded_public_inputs(&chain_id, &asset, &zero_root_after_steps),
+            Err(KagemushaFoldError::ZeroFoldedRoot {
+                field: "root_after"
+            })
+        ));
+        assert!(matches!(
+            kagemusha_poseidon_aggregation_transcript_statement(
+                &chain_id,
+                &asset,
+                &zero_root_after_steps
+            ),
+            Err(KagemushaFoldError::ZeroFoldedRoot {
+                field: "root_after"
+            })
+        ));
+
+        let mut unchanged_root = step0.clone();
+        unchanged_root.root_after = unchanged_root.root_before;
+        let unchanged_root_steps = [unchanged_root];
+        assert!(matches!(
+            kagemusha_folded_public_inputs(&chain_id, &asset, &unchanged_root_steps),
+            Err(KagemushaFoldError::UnchangedFoldedRootTransition { hop_index: 0 })
+        ));
+        assert!(matches!(
+            kagemusha_poseidon_aggregation_transcript_statement(
+                &chain_id,
+                &asset,
+                &unchanged_root_steps
+            ),
+            Err(KagemushaFoldError::UnchangedFoldedRootTransition { hop_index: 0 })
         ));
 
         let mut empty_input = step0.clone();

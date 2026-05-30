@@ -2,6 +2,7 @@
 
 use crate::{
     backend::{IpaBackend, IpaGroup, IpaScalar},
+    errors::Error,
     field, group,
     norito_types::ZkCurveId,
 };
@@ -23,6 +24,23 @@ impl IpaBackend for PallasBackend {
 
     fn group_from_scalar(scalar: Self::Scalar) -> Self::Group {
         group::from_scalar(scalar)
+    }
+
+    fn msm(bases: &[Self::Group], scalars: &[Self::Scalar]) -> Result<Self::Group, Error> {
+        use halo2curves::{msm::msm_best, pasta::VestaAffine};
+
+        if bases.len() != scalars.len() {
+            return Err(Error::DimensionMismatch {
+                expected: bases.len(),
+                actual: scalars.len(),
+            });
+        }
+        let affine_bases = bases
+            .iter()
+            .map(|base| VestaAffine::from(base.inner()))
+            .collect::<Vec<_>>();
+        let coeffs = scalars.iter().copied().map(Into::into).collect::<Vec<_>>();
+        Ok(group::GroupElem::new(msm_best(&coeffs, &affine_bases)))
     }
 }
 

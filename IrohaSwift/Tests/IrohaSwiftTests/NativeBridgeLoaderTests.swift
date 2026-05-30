@@ -4,6 +4,12 @@ import XCTest
 @testable import IrohaSwift
 
 final class NativeBridgeLoaderTests: XCTestCase {
+    func testExpectedBridgeAbiVersionIsFourForPackagedArtifacts() {
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64"), 4)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 4)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 4)
+    }
+
     func testMissingBridgeIsReported() {
         let status = NoritoBridgeLoader.validateForTests(at: "/tmp/does/not/exist", allowUntrustedLocation: true)
         XCTAssertEqual(status, .missing(path: "/tmp/does/not/exist"))

@@ -988,6 +988,14 @@ export interface IterableQueryOptions extends IterableListOptions {
   select?: ReadonlyArray<Record<string, unknown>>;
 }
 
+export interface TransactionQueryOptions extends IterableQueryOptions {
+  assetId?: string;
+  authority?: string;
+  resultOk?: boolean;
+  sinceTimestampMs?: NumericLike;
+  untilTimestampMs?: NumericLike;
+}
+
 export interface PaginationIteratorOptions extends IterableListOptions {
   pageSize?: NumericLike;
   maxItems?: NumericLike;
@@ -999,6 +1007,14 @@ export interface AccountAssetIteratorOptions extends PaginationIteratorOptions {
 
 export interface AccountTransactionIteratorOptions extends PaginationIteratorOptions {
   assetId?: string;
+}
+
+export interface TransactionIteratorOptions extends PaginationIteratorOptions {
+  assetId?: string;
+  authority?: string;
+  resultOk?: boolean;
+  sinceTimestampMs?: NumericLike;
+  untilTimestampMs?: NumericLike;
 }
 
 export interface AssetHolderIteratorOptions extends PaginationIteratorOptions {
@@ -1361,6 +1377,7 @@ export interface ToriiAccountTransactionItem {
   timestamp_ms?: number;
   entrypoint_hash: string;
   result_ok: boolean;
+  asset_id?: string | string[];
 }
 
 export interface ToriiContractActivityItem {
@@ -7154,6 +7171,13 @@ export interface InstructionBuilders {
 export interface ToriiBrowserClientOptions {
   fetchImpl?: typeof fetch;
   defaultHeaders?: Record<string, string>;
+  timeoutMs?: NumericLike;
+  config?: {
+    toriiClient?: {
+      timeoutMs?: NumericLike;
+      defaultHeaders?: Record<string, string>;
+    };
+  };
 }
 
 export declare class ToriiBrowserHttpError extends Error {
@@ -7171,6 +7195,16 @@ export declare class ToriiBrowserClient {
   listExplorerAssets(options?: Record<string, unknown>): Promise<unknown>;
   getExplorerAsset(assetId: string, options?: Record<string, unknown>): Promise<unknown>;
   listAccountAssets(accountId: string, options?: Record<string, unknown>): Promise<unknown>;
+  queryAccountTransactions<T = ToriiAccountTransactionItem>(
+    accountId: string,
+    options?: TransactionQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  queryTransactions<T = ToriiAccountTransactionItem>(
+    options?: TransactionQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  queryVisibleTransactions<T = ToriiAccountTransactionItem>(
+    options?: TransactionQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
   listAssetHolders(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
   listAssetDefinitions(options?: Record<string, unknown>): Promise<unknown>;
   getAssetDefinition(assetDefinitionId: string, options?: Record<string, unknown>): Promise<unknown>;
@@ -7334,7 +7368,13 @@ export declare class ToriiClient {
   ): Promise<ToriiIterableListResponse<T>>;
   queryAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
-    options?: IterableQueryOptions,
+    options?: TransactionQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  queryTransactions<T = ToriiAccountTransactionItem>(
+    options?: TransactionQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  queryVisibleTransactions<T = ToriiAccountTransactionItem>(
+    options?: TransactionQueryOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   iterateAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
@@ -7343,6 +7383,12 @@ export declare class ToriiClient {
   iterateAccountTransactionsQuery<T = ToriiAccountTransactionItem>(
     accountId: string,
     options?: PaginationIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
+  iterateTransactionsQuery<T = ToriiAccountTransactionItem>(
+    options?: TransactionIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
+  iterateVisibleTransactionsQuery<T = ToriiAccountTransactionItem>(
+    options?: TransactionIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
   listAssetHolders<T = ToriiAssetHolderItem>(
     assetDefinitionId: string,

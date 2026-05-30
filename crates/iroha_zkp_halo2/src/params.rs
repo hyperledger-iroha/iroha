@@ -179,7 +179,7 @@ impl<B: IpaBackend> Params<B> {
         })
     }
 
-    pub(crate) fn from_wire(w: &IpaParams) -> Result<Self, Error> {
+    fn validate_wire_header(w: &IpaParams) -> Result<usize, Error> {
         if w.version != 1 {
             return Err(Error::UnsupportedVersion {
                 component: "IpaParams",
@@ -209,6 +209,11 @@ impl<B: IpaBackend> Params<B> {
                 actual: w.h.len(),
             });
         }
+        Ok(n)
+    }
+
+    pub(crate) fn from_wire(w: &IpaParams) -> Result<Self, Error> {
+        let n = Self::validate_wire_header(w)?;
         let g =
             w.g.iter()
                 .map(B::Group::from_bytes)
@@ -226,6 +231,7 @@ pub(crate) fn params_from_wire_backend<B>(w: &IpaParams) -> Result<Arc<Params<B>
 where
     B: IpaBackend + 'static,
 {
+    Params::<B>::validate_wire_header(w)?;
     let advertised_fp = w.fingerprint();
     if let Some(existing) = PARAMS_REGISTRY.lookup::<B>(&advertised_fp) {
         return Ok(existing);

@@ -1440,6 +1440,28 @@ fn transaction_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/transactions/query".to_owned(),
+        Value::Object(json_post_operation(
+            "Transactions",
+            "Query committed transactions.",
+            "Query committed transactions with the structured QueryEnvelope filter, sort, projection, and pagination shape. This global endpoint is intended for privileged operators and developer tooling.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/transactions/visible/query".to_owned(),
+        Value::Object(json_post_operation(
+            "Transactions",
+            "Query visible transactions.",
+            "Query committed transactions visible to the authenticated viewer. Torii derives viewer scope from Authorization headers before applying the QueryEnvelope filter, sort, projection, and pagination shape.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/contracts/activity".to_owned(),
         Value::Object(json_get_operation(
             "Contracts",
@@ -11593,6 +11615,8 @@ mod tests {
         assert!(paths.contains_key("/v1/runtime/abi/active"));
         assert!(paths.contains_key("/v1/accounts"));
         assert!(paths.contains_key("/v1/transactions/history"));
+        assert!(paths.contains_key("/v1/transactions/query"));
+        assert!(paths.contains_key("/v1/transactions/visible/query"));
         assert!(paths.contains_key("/v1/contracts/activity"));
         assert!(paths.contains_key("/v1/contracts/events"));
         assert!(paths.contains_key("/v1/contracts/events/sse"));

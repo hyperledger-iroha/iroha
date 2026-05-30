@@ -4235,6 +4235,109 @@ async fn handler_account_transactions_query(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_transactions_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+        crate::filter::QueryEnvelope,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut env = env;
+    let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
+    env.pagination.limit = Some(page_limit);
+    env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        check_access_enforced_with_cost(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/transactions/query",
+            enforce,
+            cost,
+        )
+        .await?;
+    }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
+    routing::handle_v1_transactions_query_with_policy(
+        app.state.clone(),
+        crate::utils::extractors::NoritoJson(env),
+        app.telemetry.clone(),
+        allowed_asset_definition_id,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_transactions_visible_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+        crate::filter::QueryEnvelope,
+    >,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let limits = crate::routing::app_query_limits();
+    let mut env = env;
+    let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
+    env.pagination.limit = Some(page_limit);
+    env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    let allowed_asset_definition_id = match resolve_tx_history_allowed_asset_definition_id(&app) {
+        Ok(value) => value,
+        Err(err) => return Ok(tx_history_alias_resolution_reject(err)),
+    };
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    let cost = limits.rate_limit_cost(page_limit);
+    let rate_key = format!("tx-history-query:{}", viewer.subject);
+    if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !trusted_internal {
+        check_access_enforced_with_cost(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/transactions/visible/query",
+            enforce,
+            cost,
+        )
+        .await?;
+    }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    let visibility = crate::routing::TxHistoryVisibilityScope {
+        viewer_account_ids: viewer.account_ids,
+        viewer_dataspace_id: viewer.dataspace_id,
+        allow_dataspace_wide: viewer.is_mandatory_alias,
+    };
+
+    routing::handle_v1_transactions_visible_query_with_policy(
+        app.state.clone(),
+        crate::utils::extractors::NoritoJson(env),
+        app.telemetry.clone(),
+        visibility,
+        allowed_asset_definition_id,
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_account_assets(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -19131,6 +19234,7 @@ fn torii_read_http_method(endpoint: ToriiReadEndpointV1) -> reqwest::Method {
     match endpoint {
         ToriiReadEndpointV1::AccountAssetsQuery
         | ToriiReadEndpointV1::AccountTransactionsQuery
+        | ToriiReadEndpointV1::TransactionsQuery
         | ToriiReadEndpointV1::AccountsQuery
         | ToriiReadEndpointV1::AssetDefinitionsQuery
         | ToriiReadEndpointV1::AssetHoldersQuery
@@ -19188,6 +19292,7 @@ fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String,
             "/v1/accounts/{}/transactions/query",
             torii_read_path_arg_encoded(request, 0, "account_id")?
         ),
+        ToriiReadEndpointV1::TransactionsQuery => "/v1/transactions/query".to_owned(),
         ToriiReadEndpointV1::PipelineTransactionStatusGet => {
             "/v1/pipeline/transactions/status".to_owned()
         }
@@ -19546,6 +19651,31 @@ async fn execute_torii_read_request_locally(
                 routing::handle_v1_account_transactions_with_policy(
                     app.state.clone(),
                     AxPath(account_id),
+                    crate::utils::extractors::NoritoJson(env),
+                    app.telemetry.clone(),
+                    allowed_asset_definition_id,
+                )
+                .await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::TransactionsQuery => {
+            let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
+                &request.body,
+                "transactions query body",
+            ) {
+                Ok(env) => env,
+                Err(response) => return response,
+            };
+            let allowed_asset_definition_id =
+                match resolve_tx_history_allowed_asset_definition_id(app) {
+                    Ok(value) => value,
+                    Err(error) => return error.into_response(),
+                };
+            finish_torii_read_result(
+                routing::handle_v1_transactions_query_with_policy(
+                    app.state.clone(),
                     crate::utils::extractors::NoritoJson(env),
                     app.telemetry.clone(),
                     allowed_asset_definition_id,
@@ -35383,6 +35513,11 @@ impl Torii {
                 // Accounts listing
                 .route("/v1/accounts", get(handler_accounts_list))
                 .route("/v1/accounts/query", post(handler_accounts_query))
+                .route("/v1/transactions/query", post(handler_transactions_query))
+                .route(
+                    "/v1/transactions/visible/query",
+                    post(handler_transactions_visible_query),
+                )
                 .route("/v1/accounts/onboard", post(handler_accounts_onboard))
                 .route(
                     "/v1/accounts/faucet/puzzle",

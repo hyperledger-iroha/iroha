@@ -1,6 +1,159 @@
 # Status
 
-Last updated: 2026-05-29
+Last updated: 2026-05-30
+
+## 2026-05-30 Kagemusha recursive-verifier MSM foundation
+
+- The Pasta circuit module now includes a bounded native-scalar Vesta MSM
+  composition wrapper for the future in-circuit Halo2 IPA verifier. It keeps
+  canonical Pasta/Fp scalars private, exposes only the base point encodings and
+  final MSM output, reuses the native-scalar Vesta multiplication ladder per
+  term, starts the running accumulator at identity, and chains each private term
+  output into the final public point-or-identity sum. Focused adversarial
+  coverage rejects output mismatch at witness construction, public base/output
+  substitution, scalar high-bit overflow, conditional-bit tampering,
+  noncanonical `value + modulus` scalar aliases, doubled-addend case tampering,
+  and self-consistent but unchained private MSM accumulators.
+- The first IPA-specific final-comparison wrapper now proves
+  `Q = a*G + b*H + (a*b)*U` over Vesta point-or-identity encodings. It reuses
+  the three-term bounded MSM and adds a native Pasta/Fp product link for the
+  third scalar, so a malicious witness cannot use an internally valid MSM with a
+  forged IPA `a*b` term.
+- A per-round IPA accumulator wrapper now proves `Q' = x^2*L + Q + x^{-2}*R`.
+  It keeps `x` and `x^{-1}` as private canonical Pasta/Fp scalars, enforces
+  `x*x^{-1}=1`, links the first and third MSM scalars to `x^2` and `x^{-2}`,
+  and constrains the middle MSM scalar to one, preventing a valid-looking MSM
+  from drifting away from the transcript challenge.
+- The IPA generator-fold wrapper now proves
+  `G' = x^{-1}*G_L + x*G_R` and `H' = x*H_L + x^{-1}*H_R` with two linked
+  two-term MSMs that share the same private canonical challenge and inverse.
+  A forged but internally valid folded-generator MSM is rejected if its scalars
+  do not match the transcript challenge relation.
+- The native-field IPA scalar-fold gadgets now prove
+  `b' = b_L*x^{-1} + b_R*x` for one scalar and for fixed-size public vector
+  segments. They expose the left, right, and folded scalars, keep one shared
+  `x`/`x^{-1}` pair private and canonical per segment, and reject inverse
+  mismatch, output mismatch, public input/output substitution, and noncanonical
+  challenge or folded-output aliases.
+- The multi-round native-field IPA `b`-vector reduction gadget now folds a
+  power-of-two public `b` vector to the proof's final public `b` scalar. It
+  keeps intermediate folded vectors private and canonical, exposes each
+  transcript-derived round challenge and inverse as public circuit inputs linked
+  to the private canonical decompositions, and rejects wrong challenge counts,
+  mismatched inverses, final-scalar mismatches, public initial/final/challenge
+  substitution, intermediate tampering, and noncanonical private or final scalar
+  aliases.
+- The native Pasta/Fp fixed-window decomposition gadget now proves private
+  scalars as deterministic little-endian window digits for future production
+  windowed MSM. Each digit is range-constrained by boolean bits, every digit bit
+  is linked to the canonical private scalar bit at the same global offset, and
+  scalar bits above `WINDOWS * WINDOW_BITS` are forced to zero. Focused
+  adversarial coverage rejects invalid window shapes, high-bit overflow, digit
+  value overflow, non-boolean digit bits, digit-bit substitution, scalar-value
+  substitution, and noncanonical `value + modulus` aliases.
+- The non-native Vesta fixed-window point selector now proves that a private
+  selected point-or-identity comes from a private `2^WINDOW_BITS` table under
+  canonical window bits. It uses a quadratic binary selection network instead
+  of a high-degree selector product, keeping the production windowed-MSM path
+  compatible with low-degree Halo2 gates. Focused coverage rejects invalid
+  widths, table-length and digit-range errors, selected-point mismatches,
+  non-boolean or substituted digit bits, selected/table point tampering, and
+  intermediate selection-level tampering.
+- The non-native Vesta fixed-window table-derivation gadget now proves a
+  private table is exactly `[0, B, 2B, ...]` for a public base point. It links
+  table entry zero to the canonical identity, table entry one to the public
+  base, and every later table entry to a private complete-add chain. Focused
+  coverage rejects invalid widths, wrong table lengths, host-side entry
+  mismatches, public-base substitution, identity-entry tampering, and
+  addition-chain link tampering.
+- The non-native Vesta fixed-window native-scalar multiplication wrapper now
+  composes scalar windows, shifted-base table derivation, point selection,
+  per-window base doublings, and selected-point accumulation into a public
+  `output = scalar * base` statement. Focused coverage rejects high-scalar and
+  output-mismatch witness construction, public-output substitution,
+  self-consistent selection-table splices, shifted-base transition tampering,
+  and running-sum chain tampering.
+- The transparent native IPA verifier now derives the same `b`-vector reduction
+  projection from the transcript challenge sequence and rejects a proof when
+  `proof.b_final` does not equal the folded public statement vector. This gives
+  the recursive circuit witness source and the native verifier the same
+  scalar-side binding rule. The native accumulation projection now also rejects
+  supplied challenge/inverse pairs that are not multiplicative inverses before
+  using them in `Q' = x^2*L + Q + x^{-2}*R`.
+- The native zkp crate now derives and validates a combined IPA verifier witness
+  bundling a public transcript projection, full `b`-vector reduction,
+  scalar-multiplication accumulation projection, and final proof scalars. The
+  transcript projection records the `ipa.n` state boundary, each round's `L/R`
+  bytes, domain-separated round-byte digest, transcript states, challenge,
+  inverse, and final transcript state. Validation rejects transcript-state,
+  round-byte, round-digest, round-order, challenge, reduction, accumulator, and
+  final-scalar substitution before those values can feed the recursive-circuit
+  witness path.
+- Native IPA vector commitments now use backend-level deterministic MSM hooks.
+  Pallas and BN254 dispatch to `halo2curves::msm_best`, with the previous
+  per-base scalar multiplication fold retained as the generic fallback for
+  simple backends. This improves production host-side proving/verifying without
+  introducing a trusted setup or changing deterministic generator derivation.
+- A one-round in-circuit IPA verifier composition slice now links the
+  `b`-vector fold, `Q' = x^2*L + Q + x^{-2}*R` accumulator, generator fold,
+  and final `Q = a*G + b*H + (a*b)*U` comparison behind one private canonical
+  challenge/inverse pair. The link gate ties the folded `b`, `Q'`, `G'`, and
+  `H'` advice outputs across otherwise self-consistent subgadgets, preventing
+  splice-style witnesses for the one-round case.
+- A generic power-of-two multi-round in-circuit IPA verifier composition wrapper
+  now extends those links across all rounds. It shares each round's
+  challenge/inverse pair across the `b` reduction, `Q` accumulator, and every
+  generator-fold pair; links each round's `Q`, `G`, and `H` outputs into the
+  next round; and feeds the final folded values into the final IPA MSM
+  comparison. Fast adversarial host-link coverage rejects substituted final
+  `b`, wrong round counts, and self-consistent but spliced challenge,
+  accumulator, or generator-fold witnesses for a two-round statement.
+- A fixed-window native-scalar MSM wrapper now composes multiple windowed
+  scalar-multiplication terms into one public multi-scalar accumulator while
+  keeping per-term outputs private. It links public term bases, private
+  fixed-window scalar decompositions, shifted-base tables, table selections,
+  selected-point accumulation, and the final public output, with adversarial
+  coverage for public substitution, table splicing, term-output splicing,
+  sum-chain tampering, and noncanonical scalar aliases.
+- The IPA final comparison now also has an optimized fixed-window wrapper for
+  `Q = a*G + b*H + (a*b)*U`. It reuses the fixed-window three-term MSM, keeps
+  `a`, `b`, and `a*b` private and canonical, and adds a product-link gate so a
+  self-consistent MSM cannot substitute the third scalar.
+- This is still a correctness foundation, not the completed recursive verifier:
+  in-circuit transcript hash/challenge binding, migration of the remaining
+  higher-level IPA wrappers onto the windowed MSM path where needed, and
+  production-scale composed circuit evidence remain outstanding, so Kagemusha
+  aggregation mode `2` remains reserved and public compact-token
+  prover/verifier entry points continue to accept only checked pre-fold mode
+  `1`.
+- Focused validation passed:
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_native_scalar_msm --lib` (10 tests, including two-term one-bit and two-bit MSM acceptance plus output-mismatch, high-scalar-bit, public base/output substitution, conditional-bit, sum-chain, noncanonical-scalar, and double-ladder tamper rejection; finished in 3513.80s)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_msm --lib` (4 tests, including one-bit IPA final-comparison acceptance plus output-mismatch, product-high-bit, and forged-product-link rejection; finished in 1662.51s)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_round_accumulator --lib` (4 tests, including one-bit accumulator acceptance plus inverse-mismatch, output-mismatch, and forged-square-link rejection; finished in 1667.92s)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_generator_fold --lib` (4 tests, including one-bit generator-fold acceptance plus inverse-mismatch, output-mismatch, and forged-scalar-link rejection; finished in 2954.15s)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_scalar_fold --lib` (6 tests, including scalar-fold acceptance plus builder inverse/output mismatch, public-output substitution, challenge-inverse tamper, and noncanonical folded-output alias rejection; finished in 0.13s)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_scalar_fold_vector --lib` (9 tests, including two-pair vector-fold acceptance plus zero-pair builder rejection, inverse/output mismatch, public left/output substitution, challenge-inverse tamper, and noncanonical challenge/output alias rejection; finished in 1m 41s compile plus 0.30s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_b_vector_reduction --lib` (13 tests, including four-scalar two-round reduction acceptance plus non-power-of-two, challenge-count, inverse, final-mismatch, public initial/final/challenge/inverse substitution, intermediate-tamper, and noncanonical intermediate/final alias rejection; finished in 1m 47s compile plus 0.09s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_fixed_window_decomposition --lib` (11 tests, including fixed-window acceptance plus empty/oversized window-shape rejection, scalar high-bit rejection, digit-value and digit-overflow tamper rejection, non-boolean digit bits, digit-bit substitution, scalar substitution, and noncanonical scalar alias rejection; finished in 1m 41s compile plus 0.03s test time on the passing rerun)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_fixed_window_select --lib` (10 tests, including two-bit point-selection acceptance plus invalid width, table-length, digit-range, selected-mismatch, digit-bit, non-boolean-bit, selected-point, table-point, and selection-level tamper rejection; finished in 1m 41s compile plus 11.09s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_fixed_window_table --lib` (7 tests, including two-bit table derivation acceptance plus invalid width, wrong length, entry mismatch, public-base substitution, identity-entry tamper, and complete-add chain-link tamper rejection; finished in 1m 53s compile plus 138.58s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core fixed_window --lib` (28 fixed-window scalar, point-selection, and table-derivation tests; finished in 0.35s compile plus 138.74s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_windowed_scalar_mul --lib` (7 tests, including two-window scalar-mul acceptance plus high-scalar and output-mismatch builder rejection, public-output substitution, selection-table splice, shifted-base transition tamper, and sum-chain tamper rejection; finished in 1m 45s compile plus 403.30s test time; the unused-field warning observed in that run was removed before the subsequent `cargo check`)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_windowed_native_scalar_msm --lib` (9 tests, including two-term fixed-window MSM acceptance plus output-mismatch and high-scalar builder rejection, public base/output substitution, selection-table splice, term-output splice, sum-chain tamper, and noncanonical scalar alias rejection; finished in 1m 45s compile plus 2384.13s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_windowed_msm --lib` (4 tests, including one-bit fixed-window IPA final-comparison acceptance plus output-mismatch, product-high-bit, and forged-product-link rejection; finished in 1m 48s compile plus 1341.55s test time)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_final_mismatch_builder --lib` (1 builder-level negative test for inconsistent final comparison; finished in 1m 41s compile plus 3.75s test time after moving the witness builder onto the large-stack test runner)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_one_round_verifier_accepts_one_bit_statement --lib` (1 one-round composed MockProver acceptance test; finished in 9489.98s, confirming the composed slice but also showing this path is a validation bottleneck)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_four_point --lib` (6 tests covering a two-round four-point verifier builder plus final-`b`, round-count, challenge-splice, accumulator-splice, and generator-splice rejection; finished in 0.35s compile plus 8.87s test time after the public-challenge binding change)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_transcript_projection --lib` (5 tests covering transcript projection state/round-byte recording plus round-byte, round-digest, state-boundary, and round-order substitution rejection; finished in 6.59s compile plus 0.09s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_b_vector_reduction --lib` (5 tests covering native reduction projection, bad shape, round-index substitution, inverse substitution, and challenge rebinding; finished in 6.27s compile plus 0.15s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_rejects_substituted_b_final --lib` (1 test; finished in 0.20s compile plus 0.13s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 backend_msm --lib` (2 tests comparing optimized Pallas/BN254 MSM with naive accumulation and checking dimension-mismatch rejection; finished in 6.27s compile plus 0.08s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_accumulation_projection_rejects_inverse_substitution --lib` (1 test; finished in 6.26s compile plus 0.11s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_witness --lib` (6 tests covering full verifier-witness projection plus transcript projection, transcript challenge, `b`-reduction, accumulator, and final-scalar substitution rejection; finished in 0.21s compile plus 0.24s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 --lib` (76 tests; finished in 2.61s)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_cli` (finished in 52.89s after adding the fixed-window IPA final-comparison wrapper)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
 
 ## 2026-05-29 Kagemusha SDK bridge exposure
 
@@ -19,18 +172,45 @@ Last updated: 2026-05-29
   unsupported `offline-note/draft-placeholder` backend instead of canonical
   Halo2 IPA metadata, preventing draft placeholders from passing proof-binding
   validation before a real proof provider replaces them.
+- Offline recursive proof generation and chain-side verifier resolution now
+  require the literal `offline-note-recursive` circuit id. Self-consistent alias
+  spellings such as `halo2/ipa:offline-note-recursive` are rejected before proof
+  generation or backend verification, so the chain trust anchor cannot drift
+  across equivalent-looking circuit labels.
 - `connect_norito_bridge` now exports matching JNI entry points for the Kotlin
   and Java wrappers, and the Swift bridge loader requires ABI 4 plus the
   record-backed Kagemusha symbol before marking the compact-token prover
-  available.
+  available. The older unanchored C compact-token prover symbol is retained
+  only for ABI compatibility and now rejects valid `KagemushaVerifiedFoldBundle`
+  input without returning output bytes, so production bridge callers must carry
+  `KagemushaVerifiedFoldRecordBundle` verifier-record trust anchors. The
+  unanchored Rust compact-token proving entry points now return the same stable
+  verifier-record-required error; only record-backed compact-token proving emits
+  folded proofs.
 - Kagemusha chain transfers and record-backed compact-token proving now require
   confidential-transfer-v2 Halo2 IPA proof semantics rather than accepting any
   active transparent verifier: the chain instruction requires an asset-bound
   confidential transfer verifier and root hint, binds the submitted
-  `OpenVerifyEnvelope` backend tag, circuit id, schema, and verifier-key hash to
-  that asset verifier, and checked folding rejects generic active verifier
-  circuits before compact proof generation even when verifier records are not
-  supplied. Chain-side adversarial coverage now also forges the transaction
+  `OpenVerifyEnvelope` backend tag, literal
+  `halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified` circuit id,
+  schema, and verifier-key hash to that asset verifier, and chain-side transfer
+  admission, record-backed compact-token proving, and final folded-token record
+  verification all require verifier records in the canonical `offline_kagemusha`
+  namespace. Generic active confidential-transfer verifier records and
+  self-consistent confidential-transfer-v2 circuit-id aliases are rejected before
+  proof decoding or compact proof generation, and checked folding rejects generic
+  active verifier circuits before compact proof generation even when verifier
+  records are not supplied.
+  Final folded-token proving, direct compact-token verification, and
+  record-backed compact-token verification now require the literal
+  `kagemusha-folded-v1` circuit id and reject alias spellings before backend
+  verification. The `kagemusha-folded-v1` circuit now also constrains the
+  public-input hash, initial/final roots, aggregate nullifier/output digests,
+  fold digest, and aggregation transcript digest to be non-zero through inverse
+  witnesses, so all-zero wildcard root or digest columns fail inside Halo2
+  verification. It also proves that the final folded root differs from the
+  initial folded root through a selected-limb inverse witness.
+  Chain-side adversarial coverage now also forges the transaction
   root hint, nullifier, output commitment, asset definition, and chain id while
   keeping the proof envelope intact, and rejects each mismatch through
   confidential-transfer-v2 public-input validation. Optional envelope-hash
@@ -56,11 +236,13 @@ Last updated: 2026-05-29
   expensive verifier work on proofs that cannot match the registered key
   binding or claimed transparent proof system. The standalone Kagemusha
   proof-statement digest helper now applies the same canonical envelope policy
-  and rejects non-empty auxiliary bytes or zero verifier-key hashes before
-  deriving folded transcript material. The data-model Poseidon2 digest helper
-  for `KagemushaProofPublicInputsStatement` enforces the same rule, so SDKs and
-  future recursive circuits cannot derive folded transcripts from non-canonical
-  per-hop proof metadata. The data-model Kagemusha transcript helpers now also
+  and rejects non-empty auxiliary bytes, zero verifier-key hashes, and Halo2 IPA
+  confidential-transfer-v2 circuit-id aliases before deriving folded transcript
+  material. The data-model Poseidon2 digest helper for
+  `KagemushaProofPublicInputsStatement` enforces the same auxiliary-byte and
+  verifier-key hash rule, so SDKs and future recursive circuits cannot derive
+  folded transcripts from non-canonical per-hop proof metadata. The data-model
+  Kagemusha transcript helpers now also
   reject unsupported, trusted-setup, and developer-only backend labels when
   hashing per-hop verifier-key material or folding verifier-key ids, keeping
   the canonical transcript surface limited to transparent Halo2 IPA and
@@ -80,7 +262,18 @@ Last updated: 2026-05-29
   profiles such as `halo2/ipa:kzg`, before broad verifier-registry, preverify,
   guardrail, or prover allowlists can admit them. Mixed-case variants such as
   `KZG`, `halo2/ipa:KZG`, `stark/fri/Debug`, and `halo2/ipa:Mock-Proof` are
-  covered by the same classifier rather than by per-call-site checks.
+  covered by the same classifier rather than by per-call-site checks. Setup
+  markers are now recognized as delimiter-separated tokens across `/`, `:`, and
+  ASCII whitespace, so padded forms such as ` kzg `, `halo2/ipa: KZG`, and
+  `stark/fri/ KZG` fail closed before broad allowlists or verifier dispatch.
+  Pre-validation metadata helpers now reuse the same gate: gas public-input
+  metering and generic proof envelope metadata decoding skip non-production
+  Halo2-labeled envelopes before attempting to decode them.
+  Kotlin/JVM and Java Android Offline Note models now trim recursive verifier
+  and proof backend metadata at construction, reject colon separators in
+  recursive verifier-key backend/name fields, and extend proof-binding negative
+  coverage to mixed-case, whitespace-delimited, and developer-only backend
+  substitutions.
   Chain-side Kagemusha transfers and the compact-token FFI bridge now also
   require the submitted proof attachment to publish the asset-bound verifier-key
   commitment and a non-empty verifier-key id name, rejecting missing
@@ -95,12 +288,30 @@ Last updated: 2026-05-29
   verifier-key backends. Raw folded-hop proof public-input digests,
   verifier-key commitments, and verifier-key Poseidon2 digests must also be
   non-zero before entering canonical folded transcripts. Compact folded public
-  inputs now also reject zero or over-64 hop counts during data-model context
-  validation, before proof instance construction or backend verification.
+  inputs now also reject zero or over-64 hop counts, all-zero initial/final
+  roots, unchanged hop/public root transitions, and all-zero aggregation
+  transcript digests during data-model context validation, before proof instance
+  construction or backend verification.
+  The data model now exposes host-side aggregation-statement projection helpers
+  that recompute every chain-visible folded public-input digest column from the
+  full Poseidon2 transcript statement. Projection validation rejects mismatched
+  chain id, asset, roots, hop count, nullifier/output/fold digests,
+  aggregation transcript digest, domain, reserved aggregation mode, and forged
+  underlying hop proof hashes before compact proof generation, and direct
+  compact-token binding now rejects folded public inputs with zero roots,
+  unchanged public roots, or zero aggregation transcript digests.
   Compact folded-token verification now has explicit adversarial coverage for
   trusted-setup and developer-only final folded proof labels, including the
   record-backed verifier path, so those labels cannot be replayed around the
   canonical `halo2/ipa` folded proof boundary.
+- Offline audit output certificate replay keys are now checked against existing
+  topup/audit lineage before recursive proof verification. A certificate already
+  anchored by the online-to-offline topup cannot be recycled as a fresh bearer
+  output certificate, preserving the one-use trust anchor across audit hops.
+  Offline note commitments are now replay-checked across both topup issue and
+  audit-output domains, so topup commitments cannot be reintroduced as P2P
+  bearer outputs and prior P2P output commitments cannot be loaded again by a
+  later online-to-offline topup.
   Derived Halo2 IPA proving keys for IVM execution, Offline Note, and Kagemusha
   folded proofs are now stored as Norito archives that bind the canonical
   circuit family and verifier-key commitment before raw Halo2 key bytes are
@@ -210,24 +421,65 @@ Last updated: 2026-05-29
 - The aggregation-mode surface now reports mode `2` as a reserved value with a
   stable rejection reason. The current tree has native Halo2 IPA verification,
   but no in-circuit Halo2 IPA verifier gadget, so public compact-token prover
-  and verifier paths remain constrained to checked pre-fold mode `1`.
+  and verifier paths remain constrained to checked pre-fold mode `1`. The
+  non-native recursive-verifier foundation now includes canonical Vesta/Fq limb
+  ranges, a native Pasta/Fp scalar decomposition gadget that binds a public
+  or private scalar to canonical private `u64` limbs below the Fp modulus and
+  rejects `value + modulus` aliases, modular addition with independent
+  unreduced-sum and reduction carry chains, modular multiplication with
+  schoolbook product limbs, private `u128` carry chains, and a private canonical
+  quotient, a Vesta affine on-curve check for public `x/y` coordinates, a
+  distinct affine point-addition gadget, and an affine point-doubling gadget,
+  plus canonical point-or-identity
+  validation and complete point-or-identity addition covering identity
+  passthrough, inverse-pair output identity, doubling, and distinct affine
+  addition under one-hot branch selectors. A conditional-add gadget now binds
+  private selected addends to boolean scalar bits, and a bounded
+  scalar-multiplication wrapper links the public `u64` scalar-limb
+  decomposition, addend doubling ladder, private accumulator chain, and public
+  base/output point encodings. A native-scalar scalar-multiplication wrapper now
+  consumes canonical Pasta/Fp scalar decomposition bits directly, enforces
+  high-bit zeroing for bounded widths, links conditional-add selectors to those
+  scalar bits, and proves the same private addend-doubling ladder from the
+  public base. The native transparent IPA verifier now exposes
+  canonical per-round transcript projections for recursive-verifier witnesses
+  plus scalar-multiplication accumulation projections for `Q`, folded `g/h`
+  vectors, challenge squares, final folded generators, and the final expected
+  term. It also validates IPA parameter wire version, curve, and shape before
+  consulting the cached parameter registry. Native Pasta/Fp scalar
+  decomposition and native-scalar Vesta multiplication composition are in place;
+  production-sized MSM integration and the final IPA verifier gadget remain
+  outstanding.
 - Focused validation passed:
   - `cargo fmt --all`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo fmt --all -- --check`
+  - `cargo fmt --all -- --check`
   - `git diff --check`
   - `git diff --name-only -- Cargo.lock` (no output)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_cli`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha --lib` (17 tests, including JNI-helper record checks, exact verifier-record-set enforcement, missing trust-anchor metadata rejection, forged envelope-hash metadata and hop auxiliary-byte rejection for both bridge entry points, oversized-hop rejection, oversized-bundle early rejection, malformed-hop-shape early rejection, and root-discontinuity early rejection)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_cli`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_verified_kagemusha_compact_payment_token --lib` (4 tests, including unanchored Rust compact-prover rejection, record-backed real proof emission, tampered-hop rejection, and root-discontinuity rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha --lib` (17 tests, including record-backed success, JNI-helper record checks, exact verifier-record-set enforcement, verifier namespace binding, confidential-transfer-v2 record/envelope circuit-id alias rejection, legacy unanchored valid-bundle rejection, missing trust-anchor metadata rejection, forged envelope-hash metadata and hop auxiliary-byte rejection, oversized-hop rejection, oversized-bundle early rejection, malformed-hop-shape early rejection, and root-discontinuity early rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_proof_public_inputs_statement_digest --lib` (2 tests, including data-model canonical proof-statement auxiliary-byte and zero verifier-key-hash rejection)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha --lib` (11 tests, including data-model trusted-setup, developer-only debug/mock substring, and profile-less STARK backend rejection for proof statements, verifier-key digests, and folded-step verifier ids, standalone KZG/pairing label rejection for verifier-key Poseidon digests, empty proof-statement metadata, verifier-key ids, and verifier-key bytes rejection, direct aggregation-statement canonical-shape rejection, zero digest/commitment rejection, and compact folded public-input hop-count rejection)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_verifier_key_poseidon_digest_binds_backend_and_bytes --lib` (1 test, including mixed-case trusted-setup and developer-only Kagemusha verifier-key digest rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha --lib` (12 tests, including data-model trusted-setup, developer-only debug/mock substring, and profile-less STARK backend rejection for proof statements, verifier-key digests, and folded-step verifier ids, standalone KZG/pairing label rejection for verifier-key Poseidon digests, empty proof-statement metadata, verifier-key ids, and verifier-key bytes rejection, direct aggregation-statement canonical-shape rejection, folded public-input projection mismatch rejection, zero root, unchanged root-transition, zero digest/commitment, and zero aggregation transcript digest rejection, and compact folded public-input hop-count rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_verifier_key_poseidon_digest_binds_backend_and_bytes --lib` (1 test, including mixed-case and whitespace-delimited trusted-setup plus developer-only Kagemusha verifier-key digest rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model offline --lib` (16 tests)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_proof_statement_digest --lib` (4 tests, including standalone Kagemusha proof-statement auxiliary-byte, zero verifier-key-hash, empty circuit-id, empty schema, and empty instance-column rejection)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer --lib` (20 tests, including chain-side missing verifier-key commitment metadata and empty verifier-key id rejection)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha --lib` (72 tests, including empty verifier-key bytes rejection, final prover archive/circuit-family hardening, and checked fold construction)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_proof_statement_digest --lib` (4 tests, including standalone Kagemusha proof-statement auxiliary-byte, zero verifier-key-hash, Halo2 circuit-id alias, empty circuit-id, empty schema, and empty instance-column rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_fold_step --lib` (9 tests, including lower-helper rejection of non-canonical Halo2 circuit/schema metadata before proof verification)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_folded_public_inputs_from_bundle_with_records_rejects_bad_records --lib` (includes hop verifier-record and envelope circuit-id alias rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token_record_verifier_rejects_registry_mismatches --lib` (includes final folded verifier namespace and circuit-id alias rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_verifier_record_mismatches_before_proof_decode --lib` (includes canonical confidential-transfer-v2 verifier circuit-id alias rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer --lib` (20 tests, including chain-side Kagemusha verifier namespace binding, confidential-transfer-v2 verifier/envelope circuit-id alias rejection, missing verifier-key commitment metadata, and empty verifier-key id rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_folded_semantic_circuit --lib` (9 tests, including folded proof aggregation-mode, hop-count, bit-decomposition, zero root/digest public-field group, unchanged public-root, bad public-field inverse, and bad root-difference inverse-witness rejection)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core native_pasta_fp_scalar --lib` (11 tests, including public native Pasta/Fp scalar zero, native-scalar, and modulus-minus-one acceptance; private scalar acceptance; modulus, public-value substitution, limb-value substitution, non-boolean limb bit, wrong slack, non-boolean borrow, and `value + modulus` alias rejection)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_scalar_mul --lib` (10 tests, including bounded and zero scalar acceptance, builder-side wrong-output and high-bit rejection, public scalar/base/output substitution rejection, and conditional-bit, accumulator-chain, and double-chain tamper rejection)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_native_scalar_mul --lib` (7 tests, including native Pasta/Fp one-bit and two-bit scalar multiplication acceptance, high-bit builder rejection, public scalar substitution, noncanonical scalar alias, conditional-bit tamper, and double-chain case tamper rejection)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native --lib` (116 tests, including public/private native Pasta/Fp scalar canonical decomposition, native-scalar Vesta multiplication with scalar-bit/doubling-ladder binding, modulus and `value + modulus` alias rejection, non-native `u64` limb range acceptance/rejection, high-residue rejection, forged accumulator rejection, canonical Vesta/Fq modulus-minus-one acceptance, modulus rejection, public-limb substitution, non-boolean borrow, forged slack, high-residue limb rejection, modular-add no-reduction/reduction/carry acceptance, wrong output, forged reduction bit, forged sum limb, non-boolean/final carry, noncanonical operand, high-residue sum-limb rejection, modular-mul no-reduction/reduction/zero/carry acceptance, wrong output, forged private quotient, forged product limb, forged product/reduction carry, carry-limb mismatch, noncanonical operand, high-residue product-limb rejection, Vesta generator on-curve acceptance, off-curve host rejection, noncanonical coordinate rejection, public-y substitution rejection, square-link tampering, curve-constant tampering, point-or-identity acceptance for canonical identity and generator, nonzero identity host rejection, off-curve non-identity rejection, noncanonical coordinate rejection, non-boolean/public-substituted identity rejection, identity-coordinate substitution, tampered non-identity curve link rejection, complete point-or-identity addition identity/inverse/doubling/distinct acceptance, complete-add wrong-output, public-coordinate, non-boolean selector, case substitution, branch-tamper rejection, conditional-add selector and selected-addend rejection, bounded scalar-mul public scalar/base/output substitution, high scalar bit, conditional-bit, accumulator-chain, and double-chain tamper rejection, distinct affine point-addition acceptance, wrong-output and duplicate-x host rejection, point-add public-coordinate substitution, noncanonical coordinate, x-delta tampering, denominator-inverse tampering, x/y equation tampering, affine point-doubling acceptance, wrong-output host rejection, public-coordinate substitution, noncanonical coordinate, denominator/numerator tampering, denominator-inverse tampering, and doubled x/y equation tampering)
+  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha --lib` (192 tests, including record-backed Kagemusha verifier namespace binding, confidential-transfer-v2 hop record/envelope/lower-helper circuit-id alias rejection, final folded verifier namespace binding, empty verifier-key bytes rejection, final prover archive/circuit-family hardening, non-zero folded root/digest and changed-root constraints, checked fold construction, public/private native Pasta/Fp scalar decomposition, native-scalar Vesta multiplication, and the non-native Vesta/Fq range/addition/multiplication/on-curve/identity/complete-add/conditional-add/scalar-mul/point-add/point-double foundations)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_round_challenge --lib` (4 tests, including label, statement-prefix, round-byte/order substitution, and bad-shape rejection for IPA transcript projection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_accumulation --lib` (4 tests, including verifier accumulation projection, bad challenge shape, round-index substitution, and challenge-value substitution)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 --lib` (56 tests, including IPA transcript projection, verifier accumulation projection, and parameter-registry metadata validation before cached lookup)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token_rejects_non_production_folded_backend_labels --lib`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token_rejects_ --lib` (14 compact-token adversarial tests, including trusted-setup/developer-only folded proof labels, public-input/context substitution, reserved recursive mode, final prover metadata/key archive rejection, envelope metadata substitution, oversized folded proofs, and tampered hop proofs)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_kagemusha_compact_payment_token_rejects_ --lib` (3 final prover boundary tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_compact_payment_token_rejects_ --lib` (14 compact-token adversarial tests, including trusted-setup/developer-only folded proof labels, public-input/context substitution, reserved recursive mode, final circuit-id alias rejection, final prover metadata/key archive rejection, envelope metadata substitution, oversized folded proofs, and tampered hop proofs)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_kagemusha_compact_payment_token_rejects_ --lib` (3 final prover boundary tests, including folded circuit-id alias rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core confidential_transfer_v2 --lib` (6 tests, including real Halo2 IPA confidential-transfer-v2 proofs and generic envelope metadata rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core halo2_ipa_proving_key_archive --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core ivm_execution_prover_rejects_wrong_circuit_family --lib`
@@ -238,17 +490,22 @@ Last updated: 2026-05-29
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify_rejects_trusted_setup_backends_before_dedup --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify_rejects_developer_only_backends_before_dedup --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify --lib` (6 tests, including malformed envelope metadata and trusted-setup backend rejection before dedup insertion)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails_reject --lib` (2 tests, including mixed-case trusted-setup and developer-only rejection before verifier dispatch)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails_reject --lib` (2 tests, including mixed-case and whitespace-delimited trusted-setup plus developer-only rejection before verifier dispatch)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock` (no output)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails_reject_trusted_setup_backends_before_dispatch --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails --lib` (8 tests, including trusted-setup and developer-only backend rejection before verifier dispatch)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core set_verifying_keys_rejects_trusted_setup_backend_labels --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core trusted_setup_classifier_catches_standalone_and_profile_labels --lib`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core stark_backend_tag_tests --lib` (4 tests, including profile-less, trusted-setup, and developer-only debug/mock STARK/FRI profile rejection plus standalone KZG/pairing, colon-profile, and mixed-case trusted-setup/developer-only classification)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core stark_backend_tag_tests --lib` (4 tests, including profile-less, trusted-setup, and developer-only debug/mock STARK/FRI profile rejection plus standalone KZG/pairing, colon-profile, mixed-case, and whitespace-delimited trusted-setup/developer-only classification)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core state_configured_gas_schedule_updates_metering --lib` (1 test, including gas metadata decode skip for non-production Halo2 labels)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core decode_open_verify_envelope_skips_non_production_backend_labels --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii stark_fri_backend_labels_require_non_empty_profile --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_does_not_classify_profileless_stark_prefix_as_stark --lib`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects --lib` (2 tests, including standalone, colon-profile, and mixed-case trusted-setup/developer-only labels under broad prover allowlists)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects --lib` (2 tests, including standalone, colon-profile, mixed-case, and whitespace-delimited trusted-setup/developer-only labels under broad prover allowlists)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects_trusted_setup_labels --lib` (includes standalone KZG/pairing labels and `halo2/ipa:kzg` under a broad `halo2/` allowlist)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects --lib` (3 tests, including mixed-case trusted-setup and developer-only rejection before registry lookup)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects --lib` (3 tests, including mixed-case and whitespace-delimited trusted-setup plus developer-only rejection before registry lookup)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects_trusted_setup_backend_before_registry_lookup --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_backend_allowlist_rejects_developer_only_labels --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii prover_worker_rejects_developer_only_backend_before_registry_lookup --lib`
@@ -265,10 +522,14 @@ Last updated: 2026-05-29
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify --test zk_preverify_budget`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_non_transparent_proof_backends --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_non_production_backend_labels_before_registry_lookup --lib`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_self_consistent_noncanonical_recursive_circuit --lib`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_ --lib` (10 tests, including non-production backend-label rejection before registry lookup, empty recursive verifier-key id, empty verifier-key bytes rejection, self-consistent noncanonical recursive circuit rejection, and profile-less `stark/fri/` backend rejection)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_ --lib` (24 tests)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note --lib` (32 tests, including real Halo2 IPA envelope metadata substitution rejection, archived Offline Note proving-key use, empty verifier-key trust-anchor rejection, and forged recursive circuit rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_self_consistent_noncanonical_recursive_circuit --lib` (includes recursive circuit-id aliases)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_offline_note_redeem_rejects_recursive_circuit_aliases --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core issue_rejects_note_commitment_reused_from_audit_output --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_output_commitment_reused_from_topup_before_proof --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_reused_output_certificate_from_topup_before_proof --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_ --lib` (10 tests, including non-production backend-label rejection before registry lookup, empty recursive verifier-key id, empty verifier-key bytes rejection, recursive circuit-id alias rejection, and profile-less `stark/fri/` backend rejection)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_ --lib` (27 tests, including real-proof chained audit-output trust-anchor acceptance, topup certificate replay rejection, and cross-domain note-commitment replay rejection before proof verification)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note --lib` (33 tests, including real Halo2 IPA envelope metadata substitution rejection, recursive circuit-id alias rejection, archived Offline Note proving-key use, empty verifier-key trust-anchor rejection, and forged recursive circuit rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_trusted_setup_halo2_backend_labels --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_developer_only_backend_labels --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core register_vk_rejects_trusted_setup_stark_backend_labels --lib`
@@ -280,6 +541,8 @@ Last updated: 2026-05-29
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core set_verifying_keys_rejects_ --lib` (2 tests, including IVM host trusted-setup and developer-only snapshot rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core generic_verify_proof_syscall --lib` (2 tests, including syscall-time rejection of an injected developer-only VK snapshot)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core verify_proof --lib` (14 tests, including zero verifier-key hash, auxiliary-byte preverified-cache bypass rejection, and injected developer-only VK snapshot rejection)
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.proofBindingRejectsRecursiveMetadataSubstitution --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.recursiveProofMetadataNormalizesAndRejectsMalformedVerifierKeys --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests,zk-preverify --test zk_backend_tags` (2 tests, including Groth16 VK admission rejection and Halo2 curve admission rejection)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-tests --test zk_proof_retention` (2 tests, retention coverage migrated to rejected no-trusted-setup Halo2 IPA proof records)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core --features zk-preverify trace_proving_queue_tests --lib` (3 tests, including validation-only trace jobs that emit no mock proof artifact and tampered-trace rejection)
@@ -331,8 +594,10 @@ Last updated: 2026-05-29
   derivation while preserving the transparent IPA setup.
 - Offline audit coverage now proves the trust anchor is the online-to-offline
   topup lineage rather than the submitter: an independent relayer can submit a
-  real-proof audit only after `IssueOfflineNote` anchors the input claim, while
-  certificate-only or missing-certificate anchors fail before proof verification.
+  real-proof audit only after `IssueOfflineNote` anchors the input claim, and a
+  second real-proof audit can use the first audit's output claim as the next
+  offline-offline trust anchor. Certificate-only or missing-certificate anchors
+  fail before proof verification.
 - Kagemusha focused tests now include a real Halo2 IPA fixture execution path
   that records the spent nullifier, deterministic output commitments, and root
   history, plus tampered-proof rejection.
@@ -413,6 +678,28 @@ Last updated: 2026-05-29
   substitutions before backend verification. A record-backed verifier mirrors
   WSV verifier-key admission and rejects inactive records, schema mismatches,
   missing inline keys, commitment mismatches, and proof-size cap violations.
+- Added reusable in-circuit foundations for future recursive Kagemusha
+  aggregation: a Pasta/Halo2 non-native `u64` limb range/decomposition gadget,
+  canonical Vesta/Fq range, modular Vesta/Fq addition, modular Vesta/Fq
+  multiplication, a Vesta affine on-curve check, and a distinct affine
+  point-addition gadget plus an affine point-doubling gadget and canonical
+  point-or-identity validation. The limb gadget constrains a scalar to 64 boolean
+  little-endian bits and rejects any high residue above bit 63; the Vesta/Fq
+  range gadget constrains four limbs below the Vesta base-field modulus using a
+  private slack and borrow chain; the arithmetic gadgets prove addition and
+  multiplication with private unreduced/product limbs, reduction witnesses, and
+  bounded carries; the affine gadget links public `x/y` coordinates to private
+  `x*x`, `y*y`, `x^2*x`, and `x^3 + 5` witnesses; the point-addition gadget
+  composes on-curve checks for `P`, `Q`, and `R`, proves a non-zero
+  denominator through a private inverse, and links the slope plus x/y output
+  equations for distinct affine addition; the point-doubling gadget proves
+  `2*y(P)` is invertible, links `lambda * (2*y(P)) = 3*x(P)^2`, and enforces
+  doubled x/y output equations; the point-or-identity gadget enforces boolean
+  identity flags, canonical `(0, 0, 1)` identity encoding, and conditional
+  on-curve checks. These are prerequisites for sound Vesta commitment-coordinate
+  arithmetic before an in-circuit IPA verifier can ship. Aggregation mode `2`
+  remains reserved until that verifier is
+  implemented.
 - Focused validation passed:
   - `cargo fmt --all`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_config offline_defaults_keep_kagemusha_enabled_without_legacy_fallback --lib`

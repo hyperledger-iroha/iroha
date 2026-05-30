@@ -604,7 +604,10 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
     ) -> Option<ZkOpenVerifyEnvelope> {
         let backend = proof.backend.as_str();
-        if !(backend.starts_with("halo2/") || crate::zk::is_stark_fri_v1_backend(backend)) {
+        if crate::zk::is_trusted_setup_backend_label(backend)
+            || crate::zk::is_developer_only_backend_label(backend)
+            || !(backend.starts_with("halo2/") || crate::zk::is_stark_fri_v1_backend(backend))
+        {
             return None;
         }
         norito::decode_from_bytes::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
@@ -13615,6 +13618,25 @@ pub mod isi {
         }
 
         #[test]
+        fn decode_open_verify_envelope_skips_non_production_backend_labels() {
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:tiny-add",
+                [0u8; 32],
+                vec![1, 2, 3],
+                vec![4, 5, 6],
+            );
+            let bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
+            for backend in ["halo2/ipa: KZG", "halo2/ipa:Mock-Proof"] {
+                let proof_box = ProofBox::new(backend.into(), bytes.clone());
+                assert!(
+                    decode_open_verify_envelope(&proof_box).is_none(),
+                    "non-production backend {backend} must not be decoded before validation"
+                );
+            }
+        }
+
+        #[test]
         fn open_verify_backend_tag_matches_rejects_cross_family_tags() {
             assert!(open_verify_backend_tag_matches(
                 "halo2/ipa",
@@ -18246,6 +18268,7 @@ pub mod isi {
                 "halo2/kzg/tiny-add",
                 "halo2/ipa:kzg",
                 "halo2/ipa:KZG",
+                "halo2/ipa: KZG",
                 "halo2/pasta/ipa:kzg",
                 "halo2/ipa:bn254",
                 "halo2/pasta/kzg/tiny-add",
@@ -18407,6 +18430,7 @@ pub mod isi {
             for backend in [
                 "stark/fri/kzg",
                 "stark/fri/KZG",
+                "stark/fri/ KZG",
                 "stark/fri/bn254",
                 "stark/fri/BN254",
                 "stark/fri/bls12_381",

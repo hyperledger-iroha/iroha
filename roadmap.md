@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-05-29
+Last updated: 2026-05-30
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -51,10 +51,16 @@ and completed history lives in [`status.md`](./status.md).
   The production audit path is now topup-anchored and rejects unbound input
   claims, hidden output commitments, cross-asset audits, and public amount
   mismatches; audit output certificates are signature-checked against their
-  declared output account before lineage is issued, and recursive proof
-  envelopes now require exact active verifier-key commitment binding, inline
-  verifier-key length consistency, canonical `offline-note-recursive` circuit
-  ids, canonical empty auxiliary bytes, and shared trusted-setup/developer-only
+  declared output account before lineage is issued. Audit output certificate
+  replay keys are checked against existing topup/audit lineage before recursive
+  proof verification, so a one-use certificate anchored by the online-to-offline
+  topup cannot be recycled as a new bearer output. Note commitments are also
+  replay-checked across both topup issue and audit-output domains, so commitments
+  cannot move between online-to-offline loading and P2P bearer outputs.
+  Recursive proof envelopes now require exact active verifier-key commitment
+  binding, inline verifier-key length consistency, the literal canonical
+  `offline-note-recursive` circuit id with alias spellings rejected, canonical
+  empty auxiliary bytes, and shared trusted-setup/developer-only
   backend classification before verifier-registry lookup.
   Verifying-key registry admission now rejects inline verifier records with
   inconsistent published key lengths on both register and update, and rejects
@@ -88,11 +94,14 @@ and completed history lives in [`status.md`](./status.md).
   the existing ZK asset nullifier/commitment/root accumulator, requires an
   asset-bound confidential-transfer-v2 Halo2 IPA verifier and root hint, rejects
   trusted-setup proof labels, checks the submitted `OpenVerifyEnvelope` backend
-  tag, confidential-transfer-v2 circuit id, schema, and verifier-key hash against
-  the active asset binding, requires inline verifier-key bytes with matching
-  length, commitment, non-zero proof-size cap, and active circuit/version index
-  before proof envelope decoding, and leaves legacy bearer-audit forcing
-  available only as an explicit migration fallback.
+  tag, literal
+  `halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified` circuit id,
+  schema, and verifier-key hash against the active asset binding, rejects
+  normalized confidential-transfer-v2 circuit aliases before proof decoding,
+  requires inline verifier-key bytes with matching length, commitment, non-zero
+  proof-size cap, and active circuit/version index before proof envelope
+  decoding, and leaves legacy bearer-audit forcing available only as an explicit
+  migration fallback.
   Compact multi-hop Kagemusha tokens now have a deterministic folded
   public-input transcript in the Rust data model; the transcript canonicalizes
   bounded private hops, rejects duplicate nullifiers/commitments and root
@@ -108,7 +117,8 @@ and completed history lives in [`status.md`](./status.md).
   hashing it into the transcript; optional envelope-hash metadata must match
   the submitted envelope bytes before private hops or chain-side transfers are
   accepted, and raw checked folding enforces the confidential-transfer-v2
-  proof-size cap, per-hop shape bounds, root continuity, duplicate-set checks,
+  literal circuit id with alias spellings rejected alongside the proof-size cap,
+  per-hop shape bounds, root continuity, duplicate-set checks,
   non-zero set entries, mandatory verifier-key commitment and verifier-key-id
   metadata, non-empty verifier-key bytes, canonical empty envelope auxiliary
   bytes, and the 64-hop compact-token corridor before parsing private-hop envelopes. Chain-side
@@ -117,10 +127,12 @@ and completed history lives in [`status.md`](./status.md).
   The proof-statement
   preimage is exposed in the data model as `KagemushaProofPublicInputsStatement`
   and hashed through the canonical Norito/Poseidon2 helper, which now rejects
-  non-empty envelope auxiliary bytes and zero verifier-key hashes before
-  transcript material is derived at both the core verifier helper and the
-  public data-model API, so SDKs and future recursive circuits share the same
-  canonical target format. The public Kagemusha transcript helpers also reject
+  non-empty envelope auxiliary bytes, zero verifier-key hashes, and Halo2 IPA
+  confidential-transfer-v2 circuit-id aliases before transcript material is
+  derived at the core verifier helper. The public data-model API enforces the
+  shared auxiliary-byte and verifier-key hash rule, so SDKs and future recursive
+  circuits share the same canonical target format. The public Kagemusha
+  transcript helpers also reject
   unsupported, trusted-setup, and developer-only backend labels before hashing
   per-hop verifier-key material or folding verifier-key ids. The
   proof-statement helper now also rejects empty circuit ids, schema bytes,
@@ -136,8 +148,14 @@ and completed history lives in [`status.md`](./status.md).
   covers standalone KZG/pairing labels and colon-profile setup labels with
   ASCII-case-insensitive matching, so registry admission, preverify, guardrails,
   and Torii's broad prover allowlists all fail closed on mixed-case forms such
-  as `halo2/ipa:KZG` or `halo2/ipa:Mock-Proof`. Compact folded-token
-  verification now also has
+  as `halo2/ipa:KZG` or `halo2/ipa:Mock-Proof`. It also tokenizes setup markers
+  across `/`, `:`, and ASCII whitespace, so padded setup labels such as
+  `halo2/ipa: KZG` fail closed at the same boundaries. Gas metering and generic
+  proof envelope metadata helpers now apply the same gate before decoding
+  pre-validation Halo2 metadata. Kotlin/JVM and Java Android Offline Note
+  recursive proof models now trim verifier/proof backend metadata and reject
+  malformed verifier-key separators before SDK proof-binding validation.
+  Compact folded-token verification now also has
   explicit final-proof coverage rejecting trusted-setup and developer-only
   backend labels in both direct and record-backed verifier paths. Direct
   Poseidon2 aggregation transcript hashing now validates
@@ -146,36 +164,134 @@ and completed history lives in [`status.md`](./status.md).
   supported transparent verifier-key backends before hashing, and rejects
   zero proof public-input digests, verifier-key commitments, or verifier-key
   Poseidon2 digests as wildcard binding material. The folded public-input model
-  also rejects zero or over-64 hop counts during data-model context validation,
-  and exposes a 1 KiB encoded-size budget plus `norito_encoded_len()` helpers so
+  also rejects zero or over-64 hop counts, all-zero initial/final roots, and
+  unchanged hop/public root transitions, and all-zero aggregation transcript
+  digests during data-model context validation, and exposes a 1 KiB encoded-size
+  budget plus `norito_encoded_len()` helpers so
   mobile transports can enforce compact QR/NFC payload corridors before adding
   backend proof bytes; folded-context validation rejects over-budget public
   transcripts. The Poseidon2 aggregation statement is exposed publicly as
   `KagemushaPoseidonAggregationTranscriptStatement` with a canonical builder
-  and digest helper, giving SDKs and future recursive circuits the same
-  canonicalized target layout. The high-level compact-token
+  and digest helper, plus host-side projection helpers that recompute every
+  folded public-input digest column from a full aggregation statement. This
+  gives SDKs and future recursive circuits the same canonicalized target layout
+  and catches transcript/public-input mismatches before proof generation. The
+  high-level compact-token
   prover uses that checked path before
   emitting the first
   `kagemusha-folded-v1` transparent Halo2 IPA proof, which proves and verifies
-  the 30-column folded public statement without a trusted setup and pins the
-  final folded proof envelope to canonical empty auxiliary bytes. Derived Halo2
-  IPA proving keys for IVM, Offline Note, and Kagemusha now use Norito archives
+  the 30-column folded public statement without a trusted setup, constrains the
+  public-input hash, initial/final roots, and aggregate digest columns to be
+  non-zero inside Halo2 via inverse witnesses, proves the final folded root
+  differs from the initial root with a selected-limb inverse witness, and pins
+  the final folded proof envelope to canonical empty auxiliary bytes and the
+  literal `kagemusha-folded-v1` circuit id. The Pasta circuit module now also
+  contains reusable non-native foundations for the future in-circuit Vesta/Fq
+  IPA verifier: a `u64` limb decomposition gadget that proves 64 boolean
+  little-endian bits and rejects high residue above bit 63, a native Pasta/Fp
+  scalar decomposition gadget that supports public or private scalar exposure,
+  binds the scalar to four private `u64` limbs, proves the canonical 255-bit
+  representation below the Fp modulus, and rejects `value + modulus` aliases, a
+  canonical Vesta/Fq range gadget that proves four limbs are below the Vesta
+  base-field modulus through a private slack and borrow chain, modular Vesta/Fq
+  addition with
+  unreduced-sum and reduction carry-chain checks, and modular Vesta/Fq
+  multiplication with schoolbook product limbs, private `u128` carry chains, and
+  a private canonical quotient, plus a Vesta affine on-curve check that links
+  public `x/y` coordinates to private `x*x`, `y*y`, `x^2*x`, and `x^3 + 5`
+  witnesses and a distinct affine point-addition gadget that composes on-curve
+  checks with private denominator-inverse, slope, and output-coordinate
+  equations, plus an affine point-doubling gadget that proves an invertible
+  `2*y(P)` denominator and links `lambda * (2*y(P)) = 3*x(P)^2`, and a
+  point-or-identity validity gadget with canonical `(0, 0, 1)` identity
+  encoding. Complete point-or-identity addition now covers identity
+  passthrough, inverse-pair output identity, doubling, and distinct affine
+  addition under one-hot branch selectors. A conditional-add layer now binds a
+  private selected addend to a boolean scalar bit, and the first bounded
+  scalar-multiplication wrapper links public scalar-limb decomposition, the
+  addend doubling ladder, private accumulator steps, and public base/output
+  point encodings. A native-scalar scalar-multiplication wrapper now consumes
+  canonical Pasta/Fp scalar decomposition bits directly, enforces high-bit
+  zeroing for bounded widths, and proves the same private addend-doubling ladder
+  from the public base. A fixed-window Pasta/Fp scalar decomposition gadget now
+  proves deterministic little-endian window digits for the production
+  windowed-MSM path, links every digit bit to the canonical private scalar bit,
+  and constrains high scalar bits above the configured window width to zero. A
+  non-native Vesta fixed-window point selector now proves that a selected
+  private point-or-identity comes from a private `2^WINDOW_BITS` table through a
+  quadratic binary selection network. A companion table-derivation gadget now
+  proves the private table is exactly `[0, B, 2B, ...]` for a public base point
+  by linking entry zero to identity, entry one to the public base, and later
+  entries to a complete-add chain. A fixed-window native-scalar multiplication
+  wrapper now composes scalar windows, shifted-base tables, selectors,
+  per-window base doublings, and selected-point accumulation into a public
+  `output = scalar * base` statement. The remaining windowed-MSM layer composes
+  multiple windowed scalar-multiplication terms into one public multi-scalar
+  accumulator. A bounded native-scalar Vesta MSM wrapper now composes
+  private canonical Pasta/Fp scalar witnesses, public base encodings, per-term
+  private scalar-multiplication ladders, and a private running sum into one
+  public output point, rejecting public base/output substitution, scalar-bit
+  tampering, noncanonical scalar aliases, broken double ladders, and unchained
+  private MSM accumulators. The first IPA-specific composition wrapper now
+  proves the final verifier comparison `Q = a*G + b*H + (a*b)*U` by reusing the
+  three-term bounded MSM and constraining the third scalar to the native-field
+  product of the first two, so a self-consistent MSM cannot forge the IPA
+  product term. The per-round accumulator update `Q' = x^2*L + Q + x^{-2}*R`
+  now has the same treatment, with private canonical `x` and `x^{-1}` witnesses
+  constrained as inverses and linked to the MSM scalars `x^2`, `1`, and
+  `x^{-2}`. Generator folding now also has a shared-challenge wrapper proving
+  `G' = x^{-1}*G_L + x*G_R` and `H' = x*H_L + x^{-1}*H_R` with two linked
+  two-term MSMs. The native-field IPA `b`-vector fold
+  `b' = b_L*x^{-1} + b_R*x` now has public-input scalar and fixed-size
+  segment-vector gadgets with one shared private canonical challenge pair and
+  adversarial coverage for inverse, input/output, and noncanonical scalar
+  tampering. A multi-round `b`-vector reduction gadget now folds the whole
+  power-of-two public vector to the final public scalar while keeping
+  intermediate vectors private and canonical; its round challenges and inverses
+  are public circuit inputs linked to private canonical decompositions so the
+  recursive circuit can bind externally projected Fiat-Shamir challenges. The
+  native transparent IPA verifier now derives the same projection and rejects
+  substituted `proof.b_final` values. Native IPA vector commitments now use backend-level
+  deterministic MSM hooks, with Pallas and BN254 using `halo2curves::msm_best`
+  and simple backends retaining the generic deterministic fallback. A
+  fixed-window native-scalar MSM wrapper now composes private canonical scalar
+  windows, shifted-base tables, table selections, private per-term outputs, and
+  the final public multi-scalar accumulator, with adversarial coverage for
+  substitution and splice attacks. The IPA final comparison now also has a
+  fixed-window `Q = a*G + b*H + (a*b)*U` wrapper with the same third-scalar
+  product-link invariant. The native accumulation projection also rejects
+  mismatched challenge inverse witnesses.
+  A one-round in-circuit verifier composition slice now shares one canonical
+  challenge/inverse pair across `b` folding, the `Q` accumulator update,
+  generator folding, and final MSM comparison, with direct advice links for
+  folded `b`, `Q'`, `G'`, and `H'`. A native transparent IPA
+  round-transcript projection helper records the `ipa.n` state boundary, each
+  round's `L/R` bytes, round-byte digest, transcript states, challenges,
+  challenge inverses, and final transcript state, and a native verifier
+  accumulation projection records `Q`, folded `g/h`, challenge squares, final
+  folded generators, and the final expected term. A combined native verifier
+  witness now validates those transcript, reduction, accumulation, and final
+  scalar projections together for future recursive-verifier witnesses, all
+  without adding a trusted setup. Alias
+  spellings are rejected at compact-token proving
+  and verification boundaries. Derived Halo2 IPA proving keys for IVM,
+  Offline Note, and Kagemusha now use Norito archives
   that bind the canonical circuit family and verifier-key commitment before raw
   Halo2 key bytes are decoded, rejecting raw or cross-circuit key material while
-  preserving production key caching. Mobile bridge
-  callers can now invoke the verified-bundle prover through
-  `connect_norito_kagemusha_prove_verified_compact_payment_token`, which
-  verifies every bundled hop proof before deriving folded public inputs.
-  Checked bundle verification now rejects generic active transparent hop
-  circuits before compact proof generation; record-backed bundle verification
-  also ties private hops to active WSV-style confidential-transfer-v2 verifier
-  metadata, including backend tag, circuit id, schema hash, verifier-key
-  commitment, key length, proof-size cap, optional inline-key consistency, and
-  exact record-set matching with no unrelated records.
-  Mobile and bridge callers can use
+  preserving production key caching. Mobile and bridge callers must use the
+  record-backed compact-token prover
   `connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`
-  with `KagemushaVerifiedFoldRecordBundle` to get those WSV-style checks at the
-  FFI boundary, while raw folded-input proof construction stays crate-local.
+  so private hops are tied to active WSV-style confidential-transfer-v2 verifier
+  metadata, including canonical `offline_kagemusha` namespace, backend tag,
+  circuit id, schema hash, verifier-key commitment, key length, proof-size cap,
+  optional inline-key consistency, and exact record-set matching with no
+  unrelated records at the FFI boundary, while raw folded-input proof
+  construction stays crate-local. The final folded-token record verifier applies
+  the same canonical namespace and registry metadata gate before backend proof
+  verification. The older unanchored C
+  symbol and Rust compact-token proving entry points remain present for ABI
+  compatibility but reject even valid `KagemushaVerifiedFoldBundle` input
+  without returning a token.
   Swift, Kotlin/JVM, and Java Android now expose record-backed compact-token
   prover wrappers over that ABI, so mobile wallets can pass
   `KagemushaVerifiedFoldRecordBundle` Norito bytes through the native bridge
@@ -192,9 +308,18 @@ and completed history lives in [`status.md`](./status.md).
   physical gap is the end-to-end cross-platform NFC/HCE payment
   exchange with both devices unlocked and ready; recursive aggregation of the
   private per-hop proofs into the compact no-trusted-setup Kagemusha proof
-  remains follow-up work for a later version. The current codebase has no
-  in-circuit Halo2 IPA verifier gadget, so aggregation mode `2` stays a
-  reserved, explicitly rejected wire value until that verifier exists.
+  remains follow-up work for a later version. Native Pasta/Fp scalar
+  decomposition, fixed-window scalar decomposition, fixed-window Vesta point
+  selection, table derivation, and scalar-multiplication composition, and
+  fixed-window multi-term MSM plus bounded native-scalar MSM, fixed-window IPA
+  final-comparison MSM, IPA scalar/vector-fold, full `b`-vector reduction,
+  generator-fold, round-accumulator, final-comparison composition, and one-round
+  and generic multi-round verifier composition are present, but in-circuit
+  transcript hash/challenge binding, migration of the remaining higher-level IPA
+  wrappers onto the windowed MSM path where needed, and production-scale
+  composed circuit evidence are still not complete, so
+  aggregation mode `2` stays a reserved, explicitly rejected wire value until
+  that verifier exists.
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 

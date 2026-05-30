@@ -61,6 +61,14 @@ pub use envelope::{
     Halo2ProofEnvelopeHeader, PCS_IPA, PUBLIC_INPUT_STRIDE, TRANSCRIPT_BLAKE2B,
 };
 pub use errors::Error;
+pub use ipa::{
+    IpaRoundChallenge, IpaVerifierAccumulation, IpaVerifierAccumulationRound,
+    IpaVerifierBVectorReduction, IpaVerifierBVectorReductionRound, IpaVerifierTranscriptProjection,
+    IpaVerifierWitness, derive_ipa_verifier_accumulation, derive_ipa_verifier_b_vector_reduction,
+    derive_ipa_verifier_round_challenges, derive_ipa_verifier_transcript_projection,
+    derive_ipa_verifier_witness, validate_ipa_verifier_transcript_projection,
+    validate_ipa_verifier_witness,
+};
 pub use norito_types::{
     IpaParams, IpaProofData, OpenVerifyEnvelope, PolyOpenPublic, PolyOpenTranscriptMetadata,
     ZkCurveId,

@@ -32831,6 +32831,21 @@ pub(crate) struct TxHistoryVisibilityScope {
 }
 
 #[cfg(feature = "app_api")]
+fn tx_matches_history_visibility_scope(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    visibility: &TxHistoryVisibilityScope,
+    dataspace_domain: Option<&DomainId>,
+) -> bool {
+    if let Some(domain_id) = dataspace_domain {
+        return tx_references_domain_id(tx, domain_id);
+    }
+    visibility
+        .viewer_account_ids
+        .iter()
+        .any(|account_id| tx_references_account_id(tx, account_id))
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 pub(crate) struct MultisigApprovalsViewerScope {
     pub viewer_account_ids: Vec<AccountId>,
@@ -33028,6 +33043,15 @@ fn tx_asset_matches_selector(
 
 #[cfg(feature = "app_api")]
 fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> Result<()> {
+    validate_tx_filter_adapter_for_endpoint(expr, telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY)
+}
+
+#[cfg(feature = "app_api")]
+fn validate_tx_filter_adapter_for_endpoint(
+    expr: &FilterExpr,
+    telemetry: &MaybeTelemetry,
+    endpoint: &'static str,
+) -> Result<()> {
     // Strict adapter validation with depth and set-size limits + value parsing
     const MAX_DEPTH: usize = 10;
     const MAX_SET: usize = 256;
@@ -33036,27 +33060,30 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
     use iroha_crypto::HashOf;
     use iroha_data_model::{prelude as dm, query::error::QueryExecutionFail, transaction::signed};
 
-    fn invalid_field_path(field: &str) -> Error {
+    fn invalid_field_path(field: &str, endpoint: &'static str) -> Error {
         Error::AppQueryValidation {
             code: "invalid_field_path",
-            message: format!(
-                "unsupported field `{field}` for {ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY}"
-            ),
+            message: format!("unsupported field `{field}` for {endpoint}"),
         }
     }
 
-    fn validate_rec(expr: &FilterExpr, depth: usize, telemetry: &MaybeTelemetry) -> Result<()> {
+    fn validate_rec(
+        expr: &FilterExpr,
+        depth: usize,
+        telemetry: &MaybeTelemetry,
+        endpoint: &'static str,
+    ) -> Result<()> {
         if depth > MAX_DEPTH {
             return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
         }
         match expr {
             F::And(list) | F::Or(list) => {
                 for e in list {
-                    validate_rec(e, depth + 1, telemetry)?;
+                    validate_rec(e, depth + 1, telemetry, endpoint)?;
                 }
                 Ok(())
             }
-            F::Not(inner) => validate_rec(inner, depth + 1, telemetry),
+            F::Not(inner) => validate_rec(inner, depth + 1, telemetry, endpoint),
             F::Eq(f, v) | F::Ne(f, v) => match f.0.as_str() {
                 "authority" => {
                     let s = v
@@ -33101,7 +33128,7 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                         .map(|_| ())
                         .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
                 }
-                _ => Err(invalid_field_path(f.0.as_str())),
+                _ => Err(invalid_field_path(f.0.as_str(), endpoint)),
             },
             F::Lt(f, v) | F::Lte(f, v) | F::Gt(f, v) | F::Gte(f, v) => match f.0.as_str() {
                 "timestamp_ms" => {
@@ -33118,7 +33145,7 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                 {
                     Err(Error::Query(dm::ValidationFail::TooComplex))
                 }
-                _ => Err(invalid_field_path(f.0.as_str())),
+                _ => Err(invalid_field_path(f.0.as_str(), endpoint)),
             },
             F::In(f, list) | F::Nin(f, list) => {
                 if list.len() > MAX_SET {
@@ -33186,7 +33213,7 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                             Err(Error::Query(dm::ValidationFail::TooComplex))
                         }
                     }
-                    _ => Err(invalid_field_path(f.0.as_str())),
+                    _ => Err(invalid_field_path(f.0.as_str(), endpoint)),
                 }
             }
             F::Exists(f) | F::IsNull(f) => match f.0.as_str() {
@@ -33199,11 +33226,11 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                         .map(|_| ())
                         .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
                 }
-                _ => Err(invalid_field_path(f.0.as_str())),
+                _ => Err(invalid_field_path(f.0.as_str(), endpoint)),
             },
         }
     }
-    validate_rec(expr, 0, telemetry)
+    validate_rec(expr, 0, telemetry, endpoint)
 }
 
 #[cfg(feature = "app_api")]
@@ -34149,6 +34176,10 @@ pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/get";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_TRANSACTIONS_QUERY: &str = "/v1/transactions/query";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_TRANSACTIONS_VISIBLE_QUERY: &str = "/v1/transactions/visible/query";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS: &str = "/v1/accounts/{account_id}/transactions";
 #[cfg(feature = "app_api")]
@@ -35464,6 +35495,358 @@ pub async fn handle_v1_account_transactions_with_policy(
             .observe(page.items.len() as f64);
     }
     // Build Norito JSON response: { items: [...], total: N }
+    let items_json = tx_projections_to_json(&page.items);
+    let mut top = norito::json::Map::new();
+    top.insert("items".into(), norito::json::Value::Array(items_json));
+    insert_page_metadata(&mut top, &page, count_mode);
+    let body = norito::json::to_json_pretty(&top).map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            e.to_string(),
+        ))
+    })?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+/// POST /v1/transactions/query
+///
+/// Body: JSON `QueryEnvelope` with optional `filter`, `select`, and `pagination`.
+///
+/// Returns committed transactions without requiring clients to first discover
+/// and fan out over every account. Supported filter fields match the account
+/// transaction query endpoint.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_transactions_query(
+    state: Arc<CoreState>,
+    NoritoJson(envelope): NoritoJson<QueryEnvelope>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_transactions_query_with_policy(state, NoritoJson(envelope), telemetry, None).await
+}
+
+/// POST `/v1/transactions/query` with configurable asset enforcement.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_transactions_query_with_policy(
+    state: Arc<CoreState>,
+    NoritoJson(envelope): NoritoJson<QueryEnvelope>,
+    telemetry: MaybeTelemetry,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
+) -> Result<impl IntoResponse> {
+    handle_v1_transactions_query_scoped_with_policy(
+        state,
+        NoritoJson(envelope),
+        telemetry,
+        allowed_asset_definition_id,
+        ENDPOINT_TRANSACTIONS_QUERY,
+        None,
+    )
+    .await
+}
+
+/// POST `/v1/transactions/visible/query` with server-side viewer visibility.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_transactions_visible_query_with_policy(
+    state: Arc<CoreState>,
+    NoritoJson(envelope): NoritoJson<QueryEnvelope>,
+    telemetry: MaybeTelemetry,
+    visibility: TxHistoryVisibilityScope,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
+) -> Result<impl IntoResponse> {
+    handle_v1_transactions_query_scoped_with_policy(
+        state,
+        NoritoJson(envelope),
+        telemetry,
+        allowed_asset_definition_id,
+        ENDPOINT_TRANSACTIONS_VISIBLE_QUERY,
+        Some(visibility),
+    )
+    .await
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+async fn handle_v1_transactions_query_scoped_with_policy(
+    state: Arc<CoreState>,
+    NoritoJson(envelope): NoritoJson<QueryEnvelope>,
+    telemetry: MaybeTelemetry,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
+    endpoint: &'static str,
+    visibility: Option<TxHistoryVisibilityScope>,
+) -> Result<impl IntoResponse> {
+    #[cfg(feature = "telemetry")]
+    use std::time::Instant;
+
+    use iroha_data_model::query::dsl::CompoundPredicate;
+
+    #[cfg(feature = "telemetry")]
+    let start = Instant::now();
+    #[cfg(feature = "telemetry")]
+    let filter_depth = envelope
+        .filter
+        .as_ref()
+        .map(|expr| {
+            fn depth(e: &FilterExpr) -> usize {
+                use crate::filter::FilterExpr as F;
+                match e {
+                    F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
+                    F::Not(inner) => 1 + depth(inner),
+                    _ => 1,
+                }
+            }
+            depth(expr)
+        })
+        .unwrap_or(0);
+
+    let limits = app_query_limits();
+    let cap = app_query_page_cap(&state);
+    let committed_txs = committed_transactions_snapshot(state.as_ref());
+    let allowed_asset_selector = allowed_asset_definition_id
+        .clone()
+        .map(TxHistoryAssetSelector::DefinitionId);
+    let dataspace_domain = visibility.as_ref().and_then(|scope| {
+        scope
+            .allow_dataspace_wide
+            .then(|| DomainId::parse_fully_qualified(&scope.viewer_dataspace_id).ok())
+            .flatten()
+    });
+
+    if envelope.select.is_some() || envelope.aggregate.is_some() {
+        if let Some(ref expr) = envelope.filter {
+            fn depth(e: &crate::filter::FilterExpr) -> usize {
+                use crate::filter::FilterExpr as F;
+                match e {
+                    F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
+                    F::Not(inner) => 1 + depth(inner),
+                    _ => 1,
+                }
+            }
+            if depth(expr) > 10 {
+                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+            }
+            validate_tx_filter_adapter_for_endpoint(expr, &telemetry, endpoint)?;
+            crate::filter::validate_filter(expr).map_err(|e| map_filter_error(e, endpoint))?;
+        }
+        let pagination = enforce_app_pagination(
+            envelope.pagination.limit,
+            envelope.pagination.offset,
+            cap,
+            endpoint,
+        )?;
+        let _fetch_size = limits
+            .clamp_fetch_size(envelope.fetch_size)
+            .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+        let rows = committed_txs
+            .iter()
+            .filter(|tx| {
+                visibility.as_ref().is_none_or(|scope| {
+                    tx_matches_history_visibility_scope(tx, scope, dataspace_domain.as_ref())
+                })
+            })
+            .filter(|tx| {
+                allowed_asset_selector
+                    .as_ref()
+                    .is_none_or(|expected| tx_matches_asset_selector(tx, expected))
+            })
+            .map(tx_to_query_row);
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_ACCOUNT_TRANSACTIONS,
+            envelope,
+            rows,
+            "live",
+        );
+    }
+
+    let count_mode = app_count_mode(envelope.count_mode.as_deref(), endpoint);
+    let page = {
+        let predicate = if let Some(ref expr_wrap) = envelope.filter {
+            let expr = expr_wrap;
+            {
+                fn depth(e: &crate::filter::FilterExpr) -> usize {
+                    use crate::filter::FilterExpr as F;
+                    match e {
+                        F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
+                        F::Not(inner) => 1 + depth(inner),
+                        _ => 1,
+                    }
+                }
+                if depth(expr) > 10 {
+                    return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+                }
+            }
+            validate_tx_filter_adapter_for_endpoint(expr, &telemetry, endpoint)?;
+            crate::filter::validate_filter(expr).map_err(|e| map_filter_error(e, endpoint))?;
+            if filter_expr_references_field(expr, "authority") {
+                CompoundPredicate::PASS
+            } else {
+                tx_predicate_from_filter(expr)
+            }
+        } else {
+            CompoundPredicate::PASS
+        };
+        let pagination = enforce_app_pagination(
+            envelope.pagination.limit,
+            envelope.pagination.offset,
+            cap,
+            endpoint,
+        )?;
+        let fetch_size = limits
+            .clamp_fetch_size(envelope.fetch_size)
+            .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+        let sort_spec = envelope.sort.clone();
+        let filter_clone = envelope.filter.clone();
+        let select_clone = envelope.select.clone();
+
+        if sort_spec.is_empty() {
+            let filter_ref = filter_clone.as_ref();
+            let select_ref = &select_clone;
+            let filtered_iter = committed_txs.iter().filter_map(|tx| {
+                if !predicate.applies(tx) {
+                    return None;
+                }
+                if visibility.as_ref().is_some_and(|scope| {
+                    !tx_matches_history_visibility_scope(tx, scope, dataspace_domain.as_ref())
+                }) {
+                    return None;
+                }
+                if let Some(expected) = allowed_asset_selector.as_ref() {
+                    if !tx_matches_asset_selector(tx, expected) {
+                        return None;
+                    }
+                }
+                let include = filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true);
+                if include {
+                    Some(project_tx(tx, select_ref))
+                } else {
+                    None
+                }
+            });
+            collect_page_linear_for_mode(
+                filtered_iter,
+                pagination.offset,
+                pagination.limit,
+                fetch_size,
+                count_mode,
+            )
+        } else {
+            let filter_ref = filter_clone.as_ref();
+            let select_ref = &select_clone;
+            let mut projections: Vec<TxProjection> = Vec::new();
+            for tx in &committed_txs {
+                if !predicate.applies(tx) {
+                    continue;
+                }
+                if visibility.as_ref().is_some_and(|scope| {
+                    !tx_matches_history_visibility_scope(tx, scope, dataspace_domain.as_ref())
+                }) {
+                    continue;
+                }
+                if let Some(expected) = allowed_asset_selector.as_ref() {
+                    if !tx_matches_asset_selector(tx, expected) {
+                        continue;
+                    }
+                }
+                let include = filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true);
+                if include {
+                    projections.push(project_tx(tx, select_ref));
+                }
+            }
+
+            let spec_keys = sort_spec;
+            let has_entry = spec_keys.iter().any(|k| k.key.0 == "entrypoint_hash");
+            let has_auth = spec_keys.iter().any(|k| k.key.0 == "authority");
+            let sort_key = |p: &TxProjection| -> MultiSortKey {
+                let mut comps: Vec<SortKeyComponent> = Vec::new();
+                for key in &spec_keys {
+                    let asc = matches!(key.order, crate::filter::Order::Asc);
+                    match key.key.0.as_str() {
+                        "timestamp_ms" => {
+                            let ts = p.timestamp_ms.unwrap_or(u64::MAX);
+                            let val = iroha_primitives::numeric::Numeric::from(ts);
+                            comps.push(if asc {
+                                SortKeyComponent::asc(val)
+                            } else {
+                                SortKeyComponent::desc(val)
+                            });
+                        }
+                        "authority" => {
+                            let s = p.authority.as_deref().unwrap_or("").to_string();
+                            comps.push(if asc {
+                                SortKeyComponent::asc(s)
+                            } else {
+                                SortKeyComponent::desc(s)
+                            });
+                        }
+                        "entrypoint_hash" => {
+                            let s = p.entrypoint_hash.clone();
+                            comps.push(if asc {
+                                SortKeyComponent::asc(s)
+                            } else {
+                                SortKeyComponent::desc(s)
+                            });
+                        }
+                        "result_ok" => {
+                            let flag = if p.result_ok { "1" } else { "0" };
+                            comps.push(if asc {
+                                SortKeyComponent::asc(flag)
+                            } else {
+                                SortKeyComponent::desc(flag)
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                if !has_entry {
+                    comps.push(SortKeyComponent::asc(p.entrypoint_hash.clone()));
+                }
+                if !has_auth {
+                    comps.push(SortKeyComponent::asc(
+                        p.authority.as_deref().unwrap_or("").to_string(),
+                    ));
+                }
+                MultiSortKey::new(comps)
+            };
+
+            let iter = projections.into_iter().map(|p| (sort_key(&p), p));
+            collect_page_streaming_for_mode(
+                iter,
+                pagination.offset,
+                pagination.limit,
+                Some(pagination.cap),
+                count_mode,
+            )
+        }
+    };
+
+    #[cfg(feature = "telemetry")]
+    if telemetry.is_enabled() {
+        let metrics = telemetry.metrics().await;
+        metrics
+            .torii_filter_depth
+            .with_label_values(&[endpoint])
+            .observe(filter_depth as f64);
+        metrics
+            .torii_filter_match_count
+            .with_label_values(&[endpoint])
+            .observe(page.total.unwrap_or(page.items.len()) as f64);
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        metrics
+            .torii_scan_ms
+            .with_label_values(&[endpoint])
+            .observe(elapsed_ms);
+        metrics
+            .torii_stream_rows
+            .with_label_values(&[endpoint])
+            .observe(page.items.len() as f64);
+    }
+
     let items_json = tx_projections_to_json(&page.items);
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
@@ -37954,6 +38337,90 @@ mod tx_query_integration_smoke {
         };
         assert_eq!(items_len, 0);
         assert_eq!(total, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_transactions_query_returns_empty_on_blank_state() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = iroha_core::state::State::new_for_testing(World::default(), kura, query);
+
+        let env = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            aggregate: None,
+            sort: vec![crate::filter::SortKey {
+                key: crate::filter::FieldPath("timestamp_ms".into()),
+                order: crate::filter::Order::Desc,
+            }],
+            pagination: crate::filter::Pagination {
+                limit: Some(50),
+                offset: 0,
+            },
+            fetch_size: None,
+            count_mode: Some("exact".to_owned()),
+        };
+
+        let resp = handle_v1_transactions_query(
+            Arc::new(state),
+            crate::utils::extractors::NoritoJson(env),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        assert_eq!(v["items"].as_array().unwrap().len(), 0);
+        assert_eq!(v["total"].as_u64(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_transactions_visible_query_returns_empty_on_blank_state() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = iroha_core::state::State::new_for_testing(World::default(), kura, query);
+        let viewer = AccountId::new(KeyPair::random().public_key().clone());
+        let env = crate::filter::QueryEnvelope {
+            query: Some("VisibleTransactions".to_owned()),
+            filter: None,
+            select: None,
+            aggregate: None,
+            sort: vec![crate::filter::SortKey {
+                key: crate::filter::FieldPath("timestamp_ms".into()),
+                order: crate::filter::Order::Desc,
+            }],
+            pagination: crate::filter::Pagination {
+                limit: Some(50),
+                offset: 0,
+            },
+            fetch_size: None,
+            count_mode: Some("exact".to_owned()),
+        };
+
+        let resp = handle_v1_transactions_visible_query_with_policy(
+            Arc::new(state),
+            crate::utils::extractors::NoritoJson(env),
+            crate::routing::MaybeTelemetry::for_tests(),
+            TxHistoryVisibilityScope {
+                viewer_account_ids: vec![viewer],
+                viewer_dataspace_id: "wonderland".to_owned(),
+                allow_dataspace_wide: false,
+            },
+            None,
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        assert_eq!(v["items"].as_array().unwrap().len(), 0);
+        assert_eq!(v["total"].as_u64(), Some(0));
     }
 
     #[tokio::test]

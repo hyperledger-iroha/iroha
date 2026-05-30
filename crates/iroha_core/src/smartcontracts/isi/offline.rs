@@ -368,6 +368,13 @@ pub mod isi {
             )
             .into());
         }
+        if record.namespace != crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha transfer verifier key is not in the Kagemusha namespace",
+            )
+            .into());
+        }
         let circuit_key = (record.circuit_id.clone(), record.version);
         match state_transaction
             .world
@@ -392,13 +399,11 @@ pub mod isi {
         }
         if record.backend != BackendTag::Halo2IpaPasta
             || proof.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA
-            || !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
-                &record.circuit_id,
-            )
+            || record.circuit_id != crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
         {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "Kagemusha transfers require the transparent confidential-transfer-v2 Halo2/IPA verifier",
+                "Kagemusha transfers require the canonical transparent confidential-transfer-v2 Halo2/IPA verifier",
             )
             .into());
         }
@@ -474,13 +479,12 @@ pub mod isi {
             )
             .into());
         }
-        if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(&envelope.circuit_id)
-            || crate::zk::confidential_v2::normalize_confidential_circuit_id(&envelope.circuit_id)
-                != crate::zk::confidential_v2::normalize_confidential_circuit_id(&record.circuit_id)
+        if envelope.circuit_id != crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
+            || envelope.circuit_id != record.circuit_id
         {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "Kagemusha transfer proof envelope must use the asset-bound confidential-transfer-v2 circuit",
+                "Kagemusha transfer proof envelope must use the canonical asset-bound confidential-transfer-v2 circuit",
             )
             .into());
         }
@@ -645,10 +649,10 @@ pub mod isi {
             )
             .into());
         }
-        if !crate::zk::is_offline_note_recursive_circuit_id(&record.circuit_id) {
+        if record.circuit_id != crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "offline recursive verifier must use the offline-note-recursive circuit",
+                "offline recursive verifier must use the canonical offline-note-recursive circuit",
             )
             .into());
         }
@@ -1116,6 +1120,7 @@ pub mod isi {
                 )
             })?;
             let issue_key = offline_note_issue_key(&issue.note_commitment);
+            let audit_output_key = offline_note_audit_output_key(&issue.note_commitment);
             let certificate_key = offline_note_key_certificate_key(&certificate_payload_hash);
             let issued_claim_hash = offline_note_issued_claim_hash(
                 OfflineNoteIssuedClaim::from_issue(&issue).map_err(|err| {
@@ -1130,6 +1135,18 @@ pub mod isi {
                 .world
                 .offline_note_replay_keys
                 .get(&issue_key)
+                .is_some()
+            {
+                return Err(labeled_invariant(
+                    "duplicate_issue",
+                    "offline note commitment is already issued",
+                )
+                .into());
+            }
+            if state_transaction
+                .world
+                .offline_note_replay_keys
+                .get(&audit_output_key)
                 .is_some()
             {
                 return Err(labeled_invariant(
@@ -1557,6 +1574,11 @@ pub mod isi {
                 .iter()
                 .map(offline_note_audit_output_key)
                 .collect::<Vec<_>>();
+            let issued_output_commitment_keys = audit
+                .output_commitments
+                .iter()
+                .map(offline_note_issue_key)
+                .collect::<Vec<_>>();
             for issued_claim_key in &issued_input_claim_keys {
                 if state_transaction
                     .world
@@ -1627,6 +1649,20 @@ pub mod isi {
                     .into());
                 }
             }
+            for issued_output_commitment_key in &issued_output_commitment_keys {
+                if state_transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(issued_output_commitment_key)
+                    .is_some()
+                {
+                    return Err(labeled_invariant(
+                        "duplicate_issue",
+                        "offline audit output commitment is already issued",
+                    )
+                    .into());
+                }
+            }
             for issued_claim_key in &issued_output_claim_keys {
                 if state_transaction
                     .world
@@ -1637,6 +1673,20 @@ pub mod isi {
                     return Err(labeled_invariant(
                         "duplicate_issue",
                         "offline audit output claim is already issued",
+                    )
+                    .into());
+                }
+            }
+            for issued_certificate_key in &issued_output_certificate_keys {
+                if state_transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(issued_certificate_key)
+                    .is_some()
+                {
+                    return Err(labeled_invariant(
+                        "duplicate_key_certificate",
+                        "offline audit output key certificate is already issued",
                     )
                     .into());
                 }
@@ -2100,7 +2150,7 @@ pub mod isi {
             let asset = Asset::new(asset_id, Numeric::zero());
 
             let mut vk_record = crate::zk::confidential_v2::confidential_transfer_v2_vk_record(
-                "offline-kagemusha",
+                crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
                 1,
             )
             .expect("confidential transfer v2 verifier record");
@@ -2289,7 +2339,7 @@ pub mod isi {
 
         #[test]
         fn kagemusha_transfer_rejects_confidential_v2_envelope_mismatches() {
-            let cases: [(&str, &str, fn(&mut OpenVerifyEnvelope)); 5] = [
+            let cases: [(&str, &str, fn(&mut OpenVerifyEnvelope)); 6] = [
                 ("verifier_key_invalid", "backend", |envelope| {
                     envelope.backend = BackendTag::Stark;
                 }),
@@ -2300,6 +2350,10 @@ pub mod isi {
                         envelope.circuit_id = "halo2/pasta/ipa/tiny-add".to_owned();
                     },
                 ),
+                ("verifier_key_invalid", "canonical", |envelope| {
+                    envelope.circuit_id =
+                        "anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
+                }),
                 ("verifier_schema_mismatch", "schema", |envelope| {
                     envelope.public_inputs = b"not-confidential-transfer-v2".to_vec();
                 }),
@@ -2628,6 +2682,143 @@ pub mod isi {
         }
 
         #[test]
+        fn issue_rejects_note_commitment_reused_from_audit_output() {
+            let (state, asset_id, account_id, _definition_id) =
+                self_escrow_test_state(Numeric::new(100, 0));
+            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let key_certificate =
+                signed_sample_certificate(&account_keypair, account_id.clone(), 0x86, "topup-key");
+            let issue = iroha_data_model::offline::OfflineNoteIssue {
+                note_commitment: Hash::new(b"offline-reused-audit-output-note"),
+                key_certificate,
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            };
+            let audit_output_key = offline_note_audit_output_key(&issue.note_commitment);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction.world.account_permissions.insert(
+                account_id.clone(),
+                BTreeSet::from([Permission::new(
+                    CAN_MANAGE_OFFLINE_ESCROW_PERMISSION.into(),
+                    Json::new(()),
+                )]),
+            );
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(audit_output_key, ());
+
+            let err = IssueOfflineNote::new(issue)
+                .execute(&account_id, &mut transaction)
+                .expect_err("topup issue must not reuse a prior audit output commitment");
+            assert_offline_rejection(err, "duplicate_issue", "commitment is already issued");
+        }
+
+        #[test]
+        fn audit_rejects_output_commitment_reused_from_topup_before_proof() {
+            let (state, asset_id, account_id, _definition_id) =
+                self_escrow_test_state(Numeric::new(100, 0));
+            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let input_certificate = signed_sample_certificate(
+                &account_keypair,
+                account_id.clone(),
+                0x87,
+                "topup-input-key",
+            );
+            let output_certificate =
+                signed_sample_certificate(&account_keypair, account_id, 0x88, "audit-output-key");
+            let issue = iroha_data_model::offline::OfflineNoteIssue {
+                note_commitment: Hash::new(b"offline-topup-note"),
+                key_certificate: input_certificate.clone(),
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            };
+            let audit = sample_audit_bundle_for_issue(&issue, output_certificate);
+            let certificate_payload_hash = input_certificate
+                .payload_hash()
+                .expect("certificate payload hash");
+            let certificate_key = offline_note_key_certificate_key(&certificate_payload_hash);
+            let issued_claim = OfflineNoteIssuedClaim::from_issue(&issue).expect("issued claim");
+            let issued_claim_hash =
+                offline_note_issued_claim_hash(issued_claim).expect("issued claim hash");
+            let issued_claim_key = offline_note_issued_claim_key(&issued_claim_hash);
+            let issued_output_commitment_key =
+                offline_note_issue_key(audit.output_commitments.first().expect("output"));
+            let relayer = sample_account(0x89);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(certificate_key, ());
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(issued_claim_key, ());
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(issued_output_commitment_key, ());
+
+            let err = AuditOfflineNote::new(audit)
+                .execute(&relayer, &mut transaction)
+                .expect_err("audit output must not reuse a topup note commitment");
+            assert_offline_rejection(
+                err,
+                "duplicate_issue",
+                "output commitment is already issued",
+            );
+        }
+
+        #[test]
+        fn audit_rejects_reused_output_certificate_from_topup_before_proof() {
+            let (state, asset_id, account_id, _definition_id) =
+                self_escrow_test_state(Numeric::new(100, 0));
+            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let input_certificate =
+                signed_sample_certificate(&account_keypair, account_id, 0x84, "topup-input-key");
+            let issue = iroha_data_model::offline::OfflineNoteIssue {
+                note_commitment: Hash::new(b"offline-topup-note"),
+                key_certificate: input_certificate.clone(),
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            };
+            let audit = sample_audit_bundle_for_issue(&issue, input_certificate.clone());
+            let certificate_payload_hash = input_certificate
+                .payload_hash()
+                .expect("certificate payload hash");
+            let certificate_key = offline_note_key_certificate_key(&certificate_payload_hash);
+            let issued_claim = OfflineNoteIssuedClaim::from_issue(&issue).expect("issued claim");
+            let issued_claim_hash =
+                offline_note_issued_claim_hash(issued_claim).expect("issued claim hash");
+            let issued_claim_key = offline_note_issued_claim_key(&issued_claim_hash);
+            let relayer = sample_account(0x85);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(certificate_key, ());
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(issued_claim_key, ());
+
+            let err = AuditOfflineNote::new(audit)
+                .execute(&relayer, &mut transaction)
+                .expect_err("audit output must not reuse an issued topup key certificate");
+            assert_offline_rejection(
+                err,
+                "duplicate_key_certificate",
+                "output key certificate is already issued",
+            );
+        }
+
+        #[test]
         fn audit_rejects_output_certificate_signature_before_proof() {
             let (state, asset_id, account_id, _definition_id) =
                 self_escrow_test_state(Numeric::new(100, 0));
@@ -2754,7 +2945,7 @@ pub mod isi {
             )
             .expect("real offline audit proof");
             audit.recursive_proof = OfflineNoteRecursiveProof {
-                verifier_key_id: verifier_id,
+                verifier_key_id: verifier_id.clone(),
                 public_inputs_hash: audit_hash,
                 proof,
             };
@@ -2774,7 +2965,7 @@ pub mod isi {
             )
             .expect("issued output claim");
             let output_claim_hash =
-                offline_note_issued_claim_hash(output_claim).expect("output claim hash");
+                offline_note_issued_claim_hash(output_claim.clone()).expect("output claim hash");
             let output_claim_key = offline_note_issued_claim_key(&output_claim_hash);
             assert!(
                 transaction
@@ -2783,6 +2974,71 @@ pub mod isi {
                     .get(&output_claim_key)
                     .is_some(),
                 "audit should anchor output claim lineage for later redemption"
+            );
+            let first_audit_output_claim = audit.output_claims.first().expect("output claim");
+            let second_output_certificate =
+                signed_sample_certificate(&issuer, authority.clone(), 0x79, "audit-output-key-2");
+            let second_output_commitment = Hash::new(b"offline-audit-output-note-2");
+            let mut second_audit = OfflineNoteAuditBundle {
+                token_id: Hash::new(b"offline-audit-token-2"),
+                sender_key_certificate: first_audit_output_claim.key_certificate.clone(),
+                input_nullifiers: vec![Hash::new(b"offline-audit-input-nullifier-2")],
+                input_claims: vec![output_claim],
+                output_commitments: vec![second_output_commitment],
+                output_claims: vec![OfflineNoteAuditOutputClaim {
+                    note_commitment: second_output_commitment,
+                    key_certificate: second_output_certificate,
+                    asset: asset_id.clone(),
+                    amount: Numeric::new(10, 0),
+                }],
+                recursive_proof: placeholder_recursive_proof(Hash::new(
+                    b"offline-placeholder-public-inputs-2",
+                )),
+            };
+            let second_audit_hash = second_audit
+                .public_inputs_hash()
+                .expect("second audit public-input hash");
+            let second_proof = crate::zk::prove_offline_note_audit(
+                crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+                &verifier_key,
+                &second_audit,
+                Some(&proving_key),
+            )
+            .expect("real second-hop offline audit proof");
+            second_audit.recursive_proof = OfflineNoteRecursiveProof {
+                verifier_key_id: verifier_id,
+                public_inputs_hash: second_audit_hash,
+                proof: second_proof,
+            };
+            AuditOfflineNote::new(second_audit.clone())
+                .execute(&relayer, &mut transaction)
+                .expect("prior audit output should anchor the next offline-offline hop");
+            let spent_output_claim_key = offline_note_spent_claim_key(&output_claim_hash);
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&spent_output_claim_key)
+                    .is_some(),
+                "second audit should consume the first audit output claim"
+            );
+            let second_output_claim = OfflineNoteIssuedClaim::from_audit_output(
+                second_audit
+                    .output_claims
+                    .first()
+                    .expect("second output claim"),
+            )
+            .expect("second issued output claim");
+            let second_output_claim_hash =
+                offline_note_issued_claim_hash(second_output_claim).expect("second claim hash");
+            let second_output_claim_key = offline_note_issued_claim_key(&second_output_claim_hash);
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&second_output_claim_key)
+                    .is_some(),
+                "second audit should anchor the next output claim lineage"
             );
             let balance = transaction
                 .world
@@ -2846,6 +3102,7 @@ pub mod isi {
                 "groth16/bn254",
                 "halo2/kzg",
                 "halo2/ipa:KZG",
+                "halo2/ipa: KZG",
                 "halo2/bn254",
                 "debug-proof",
                 "Debug-Proof",
@@ -2956,44 +3213,51 @@ pub mod isi {
 
         #[test]
         fn offline_note_rejects_self_consistent_noncanonical_recursive_circuit() {
-            let (state, mut proof, _public_inputs_hash) =
-                offline_note_verifier_test_state(ConfidentialStatus::Active);
-            let forged_circuit = "halo2/ipa:offline-note-recursive-shadow".to_owned();
-            let envelope_circuit = forged_circuit.clone();
-            mutate_offline_note_recursive_envelope(&mut proof, |envelope| {
-                envelope.circuit_id = envelope_circuit;
-            });
-            let verifier_id = proof.verifier_key_id.clone();
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            {
-                let mut mutation_transaction = block.transaction();
-                let mut record = mutation_transaction
-                    .world
-                    .verifying_keys
-                    .get(&verifier_id)
-                    .expect("verifier record")
-                    .clone();
-                mutation_transaction
-                    .world
-                    .verifying_keys_by_circuit
-                    .remove((record.circuit_id.clone(), record.version));
-                record.circuit_id = forged_circuit;
-                mutation_transaction.world.verifying_keys_by_circuit.insert(
-                    (record.circuit_id.clone(), record.version),
-                    verifier_id.clone(),
-                );
-                mutation_transaction
-                    .world
-                    .verifying_keys
-                    .insert(verifier_id.clone(), record);
-                mutation_transaction.apply();
-            }
-            let transaction = block.transaction();
+            for forged_circuit in [
+                "halo2/ipa:offline-note-recursive",
+                "halo2/ipa/offline-note-recursive",
+                "halo2/pasta/offline-note-recursive",
+                "halo2/pasta/ipa/offline-note-recursive",
+                "halo2/ipa:offline-note-recursive-shadow",
+            ] {
+                let (state, mut proof, _public_inputs_hash) =
+                    offline_note_verifier_test_state(ConfidentialStatus::Active);
+                mutate_offline_note_recursive_envelope(&mut proof, |envelope| {
+                    envelope.circuit_id = forged_circuit.to_owned();
+                });
+                let verifier_id = proof.verifier_key_id.clone();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                {
+                    let mut mutation_transaction = block.transaction();
+                    let mut record = mutation_transaction
+                        .world
+                        .verifying_keys
+                        .get(&verifier_id)
+                        .expect("verifier record")
+                        .clone();
+                    mutation_transaction
+                        .world
+                        .verifying_keys_by_circuit
+                        .remove((record.circuit_id.clone(), record.version));
+                    record.circuit_id = forged_circuit.to_owned();
+                    mutation_transaction.world.verifying_keys_by_circuit.insert(
+                        (record.circuit_id.clone(), record.version),
+                        verifier_id.clone(),
+                    );
+                    mutation_transaction
+                        .world
+                        .verifying_keys
+                        .insert(verifier_id.clone(), record);
+                    mutation_transaction.apply();
+                }
+                let transaction = block.transaction();
 
-            let err = offline_note_resolve_verifier(&proof, &transaction)
-                .expect_err("self-consistent noncanonical Offline recursive circuit must reject");
-            assert_offline_rejection(err, "verifier_key_invalid", "offline-note-recursive");
+                let err = offline_note_resolve_verifier(&proof, &transaction).expect_err(
+                    "self-consistent noncanonical Offline recursive circuit must reject",
+                );
+                assert_offline_rejection(err, "verifier_key_invalid", "offline-note-recursive");
+            }
         }
 
         #[test]
@@ -3169,7 +3433,12 @@ pub mod isi {
             let mut block = state.block(header);
             let mut transaction = block.transaction();
 
-            for backend in ["halo2/pasta", "halo2/ipa:KZG", "halo2/ipa:Mock-Proof"] {
+            for backend in [
+                "halo2/pasta",
+                "halo2/ipa:KZG",
+                "halo2/ipa: KZG",
+                "halo2/ipa:Mock-Proof",
+            ] {
                 let err = sample_kagemusha_transfer(backend)
                     .execute(&authority, &mut transaction)
                     .expect_err("Kagemusha must reject non-transparent proof backends");
@@ -3274,6 +3543,41 @@ pub mod isi {
                 },
                 "verifier_key_inactive",
                 "circuit/version",
+            );
+            assert_kagemusha_transfer_record_mutation_rejects(
+                |transaction, verifier_id| {
+                    mutate_verifier_record(transaction, verifier_id, |record| {
+                        record.namespace = "generic_confidential_transfer".to_owned();
+                    });
+                },
+                "verifier_key_invalid",
+                "Kagemusha namespace",
+            );
+            assert_kagemusha_transfer_record_mutation_rejects(
+                |transaction, verifier_id| {
+                    let mut record = transaction
+                        .world
+                        .verifying_keys
+                        .get(verifier_id)
+                        .expect("verifier record")
+                        .clone();
+                    transaction
+                        .world
+                        .verifying_keys_by_circuit
+                        .remove((record.circuit_id.clone(), record.version));
+                    record.circuit_id =
+                        "anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
+                    transaction.world.verifying_keys_by_circuit.insert(
+                        (record.circuit_id.clone(), record.version),
+                        verifier_id.clone(),
+                    );
+                    transaction
+                        .world
+                        .verifying_keys
+                        .insert(verifier_id.clone(), record);
+                },
+                "verifier_key_invalid",
+                "canonical",
             );
             assert_kagemusha_transfer_record_mutation_rejects(
                 |transaction, verifier_id| {

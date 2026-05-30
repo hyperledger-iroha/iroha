@@ -1682,16 +1682,19 @@ mod tests {
             "groth16/bn254",
             "kzg",
             "KZG",
+            " kzg ",
             "kzg/ceremony-v1",
             "KZG/ceremony-v1",
             "bn254",
             "BN254",
+            "\tBN254\n",
             "bn256",
             "bls12_381",
             "halo2/bn254",
             "halo2/kzg",
             "halo2/ipa:kzg",
             "halo2/ipa:KZG",
+            "halo2/ipa: KZG",
         ] {
             assert!(
                 !backend_allowed(backend, &broad_halo2),
@@ -1814,7 +1817,7 @@ mod tests {
             allowed_circuits: Vec::new(),
             state: Some(fixture_state()),
         };
-        for backend in ["halo2/kzg", "halo2/ipa:KZG"] {
+        for backend in ["halo2/kzg", "halo2/ipa:KZG", "halo2/ipa: KZG"] {
             let attachment = ProofAttachment::new_ref(
                 backend.to_owned(),
                 ProofBox::new(backend.to_owned(), vec![0x42]),
