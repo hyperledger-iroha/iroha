@@ -41,6 +41,26 @@ import { noritoEncodeInstruction } from "@iroha/iroha-js/norito";
 import { generateKeyPair } from "@iroha/iroha-js/crypto";
 ```
 
+For browser-safe Kotodama contract compilation, use the dedicated compiler
+subpath. It emits the same `.to` artifact bytes and manifest metadata used by
+Torii contract deployment without importing the Node-first SDK surface:
+
+```js
+import { compileKotodamaProgram } from "@iroha/iroha-js/kotodama-compiler";
+
+const compiled = compileKotodamaProgram(source, { sourceName: "contract.ko" });
+if (compiled.diagnostics.length > 0) {
+  throw new Error(compiled.diagnostics.map((item) => item.message).join("\n"));
+}
+
+console.log(compiled.codeHashHex);
+console.log(compiled.manifest);
+```
+
+The compiler defaults to production mode, which strips `#[test]` functions like
+Rust `CompilerMode::Production`. Pass `{ mode: "test" }` to retain supported
+Kotodama test helpers in local test artifacts.
+
 For browser-only Connect bootstrap without importing the Node-first `ToriiClient`
 surface, use the dedicated browser subpath:
 

@@ -98,6 +98,31 @@ pub struct IpaVerifierTranscriptProjection<S: IpaScalar> {
     pub final_state: [u8; 32],
 }
 
+/// Field-friendly binding of one verifier transcript projection.
+///
+/// The native verifier still validates the exact SHA3 transcript projection.
+/// This structure additionally projects that byte transcript into scalar field
+/// elements and folds them with a transparent Pow5 accumulator so recursive
+/// verifier circuits can bind their public challenge inputs to the host-checked
+/// transcript without implementing SHA3 inside the circuit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IpaVerifierTranscriptBinding<S: IpaScalar> {
+    /// Public vector length absorbed by the IPA verifier.
+    pub n: usize,
+    /// Scalar projection of the transcript header and `ipa.n` state boundary.
+    pub header_projection: S,
+    /// Scalar projections of each round's bytes, states, challenge, and inverse.
+    pub round_projections: Vec<S>,
+    /// Per-round Fiat-Shamir challenges copied from the verified projection.
+    pub challenges: Vec<S>,
+    /// Per-round challenge inverses copied from the verified projection.
+    pub challenge_inverses: Vec<S>,
+    /// Scalar projection of the final transcript state.
+    pub final_projection: S,
+    /// Pow5 accumulator binding all scalar projections and challenges.
+    pub binding_digest: S,
+}
+
 /// Native verifier-side IPA accumulation state for one reduction round.
 ///
 /// The round records the scalar squares used in `Q' = L^{x^2} * Q *
@@ -186,6 +211,8 @@ pub struct IpaVerifierAccumulation<G: IpaGroup> {
 pub struct IpaVerifierWitness<B: IpaBackend> {
     /// Public transcript projection for this proof.
     pub transcript_projection: IpaVerifierTranscriptProjection<B::Scalar>,
+    /// Field-friendly binding of the verified transcript projection.
+    pub transcript_binding: IpaVerifierTranscriptBinding<B::Scalar>,
     /// Per-round transcript states and Fiat-Shamir challenges.
     pub round_challenges: Vec<IpaRoundChallenge<B::Scalar>>,
     /// Public `b`-vector reduction down to `proof.b_final`.
@@ -207,6 +234,170 @@ fn ipa_round_bytes_digest(round_index: usize, l_bytes: [u8; 32], r_bytes: [u8; 3
     buf.extend_from_slice(&l_bytes);
     buf.extend_from_slice(&r_bytes);
     sha3_256(&buf)
+}
+
+fn scalar_from_u64<S: IpaScalar>(value: u64) -> S {
+    let mut out = S::zero();
+    for _ in 0..value {
+        out = out.add(S::one());
+    }
+    out
+}
+
+fn scalar_pow5<S: IpaScalar>(value: S) -> S {
+    let square = value.mul(value);
+    square.mul(square).mul(value)
+}
+
+/// Transparent field compressor used by the transcript-binding accumulator.
+///
+/// This is deliberately small and circuit-friendly: recursive verifier circuits
+/// can enforce it with quadratic constraints by witnessing the intermediate
+/// squares. It is not a replacement for the native SHA3 transcript; it binds
+/// scalar projections of a SHA3-validated transcript into the recursive public
+/// input surface.
+pub fn ipa_transcript_binding_compress<S: IpaScalar>(left: S, right: S) -> S {
+    let left_shifted = left.add(scalar_from_u64::<S>(7));
+    let right_shifted = right.add(scalar_from_u64::<S>(13));
+    scalar_from_u64::<S>(2)
+        .mul(scalar_pow5(left_shifted))
+        .add(scalar_from_u64::<S>(3).mul(scalar_pow5(right_shifted)))
+}
+
+/// Fold one round projection and challenge pair into a transcript-binding state.
+pub fn ipa_transcript_binding_round<S: IpaScalar>(
+    state: S,
+    round_projection: S,
+    challenge: S,
+    challenge_inverse: S,
+) -> S {
+    let after_round = ipa_transcript_binding_compress(state, round_projection);
+    let after_challenge = ipa_transcript_binding_compress(after_round, challenge);
+    ipa_transcript_binding_compress(after_challenge, challenge_inverse)
+}
+
+fn projection_scalar<S: IpaScalar>(label: &[u8], body: &[u8]) -> S {
+    let mut buf = Vec::with_capacity(DST.len() + label.len() + body.len() + 24);
+    buf.extend_from_slice(DST.as_bytes());
+    buf.push(5u8);
+    buf.extend_from_slice(&(label.len() as u64).to_le_bytes());
+    buf.extend_from_slice(label);
+    buf.extend_from_slice(&(body.len() as u64).to_le_bytes());
+    buf.extend_from_slice(body);
+    let wide = crate::hash::sha3_512(&buf);
+    let mut bytes = [0u8; 64];
+    bytes.copy_from_slice(&wide);
+    S::from_uniform(&bytes)
+}
+
+fn transcript_header_projection_scalar<S: IpaScalar>(
+    projection: &IpaVerifierTranscriptProjection<S>,
+) -> S {
+    let mut body = Vec::with_capacity(8 + 32 + 32);
+    body.extend_from_slice(&(projection.n as u64).to_le_bytes());
+    body.extend_from_slice(&projection.state_before_ipa_n);
+    body.extend_from_slice(&projection.state_after_ipa_n);
+    projection_scalar(b"ipa.transcript.binding.header", &body)
+}
+
+fn transcript_round_projection_scalar<S: IpaScalar>(round: &IpaRoundChallenge<S>) -> S {
+    let mut body = Vec::with_capacity(8 + 32 * 8);
+    body.extend_from_slice(&(round.round_index as u64).to_le_bytes());
+    body.extend_from_slice(&round.l_bytes);
+    body.extend_from_slice(&round.r_bytes);
+    body.extend_from_slice(&round.round_bytes_digest);
+    body.extend_from_slice(&round.state_before_round);
+    body.extend_from_slice(&round.state_after_round_absorb);
+    body.extend_from_slice(&round.state_after_challenge);
+    body.extend_from_slice(&round.challenge.to_bytes());
+    body.extend_from_slice(&round.challenge_inverse.to_bytes());
+    projection_scalar(b"ipa.transcript.binding.round", &body)
+}
+
+fn transcript_final_projection_scalar<S: IpaScalar>(
+    projection: &IpaVerifierTranscriptProjection<S>,
+) -> S {
+    projection_scalar(b"ipa.transcript.binding.final", &projection.final_state)
+}
+
+/// Derive a field-friendly binding from a verified IPA transcript projection.
+///
+/// # Errors
+///
+/// Returns an error if the projection shape is inconsistent or if any
+/// challenge/inverse pair does not multiply to one.
+pub fn derive_ipa_verifier_transcript_binding<S: IpaScalar>(
+    projection: &IpaVerifierTranscriptProjection<S>,
+) -> Result<IpaVerifierTranscriptBinding<S>, Error> {
+    if projection.n == 0 || (projection.n & (projection.n - 1)) != 0 {
+        return Err(Error::InvalidN(projection.n));
+    }
+    let expected_rounds = projection.n.trailing_zeros() as usize;
+    if projection.rounds.len() != expected_rounds {
+        return Err(Error::InvalidProofShape {
+            reason: "transcript binding round count",
+            expected: expected_rounds,
+            actual: projection.rounds.len(),
+        });
+    }
+
+    let header_projection = transcript_header_projection_scalar(projection);
+    let final_projection = transcript_final_projection_scalar(projection);
+    let mut round_projections = Vec::with_capacity(expected_rounds);
+    let mut challenges = Vec::with_capacity(expected_rounds);
+    let mut challenge_inverses = Vec::with_capacity(expected_rounds);
+    let mut state = header_projection;
+    for (round_index, round) in projection.rounds.iter().enumerate() {
+        if round.round_index != round_index {
+            return Err(Error::InvalidProofShape {
+                reason: "transcript binding round index",
+                expected: round_index,
+                actual: round.round_index,
+            });
+        }
+        if round.challenge.mul(round.challenge_inverse) != S::one() {
+            return Err(Error::VerificationFailed);
+        }
+        let round_projection = transcript_round_projection_scalar(round);
+        state = ipa_transcript_binding_round(
+            state,
+            round_projection,
+            round.challenge,
+            round.challenge_inverse,
+        );
+        round_projections.push(round_projection);
+        challenges.push(round.challenge);
+        challenge_inverses.push(round.challenge_inverse);
+    }
+    let binding_digest = ipa_transcript_binding_compress(state, final_projection);
+
+    Ok(IpaVerifierTranscriptBinding {
+        n: projection.n,
+        header_projection,
+        round_projections,
+        challenges,
+        challenge_inverses,
+        final_projection,
+        binding_digest,
+    })
+}
+
+/// Validate a supplied field-friendly binding against a transcript projection.
+///
+/// # Errors
+///
+/// Returns an error if the deterministic binding derived from `projection`
+/// differs from `binding`.
+pub fn validate_ipa_verifier_transcript_binding<S: IpaScalar>(
+    projection: &IpaVerifierTranscriptProjection<S>,
+    binding: &IpaVerifierTranscriptBinding<S>,
+) -> Result<(), Error> {
+    let expected = derive_ipa_verifier_transcript_binding(projection)?;
+    if &expected == binding {
+        Ok(())
+    } else {
+        Err(Error::VerificationFailed)
+    }
 }
 
 /// Derive the verifier-side IPA transcript projection from the current transcript.
@@ -551,6 +742,7 @@ pub fn derive_ipa_verifier_witness<B: IpaBackend>(
 ) -> Result<IpaVerifierWitness<B>, Error> {
     let transcript_projection =
         derive_ipa_verifier_transcript_projection::<B>(params.n(), transcript, proof)?;
+    let transcript_binding = derive_ipa_verifier_transcript_binding(&transcript_projection)?;
     let round_challenges = transcript_projection.rounds.clone();
     let b_reduction = derive_ipa_verifier_b_vector_reduction(b, &round_challenges)?;
     if b_reduction.final_b != proof.b_final {
@@ -560,6 +752,7 @@ pub fn derive_ipa_verifier_witness<B: IpaBackend>(
         derive_ipa_verifier_accumulation::<B>(params, b, p_g, t, proof, &round_challenges)?;
     Ok(IpaVerifierWitness {
         transcript_projection,
+        transcript_binding,
         round_challenges,
         b_reduction,
         accumulation,
@@ -590,6 +783,7 @@ pub fn validate_ipa_verifier_witness<B: IpaBackend>(
 ) -> Result<(), Error> {
     let expected = derive_ipa_verifier_witness::<B>(params, transcript, b, p_g, t, proof)?;
     if witness.transcript_projection != expected.transcript_projection
+        || witness.transcript_binding != expected.transcript_binding
         || witness.round_challenges != expected.round_challenges
         || witness.b_reduction != expected.b_reduction
         || witness.accumulation != expected.accumulation

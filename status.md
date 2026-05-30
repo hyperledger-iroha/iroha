@@ -19,6 +19,18 @@ Last updated: 2026-05-30
   - `cargo test -p iroha_torii transactions_query -- --nocapture`
   - `cargo test -p iroha_torii transactions_visible_query -- --nocapture`
 
+## 2026-05-30 JS Kotodama ABI hash refresh
+
+- Updated the JS Kotodama compiler and regenerated `javascript/iroha_js/dist`
+  so compiled contract outputs now emit the current V1 ABI hash
+  `73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d`
+  in both `abiHashHex` and manifest `abi_hash`. Added JS regression coverage
+  against the canonical manifest hash literal.
+- Validation:
+  `node --test --test-name-pattern "Kotodama compiler SDK compiles a minimal contract artifact" javascript/iroha_js/test/kotodamaCompiler.test.js`
+  and
+  `cargo test -p ivm --test abi_hash_versions abi_hash_matches_v1_golden -- --nocapture`.
+
 ## 2026-05-30 Kagemusha recursive-verifier MSM foundation
 
 - The Pasta circuit module now includes a bounded native-scalar Vesta MSM
@@ -36,16 +48,17 @@ Last updated: 2026-05-30
   the three-term bounded MSM and adds a native Pasta/Fp product link for the
   third scalar, so a malicious witness cannot use an internally valid MSM with a
   forged IPA `a*b` term.
-- A per-round IPA accumulator wrapper now proves `Q' = x^2*L + Q + x^{-2}*R`.
-  It keeps `x` and `x^{-1}` as private canonical Pasta/Fp scalars, enforces
-  `x*x^{-1}=1`, links the first and third MSM scalars to `x^2` and `x^{-2}`,
-  and constrains the middle MSM scalar to one, preventing a valid-looking MSM
-  from drifting away from the transcript challenge.
+- A per-round IPA accumulator wrapper now proves `Q' = x^2*L + Q + x^{-2}*R`
+  through the fixed-window native-scalar MSM path. It keeps `x` and `x^{-1}`
+  as private canonical Pasta/Fp scalars, enforces `x*x^{-1}=1`, links the
+  first and third MSM scalars to `x^2` and `x^{-2}`, and constrains the middle
+  MSM scalar to one, preventing a valid-looking MSM from drifting away from the
+  transcript challenge.
 - The IPA generator-fold wrapper now proves
   `G' = x^{-1}*G_L + x*G_R` and `H' = x*H_L + x^{-1}*H_R` with two linked
-  two-term MSMs that share the same private canonical challenge and inverse.
-  A forged but internally valid folded-generator MSM is rejected if its scalars
-  do not match the transcript challenge relation.
+  fixed-window two-term MSMs that share the same private canonical challenge
+  and inverse. A forged but internally valid folded-generator MSM is rejected if
+  its scalars do not match the transcript challenge relation.
 - The native-field IPA scalar-fold gadgets now prove
   `b' = b_L*x^{-1} + b_R*x` for one scalar and for fixed-size public vector
   segments. They expose the left, right, and folded scalars, keep one shared
@@ -106,6 +119,14 @@ Last updated: 2026-05-30
   round-byte, round-digest, round-order, challenge, reduction, accumulator, and
   final-scalar substitution before those values can feed the recursive-circuit
   witness path.
+- The native zkp crate also derives and validates a field-friendly IPA
+  transcript binding from the SHA3-validated projection. The binding maps the
+  transcript header, every full round projection, each challenge/inverse pair,
+  and the final transcript state into Pasta/Fp scalars, then folds them through
+  a transparent Pow5 accumulator. This does not replace native SHA3 transcript
+  validation; it gives recursive verifier circuits a compact public digest that
+  binds their challenge inputs to the host-checked transcript without a trusted
+  setup.
 - Native IPA vector commitments now use backend-level deterministic MSM hooks.
   Pallas and BN254 dispatch to `halo2curves::msm_best`, with the previous
   per-base scalar multiplication fold retained as the generic fallback for
@@ -113,18 +134,27 @@ Last updated: 2026-05-30
   introducing a trusted setup or changing deterministic generator derivation.
 - A one-round in-circuit IPA verifier composition slice now links the
   `b`-vector fold, `Q' = x^2*L + Q + x^{-2}*R` accumulator, generator fold,
-  and final `Q = a*G + b*H + (a*b)*U` comparison behind one private canonical
-  challenge/inverse pair. The link gate ties the folded `b`, `Q'`, `G'`, and
-  `H'` advice outputs across otherwise self-consistent subgadgets, preventing
-  splice-style witnesses for the one-round case.
+  and final fixed-window `Q = a*G + b*H + (a*b)*U` comparison behind one
+  private canonical challenge/inverse pair. The link gate ties the folded `b`,
+  `Q'`, `G'`, and `H'` advice outputs across otherwise self-consistent
+  subgadgets, preventing splice-style witnesses for the one-round case.
 - A generic power-of-two multi-round in-circuit IPA verifier composition wrapper
   now extends those links across all rounds. It shares each round's
   challenge/inverse pair across the `b` reduction, `Q` accumulator, and every
   generator-fold pair; links each round's `Q`, `G`, and `H` outputs into the
-  next round; and feeds the final folded values into the final IPA MSM
-  comparison. Fast adversarial host-link coverage rejects substituted final
-  `b`, wrong round counts, and self-consistent but spliced challenge,
-  accumulator, or generator-fold witnesses for a two-round statement.
+  next round; and feeds the final folded values into the final fixed-window IPA
+  MSM comparison. Fast adversarial host-link coverage rejects substituted final
+  `b`, wrong round counts, fixed-window width overflow, and self-consistent but
+  spliced challenge, accumulator, or generator-fold witnesses for a two-round
+  statement.
+- A native Pasta/Fp transcript-binding accumulator circuit now enforces the
+  same Pow5 binding over public header/final/round projection scalars and
+  public challenge/inverse scalars. Public-instance gates bind each projected
+  scalar at its circuit row, inverse gates enforce `x*x^{-1}=1`, and chain
+  gates link all compressor rows through the final digest. Focused adversarial
+  coverage rejects builder count/inverse/digest errors, public
+  header/round/challenge/inverse/final/digest substitution, and intermediate
+  accumulator-state tampering.
 - A fixed-window native-scalar MSM wrapper now composes multiple windowed
   scalar-multiplication terms into one public multi-scalar accumulator while
   keeping per-term outputs private. It links public term bases, private
@@ -137,17 +167,17 @@ Last updated: 2026-05-30
   `a`, `b`, and `a*b` private and canonical, and adds a product-link gate so a
   self-consistent MSM cannot substitute the third scalar.
 - This is still a correctness foundation, not the completed recursive verifier:
-  in-circuit transcript hash/challenge binding, migration of the remaining
-  higher-level IPA wrappers onto the windowed MSM path where needed, and
-  production-scale composed circuit evidence remain outstanding, so Kagemusha
-  aggregation mode `2` remains reserved and public compact-token
-  prover/verifier entry points continue to accept only checked pre-fold mode
-  `1`.
+  the transcript-binding circuit still needs to be composed into the full
+  production-width recursive verifier and backed by production-width composed
+  evidence, so Kagemusha aggregation mode `2` remains reserved and public
+  compact-token prover/verifier entry points continue to accept only checked
+  pre-fold mode `1`.
 - Focused validation passed:
   - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_native_scalar_msm --lib` (10 tests, including two-term one-bit and two-bit MSM acceptance plus output-mismatch, high-scalar-bit, public base/output substitution, conditional-bit, sum-chain, noncanonical-scalar, and double-ladder tamper rejection; finished in 3513.80s)
   - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_msm --lib` (4 tests, including one-bit IPA final-comparison acceptance plus output-mismatch, product-high-bit, and forged-product-link rejection; finished in 1662.51s)
-  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_round_accumulator --lib` (4 tests, including one-bit accumulator acceptance plus inverse-mismatch, output-mismatch, and forged-square-link rejection; finished in 1667.92s)
-  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_generator_fold --lib` (4 tests, including one-bit generator-fold acceptance plus inverse-mismatch, output-mismatch, and forged-scalar-link rejection; finished in 2954.15s)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_round_accumulator --lib` (4 fixed-window tests, including one-bit accumulator acceptance plus inverse-mismatch, output-mismatch, and forged-square-link rejection; finished in 1m 47s compile plus 1358.70s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_round_accumulator_rejects_window_high_bit_builder --lib` (1 fixed-window high-bit builder rejection; finished in 1m 47s compile plus 0.01s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_generator_fold --lib` (5 fixed-window tests, including one-bit generator-fold acceptance plus inverse-mismatch, fixed-window high-bit, output-mismatch, and forged-scalar-link rejection; finished in 2391.90s)
   - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_scalar_fold --lib` (6 tests, including scalar-fold acceptance plus builder inverse/output mismatch, public-output substitution, challenge-inverse tamper, and noncanonical folded-output alias rejection; finished in 0.13s)
   - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_scalar_fold_vector --lib` (9 tests, including two-pair vector-fold acceptance plus zero-pair builder rejection, inverse/output mismatch, public left/output substitution, challenge-inverse tamper, and noncanonical challenge/output alias rejection; finished in 1m 41s compile plus 0.30s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_b_vector_reduction --lib` (13 tests, including four-scalar two-round reduction acceptance plus non-power-of-two, challenge-count, inverse, final-mismatch, public initial/final/challenge/inverse substitution, intermediate-tamper, and noncanonical intermediate/final alias rejection; finished in 1m 47s compile plus 0.09s test time)
@@ -159,16 +189,22 @@ Last updated: 2026-05-30
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_windowed_native_scalar_msm --lib` (9 tests, including two-term fixed-window MSM acceptance plus output-mismatch and high-scalar builder rejection, public base/output substitution, selection-table splice, term-output splice, sum-chain tamper, and noncanonical scalar alias rejection; finished in 1m 45s compile plus 2384.13s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_windowed_msm --lib` (4 tests, including one-bit fixed-window IPA final-comparison acceptance plus output-mismatch, product-high-bit, and forged-product-link rejection; finished in 1m 48s compile plus 1341.55s test time)
   - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_final_mismatch_builder --lib` (1 builder-level negative test for inconsistent final comparison; finished in 1m 41s compile plus 3.75s test time after moving the witness builder onto the large-stack test runner)
-  - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_one_round_verifier_accepts_one_bit_statement --lib` (1 one-round composed MockProver acceptance test; finished in 9489.98s, confirming the composed slice but also showing this path is a validation bottleneck)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_four_point --lib` (6 tests covering a two-round four-point verifier builder plus final-`b`, round-count, challenge-splice, accumulator-splice, and generator-splice rejection; finished in 0.35s compile plus 8.87s test time after the public-challenge binding change)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_window_high_bit_builder --lib` (1 composed one-round fixed-window high-bit builder rejection; finished in 0.46s compile plus 0.01s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_one_round_verifier_accepts_one_bit_statement --lib` (1 one-round composed fixed-window MockProver acceptance test; finished in 14855.74s, confirming the composed slice but also showing this path is a major validation bottleneck)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_four_point_builder --lib` (4 fixed-window tests covering a two-round four-point verifier builder plus final-`b`, round-count, and high-bit builder rejection; finished in 0.31s compile plus 9.00s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_four_point_host_links --lib` (3 host-link splice checks for challenge, accumulator, and generator substitution; finished in 0.31s compile plus 10.86s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_transcript_projection --lib` (5 tests covering transcript projection state/round-byte recording plus round-byte, round-digest, state-boundary, and round-order substitution rejection; finished in 6.59s compile plus 0.09s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_transcript_binding --lib` (4 tests covering transcript-binding acceptance plus round-projection, challenge, and digest substitution rejection; finished in 8.03s compile plus 0.09s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_b_vector_reduction --lib` (5 tests covering native reduction projection, bad shape, round-index substitution, inverse substitution, and challenge rebinding; finished in 6.27s compile plus 0.15s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_rejects_substituted_b_final --lib` (1 test; finished in 0.20s compile plus 0.13s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 backend_msm --lib` (2 tests comparing optimized Pallas/BN254 MSM with naive accumulation and checking dimension-mismatch rejection; finished in 6.27s compile plus 0.08s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_accumulation_projection_rejects_inverse_substitution --lib` (1 test; finished in 6.26s compile plus 0.11s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 ipa_verifier_witness --lib` (6 tests covering full verifier-witness projection plus transcript projection, transcript challenge, `b`-reduction, accumulator, and final-scalar substitution rejection; finished in 0.21s compile plus 0.24s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_transcript_binding --lib` (11 tests covering transcript-binding circuit acceptance plus round-count, inverse, digest, public header/round/challenge/inverse/final/digest substitution, and intermediate-state tamper rejection; finished in 1m 55s compile plus 0.02s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 --lib` (76 tests; finished in 2.61s)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_cli` (finished in 52.89s after adding the fixed-window IPA final-comparison wrapper)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_zkp_halo2` (finished in 12.28s)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_core` (finished in 40.91s after adding the transcript-binding circuit)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_cli` (finished in 2m 35s after adding the transcript-binding circuit)
   - `cargo fmt --all -- --check`
   - `git diff --check`
 

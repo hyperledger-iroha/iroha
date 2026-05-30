@@ -1475,6 +1475,134 @@ fn ipa_transcript_projection_validation_rejects_round_order_substitution() {
 }
 
 #[test]
+fn ipa_transcript_binding_projection_binds_rounds_and_challenges() {
+    let (params, z, commitment, t, proof) = sample_pallas_opening(8, "transcript-binding");
+    let mut transcript = Transcript::new("transcript-binding");
+    absorb_pallas_poly_statement(
+        &mut transcript,
+        &params,
+        z,
+        commitment,
+        t,
+        PolyOpenTranscriptMetadata::default(),
+    );
+    let projection = derive_ipa_verifier_transcript_projection::<PallasBackend>(
+        params.n(),
+        &mut transcript,
+        &proof,
+    )
+    .expect("transcript projection derives");
+    let binding =
+        derive_ipa_verifier_transcript_binding(&projection).expect("transcript binding derives");
+
+    assert_eq!(binding.n, params.n());
+    assert_eq!(binding.round_projections.len(), 3);
+    assert_eq!(binding.challenges.len(), 3);
+    assert_eq!(binding.challenge_inverses.len(), 3);
+    assert_ne!(binding.binding_digest.to_bytes(), [0u8; 32]);
+
+    let mut recomputed = binding.header_projection;
+    for round_index in 0..binding.round_projections.len() {
+        recomputed = ipa_transcript_binding_round(
+            recomputed,
+            binding.round_projections[round_index],
+            binding.challenges[round_index],
+            binding.challenge_inverses[round_index],
+        );
+    }
+    recomputed = ipa_transcript_binding_compress(recomputed, binding.final_projection);
+    assert_eq!(recomputed.to_bytes(), binding.binding_digest.to_bytes());
+
+    validate_ipa_verifier_transcript_binding(&projection, &binding)
+        .expect("transcript binding validates");
+}
+
+#[test]
+fn ipa_transcript_binding_validation_rejects_round_projection_substitution() {
+    let (params, z, commitment, t, proof) = sample_pallas_opening(8, "binding-round");
+    let mut transcript = Transcript::new("binding-round");
+    absorb_pallas_poly_statement(
+        &mut transcript,
+        &params,
+        z,
+        commitment,
+        t,
+        PolyOpenTranscriptMetadata::default(),
+    );
+    let projection = derive_ipa_verifier_transcript_projection::<PallasBackend>(
+        params.n(),
+        &mut transcript,
+        &proof,
+    )
+    .expect("transcript projection derives");
+    let mut binding =
+        derive_ipa_verifier_transcript_binding(&projection).expect("transcript binding derives");
+    binding.round_projections[0] = binding.round_projections[0].add(pallas::Scalar::one());
+
+    assert!(matches!(
+        validate_ipa_verifier_transcript_binding(&projection, &binding),
+        Err(Error::VerificationFailed)
+    ));
+}
+
+#[test]
+fn ipa_transcript_binding_validation_rejects_challenge_substitution() {
+    let (params, z, commitment, t, proof) = sample_pallas_opening(8, "binding-challenge");
+    let mut transcript = Transcript::new("binding-challenge");
+    absorb_pallas_poly_statement(
+        &mut transcript,
+        &params,
+        z,
+        commitment,
+        t,
+        PolyOpenTranscriptMetadata::default(),
+    );
+    let projection = derive_ipa_verifier_transcript_projection::<PallasBackend>(
+        params.n(),
+        &mut transcript,
+        &proof,
+    )
+    .expect("transcript projection derives");
+    let mut binding =
+        derive_ipa_verifier_transcript_binding(&projection).expect("transcript binding derives");
+    binding.challenges[0] = binding.challenges[1];
+    binding.challenge_inverses[0] = binding.challenge_inverses[1];
+
+    assert!(matches!(
+        validate_ipa_verifier_transcript_binding(&projection, &binding),
+        Err(Error::VerificationFailed)
+    ));
+}
+
+#[test]
+fn ipa_transcript_binding_validation_rejects_digest_substitution() {
+    let (params, z, commitment, t, proof) = sample_pallas_opening(8, "binding-digest");
+    let mut transcript = Transcript::new("binding-digest");
+    absorb_pallas_poly_statement(
+        &mut transcript,
+        &params,
+        z,
+        commitment,
+        t,
+        PolyOpenTranscriptMetadata::default(),
+    );
+    let projection = derive_ipa_verifier_transcript_projection::<PallasBackend>(
+        params.n(),
+        &mut transcript,
+        &proof,
+    )
+    .expect("transcript projection derives");
+    let mut binding =
+        derive_ipa_verifier_transcript_binding(&projection).expect("transcript binding derives");
+    binding.binding_digest = binding.binding_digest.add(pallas::Scalar::one());
+
+    assert!(matches!(
+        validate_ipa_verifier_transcript_binding(&projection, &binding),
+        Err(Error::VerificationFailed)
+    ));
+}
+
+#[test]
 fn ipa_b_vector_reduction_projection_matches_proof_final_b() {
     let (params, z, commitment, t, proof) = sample_pallas_opening(8, "b-reduction-projection");
     let mut transcript = Transcript::new("b-reduction-projection");
@@ -1656,6 +1784,16 @@ fn ipa_verifier_witness_projection_matches_verifier() {
         witness.transcript_projection.rounds,
         witness.round_challenges
     );
+    assert_eq!(witness.transcript_binding.n, params.n());
+    assert_eq!(witness.transcript_binding.challenges.len(), 3);
+    assert_eq!(
+        witness.transcript_binding.challenges,
+        witness
+            .round_challenges
+            .iter()
+            .map(|round| round.challenge)
+            .collect::<Vec<_>>()
+    );
     assert_eq!(witness.b_reduction.final_b, proof.b_final);
     assert_eq!(witness.proof_a_final, proof.a_final);
     assert_eq!(witness.proof_b_final, proof.b_final);
@@ -1715,6 +1853,54 @@ fn ipa_verifier_witness_validation_rejects_transcript_projection_substitution() 
     witness.transcript_projection.rounds[0].round_bytes_digest[0] ^= 0x01;
 
     let mut validation = Transcript::new("witness-transcript");
+    absorb_pallas_poly_statement(
+        &mut validation,
+        &params,
+        z,
+        commitment,
+        t,
+        PolyOpenTranscriptMetadata::default(),
+    );
+    assert!(matches!(
+        validate_ipa_verifier_witness::<PallasBackend>(
+            &params,
+            &mut validation,
+            &b,
+            commitment,
+            t,
+            &proof,
+            &witness,
+        ),
+        Err(Error::VerificationFailed)
+    ));
+}
+
+#[test]
+fn ipa_verifier_witness_validation_rejects_transcript_binding_substitution() {
+    let (params, z, commitment, t, proof) = sample_pallas_opening(8, "witness-binding");
+    let mut transcript = Transcript::new("witness-binding");
+    absorb_pallas_poly_statement(
+        &mut transcript,
+        &params,
+        z,
+        commitment,
+        t,
+        PolyOpenTranscriptMetadata::default(),
+    );
+    let b = pallas_evaluation_vector(params.n(), z);
+    let mut witness = derive_ipa_verifier_witness::<PallasBackend>(
+        &params,
+        &mut transcript,
+        &b,
+        commitment,
+        t,
+        &proof,
+    )
+    .expect("recursive verifier witness derives");
+    witness.transcript_binding.binding_digest =
+        witness.transcript_binding.binding_digest.add(pallas::Scalar::one());
+
+    let mut validation = Transcript::new("witness-binding");
     absorb_pallas_poly_statement(
         &mut validation,
         &params,

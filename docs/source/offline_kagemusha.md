@@ -399,12 +399,13 @@ scalar, so a self-consistent MSM cannot forge the `a*b` term. An optimized
 fixed-window version of the same final comparison now routes the three-term MSM
 through private canonical scalar windows, shifted-base tables, and table
 selections while keeping the same `a*b` product-link invariant. A per-round IPA
-accumulator wrapper now proves `Q' = x^2*L + Q + x^{-2}*R`, keeps `x` and
-`x^{-1}` as private canonical Pasta/Fp scalars, constrains them as inverses,
-and links the three MSM scalars to `x^2`, `1`, and `x^{-2}`. A generator-fold
-wrapper now proves `G' = x^{-1}*G_L + x*G_R` and
-`H' = x*H_L + x^{-1}*H_R` with two shared-challenge MSMs, so folded generator
-witnesses cannot drift from the transcript challenge. The native transparent IPA
+accumulator wrapper now proves `Q' = x^2*L + Q + x^{-2}*R` through the
+fixed-window MSM path, keeps `x` and `x^{-1}` as private canonical Pasta/Fp
+scalars, constrains them as inverses, and links the three MSM scalars to
+`x^2`, `1`, and `x^{-2}`. A generator-fold wrapper now proves
+`G' = x^{-1}*G_L + x*G_R` and `H' = x*H_L + x^{-1}*H_R` with two
+shared-challenge fixed-window MSMs, so folded generator witnesses cannot drift
+from the transcript challenge. The native transparent IPA
 verifier also exposes canonical per-round transcript projections: after the
 caller has absorbed the polynomial-opening statement, the helper records the
 state before and after each `L || R` absorb, the derived `ipa.x` challenge, its
@@ -444,6 +445,15 @@ inverse, and final transcript state. Validation rejects transcript-state,
 round-byte, round-digest, round-order, challenge, reduction, accumulator, or
 final-scalar substitution before those values can be consumed by the recursive
 circuit witness builder.
+The same native projection now has a field-friendly transcript binding for
+recursive circuits: the host maps the SHA3-validated header, each complete round
+projection, each challenge/inverse pair, and the final transcript state into
+Pasta/Fp scalars, then folds them with a transparent Pow5 accumulator. A native
+Pasta/Fp circuit enforces that accumulator over public projection and
+challenge/inverse scalars, checks `x*x^{-1}=1`, and links every compressor row
+to the final public digest. This binding does not replace the native SHA3
+transcript check; it gives the recursive verifier a compact challenge-binding
+public input without adding a trusted setup.
 The in-circuit side now has a one-round verifier composition slice that shares
 one private canonical `x/x^{-1}` pair across the `b`-vector fold, `Q`
 accumulator update, generator fold, and final MSM comparison. The slice links
@@ -453,17 +463,15 @@ different intermediate values. A generic power-of-two multi-round composition
 wrapper now extends that linking across all IPA rounds: every round shares its
 challenge pair across `b`, `Q`, and every generator-fold pair, each round's
 `Q`, `G`, and `H` outputs feed the next round, and the last folded values feed
-the final IPA comparison.
+the final fixed-window IPA comparison.
 Native Pasta/Fp scalar decomposition, fixed-window scalar decomposition,
 fixed-window Vesta point selection, table derivation, and scalar-multiplication
 composition, fixed-window multi-term MSM, native IPA scalar/vector-fold, full
 `b`-vector reduction, bounded MSM, fixed-window final IPA MSM, IPA
 generator-fold, round-accumulator, and final IPA comparison composition plus
-one-round and generic multi-round verifier composition are present, but
-in-circuit transcript hash/challenge binding, migration of the remaining
-higher-level IPA wrappers onto the windowed MSM path where needed, and
-production-scale composed circuit evidence remain outstanding on the
-recursive-circuit side, so
-aggregation mode `2` remains a reserved wire value with a stable rejection
-reason, and public prover/verifier entry points accept only checked pre-fold
-mode `1`.
+one-round and generic multi-round verifier composition are present. The
+remaining recursive-circuit work is composing the transcript-binding accumulator
+into the full production-width verifier and producing production-width composed
+circuit evidence, so aggregation mode `2` remains a reserved wire value with a
+stable rejection reason, and public prover/verifier entry points accept only
+checked pre-fold mode `1`.

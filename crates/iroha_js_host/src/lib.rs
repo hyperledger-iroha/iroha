@@ -8947,6 +8947,21 @@ pub fn encode_signed_transaction_norito(bytes: Uint8Array) -> napi::Result<Buffe
     Ok(Buffer::from(encoded))
 }
 
+/// Convert a signed transaction payload into versioned adaptive Norito bytes.
+///
+/// This is the public `/transaction` payload shape accepted by Torii routes
+/// that decode `SignedTransaction::decode_all_versioned`.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn encode_signed_transaction_versioned(bytes: Uint8Array) -> napi::Result<Buffer> {
+    ensure_packed_struct_disabled();
+    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let mut encoded = Vec::with_capacity(bytes.len() + 1);
+    encoded.push(1);
+    encoded.extend(norito::codec::encode_adaptive(&tx));
+    Ok(Buffer::from(encoded))
+}
+
 /// Decode a Norito-framed transaction submission receipt into its JSON representation.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership

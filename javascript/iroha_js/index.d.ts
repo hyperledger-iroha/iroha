@@ -1,5 +1,7 @@
 /// <reference types="node" />
 
+export * from "./kotodama-compiler";
+
 export type JsonValue =
   | null
   | boolean
