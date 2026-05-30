@@ -328,21 +328,34 @@ object OfflineNote {
             bytes[3] == '0'.code.toByte()
 
     class VerifyingKeyIdReference @JvmOverloads constructor(
-        val backend: String = RECURSIVE_BACKEND,
-        val name: String = RECURSIVE_VERIFIER_NAME,
+        backend: String = RECURSIVE_BACKEND,
+        name: String = RECURSIVE_VERIFIER_NAME,
     ) {
+        val backend: String
+        val name: String
+
         init {
-            require(backend.trim().isNotEmpty()) { "verifying key backend must not be empty" }
-            require(name.trim().isNotEmpty()) { "verifying key name must not be empty" }
+            val normalizedBackend = backend.trim()
+            val normalizedName = name.trim()
+            require(normalizedBackend.isNotEmpty()) { "verifying key backend must not be empty" }
+            require(normalizedName.isNotEmpty()) { "verifying key name must not be empty" }
+            require(!normalizedBackend.contains(':') && !normalizedName.contains(':')) {
+                "verifying key backend and name must not contain ':'"
+            }
+            this.backend = normalizedBackend
+            this.name = normalizedName
         }
     }
 
-    class ProofBox(val backend: String, bytes: ByteArray) {
+    class ProofBox(backend: String, bytes: ByteArray) {
+        val backend: String
         private val _bytes = bytes.copyOf()
 
         init {
-            require(backend.trim().isNotEmpty()) { "proof backend must not be empty" }
+            val normalizedBackend = backend.trim()
+            require(normalizedBackend.isNotEmpty()) { "proof backend must not be empty" }
             require(_bytes.isNotEmpty()) { "proof bytes must not be empty" }
+            this.backend = normalizedBackend
         }
 
         fun bytes(): ByteArray = _bytes.copyOf()

@@ -51,6 +51,44 @@ test("ToriiBrowserClient account assets use the current asset selector query key
   assert.equal(payload.items[0].asset, "asset-alias");
 });
 
+test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope", async () => {
+  let capturedUrl;
+  let capturedInit;
+  const fetchImpl = async (url, init) => {
+    capturedUrl = String(url);
+    capturedInit = init;
+    return jsonResponse({ items: [], total: 0 });
+  };
+  const client = new ToriiBrowserClient("https://torii.example/v1", {
+    fetchImpl,
+    defaultHeaders: { Authorization: "Bearer jwt" },
+  });
+
+  const payload = await client.queryVisibleTransactions({
+    assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
+    sort: "newest",
+    limit: 25,
+    queryName: "VisibleTransactions",
+  });
+
+  assert.equal(capturedUrl, "https://torii.example/v1/transactions/visible/query");
+  assert.equal(capturedInit.method, "POST");
+  assert.equal(capturedInit.headers.Authorization, "Bearer jwt");
+  assert.deepEqual(JSON.parse(capturedInit.body), {
+    pagination: { limit: 25 },
+    sort: [
+      { key: "timestamp_ms", order: "desc" },
+      { key: "entrypoint_hash", order: "desc" },
+    ],
+    filter: {
+      op: "eq",
+      args: ["asset_id", "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb"],
+    },
+    query: "VisibleTransactions",
+  });
+  assert.deepEqual(payload, { items: [], total: 0 });
+});
+
 test("ToriiBrowserClient preserves error responses for callers", async () => {
   const fetchImpl = async () => new Response("not found", { status: 404 });
   const client = new ToriiBrowserClient("https://localhost:8080", { fetchImpl });

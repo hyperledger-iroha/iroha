@@ -93,6 +93,40 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun kagemushaNativeAvailabilityRequiresJniEntrypoint() {
+        assertTrue(
+            KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = { throw IllegalArgumentException("invalid archive") },
+            )
+        )
+        assertTrue(
+            KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = {},
+            )
+        )
+        assertFalse(
+            KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = { throw UnsatisfiedLinkError("missing symbol") },
+            )
+        )
+        assertFalse(
+            KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+                loadLibrary = { throw UnsatisfiedLinkError("missing library") },
+                probeSymbol = { error("probe must not run") },
+            )
+        )
+        assertFalse(
+            KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+                loadLibrary = { throw SecurityException("denied") },
+                probeSymbol = {},
+            )
+        )
+    }
+
+    @Test
     fun publicNoritoDecodersRoundTripFixturePayloads() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -411,6 +445,42 @@ class OfflineNoteTest {
         )
         assertFailsWith<IllegalArgumentException> {
             redeem.replacingRecursiveProof(draftPlaceholder).validateProofBinding()
+        }
+
+        for (backend in listOf("halo2/ipa:KZG", "halo2/ipa: KZG", "halo2/ipa:Mock-Proof")) {
+            val nonProductionBackend = OfflineNote.RecursiveProof(
+                publicInputsHash = redeem.publicInputsHash(),
+                proof = OfflineNote.ProofBox(
+                    backend,
+                    redeem.recursiveProof.proof.bytes(),
+                ),
+            )
+            assertFailsWith<IllegalArgumentException>("backend $backend must not pass proof binding") {
+                redeem.replacingRecursiveProof(nonProductionBackend).validateProofBinding()
+            }
+        }
+    }
+
+    @Test
+    fun recursiveProofMetadataNormalizesAndRejectsMalformedVerifierKeys() {
+        val verifier = OfflineNote.VerifyingKeyIdReference(
+            "  ${OfflineNote.RECURSIVE_BACKEND}  ",
+            "  ${OfflineNote.RECURSIVE_VERIFIER_NAME}  ",
+        )
+        assertEquals(OfflineNote.RECURSIVE_BACKEND, verifier.backend)
+        assertEquals(OfflineNote.RECURSIVE_VERIFIER_NAME, verifier.name)
+
+        val proof = OfflineNote.ProofBox(
+            "  ${OfflineNote.RECURSIVE_BACKEND}  ",
+            byteArrayOf(0x01),
+        )
+        assertEquals(OfflineNote.RECURSIVE_BACKEND, proof.backend)
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNote.VerifyingKeyIdReference("halo2/ipa:KZG", OfflineNote.RECURSIVE_VERIFIER_NAME)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNote.VerifyingKeyIdReference(OfflineNote.RECURSIVE_BACKEND, "offline:note")
         }
     }
 

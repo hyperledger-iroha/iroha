@@ -355,6 +355,10 @@ const ITERABLE_OPTION_KEYS = new Set([
   "receiverId",
   "depositAccountId",
   "assetId",
+  "authority",
+  "resultOk",
+  "sinceTimestampMs",
+  "untilTimestampMs",
   "certificateExpiresBeforeMs",
   "certificateExpiresAfterMs",
   "policyExpiresBeforeMs",
@@ -407,6 +411,13 @@ const ITERABLE_QUERY_OPTION_KEYS = new Set([
   "signal",
   "canonicalAuth",
 ]);
+const TRANSACTION_QUERY_OPTION_KEYS = [
+  "assetId",
+  "authority",
+  "resultOk",
+  "sinceTimestampMs",
+  "untilTimestampMs",
+];
 const EXPLORER_NFT_LIST_OPTION_KEYS = new Set([
   "page",
   "perPage",
@@ -1672,15 +1683,54 @@ export class ToriiClient {
   /**
    * Query transactions involving an account (`POST /v1/accounts/{id}/transactions/query`).
    * @param {string} accountId
-   * @param {IterableQueryOptions} [options]
+   * @param {IterableQueryOptions & {assetId?: string, authority?: string, resultOk?: boolean, sinceTimestampMs?: number, untilTimestampMs?: number}} [options]
    * @returns {Promise<{items: Array<object>, total: number}>}
    */
   async queryAccountTransactions(accountId, options = {}) {
     const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const encodedId = encodeURIComponent(normalizedId);
+    const normalizedOptions = normalizeTransactionQueryOptions(
+      options,
+      `options for /v1/accounts/${encodedId}/transactions/query`,
+    );
     return this._queryIterable(
       `/v1/accounts/${encodedId}/transactions/query`,
+      normalizedOptions,
+      normalizeAccountTransactionListResponse,
+    );
+  }
+
+  /**
+   * Query committed transactions (`POST /v1/transactions/query`).
+   * @param {IterableQueryOptions & {assetId?: string, authority?: string, resultOk?: boolean, sinceTimestampMs?: number, untilTimestampMs?: number}} [options]
+   * @returns {Promise<{items: Array<object>, total: number}>}
+   */
+  async queryTransactions(options = {}) {
+    const normalizedOptions = normalizeTransactionQueryOptions(
       options,
+      "options for /v1/transactions/query",
+    );
+    return this._queryIterable(
+      "/v1/transactions/query",
+      normalizedOptions,
+      normalizeAccountTransactionListResponse,
+    );
+  }
+
+  /**
+   * Query committed transactions visible to the authenticated viewer
+   * (`POST /v1/transactions/visible/query`).
+   * @param {IterableQueryOptions & {assetId?: string, authority?: string, resultOk?: boolean, sinceTimestampMs?: number, untilTimestampMs?: number}} [options]
+   * @returns {Promise<{items: Array<object>, total: number}>}
+   */
+  async queryVisibleTransactions(options = {}) {
+    const normalizedOptions = normalizeTransactionQueryOptions(
+      options,
+      "options for /v1/transactions/visible/query",
+    );
+    return this._queryIterable(
+      "/v1/transactions/visible/query",
+      normalizedOptions,
       normalizeAccountTransactionListResponse,
     );
   }
@@ -1711,6 +1761,24 @@ export class ToriiClient {
       this.queryAccountTransactions.bind(this, normalizedId),
       options,
     );
+  }
+
+  /**
+   * Iterate committed transactions via the structured query endpoint.
+   * @param {PaginationIteratorOptions} [options]
+   * @returns {AsyncGenerator<object, void, unknown>}
+   */
+  iterateTransactionsQuery(options = {}) {
+    return this._iterateIterable(this.queryTransactions.bind(this), options);
+  }
+
+  /**
+   * Iterate committed viewer-visible transactions via the structured query endpoint.
+   * @param {PaginationIteratorOptions} [options]
+   * @returns {AsyncGenerator<object, void, unknown>}
+   */
+  iterateVisibleTransactionsQuery(options = {}) {
+    return this._iterateIterable(this.queryVisibleTransactions.bind(this), options);
   }
 
   /**
@@ -24314,6 +24382,109 @@ function normalizeIterableQueryOptions(options, context, extraAllowedKeys = []) 
   const resolvedAllowedKeys = new Set([...ITERABLE_QUERY_OPTION_KEYS, ...extraAllowedKeys]);
   assertSupportedOptionKeys(normalized, resolvedAllowedKeys, context);
   return normalized;
+}
+
+function transactionFilter(op, field, value) {
+  return { op, args: [field, value] };
+}
+
+function normalizeTransactionQuerySort(sort) {
+  if (sort === undefined || sort === null) {
+    return undefined;
+  }
+  if (typeof sort === "string") {
+    const normalized = sort.trim().toLowerCase();
+    if (normalized === "newest") {
+      return [
+        { key: "timestamp_ms", order: "desc" },
+        { key: "entrypoint_hash", order: "desc" },
+      ];
+    }
+    if (normalized === "oldest") {
+      return [
+        { key: "timestamp_ms", order: "asc" },
+        { key: "entrypoint_hash", order: "asc" },
+      ];
+    }
+  }
+  return sort;
+}
+
+function mergeTransactionFilters(rawFilter, convenienceFilters) {
+  if (convenienceFilters.length === 0) {
+    return rawFilter;
+  }
+  const filters = [...convenienceFilters];
+  const existing = ToriiClient._normalizeFilterObject(rawFilter);
+  if (existing !== undefined) {
+    filters.unshift(existing);
+  }
+  return filters.length === 1 ? filters[0] : { op: "and", args: filters };
+}
+
+function normalizeTransactionQueryOptions(options, context) {
+  const normalized = normalizeIterableQueryOptions(
+    options,
+    context,
+    TRANSACTION_QUERY_OPTION_KEYS,
+  );
+  const {
+    assetId,
+    authority,
+    resultOk,
+    sinceTimestampMs,
+    untilTimestampMs,
+    filter,
+    sort,
+    ...rest
+  } = normalized;
+  const convenienceFilters = [];
+  if (assetId !== undefined && assetId !== null) {
+    convenienceFilters.push(
+      transactionFilter("eq", "asset_id", ToriiClient._normalizeAssetId(assetId, "assetId")),
+    );
+  }
+  if (authority !== undefined && authority !== null) {
+    convenienceFilters.push(
+      transactionFilter(
+        "eq",
+        "authority",
+        ToriiClient._normalizeAccountId(authority, "authority"),
+      ),
+    );
+  }
+  if (resultOk !== undefined && resultOk !== null) {
+    convenienceFilters.push(
+      transactionFilter("eq", "result_ok", requireBooleanLike(resultOk, "resultOk")),
+    );
+  }
+  if (sinceTimestampMs !== undefined && sinceTimestampMs !== null) {
+    convenienceFilters.push(
+      transactionFilter(
+        "gte",
+        "timestamp_ms",
+        ToriiClient._normalizeUnsignedInteger(sinceTimestampMs, "sinceTimestampMs", {
+          allowZero: true,
+        }),
+      ),
+    );
+  }
+  if (untilTimestampMs !== undefined && untilTimestampMs !== null) {
+    convenienceFilters.push(
+      transactionFilter(
+        "lte",
+        "timestamp_ms",
+        ToriiClient._normalizeUnsignedInteger(untilTimestampMs, "untilTimestampMs", {
+          allowZero: true,
+        }),
+      ),
+    );
+  }
+  return {
+    ...rest,
+    sort: normalizeTransactionQuerySort(sort),
+    filter: mergeTransactionFilters(filter, convenienceFilters),
+  };
 }
 
 function normalizeEventStreamOptions(options, context, allowedExtraKeys = []) {

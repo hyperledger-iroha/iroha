@@ -46,9 +46,11 @@ public final class OfflineNoteTest {
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
     proofBindingRejectsRecursiveMetadataSubstitution();
+    recursiveProofMetadataNormalizesAndRejectsMalformedVerifierKeys();
     instanceValuesMatchRustVectors();
     auditInstanceValuesRejectUnanchoredClaimsAndHiddenOutputs();
     kagemushaRecordBackedNativeProverValidatesInput();
+    kagemushaNativeAvailabilityRequiresJniEntrypoint();
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
     nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
@@ -451,6 +453,54 @@ public final class OfflineNoteTest {
     assertThrows(
         () -> redeem.replacingRecursiveProof(draftPlaceholder).validateProofBinding(),
         "proof binding should reject draft-placeholder proofs");
+
+    for (final String backend :
+        new String[] {"halo2/ipa:KZG", "halo2/ipa: KZG", "halo2/ipa:Mock-Proof"}) {
+      final OfflineNote.RecursiveProof nonProductionBackend =
+          new OfflineNote.RecursiveProof(
+              redeem.publicInputsHash(),
+              new OfflineNote.ProofBox(
+                  backend,
+                  redeem.recursiveProof().proof().bytes()));
+      assertThrows(
+          () -> redeem.replacingRecursiveProof(nonProductionBackend).validateProofBinding(),
+          "proof binding should reject non-production backend " + backend);
+    }
+  }
+
+  private static void recursiveProofMetadataNormalizesAndRejectsMalformedVerifierKeys() {
+    final OfflineNote.VerifyingKeyIdReference verifier =
+        new OfflineNote.VerifyingKeyIdReference(
+            "  " + OfflineNote.RECURSIVE_BACKEND + "  ",
+            "  " + OfflineNote.RECURSIVE_VERIFIER_NAME + "  ");
+    assertEquals(
+        OfflineNote.RECURSIVE_BACKEND,
+        verifier.backend(),
+        "verifier backend should be trimmed");
+    assertEquals(
+        OfflineNote.RECURSIVE_VERIFIER_NAME,
+        verifier.name(),
+        "verifier name should be trimmed");
+
+    final OfflineNote.ProofBox proof =
+        new OfflineNote.ProofBox(
+            "  " + OfflineNote.RECURSIVE_BACKEND + "  ",
+            new byte[] {0x01});
+    assertEquals(
+        OfflineNote.RECURSIVE_BACKEND,
+        proof.backend(),
+        "proof backend should be trimmed");
+
+    assertThrows(
+        () ->
+            new OfflineNote.VerifyingKeyIdReference(
+                "halo2/ipa:KZG", OfflineNote.RECURSIVE_VERIFIER_NAME),
+        "verifier backend must reject colon separators");
+    assertThrows(
+        () ->
+            new OfflineNote.VerifyingKeyIdReference(
+                OfflineNote.RECURSIVE_BACKEND, "offline:note"),
+        "verifier name must reject colon separators");
   }
 
   private static void instanceValuesMatchRustVectors() throws Exception {
@@ -594,6 +644,42 @@ public final class OfflineNoteTest {
               new byte[] {0x01, 0x02}),
           "Kagemusha record-backed native prover must reject malformed archives");
     }
+  }
+
+  private static void kagemushaNativeAvailabilityRequiresJniEntrypoint() {
+    assertTrue(
+        KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+            () -> {},
+            () -> {
+              throw new IllegalArgumentException("invalid archive");
+            }),
+        "native availability accepts the malformed-input error from a present JNI symbol");
+    assertTrue(
+        KagemushaCompactPaymentTokenProver.detectNativeAvailability(() -> {}, () -> {}),
+        "native availability accepts a probe that returns normally");
+    assertTrue(
+        !KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+            () -> {},
+            () -> {
+              throw new UnsatisfiedLinkError("missing symbol");
+            }),
+        "native availability rejects a loaded library without the Kagemusha JNI symbol");
+    assertTrue(
+        !KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+            () -> {
+              throw new UnsatisfiedLinkError("missing library");
+            },
+            () -> {
+              throw new AssertionError("probe must not run");
+            }),
+        "native availability rejects a missing library before probing symbols");
+    assertTrue(
+        !KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+            () -> {
+              throw new SecurityException("denied");
+            },
+            () -> {}),
+        "native availability rejects a library blocked by the security manager");
   }
 
   private static void nativeHalo2ProverPerformanceWhenRequested() throws Exception {

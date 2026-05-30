@@ -164,7 +164,11 @@ fn zk_gas_per_commitment() -> u64 {
 }
 
 fn halo2_public_input_count(attachment: &ProofAttachment) -> Option<u64> {
-    if !attachment.backend.as_str().starts_with("halo2/") {
+    let backend = attachment.backend.as_str();
+    if crate::zk::is_trusted_setup_backend_label(backend)
+        || crate::zk::is_developer_only_backend_label(backend)
+        || !backend.starts_with("halo2/")
+    {
         return None;
     }
     let env: OpenVerifyEnvelope = decode_from_bytes(&attachment.proof.bytes).ok()?;
@@ -944,6 +948,22 @@ mod tests {
         let proof_bytes = attachment.proof.bytes.len() as u64;
         let public_inputs =
             halo2_public_input_count(&attachment).expect("fixture exposes halo2 public inputs");
+        for backend in ["halo2/ipa: KZG", "halo2/ipa:Mock-Proof"] {
+            let rejected_proof = iroha_data_model::proof::ProofBox::new(
+                backend.to_owned(),
+                attachment.proof.bytes.clone(),
+            );
+            let rejected_attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+                backend.to_owned(),
+                rejected_proof,
+                VerifyingKeyId::new(backend, "vk-config-gas-rejected"),
+            );
+            assert_eq!(
+                halo2_public_input_count(&rejected_attachment),
+                None,
+                "non-production backend {backend} must not be decoded for gas metadata"
+            );
+        }
 
         let verify_instr: InstructionBox = VerifyProof::new(attachment.clone()).into();
         let verify_gas = meter_instruction(&verify_instr);

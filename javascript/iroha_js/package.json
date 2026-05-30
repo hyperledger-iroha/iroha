@@ -18,7 +18,11 @@
       "import": "./dist/instructionBuilders.js",
       "types": "./index.d.ts"
     },
-    "./torii": "./dist/toriiClient.js",
+    "./torii": {
+      "browser": "./dist/toriiBrowserClient.js",
+      "import": "./dist/toriiClient.js",
+      "types": "./index.d.ts"
+    },
     "./torii-browser": {
       "import": "./dist/toriiBrowserClient.js",
       "browser": "./dist/toriiBrowserClient.js",

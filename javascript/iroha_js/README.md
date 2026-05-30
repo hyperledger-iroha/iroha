@@ -2904,6 +2904,30 @@ across Torii's JSON endpoints (including query projections via
 `iterateAccountTransactionsQuery`, `iterateAssetHoldersQuery`, and
 `iterateTriggersQuery`).
 
+For FI wallet-style transaction explorers, prefer the viewer-scoped query helper.
+It posts to `/v1/transactions/visible/query`, lets Torii enforce the authenticated
+viewer scope, and accepts convenience filters without hand-writing a QueryEnvelope:
+
+```js
+import { ToriiClient } from "@iroha/iroha-js/torii";
+
+const torii = new ToriiClient("https://torii.example", {
+  config: {
+    toriiClient: {
+      defaultHeaders: { Authorization: `Bearer ${jwt}` },
+      timeoutMs: 10_000,
+    },
+  },
+});
+
+const { items } = await torii.queryVisibleTransactions({
+  assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
+  sort: "newest",
+  limit: 25,
+  queryName: "WalletTxExplorer",
+});
+```
+
 When you need to pin iterator parity to specific Norito selectors, apply
 structured filters against the NFT definition (`id.definition_id`) or asset
 definition (`asset_id.definition_id`) fields and trim payloads with `select`

@@ -15357,6 +15357,98 @@ test("queryAccountTransactions posts structured envelope", async () => {
   assert.equal(capturedBody.query, "AccountTransactions");
 });
 
+test("queryTransactions posts structured envelope", async () => {
+  let capturedPath;
+  let capturedBody;
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url);
+    capturedPath = parsed.pathname;
+    assert.equal(init.method, "POST");
+    capturedBody = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [], total: 0 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.queryTransactions({
+    filter: { op: "eq", args: ["asset_id", "pkr#sbp"] },
+    sort: [{ key: "timestamp_ms", order: "desc" }],
+    fetchSize: 10,
+    queryName: "Transactions",
+  });
+  assert.equal(capturedPath, "/v1/transactions/query");
+  assert.deepEqual(capturedBody.filter, { op: "eq", args: ["asset_id", "pkr#sbp"] });
+  assert.deepEqual(capturedBody.sort, [{ key: "timestamp_ms", order: "desc" }]);
+  assert.equal(capturedBody.fetch_size, 10);
+  assert.equal(capturedBody.query, "Transactions");
+});
+
+test("queryVisibleTransactions builds convenience transaction filters", async () => {
+  let capturedPath;
+  let capturedBody;
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url);
+    capturedPath = parsed.pathname;
+    assert.equal(init.method, "POST");
+    capturedBody = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [], total: 0 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.queryVisibleTransactions({
+    assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
+    resultOk: true,
+    sinceTimestampMs: 1700000000000,
+    sort: "newest",
+    fetchSize: 25,
+    queryName: "VisibleTransactions",
+  });
+  assert.equal(capturedPath, "/v1/transactions/visible/query");
+  assert.deepEqual(capturedBody.filter, {
+    op: "and",
+    args: [
+      { op: "eq", args: ["asset_id", "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb"] },
+      { op: "eq", args: ["result_ok", true] },
+      { op: "gte", args: ["timestamp_ms", 1700000000000] },
+    ],
+  });
+  assert.deepEqual(capturedBody.sort, [
+    { key: "timestamp_ms", order: "desc" },
+    { key: "entrypoint_hash", order: "desc" },
+  ]);
+  assert.equal(capturedBody.fetch_size, 25);
+  assert.equal(capturedBody.query, "VisibleTransactions");
+});
+
+test("queryAccountTransactions merges raw and convenience filters", async () => {
+  let capturedBody;
+  const fetchImpl = async (_url, init) => {
+    capturedBody = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [], total: 0 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.queryAccountTransactions(FIXTURE_ALICE_ID, {
+    filter: { op: "eq", args: ["authority", FIXTURE_ALICE_ID] },
+    assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
+  });
+  assert.deepEqual(capturedBody.filter, {
+    op: "and",
+    args: [
+      { op: "eq", args: ["authority", FIXTURE_ALICE_ID] },
+      { op: "eq", args: ["asset_id", "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb"] },
+    ],
+  });
+});
+
 test("iterateAccountTransactions paginates results", async () => {
   const responses = [
     {

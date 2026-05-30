@@ -349,8 +349,10 @@ public final class OfflineNote {
     }
 
     public VerifyingKeyIdReference(final String backend, final String name) {
-      this.backend = requireNonBlank(backend, "verifying key backend");
-      this.name = requireNonBlank(name, "verifying key name");
+      this.backend = requireNoColon(requireNonBlankTrimmed(backend, "verifying key backend"),
+          "verifying key backend");
+      this.name = requireNoColon(requireNonBlankTrimmed(name, "verifying key name"),
+          "verifying key name");
     }
 
     public String backend() {
@@ -367,7 +369,7 @@ public final class OfflineNote {
     private final byte[] bytes;
 
     public ProofBox(final String backend, final byte[] bytes) {
-      this.backend = requireNonBlank(backend, "proof backend");
+      this.backend = requireNonBlankTrimmed(backend, "proof backend");
       this.bytes = copy(bytes, "proof bytes");
       if (this.bytes.length == 0) {
         throw new IllegalArgumentException("proof bytes must not be empty");
@@ -2918,6 +2920,17 @@ public final class OfflineNote {
       throw new IllegalArgumentException(field + " must not be empty");
     }
     return checked;
+  }
+
+  private static String requireNonBlankTrimmed(final String value, final String field) {
+    return requireNonBlank(value, field).trim();
+  }
+
+  private static String requireNoColon(final String value, final String field) {
+    if (value.indexOf(':') >= 0) {
+      throw new IllegalArgumentException(field + " must not contain ':'");
+    }
+    return value;
   }
 
   private static byte[] copy(final byte[] value, final String field) {

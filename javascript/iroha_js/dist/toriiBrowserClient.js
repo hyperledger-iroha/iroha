@@ -54,6 +54,13 @@ function normalizeOffset(value, context, fallback = 0) {
   return numeric;
 }
 
+function normalizeBoolean(value, context) {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${context} must be a boolean`);
+  }
+  return value;
+}
+
 function normalizeExplorerPagination(options, context) {
   const page = normalizePositiveInteger(options.page, `${context}.page`, 1);
   const perPage = normalizePositiveInteger(
@@ -73,6 +80,96 @@ function normalizeIterablePagination(options, context) {
     params.offset = normalizeOffset(options.offset, `${context}.offset`);
   }
   return params;
+}
+
+function normalizeTransactionQuerySort(sort) {
+  if (sort === undefined || sort === null) {
+    return [];
+  }
+  if (typeof sort === "string") {
+    const normalized = sort.trim().toLowerCase();
+    if (normalized === "newest") {
+      return [
+        { key: "timestamp_ms", order: "desc" },
+        { key: "entrypoint_hash", order: "desc" },
+      ];
+    }
+    if (normalized === "oldest") {
+      return [
+        { key: "timestamp_ms", order: "asc" },
+        { key: "entrypoint_hash", order: "asc" },
+      ];
+    }
+    return normalized
+      .split(",")
+      .map((token) => token.trim())
+      .filter(Boolean)
+      .map((token) => {
+        const [key, order = "asc"] = token.split(":");
+        return { key: requireNonEmptyString(key, "sort key"), order };
+      });
+  }
+  if (Array.isArray(sort)) {
+    return sort.map((entry, index) => {
+      const item = requireObject(entry, `sort[${index}]`);
+      return {
+        key: requireNonEmptyString(item.key, `sort[${index}].key`),
+        order: item.order ?? "asc",
+      };
+    });
+  }
+  throw new TypeError("sort must be a string or array");
+}
+
+function transactionFilter(op, field, value) {
+  return { op, args: [field, value] };
+}
+
+function normalizeTransactionQueryEnvelope(options, context) {
+  const opts = requireObject(options, `${context} options`);
+  const pagination = normalizeIterablePagination(opts, `${context} options`);
+  const filters = [];
+  if (opts.filter !== undefined && opts.filter !== null) {
+    filters.push(requireObject(opts.filter, `${context}.filter`));
+  }
+  if (opts.assetId !== undefined && opts.assetId !== null) {
+    filters.push(transactionFilter("eq", "asset_id", requireNonEmptyString(opts.assetId, "assetId")));
+  }
+  if (opts.authority !== undefined && opts.authority !== null) {
+    filters.push(transactionFilter("eq", "authority", requireNonEmptyString(opts.authority, "authority")));
+  }
+  if (opts.resultOk !== undefined && opts.resultOk !== null) {
+    filters.push(transactionFilter("eq", "result_ok", normalizeBoolean(opts.resultOk, "resultOk")));
+  }
+  if (opts.sinceTimestampMs !== undefined && opts.sinceTimestampMs !== null) {
+    filters.push(transactionFilter("gte", "timestamp_ms", normalizeOffset(opts.sinceTimestampMs, "sinceTimestampMs")));
+  }
+  if (opts.untilTimestampMs !== undefined && opts.untilTimestampMs !== null) {
+    filters.push(transactionFilter("lte", "timestamp_ms", normalizeOffset(opts.untilTimestampMs, "untilTimestampMs")));
+  }
+  const envelope = {
+    pagination,
+    sort: normalizeTransactionQuerySort(opts.sort),
+  };
+  if (filters.length === 1) {
+    envelope.filter = filters[0];
+  } else if (filters.length > 1) {
+    envelope.filter = { op: "and", args: filters };
+  }
+  if (opts.fetchSize !== undefined && opts.fetchSize !== null) {
+    envelope.fetch_size = normalizePositiveInteger(opts.fetchSize, "fetchSize", undefined);
+  }
+  const queryName = opts.queryName ?? opts.query_name;
+  if (queryName !== undefined && queryName !== null) {
+    envelope.query = requireNonEmptyString(queryName, "queryName");
+  }
+  if (opts.select !== undefined && opts.select !== null) {
+    if (!Array.isArray(opts.select)) {
+      throw new TypeError("select must be an array");
+    }
+    envelope.select = opts.select;
+  }
+  return envelope;
 }
 
 function signalFrom(options) {
@@ -116,7 +213,12 @@ export class ToriiBrowserClient {
     if (typeof this.fetchImpl !== "function") {
       throw new TypeError("ToriiBrowserClient requires a fetch implementation");
     }
-    this.defaultHeaders = { ...(normalizedOptions.defaultHeaders ?? {}) };
+    this.defaultHeaders = {
+      ...(normalizedOptions.config?.toriiClient?.defaultHeaders ?? {}),
+      ...(normalizedOptions.defaultHeaders ?? {}),
+    };
+    this.timeoutMs =
+      normalizedOptions.config?.toriiClient?.timeoutMs ?? normalizedOptions.timeoutMs ?? null;
   }
 
   _url(path, params) {
@@ -134,11 +236,23 @@ export class ToriiBrowserClient {
       ...this.defaultHeaders,
       ...(normalizedOptions.headers ?? {}),
     };
+    let timeoutId;
+    let signal = normalizedOptions.signal;
+    if (
+      signal === undefined &&
+      this.timeoutMs !== null &&
+      this.timeoutMs !== undefined &&
+      Number(this.timeoutMs) > 0
+    ) {
+      const controller = new AbortController();
+      timeoutId = setTimeout(() => controller.abort(), Number(this.timeoutMs));
+      signal = controller.signal;
+    }
     const init = {
       method,
       cache: "no-store",
       headers,
-      signal: normalizedOptions.signal,
+      signal,
     };
     if (normalizedOptions.body !== undefined) {
       init.body = JSON.stringify(normalizedOptions.body);
@@ -147,7 +261,14 @@ export class ToriiBrowserClient {
         "Content-Type": "application/json",
       };
     }
-    const response = await this.fetchImpl(this._url(path, normalizedOptions.params), init);
+    let response;
+    try {
+      response = await this.fetchImpl(this._url(path, normalizedOptions.params), init);
+    } finally {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+    }
     const status = responseStatus(response);
     const successStatuses = normalizedOptions.successStatuses ?? DEFAULT_SUCCESS_STATUSES;
     if (!successStatuses.includes(status)) {
@@ -231,6 +352,30 @@ export class ToriiBrowserClient {
         scope: opts.scope,
         count_mode: opts.countMode ?? opts.count_mode,
       },
+      signal: signalFrom(opts),
+    });
+  }
+
+  queryAccountTransactions(accountId, options = {}) {
+    const opts = requireObject(options, "queryAccountTransactions options");
+    return this._json("POST", `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/transactions/query`, {
+      body: normalizeTransactionQueryEnvelope(opts, "queryAccountTransactions"),
+      signal: signalFrom(opts),
+    });
+  }
+
+  queryTransactions(options = {}) {
+    const opts = requireObject(options, "queryTransactions options");
+    return this._json("POST", "/v1/transactions/query", {
+      body: normalizeTransactionQueryEnvelope(opts, "queryTransactions"),
+      signal: signalFrom(opts),
+    });
+  }
+
+  queryVisibleTransactions(options = {}) {
+    const opts = requireObject(options, "queryVisibleTransactions options");
+    return this._json("POST", "/v1/transactions/visible/query", {
+      body: normalizeTransactionQueryEnvelope(opts, "queryVisibleTransactions"),
       signal: signalFrom(opts),
     });
   }
@@ -480,3 +625,5 @@ export class ToriiBrowserClient {
     });
   }
 }
+
+export { ToriiBrowserClient as ToriiClient, ToriiBrowserHttpError as ToriiHttpError };
