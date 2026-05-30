@@ -8109,7 +8109,7 @@ pub async fn handle_v1_sumeragi_leader(
             epoch_seed: seed_opt.map(hex::encode),
         },
     };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8344,7 +8344,7 @@ pub async fn handle_v1_sumeragi_params(
         mode_activation_height: sp.mode_activation_height,
         chain_height: state.committed_height() as u64,
     };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8783,8 +8783,8 @@ pub async fn handle_v1_zk_roots(
 #[cfg(feature = "app_api")]
 /// POST /v1/zk/vote/tally — convenience endpoint returning election tally as JSON.
 ///
-/// Example wrapper for the Norito TLV read APIs. Current implementation returns
-/// a stub until election state is persisted.
+/// Example wrapper for the Norito TLV read APIs. Omitted or wildcard `Accept`
+/// headers return JSON, while explicit Norito requests still receive Norito.
 pub async fn handle_v1_zk_vote_tally(
     State(state): State<Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
@@ -8797,7 +8797,7 @@ pub async fn handle_v1_zk_vote_tally(
         None => (false, Vec::new()),
     };
     let payload = ZkVoteGetTallyResponseDto { finalized, tally };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -43882,28 +43882,34 @@ mod query_endpoint_tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
+        use iroha_core::zk::test_utils::halo2_fixture_envelope;
         use iroha_data_model::proof;
         // Avoid importing iroha_schema here to keep dev-deps minimal in this crate's tests.
         type Ident = String;
-        let backend: Ident = "groth16/bn254".into();
-        let bytes = b"torii_proof_smoke".to_vec();
-        let proof = proof::ProofBox::new(backend.clone(), bytes);
-        let vk_id = proof::VerifyingKeyId::new(backend.clone(), "torii_proof_smoke_vk");
-        let vk_box = proof::VerifyingKeyBox::new(backend.clone(), vec![0xAA, 0xBB]);
+        let backend: Ident = "halo2/ipa".into();
+        let circuit_id = "tiny-add";
+        let envelope_circuit_id = "halo2/ipa:tiny-add";
+        let seed_fixture = halo2_fixture_envelope(envelope_circuit_id, [0; 32]);
+        let vk_box = seed_fixture
+            .vk_box(backend.clone())
+            .unwrap_or_else(|| proof::VerifyingKeyBox::new(backend.clone(), vec![0xAA, 0xBB]));
         let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
+        let fixture = halo2_fixture_envelope(envelope_circuit_id, vk_commitment);
+        let proof = fixture.proof_box(backend.clone());
+        let vk_id = proof::VerifyingKeyId::new(backend.clone(), "torii_proof_smoke_vk");
         let mut vk_record = proof::VerifyingKeyRecord::new_with_owner(
             1,
-            "torii_proof_smoke",
+            circuit_id,
             None,
             "test",
-            iroha_data_model::zk::BackendTag::Groth16,
-            "bn254",
-            [0; 32],
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pallas",
+            fixture.schema_hash,
             vk_commitment,
         );
         vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture vk length fits");
-        vk_record.max_proof_bytes = 1024;
-        vk_record.gas_schedule_id = Some("groth16_default".into());
+        vk_record.max_proof_bytes = 1024 * 1024;
+        vk_record.gas_schedule_id = Some("halo2_default".into());
         vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
         vk_record.key = Some(vk_box);
         stx.world
@@ -43911,7 +43917,7 @@ mod query_endpoint_tests {
             .insert(vk_id.clone(), vk_record);
         stx.world
             .verifying_keys_by_circuit_mut_for_testing()
-            .insert(("torii_proof_smoke".into(), 1), vk_id.clone());
+            .insert((circuit_id.into(), 1), vk_id.clone());
         let attachment = proof::ProofAttachment {
             backend: backend.clone(),
             proof: proof.clone(),

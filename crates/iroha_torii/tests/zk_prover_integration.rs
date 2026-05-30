@@ -3,7 +3,7 @@
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs, clippy::similar_names, unused_imports)]
 
-use std::sync::Once;
+use std::sync::{Arc, Once};
 
 use axum::{
     Router,
@@ -11,8 +11,12 @@ use axum::{
     routing::{delete, get},
 };
 use http_body_util::BodyExt as _;
-use iroha_core::zk::test_utils::halo2_fixture_envelope;
-use iroha_data_model::proof::{ProofAttachment, VerifyingKeyId};
+use iroha_core::zk::{hash_vk, test_utils::halo2_fixture_envelope};
+use iroha_data_model::{
+    confidential::ConfidentialStatus,
+    proof::{ProofAttachment, VerifyingKeyId, VerifyingKeyRecord},
+    zk::BackendTag,
+};
 use iroha_torii::zk_attachments::AttachmentTenant;
 use tower::ServiceExt as _;
 
@@ -33,17 +37,71 @@ fn ensure_quota_config() {
             iroha_torii::MaybeTelemetry::disabled(),
         );
     });
+    iroha_torii::zk_prover::configure(
+        true,
+        iroha_config::parameters::defaults::torii::ZK_PROVER_SCAN_PERIOD_SECS,
+        iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_TTL_SECS,
+        iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_INFLIGHT,
+        iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_SCAN_BYTES,
+        iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_SCAN_MILLIS,
+        iroha_config::parameters::defaults::torii::zk_prover_keys_dir(),
+        iroha_config::parameters::defaults::torii::zk_prover_allowed_backends(),
+        iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits(),
+        Some(fixture_state()),
+        iroha_torii::MaybeTelemetry::disabled(),
+    );
 }
 
 fn fixture_attachment_bytes() -> Vec<u8> {
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let proof = fixture.proof_box("halo2/ipa");
-    let attachment = ProofAttachment::new_ref(
+    let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+    let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
+    let vk_commitment = hash_vk(&vk);
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", vk_commitment);
+    let mut attachment = ProofAttachment::new_ref(
         "halo2/ipa".into(),
-        proof,
-        VerifyingKeyId::new("halo2/ipa", "vk"),
+        fixture.proof_box("halo2/ipa"),
+        VerifyingKeyId::new("halo2/ipa", "tiny-add"),
     );
+    attachment.vk_commitment = Some(vk_commitment);
     norito::to_bytes(&attachment).expect("proof attachment bytes")
+}
+
+fn fixture_state() -> Arc<iroha_core::state::State> {
+    let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+    let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
+    let vk_commitment = hash_vk(&vk);
+    let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add");
+    let mut record = VerifyingKeyRecord::new_with_owner(
+        1,
+        "tiny-add",
+        None,
+        "test",
+        BackendTag::Halo2IpaPasta,
+        "pasta",
+        [0; 32],
+        vk_commitment,
+    );
+    record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
+    record.max_proof_bytes = 1024 * 1024;
+    record.status = ConfidentialStatus::Active;
+    record.key = Some(vk);
+
+    let mut world = iroha_core::state::World::new();
+    world
+        .verifying_keys_mut_for_testing()
+        .insert(vk_id.clone(), record);
+    world
+        .verifying_keys_by_circuit_mut_for_testing()
+        .insert(("tiny-add".into(), 1), vk_id);
+    let mut state = iroha_core::state::State::new_for_testing(
+        world,
+        iroha_core::kura::Kura::blank_kura_for_testing(),
+        iroha_core::query::store::LiveQueryStore::start_test(),
+    );
+    let mut zk = state.zk_snapshot();
+    zk.halo2.enabled = true;
+    state.set_zk(zk);
+    Arc::new(state)
 }
 
 async fn created_attachment_id(resp: axum::response::Response) -> String {

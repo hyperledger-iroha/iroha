@@ -155,6 +155,37 @@ Last updated: 2026-05-30
   - `cargo fmt --all -- --check`
   - `git diff --check`
 
+## 2026-05-30 Torii ZK vote tally response negotiation
+
+- `/v1/zk/vote/tally` now uses JSON-preferred response negotiation, matching
+  the endpoint documentation and `/v1/zk/roots` convenience API behavior while
+  preserving explicit `Accept: application/x-norito` support for binary
+  callers.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test zk_endpoints zk_vote_tally_endpoint_returns_200 --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_endpoints --features app_api -- --nocapture`
+
+## 2026-05-29 Torii Sumeragi leader negotiation fix
+
+- `/v1/sumeragi/leader` now uses JSON-preferred response negotiation, matching
+  the router-level endpoint shape test and preserving explicit
+  `Accept: application/x-norito` support for binary callers.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_leader_endpoint sumeragi_leader_endpoint_shape -- --nocapture`
+
+## 2026-05-29 Torii proof query fixture
+
+- `routing::query_endpoint_tests::proofs_roundtrip_and_query_via_torii`
+  now uses a supported transparent Halo2 IPA `OpenVerifyEnvelope` fixture and
+  matching `Halo2IpaPasta` verifier record instead of a trusted-setup
+  Groth16/BN254 proof label. This keeps Torii proof-query roundtrip coverage
+  aligned with the production trusted-setup rejection guardrail.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii proofs_roundtrip_and_query_via_torii --lib -- --nocapture`
+
 ## 2026-05-29 Kagemusha SDK bridge exposure
 
 - Swift, Kotlin/JVM, and Java Android now expose record-backed Kagemusha
