@@ -208,6 +208,21 @@ pub enum Instr {
         dest: Temp,
         message: Temp,
     },
+    /// Compute Blake2b-256 hash of a Blob pointer and return the resulting Blob pointer.
+    Blake2b256Hash {
+        dest: Temp,
+        message: Temp,
+    },
+    /// Compute Keccak-256 hash of a Blob pointer and return the resulting Blob pointer.
+    Keccak256Hash {
+        dest: Temp,
+        message: Temp,
+    },
+    /// Compute Iroha's canonical ledger hash of a Blob pointer and return the resulting Blob pointer.
+    IrohaHash {
+        dest: Temp,
+        message: Temp,
+    },
     /// Verify an SM2 signature (message, signature, public key, optional distid) returning a bool.
     Sm2Verify {
         dest: Temp,
@@ -539,12 +554,32 @@ pub enum Instr {
     GetAuthority {
         dest: Temp,
     },
+    /// Load current authority AccountId pointer through the extended sysvar surface.
+    SysvarAuthority {
+        dest: Temp,
+    },
     /// Load the current trusted host time in unix milliseconds into `dest`.
     CurrentTimeMs {
         dest: Temp,
     },
     /// Load the current trusted host block height into `dest`.
     BlockHeight {
+        dest: Temp,
+    },
+    /// Load the current trusted host block time in unix milliseconds into `dest`.
+    BlockTimeMs {
+        dest: Temp,
+    },
+    /// Load the current chain identifier Blob pointer into `dest`.
+    ChainId {
+        dest: Temp,
+    },
+    /// Load the current contract address NoritoBytes pointer into `dest`.
+    ContractAddress {
+        dest: Temp,
+    },
+    /// Load the current entrypoint name Blob pointer into `dest`.
+    Entrypoint {
         dest: Temp,
     },
     /// Resolve a canonical account alias string to the current AccountId.
@@ -607,6 +642,11 @@ pub enum Instr {
         dest: Temp,
         payload: Temp,
     },
+    /// Extended query bridge: QUERY_EXECUTE_NORITO with NoritoBytes `QueryRequest` in r10.
+    QueryExecuteNorito {
+        dest: Temp,
+        payload: Temp,
+    },
     /// Subscription billing helper using trigger context.
     SubscriptionBill,
     /// Subscription usage recorder using trigger args.
@@ -624,6 +664,28 @@ pub enum Instr {
     /// Durable state delete: r10 = &Name path
     StateDel {
         path: Temp,
+    },
+    /// Durable state key enumeration: r10 = &Name prefix; r11 = offset; r12 = limit.
+    StateKeys {
+        dest: Temp,
+        prefix: Temp,
+        offset: Temp,
+        limit: Temp,
+    },
+    /// Durable state key presence: r10 = &Name path; returns present flag in dest.
+    StateHas {
+        dest: Temp,
+        path: Temp,
+    },
+    /// Durable state value payload length: r10 = &Name path; returns length in dest.
+    StateLen {
+        dest: Temp,
+        path: Temp,
+    },
+    /// Durable state key count for prefix: r10 = &Name prefix; returns total in dest.
+    StateCount {
+        dest: Temp,
+        prefix: Temp,
     },
     /// Decode a NoritoBytes blob containing an ASCII decimal integer; result in dest.
     DecodeInt {
@@ -2546,6 +2608,11 @@ fn lower_surface_builtin_call(
             });
             d
         }
+        Builtin::SysvarAuthority => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::SysvarAuthority { dest });
+            dest
+        }
         Builtin::Path => {
             let base = lower_expr(ctx, &args[0], vars);
             let d = ctx.new_temp();
@@ -2584,6 +2651,43 @@ fn lower_surface_builtin_call(
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t
+        }
+        Builtin::StateKeys => {
+            let prefix = lower_expr(ctx, &args[0], vars);
+            let offset = lower_expr_as_int(ctx, &args[1], vars);
+            let limit = lower_expr_as_int(ctx, &args[2], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::StateKeys {
+                dest,
+                prefix,
+                offset,
+                limit,
+            });
+            dest
+        }
+        Builtin::StateHas => {
+            let path = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::StateHas { dest, path });
+            dest
+        }
+        Builtin::StateLen => {
+            let path = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::StateLen { dest, path });
+            dest
+        }
+        Builtin::StateCount => {
+            let prefix = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::StateCount { dest, prefix });
+            dest
+        }
+        Builtin::QueryExecuteNorito => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::QueryExecuteNorito { dest, payload });
+            dest
         }
         Builtin::Contains => {
             let mexpr = &args[0];
@@ -3506,6 +3610,43 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
                 }
+                "state_keys" => {
+                    let prefix = lower_expr(ctx, &args[0], vars);
+                    let offset = lower_expr_as_int(ctx, &args[1], vars);
+                    let limit = lower_expr_as_int(ctx, &args[2], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::StateKeys {
+                        dest,
+                        prefix,
+                        offset,
+                        limit,
+                    });
+                    dest
+                }
+                "state_has" => {
+                    let path = lower_expr(ctx, &args[0], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::StateHas { dest, path });
+                    dest
+                }
+                "state_len" => {
+                    let path = lower_expr(ctx, &args[0], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::StateLen { dest, path });
+                    dest
+                }
+                "state_count" => {
+                    let prefix = lower_expr(ctx, &args[0], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::StateCount { dest, prefix });
+                    dest
+                }
+                "query_execute_norito" => {
+                    let payload = lower_expr(ctx, &args[0], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::QueryExecuteNorito { dest, payload });
+                    dest
+                }
                 // Pointer-ABI constructors: accept string literals (or temps derived from them)
                 // and lower to typed pointers that codegen wires into Norito TLV fixups.
                 // `account_id("alias@dataspace")` is special-cased below to preserve runtime
@@ -3688,6 +3829,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::GetAuthority { dest: t });
                     t
                 }
+                "sysvar_authority" => {
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::SysvarAuthority { dest: t });
+                    t
+                }
                 "current_time_ms" => {
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::CurrentTimeMs { dest: t });
@@ -3696,6 +3842,26 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "block_height" => {
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::BlockHeight { dest: t });
+                    t
+                }
+                "block_time_ms" => {
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::BlockTimeMs { dest: t });
+                    t
+                }
+                "chain_id" => {
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::ChainId { dest: t });
+                    t
+                }
+                "contract_address" => {
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::ContractAddress { dest: t });
+                    t
+                }
+                "entrypoint" => {
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Entrypoint { dest: t });
                     t
                 }
                 "trigger_event" => {
@@ -3917,6 +4083,33 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let msg = lower_expr(ctx, &args[0], vars);
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Sha3Hash {
+                        dest: t,
+                        message: msg,
+                    });
+                    t
+                }
+                "blake2b256_hash" => {
+                    let msg = lower_expr(ctx, &args[0], vars);
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Blake2b256Hash {
+                        dest: t,
+                        message: msg,
+                    });
+                    t
+                }
+                "keccak256_hash" => {
+                    let msg = lower_expr(ctx, &args[0], vars);
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Keccak256Hash {
+                        dest: t,
+                        message: msg,
+                    });
+                    t
+                }
+                "iroha_hash" => {
+                    let msg = lower_expr(ctx, &args[0], vars);
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::IrohaHash {
                         dest: t,
                         message: msg,
                     });
