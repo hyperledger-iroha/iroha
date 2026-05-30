@@ -381,6 +381,8 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_accounts_faucet_tool());
     tools.push(iroha_account_transactions_tool());
     tools.push(iroha_account_transactions_query_tool());
+    tools.push(iroha_transactions_query_tool());
+    tools.push(iroha_transactions_visible_query_tool());
     tools.push(iroha_account_assets_tool());
     tools.push(iroha_account_assets_query_tool());
     tools.push(iroha_account_permissions_tool());
@@ -1590,6 +1592,19 @@ async fn handle_tools_call(
         }
         "iroha.accounts.transactions.query" => {
             match dispatch_iroha_account_transactions_query(&app, inbound_headers, &arguments).await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.transactions.query" => {
+            match dispatch_iroha_transactions_query(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.transactions.visible.query" => {
+            match dispatch_iroha_transactions_visible_query(&app, inbound_headers, &arguments).await
             {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
@@ -5522,6 +5537,58 @@ async fn dispatch_iroha_account_transactions_query(
         inbound_headers,
         Method::POST,
         route.as_str(),
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_transactions_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_iroha_transactions_query_path(
+        app,
+        inbound_headers,
+        arguments,
+        "/v1/transactions/query",
+    )
+    .await
+}
+
+async fn dispatch_iroha_transactions_visible_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_iroha_transactions_query_path(
+        app,
+        inbound_headers,
+        arguments,
+        "/v1/transactions/visible/query",
+    )
+    .await
+}
+
+async fn dispatch_iroha_transactions_query_path(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+    route: &str,
+) -> Result<Value, String> {
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        route,
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -12064,6 +12131,57 @@ fn iroha_account_transactions_query_tool() -> ToolSpec {
                         "account_id": { "type": "string" }
                     }
                 },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "aggregate": { "type": "object", "additionalProperties": true },
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_transactions_query_tool() -> ToolSpec {
+    transactions_query_tool(
+        "iroha.transactions.query",
+        "/v1/transactions/query",
+        "Query committed transactions with QueryEnvelope shortcuts. Intended for privileged operator and developer use.",
+    )
+}
+
+fn iroha_transactions_visible_query_tool() -> ToolSpec {
+    transactions_query_tool(
+        "iroha.transactions.visible.query",
+        "/v1/transactions/visible/query",
+        "Query committed transactions visible to the authenticated viewer with QueryEnvelope shortcuts.",
+    )
+}
+
+fn transactions_query_tool(name: &str, path_template: &str, description: &str) -> ToolSpec {
+    ToolSpec {
+        name: name.to_owned(),
+        effect: manual_tool_effect_from_name(name),
+        description: description.to_owned(),
+        method: Method::POST,
+        path_template: path_template.to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
                 "body": {
                     "type": "object",
                     "additionalProperties": true,

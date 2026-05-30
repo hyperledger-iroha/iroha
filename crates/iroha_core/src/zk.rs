@@ -368,6 +368,8 @@ pub const OFFLINE_NOTE_RECURSIVE_IPA_K: u32 = 7;
 pub const OFFLINE_NOTE_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
 /// Canonical circuit identifier for compact Kagemusha folded proofs.
 pub const KAGEMUSHA_FOLDED_CIRCUIT_ID: &str = "kagemusha-folded-v1";
+/// Canonical verifier-record namespace for Kagemusha Offline hop and folded proofs.
+pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str = "offline_kagemusha";
 /// Halo2 IPA parameter degree used by the canonical Kagemusha folded circuit.
 pub const KAGEMUSHA_FOLDED_IPA_K: u32 = 7;
 /// Maximum encoded proof payload accepted for Kagemusha folded proofs.
@@ -387,8 +389,22 @@ pub const OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS: usize = 2;
 pub const KAGEMUSHA_FOLDED_INSTANCE_COLUMNS: usize = 30;
 /// Number of private boolean witness bits for `hop_count - 1` (0..=63).
 pub const KAGEMUSHA_FOLDED_HOP_COUNT_BITS: usize = 6;
+const KAGEMUSHA_FOLDED_ROOT_LIMBS: usize = 4;
 const KAGEMUSHA_FOLDED_AGGREGATION_MODE_INDEX: usize = 4;
 const KAGEMUSHA_FOLDED_HOP_COUNT_INDEX: usize = 5;
+const KAGEMUSHA_FOLDED_INITIAL_ROOT_START_INDEX: usize = 6;
+const KAGEMUSHA_FOLDED_FINAL_ROOT_START_INDEX: usize = 10;
+const KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUPS: [[usize; 4]; 7] = [
+    [0, 1, 2, 3],
+    [6, 7, 8, 9],
+    [10, 11, 12, 13],
+    [14, 15, 16, 17],
+    [18, 19, 20, 21],
+    [22, 23, 24, 25],
+    [26, 27, 28, 29],
+];
+const KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT: usize =
+    KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUPS.len();
 
 /// Public and private witness values for the canonical Offline semantic circuit.
 ///
@@ -494,28 +510,64 @@ impl KagemushaFoldedInstanceValues {
             halo2_proofs::halo2curves::pasta::Fp::from(bit)
         }))
     }
-}
 
-pub(crate) fn is_offline_note_recursive_circuit_id(circuit_id: &str) -> bool {
-    matches!(
-        circuit_id,
-        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID
-            | "halo2/ipa:offline-note-recursive"
-            | "halo2/ipa/offline-note-recursive"
-            | "halo2/pasta/offline-note-recursive"
-            | "halo2/pasta/ipa/offline-note-recursive"
-    )
-}
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn non_zero_public_field_inverses(
+        &self,
+    ) -> Result<
+        [halo2_proofs::halo2curves::pasta::Fp; KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+        String,
+    > {
+        use ff::Field as _;
 
-fn is_kagemusha_folded_circuit_id(circuit_id: &str) -> bool {
-    matches!(
-        circuit_id,
-        KAGEMUSHA_FOLDED_CIRCUIT_ID
-            | "halo2/ipa:kagemusha-folded-v1"
-            | "halo2/ipa/kagemusha-folded-v1"
-            | "halo2/pasta/kagemusha-folded-v1"
-            | "halo2/pasta/ipa/kagemusha-folded-v1"
-    )
+        let mut inverses = [halo2_proofs::halo2curves::pasta::Fp::from(0);
+            KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT];
+        for (group_index, group) in KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUPS
+            .iter()
+            .enumerate()
+        {
+            // Folded roots/digests are u64 limbs embedded in Pasta Fp; a four-limb
+            // sum is zero exactly when every limb in the public field group is zero.
+            let sum = group.iter().fold(
+                halo2_proofs::halo2curves::pasta::Fp::from(0),
+                |acc, index| {
+                    acc + halo2_proofs::halo2curves::pasta::Fp::from(self.public_values[*index])
+                },
+            );
+            inverses[group_index] = Option::from(sum.invert()).ok_or_else(|| {
+                format!("Kagemusha folded public field group {group_index} must be non-zero")
+            })?;
+        }
+        Ok(inverses)
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn root_difference_witness(
+        &self,
+    ) -> Result<
+        (
+            [halo2_proofs::halo2curves::pasta::Fp; KAGEMUSHA_FOLDED_ROOT_LIMBS],
+            halo2_proofs::halo2curves::pasta::Fp,
+        ),
+        String,
+    > {
+        use ff::Field as _;
+
+        let mut selectors =
+            [halo2_proofs::halo2curves::pasta::Fp::from(0); KAGEMUSHA_FOLDED_ROOT_LIMBS];
+        for index in 0..KAGEMUSHA_FOLDED_ROOT_LIMBS {
+            let initial = self.public_values[KAGEMUSHA_FOLDED_INITIAL_ROOT_START_INDEX + index];
+            let final_root = self.public_values[KAGEMUSHA_FOLDED_FINAL_ROOT_START_INDEX + index];
+            if initial != final_root {
+                selectors[index] = halo2_proofs::halo2curves::pasta::Fp::from(1);
+                let diff = halo2_proofs::halo2curves::pasta::Fp::from(final_root)
+                    - halo2_proofs::halo2curves::pasta::Fp::from(initial);
+                let inverse = Option::from(diff.invert()).expect("non-zero u64 limb difference");
+                return Ok((selectors, inverse));
+            }
+        }
+        Err("Kagemusha folded final root must differ from the initial root".to_owned())
+    }
 }
 
 /// Build the canonical inline verifier key for Offline recursive note proofs.
@@ -1105,7 +1157,8 @@ pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
 pub fn is_trusted_setup_backend_label(backend: &str) -> bool {
     let backend = backend.to_ascii_lowercase();
     let backend = backend.as_str();
-    backend == "groth16"
+    has_trusted_setup_backend_segment(backend)
+        || backend == "groth16"
         || backend.starts_with("groth16/")
         || backend == "kzg"
         || backend.starts_with("kzg/")
@@ -1125,6 +1178,17 @@ pub fn is_trusted_setup_backend_label(backend: &str) -> bool {
         || backend.starts_with("halo2/kzg/")
         || backend.contains("/kzg")
         || backend.contains(":kzg")
+}
+
+fn has_trusted_setup_backend_segment(backend: &str) -> bool {
+    backend
+        .split(|ch: char| ch == '/' || ch == ':' || ch.is_ascii_whitespace())
+        .any(|segment| {
+            matches!(
+                segment,
+                "groth16" | "kzg" | "bn254" | "bn256" | "bls12" | "bls12_381" | "bls12-381"
+            )
+        })
 }
 
 /// Returns `true` for developer-only backend labels that must not enter
@@ -1438,9 +1502,9 @@ fn prove_halo2_ipa_offline_note_envelope(
     };
     use rand_core_06::OsRng;
 
-    if !is_offline_note_recursive_circuit_id(circuit_id) {
+    if circuit_id != OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID {
         return Err(format!(
-            "unsupported Offline recursive circuit id `{circuit_id}`"
+            "Offline recursive proving requires canonical circuit id `{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID}` (found `{circuit_id}`)"
         ));
     }
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
@@ -1664,9 +1728,9 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
     };
     use rand_core_06::OsRng;
 
-    if !is_kagemusha_folded_circuit_id(circuit_id) {
+    if circuit_id != KAGEMUSHA_FOLDED_CIRCUIT_ID {
         return Err(format!(
-            "unsupported Kagemusha folded circuit id `{circuit_id}`"
+            "Kagemusha folded proving requires canonical circuit id `{KAGEMUSHA_FOLDED_CIRCUIT_ID}` (found `{circuit_id}`)"
         ));
     }
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
@@ -1684,6 +1748,9 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
 
     let public_values = instance_values.public_scalars();
     let hop_count_minus_one_bits = instance_values.hop_count_minus_one_bits()?;
+    let non_zero_public_field_inverses = instance_values.non_zero_public_field_inverses()?;
+    let (root_difference_selectors, root_difference_inverse) =
+        instance_values.root_difference_witness()?;
     let instance_columns_owned: Vec<Vec<Scalar>> =
         public_values.iter().map(|value| vec![*value]).collect();
     let instance_columns: Vec<&[Scalar]> =
@@ -1724,6 +1791,9 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
     let circuit = pasta_tiny::KagemushaFoldedSemantic {
         public_values,
         hop_count_minus_one_bits,
+        non_zero_public_field_inverses,
+        root_difference_selectors,
+        root_difference_inverse,
     };
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
     create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
@@ -1961,6 +2031,7 @@ fn kagemusha_fold_step_public_inputs_digest_impl(
         if envelope.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
             return Err("Kagemusha Halo2/IPA proof envelope has the wrong backend tag".to_owned());
         }
+        ensure_kagemusha_confidential_v2_envelope_metadata(&envelope)?;
         extract_pasta_instance_columns_bytes(&envelope.proof_bytes).ok_or_else(|| {
             "Kagemusha Halo2/IPA proof public input statement cannot be extracted".to_owned()
         })?
@@ -1999,6 +2070,21 @@ fn kagemusha_fold_open_verify_envelope(
     norito::decode_from_bytes(&proof.bytes).map_err(|err| {
         format!("Kagemusha fold proof statement is not a valid OpenVerifyEnvelope: {err}")
     })
+}
+
+fn ensure_kagemusha_confidential_v2_envelope_metadata(
+    envelope: &iroha_data_model::zk::OpenVerifyEnvelope,
+) -> Result<(), String> {
+    if envelope.circuit_id != confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID {
+        return Err(
+            "Kagemusha fold Halo2/IPA hops must expose the canonical confidential-transfer-v2 circuit"
+                .to_owned(),
+        );
+    }
+    if envelope.public_inputs != confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1 {
+        return Err("Kagemusha fold Halo2/IPA proof schema mismatch".to_owned());
+    }
+    Ok(())
 }
 
 /// Compute the Poseidon2 digest of the public input statement verified by a Kagemusha hop proof.
@@ -2148,6 +2234,12 @@ fn validate_kagemusha_fold_attachment(step: &KagemushaFoldProofStep<'_>) -> Resu
     if envelope.vk_hash != actual {
         return Err("Kagemusha fold proof envelope verifier key commitment mismatch".to_owned());
     }
+    if !envelope.aux.is_empty() {
+        return Err("Kagemusha fold proof envelope must have empty auxiliary bytes".to_owned());
+    }
+    if backend == ZK_BACKEND_HALO2_IPA {
+        ensure_kagemusha_confidential_v2_envelope_metadata(&envelope)?;
+    }
     if !verify_backend(backend, &step.attachment.proof, Some(step.vk_box)) {
         return Err("Kagemusha fold hop proof verification failed".to_owned());
     }
@@ -2238,6 +2330,9 @@ fn validate_kagemusha_fold_verifier_record(
     if !record.is_active() {
         return Err("Kagemusha fold verifier record is not active".to_owned());
     }
+    if record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE {
+        return Err("Kagemusha fold verifier record is not in the Kagemusha namespace".to_owned());
+    }
     let expected_backend =
         kagemusha_record_backend_for_proof_backend(step.attachment.backend.as_str())
             .ok_or_else(|| "Kagemusha fold verifier record backend is unsupported".to_owned())?;
@@ -2250,11 +2345,11 @@ fn validate_kagemusha_fold_verifier_record(
         return Err("Kagemusha fold proof exceeds verifier record proof-size cap".to_owned());
     }
     let envelope = kagemusha_fold_open_verify_envelope(&step.attachment.proof)?;
-    if !confidential_v2::is_confidential_transfer_v2_circuit_id(&record.circuit_id)
-        || !confidential_v2::is_confidential_transfer_v2_circuit_id(&envelope.circuit_id)
+    if record.circuit_id != confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
+        || envelope.circuit_id != confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
     {
         return Err(
-            "Kagemusha fold verifier records must use the confidential-transfer-v2 circuit"
+            "Kagemusha fold verifier records must use the canonical confidential-transfer-v2 circuit"
                 .to_owned(),
         );
     }
@@ -2314,14 +2409,7 @@ fn validate_required_kagemusha_confidential_v2_step_public_inputs(
             "Kagemusha fold confidential-transfer-v2 hops require halo2/ipa backend".to_owned(),
         );
     }
-    if !confidential_v2::is_confidential_transfer_v2_circuit_id(&envelope.circuit_id) {
-        return Err(
-            "Kagemusha fold hops must expose the confidential-transfer-v2 circuit".to_owned(),
-        );
-    }
-    if envelope.public_inputs != confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1 {
-        return Err("Kagemusha fold confidential-transfer-v2 proof schema mismatch".to_owned());
-    }
+    ensure_kagemusha_confidential_v2_envelope_metadata(&envelope)?;
     if !envelope.aux.is_empty() {
         return Err(
             "Kagemusha fold confidential-transfer-v2 proof envelope must have empty auxiliary bytes"
@@ -2516,44 +2604,48 @@ pub fn kagemusha_verified_folded_public_inputs_from_record_bundle(
     )
 }
 
-/// Verify private hop proofs and prove the compact Kagemusha token in one path.
+const KAGEMUSHA_RECORD_BACKED_COMPACT_PROVER_REQUIRED: &str = "Kagemusha compact-token proving requires verifier-record trust anchors; use prove_verified_kagemusha_compact_payment_token_from_bundle_with_records or prove_verified_kagemusha_compact_payment_token_from_record_bundle";
+
+/// Reject unanchored private-hop compact Kagemusha token proving.
 ///
-/// This is the production entry point for wallet/prover code: it verifies every
-/// private hop proof before deriving the folded public statement, then emits the
-/// transparent `kagemusha-folded-v1` Halo2 IPA proof for that statement.
+/// This ABI is retained so callers get a stable error instead of accidentally
+/// proving compact tokens against caller-supplied inline verifier keys. Use
+/// [`prove_verified_kagemusha_compact_payment_token_from_bundle_with_records`]
+/// or [`prove_verified_kagemusha_compact_payment_token_from_record_bundle`].
 ///
 /// # Errors
 ///
-/// Returns an error when hop verification, folded public-input construction, or
-/// compact proof generation fails.
+/// Always returns an error requiring verifier-record trust anchors.
 #[cfg(feature = "zk-halo2-ipa")]
 pub fn prove_verified_kagemusha_compact_payment_token(
-    chain_id: &iroha_data_model::ChainId,
-    asset: &iroha_data_model::asset::AssetDefinitionId,
-    steps: &[KagemushaFoldProofStep<'_>],
-    circuit_id: &str,
-    vk_box: &VerifyingKeyBox,
-    proving_key_bytes: Option<&[u8]>,
+    _chain_id: &iroha_data_model::ChainId,
+    _asset: &iroha_data_model::asset::AssetDefinitionId,
+    _steps: &[KagemushaFoldProofStep<'_>],
+    _circuit_id: &str,
+    _vk_box: &VerifyingKeyBox,
+    _proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
-    let public_inputs = kagemusha_verified_folded_public_inputs(chain_id, asset, steps)?;
-    prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
+    Err(KAGEMUSHA_RECORD_BACKED_COMPACT_PROVER_REQUIRED.to_owned())
 }
 
-/// Verify a serializable Kagemusha fold bundle and prove one compact payment token.
+/// Reject unanchored serializable-bundle compact Kagemusha token proving.
+///
+/// This ABI is retained so callers get a stable error instead of accidentally
+/// proving compact tokens against caller-supplied inline verifier keys. Use
+/// [`prove_verified_kagemusha_compact_payment_token_from_bundle_with_records`]
+/// or [`prove_verified_kagemusha_compact_payment_token_from_record_bundle`].
 ///
 /// # Errors
 ///
-/// Returns an error when hop verification, folded public-input construction, or
-/// compact proof generation fails.
+/// Always returns an error requiring verifier-record trust anchors.
 #[cfg(feature = "zk-halo2-ipa")]
 pub fn prove_verified_kagemusha_compact_payment_token_from_bundle(
-    bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
-    circuit_id: &str,
-    vk_box: &VerifyingKeyBox,
-    proving_key_bytes: Option<&[u8]>,
+    _bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
+    _circuit_id: &str,
+    _vk_box: &VerifyingKeyBox,
+    _proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
-    let public_inputs = kagemusha_verified_folded_public_inputs_from_bundle(bundle)?;
-    prove_kagemusha_compact_payment_token(circuit_id, vk_box, public_inputs, proving_key_bytes)
+    Err(KAGEMUSHA_RECORD_BACKED_COMPACT_PROVER_REQUIRED.to_owned())
 }
 
 /// Verify a serializable Kagemusha fold bundle against active hop verifier
@@ -2613,7 +2705,7 @@ pub fn verify_kagemusha_compact_payment_token(
         || vk_box.backend != ZK_BACKEND_HALO2_IPA
         || token.folded_proof.proof.backend != token.folded_proof.verifier_key_id.backend
         || token.folded_proof.proof.backend != vk_box.backend
-        || !is_kagemusha_folded_circuit_id(&token.folded_proof.verifier_key_id.name)
+        || token.folded_proof.verifier_key_id.name != KAGEMUSHA_FOLDED_CIRCUIT_ID
     {
         return false;
     }
@@ -2624,7 +2716,7 @@ pub fn verify_kagemusha_compact_payment_token(
         };
     if envelope.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
         || envelope.circuit_id != token.folded_proof.verifier_key_id.name
-        || !is_kagemusha_folded_circuit_id(&envelope.circuit_id)
+        || envelope.circuit_id != KAGEMUSHA_FOLDED_CIRCUIT_ID
         || envelope.vk_hash != hash_vk(vk_box)
     {
         return false;
@@ -2658,18 +2750,19 @@ pub fn verify_kagemusha_compact_payment_token(
 /// Verify a compact Kagemusha payment token against a registered verifier record.
 ///
 /// This mirrors the WSV verifier-key checks used by chain-side proof admission:
-/// active status, transparent Halo2 IPA backend, folded circuit id, canonical
-/// public-input schema, non-zero proof-size limit, inline verifier key,
-/// verifier-key commitment, and token verifier-key id all have to match before
-/// the backend proof verifier runs.
+/// active status, Kagemusha namespace, transparent Halo2 IPA backend, folded
+/// circuit id, canonical public-input schema, non-zero proof-size limit, inline
+/// verifier key, verifier-key commitment, and token verifier-key id all have to
+/// match before the backend proof verifier runs.
 #[must_use]
 pub fn verify_kagemusha_compact_payment_token_with_record(
     token: &iroha_data_model::offline::KagemushaCompactPaymentToken,
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> bool {
     if !record.is_active()
+        || record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE
         || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
-        || !is_kagemusha_folded_circuit_id(&record.circuit_id)
+        || record.circuit_id != KAGEMUSHA_FOLDED_CIRCUIT_ID
         || record.public_inputs_schema_hash
             != iroha_data_model::offline::kagemusha_folded_public_inputs_schema_hash()
         || record.max_proof_bytes == 0
@@ -7129,7 +7222,9 @@ mod stark_backend_tag_tests {
         assert!(!is_stark_fri_v1_backend("stark/fri/"));
         assert!(!is_stark_fri_v1_backend("stark/fri/kzg"));
         assert!(!is_stark_fri_v1_backend("stark/fri/KZG"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/ KZG"));
         assert!(!is_stark_fri_v1_backend("stark/fri:kzg"));
+        assert!(!is_stark_fri_v1_backend("stark/fri: KZG"));
         assert!(!is_stark_fri_v1_backend("stark/fri/bn254"));
         assert!(!is_stark_fri_v1_backend("stark/fri/bls12_381"));
         assert!(!is_stark_fri_v1_backend("stark/fri/debug"));
@@ -7159,22 +7254,27 @@ mod stark_backend_tag_tests {
         for backend in [
             "kzg",
             "KZG",
+            " kzg ",
             "kzg/ceremony-v1",
             "KZG/ceremony-v1",
             "bn254",
             "BN254",
+            "\tBN254\n",
             "bn256",
             "bls12_381",
             "BLS12_381",
             "bls12-381",
             "halo2/ipa:kzg",
             "halo2/ipa:KZG",
+            "halo2/ipa: KZG",
             "Halo2/IPA:KZG",
             "halo2/pasta/ipa:kzg",
             "stark/fri:kzg",
             "stark/fri:KZG",
+            "stark/fri: KZG",
             "halo2/ipa:bn254",
             "halo2/ipa:BN254",
+            "halo2/ipa: BN254",
             "stark/fri:bls12_381",
         ] {
             assert!(
@@ -7647,12 +7747,14 @@ mod guardrails_tests {
         for backend in [
             "kzg",
             "KZG",
+            " kzg ",
             "bn254",
             "BN254",
             "bls12_381",
             "halo2/kzg",
             "halo2/ipa:kzg",
             "halo2/ipa:KZG",
+            "halo2/ipa: KZG",
             "halo2/bn254",
             "groth16/bn254",
         ] {
@@ -8168,9 +8270,29 @@ mod kagemusha_folded_semantic_circuit_tests {
             .expect("valid hop_count bits")
     }
 
+    fn public_field_inverses(
+        values: KagemushaFoldedInstanceValues,
+    ) -> [Scalar; KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT] {
+        values
+            .non_zero_public_field_inverses()
+            .expect("valid public field inverses")
+    }
+
+    fn root_difference_witness(
+        values: KagemushaFoldedInstanceValues,
+    ) -> ([Scalar; KAGEMUSHA_FOLDED_ROOT_LIMBS], Scalar) {
+        values
+            .root_difference_witness()
+            .expect("valid root difference witness")
+    }
+
     fn verify(
         values: KagemushaFoldedInstanceValues,
         hop_count_bits: [Scalar; KAGEMUSHA_FOLDED_HOP_COUNT_BITS],
+        non_zero_public_field_inverses: [Scalar;
+            KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+        root_difference_selectors: [Scalar; KAGEMUSHA_FOLDED_ROOT_LIMBS],
+        root_difference_inverse: Scalar,
     ) -> bool {
         let public_values = values.public_values.map(Scalar::from);
         let instances = public_values
@@ -8181,6 +8303,9 @@ mod kagemusha_folded_semantic_circuit_tests {
         let circuit = pasta_tiny::KagemushaFoldedSemantic {
             public_values,
             hop_count_minus_one_bits: hop_count_bits,
+            non_zero_public_field_inverses,
+            root_difference_selectors,
+            root_difference_inverse,
         };
         MockProver::run(KAGEMUSHA_FOLDED_IPA_K, &circuit, instances)
             .expect("Kagemusha folded mock prover")
@@ -8188,19 +8313,47 @@ mod kagemusha_folded_semantic_circuit_tests {
             .is_ok()
     }
 
+    fn verify_with_valid_witness(values: KagemushaFoldedInstanceValues) -> bool {
+        let (root_difference_selectors, root_difference_inverse) = root_difference_witness(values);
+        verify(
+            values,
+            bits(values),
+            public_field_inverses(values),
+            root_difference_selectors,
+            root_difference_inverse,
+        )
+    }
+
+    fn verify_with_root_witness(
+        values: KagemushaFoldedInstanceValues,
+        hop_count_bits: [Scalar; KAGEMUSHA_FOLDED_HOP_COUNT_BITS],
+        non_zero_public_field_inverses: [Scalar;
+            KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+    ) -> bool {
+        let (root_difference_selectors, root_difference_inverse) = root_difference_witness(values);
+        verify(
+            values,
+            hop_count_bits,
+            non_zero_public_field_inverses,
+            root_difference_selectors,
+            root_difference_inverse,
+        )
+    }
+
     #[test]
     fn kagemusha_folded_semantic_circuit_accepts_valid_corridor() {
         let values = base_values();
-        assert!(verify(values, bits(values)));
+        assert!(verify_with_valid_witness(values));
     }
 
     #[test]
     fn kagemusha_folded_semantic_circuit_rejects_zero_hop_count() {
         let mut values = base_values();
         values.public_values[KAGEMUSHA_FOLDED_HOP_COUNT_INDEX] = 0;
-        assert!(!verify(
+        assert!(!verify_with_root_witness(
             values,
-            [Scalar::from(0); KAGEMUSHA_FOLDED_HOP_COUNT_BITS]
+            [Scalar::from(0); KAGEMUSHA_FOLDED_HOP_COUNT_BITS],
+            public_field_inverses(values),
         ));
     }
 
@@ -8208,9 +8361,10 @@ mod kagemusha_folded_semantic_circuit_tests {
     fn kagemusha_folded_semantic_circuit_rejects_oversized_hop_count() {
         let mut values = base_values();
         values.public_values[KAGEMUSHA_FOLDED_HOP_COUNT_INDEX] = 65;
-        assert!(!verify(
+        assert!(!verify_with_root_witness(
             values,
-            [Scalar::from(1); KAGEMUSHA_FOLDED_HOP_COUNT_BITS]
+            [Scalar::from(1); KAGEMUSHA_FOLDED_HOP_COUNT_BITS],
+            public_field_inverses(values),
         ));
     }
 
@@ -8220,7 +8374,11 @@ mod kagemusha_folded_semantic_circuit_tests {
         values.public_values[KAGEMUSHA_FOLDED_AGGREGATION_MODE_INDEX] = u64::from(
             iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
         );
-        assert!(!verify(values, bits(values)));
+        assert!(!verify_with_root_witness(
+            values,
+            bits(values),
+            public_field_inverses(values)
+        ));
     }
 
     #[test]
@@ -8228,7 +8386,5400 @@ mod kagemusha_folded_semantic_circuit_tests {
         let values = base_values();
         let mut bit_witness = bits(values);
         bit_witness[0] = Scalar::from(2);
-        assert!(!verify(values, bit_witness));
+        assert!(!verify_with_root_witness(
+            values,
+            bit_witness,
+            public_field_inverses(values)
+        ));
+    }
+
+    #[test]
+    fn kagemusha_folded_semantic_circuit_rejects_zero_public_field_groups() {
+        for group in KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUPS {
+            let mut values = base_values();
+            for index in group {
+                values.public_values[index] = 0;
+            }
+            assert!(!verify_with_root_witness(
+                values,
+                bits(values),
+                [Scalar::from(0); KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+            ));
+            assert!(
+                values.non_zero_public_field_inverses().is_err(),
+                "host witness builder must reject all-zero folded public field groups"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_folded_semantic_circuit_rejects_bad_public_field_inverse_witness() {
+        let values = base_values();
+        let mut inverses = public_field_inverses(values);
+        inverses[0] = Scalar::from(1);
+        assert!(!verify_with_root_witness(values, bits(values), inverses));
+    }
+
+    #[test]
+    fn kagemusha_folded_semantic_circuit_rejects_unchanged_public_roots() {
+        let mut values = base_values();
+        for limb_index in 0..KAGEMUSHA_FOLDED_ROOT_LIMBS {
+            values.public_values[KAGEMUSHA_FOLDED_FINAL_ROOT_START_INDEX + limb_index] =
+                values.public_values[KAGEMUSHA_FOLDED_INITIAL_ROOT_START_INDEX + limb_index];
+        }
+        assert!(!verify(
+            values,
+            bits(values),
+            public_field_inverses(values),
+            [Scalar::from(0); KAGEMUSHA_FOLDED_ROOT_LIMBS],
+            Scalar::from(0),
+        ));
+        assert!(
+            values.root_difference_witness().is_err(),
+            "host witness builder must reject unchanged folded public roots"
+        );
+    }
+
+    #[test]
+    fn kagemusha_folded_semantic_circuit_rejects_bad_root_difference_witness() {
+        let values = base_values();
+        let (mut selectors, inverse) = root_difference_witness(values);
+        selectors[0] = Scalar::from(0);
+        assert!(!verify(
+            values,
+            bits(values),
+            public_field_inverses(values),
+            selectors,
+            inverse,
+        ));
+
+        let (selectors, _) = root_difference_witness(values);
+        assert!(!verify(
+            values,
+            bits(values),
+            public_field_inverses(values),
+            selectors,
+            Scalar::from(1),
+        ));
+    }
+}
+
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod kagemusha_non_native_limb_circuit_tests {
+    use halo2_proofs::{
+        dev::MockProver,
+        halo2curves::{
+            CurveAffine as _,
+            ff::{Field as _, PrimeField as _},
+            group::Curve as _,
+            group::prime::PrimeCurveAffine as _,
+            pasta::{EqAffine as VestaAffine, Fp as Scalar, Fq},
+        },
+    };
+
+    use super::*;
+
+    fn bits_for_u64(value: u64) -> [Scalar; pasta_tiny::NON_NATIVE_U64_LIMB_BITS] {
+        std::array::from_fn(|index| Scalar::from((value >> index) & 1))
+    }
+
+    fn two_pow_64() -> Scalar {
+        let mut value = Scalar::from(1);
+        for _ in 0..pasta_tiny::NON_NATIVE_U64_LIMB_BITS {
+            value += value;
+        }
+        value
+    }
+
+    fn verify(circuit: pasta_tiny::NonNativeU64LimbRange) -> bool {
+        verify_with_public_value(circuit.value, circuit)
+    }
+
+    fn verify_with_public_value(
+        public_value: Scalar,
+        circuit: pasta_tiny::NonNativeU64LimbRange,
+    ) -> bool {
+        MockProver::run(7, &circuit, vec![vec![public_value]])
+            .expect("non-native u64 limb mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn verify_native_pasta_fp_scalar(circuit: pasta_tiny::NativePastaFpScalar) -> bool {
+        verify_native_pasta_fp_scalar_with_public_value(circuit.value, circuit)
+    }
+
+    fn verify_native_pasta_fp_scalar_with_public_value(
+        public_value: Scalar,
+        circuit: pasta_tiny::NativePastaFpScalar,
+    ) -> bool {
+        MockProver::run(7, &circuit, vec![vec![public_value]])
+            .expect("native Pasta Fp scalar mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn verify_private_native_pasta_fp_scalar(
+        circuit: pasta_tiny::PrivateNativePastaFpScalar,
+    ) -> bool {
+        MockProver::run(7, &circuit, vec![])
+            .expect("private native Pasta Fp scalar mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn verify_native_pasta_fp_fixed_window_decomposition<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NativePastaFpFixedWindowDecomposition<WINDOWS, WINDOW_BITS>,
+    ) -> bool {
+        MockProver::run(8, &circuit, vec![])
+            .expect("native Pasta Fp fixed-window decomposition mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn native_pasta_fp_ipa_scalar_fold_instances(
+        circuit: &pasta_tiny::NativePastaFpIpaScalarFold,
+    ) -> Vec<Vec<Scalar>> {
+        vec![
+            vec![circuit.left.value],
+            vec![circuit.right.value],
+            vec![circuit.output.value],
+        ]
+    }
+
+    fn verify_native_pasta_fp_ipa_scalar_fold(
+        circuit: pasta_tiny::NativePastaFpIpaScalarFold,
+    ) -> bool {
+        let instances = native_pasta_fp_ipa_scalar_fold_instances(&circuit);
+        verify_native_pasta_fp_ipa_scalar_fold_with_instances(circuit, instances)
+    }
+
+    fn verify_native_pasta_fp_ipa_scalar_fold_with_instances(
+        circuit: pasta_tiny::NativePastaFpIpaScalarFold,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(7, &circuit, instances)
+            .expect("native Pasta Fp IPA scalar-fold mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn native_pasta_fp_ipa_scalar_fold_vector_instances<const PAIRS: usize>(
+        circuit: &pasta_tiny::NativePastaFpIpaScalarFoldVector<PAIRS>,
+    ) -> Vec<Vec<Scalar>> {
+        circuit
+            .lefts
+            .iter()
+            .chain(circuit.rights.iter())
+            .chain(circuit.outputs.iter())
+            .map(|scalar| vec![scalar.value])
+            .collect()
+    }
+
+    fn verify_native_pasta_fp_ipa_scalar_fold_vector<const PAIRS: usize>(
+        circuit: pasta_tiny::NativePastaFpIpaScalarFoldVector<PAIRS>,
+    ) -> bool {
+        let instances = native_pasta_fp_ipa_scalar_fold_vector_instances(&circuit);
+        verify_native_pasta_fp_ipa_scalar_fold_vector_with_instances(circuit, instances)
+    }
+
+    fn verify_native_pasta_fp_ipa_scalar_fold_vector_with_instances<const PAIRS: usize>(
+        circuit: pasta_tiny::NativePastaFpIpaScalarFoldVector<PAIRS>,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(7, &circuit, instances)
+            .expect("native Pasta Fp IPA scalar-fold vector mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn native_pasta_fp_ipa_b_vector_reduction_instances<const LEN: usize>(
+        circuit: &pasta_tiny::NativePastaFpIpaBVectorReduction<LEN>,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = circuit.vectors[0]
+            .iter()
+            .map(|scalar| vec![scalar.value])
+            .collect::<Vec<_>>();
+        instances.push(vec![
+            circuit
+                .vectors
+                .last()
+                .expect("final b-vector layer")
+                .first()
+                .expect("final folded scalar")
+                .value,
+        ]);
+        instances.extend(
+            circuit
+                .challenges
+                .iter()
+                .map(|challenge| vec![challenge.value]),
+        );
+        instances.extend(
+            circuit
+                .challenge_inverses
+                .iter()
+                .map(|inverse| vec![inverse.value]),
+        );
+        instances
+    }
+
+    fn verify_native_pasta_fp_ipa_b_vector_reduction<const LEN: usize>(
+        circuit: pasta_tiny::NativePastaFpIpaBVectorReduction<LEN>,
+    ) -> bool {
+        let instances = native_pasta_fp_ipa_b_vector_reduction_instances(&circuit);
+        verify_native_pasta_fp_ipa_b_vector_reduction_with_instances(circuit, instances)
+    }
+
+    fn verify_native_pasta_fp_ipa_b_vector_reduction_with_instances<const LEN: usize>(
+        circuit: pasta_tiny::NativePastaFpIpaBVectorReduction<LEN>,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(7, &circuit, instances)
+            .expect("native Pasta Fp IPA b-vector reduction mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn native_pasta_fp_ipa_b_vector_reduction_test_scalars()
+    -> ([Scalar; 4], Vec<Scalar>, Vec<Scalar>, Scalar) {
+        let initial = [
+            Scalar::from(2),
+            Scalar::from(5),
+            Scalar::from(7),
+            Scalar::from(11),
+        ];
+        let challenges = vec![Scalar::from(2), Scalar::from(3)];
+        let inverses = challenges
+            .iter()
+            .map(|challenge| Option::<Scalar>::from(challenge.invert()).expect("non-zero"))
+            .collect::<Vec<_>>();
+        let first_layer = [
+            initial[0] * inverses[0] + initial[2] * challenges[0],
+            initial[1] * inverses[0] + initial[3] * challenges[0],
+        ];
+        let final_scalar = first_layer[0] * inverses[1] + first_layer[1] * challenges[1];
+        (initial, challenges, inverses, final_scalar)
+    }
+
+    fn verify_vesta_fq_canonical(circuit: pasta_tiny::NonNativeVestaFqCanonicalRange) -> bool {
+        verify_vesta_fq_canonical_with_public_limbs(circuit.limbs, circuit)
+    }
+
+    fn verify_vesta_fq_canonical_with_public_limbs(
+        public_limbs: [Scalar; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        circuit: pasta_tiny::NonNativeVestaFqCanonicalRange,
+    ) -> bool {
+        let instances = public_limbs
+            .iter()
+            .copied()
+            .map(|limb| vec![limb])
+            .collect::<Vec<_>>();
+        MockProver::run(7, &circuit, instances)
+            .expect("non-native Vesta Fq canonical mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn verify_vesta_fq_add(circuit: pasta_tiny::NonNativeVestaFqAdd) -> bool {
+        let instances = circuit
+            .lhs
+            .limbs
+            .iter()
+            .chain(circuit.rhs.limbs.iter())
+            .chain(circuit.out.limbs.iter())
+            .copied()
+            .map(|limb| vec![limb])
+            .collect::<Vec<_>>();
+        MockProver::run(7, &circuit, instances)
+            .expect("non-native Vesta Fq add mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn set_add_sum_limb(circuit: &mut pasta_tiny::NonNativeVestaFqAdd, index: usize, value: u64) {
+        circuit.sum_limbs[index] = Scalar::from(value);
+        circuit.sum_bits[index] = bits_for_u64(value);
+        circuit.sum_accumulators[index] = pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(
+            circuit.sum_limbs[index],
+            circuit.sum_bits[index],
+        );
+    }
+
+    fn verify_vesta_fq_mul(circuit: pasta_tiny::NonNativeVestaFqMul) -> bool {
+        let instances = circuit
+            .lhs
+            .limbs
+            .iter()
+            .chain(circuit.rhs.limbs.iter())
+            .chain(circuit.out.limbs.iter())
+            .copied()
+            .map(|limb| vec![limb])
+            .collect::<Vec<_>>();
+        MockProver::run(7, &circuit, instances)
+            .expect("non-native Vesta Fq mul mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn set_mul_product_limb(
+        circuit: &mut pasta_tiny::NonNativeVestaFqMul,
+        index: usize,
+        value: u64,
+    ) {
+        circuit.product_limbs[index] = Scalar::from(value);
+        circuit.product_bits[index] = bits_for_u64(value);
+        circuit.product_accumulators[index] =
+            pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(
+                circuit.product_limbs[index],
+                circuit.product_bits[index],
+            );
+    }
+
+    fn fq_to_limbs(value: Fq) -> [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS] {
+        let repr = value.to_repr();
+        let bytes = repr.as_ref();
+        std::array::from_fn(|index| {
+            let start = index * 8;
+            u64::from_le_bytes(bytes[start..start + 8].try_into().expect("limb bytes"))
+        })
+    }
+
+    fn vesta_generator_limbs() -> (
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) {
+        vesta_affine_limbs(VestaAffine::generator())
+    }
+
+    fn vesta_affine_limbs(
+        point: VestaAffine,
+    ) -> (
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) {
+        let coordinates = point
+            .coordinates()
+            .into_option()
+            .expect("test point is not identity");
+        (fq_to_limbs(*coordinates.x()), fq_to_limbs(*coordinates.y()))
+    }
+
+    fn vesta_addition_test_points() -> (
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        ),
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        ),
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        ),
+    ) {
+        let generator = VestaAffine::generator();
+        let p_projective = generator.to_curve();
+        let q_projective = p_projective + p_projective;
+        let r_projective = p_projective + q_projective;
+        (
+            vesta_affine_limbs(generator),
+            vesta_affine_limbs(q_projective.to_affine()),
+            vesta_affine_limbs(r_projective.to_affine()),
+        )
+    }
+
+    fn vesta_doubling_test_points() -> (
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        ),
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        ),
+    ) {
+        let generator = VestaAffine::generator();
+        let double = generator.to_curve() + generator.to_curve();
+        (
+            vesta_affine_limbs(generator),
+            vesta_affine_limbs(double.to_affine()),
+        )
+    }
+
+    fn increment_canonical_limb(
+        mut limbs: [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS] {
+        limbs[0] = limbs[0].wrapping_add(1);
+        limbs
+    }
+
+    fn verify_vesta_affine_on_curve(circuit: pasta_tiny::NonNativeVestaAffineOnCurve) -> bool {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-on-curve".to_owned())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || {
+                let instances = circuit
+                    .x_squared
+                    .lhs
+                    .limbs
+                    .iter()
+                    .chain(circuit.y_squared.lhs.limbs.iter())
+                    .copied()
+                    .map(|limb| vec![limb])
+                    .collect::<Vec<_>>();
+                MockProver::run(7, &circuit, instances)
+                    .expect("non-native Vesta affine on-curve mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn Vesta affine on-curve verifier")
+            .join()
+            .expect("Vesta affine on-curve verifier panicked")
+    }
+
+    fn vesta_affine_maybe_identity_instances(
+        circuit: &pasta_tiny::NonNativeVestaAffineMaybeIdentity,
+    ) -> Vec<Vec<Scalar>> {
+        circuit
+            .x_squared
+            .lhs
+            .limbs
+            .iter()
+            .chain(circuit.y_squared.lhs.limbs.iter())
+            .copied()
+            .chain(core::iter::once(circuit.identity))
+            .map(|limb| vec![limb])
+            .collect::<Vec<_>>()
+    }
+
+    fn verify_vesta_affine_maybe_identity(
+        circuit: pasta_tiny::NonNativeVestaAffineMaybeIdentity,
+    ) -> bool {
+        let instances = vesta_affine_maybe_identity_instances(&circuit);
+        verify_vesta_affine_maybe_identity_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_maybe_identity_with_instances(
+        circuit: pasta_tiny::NonNativeVestaAffineMaybeIdentity,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-maybe-identity".to_owned())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(7, &circuit, instances)
+                    .expect("non-native Vesta affine maybe-identity mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn Vesta affine maybe-identity verifier")
+            .join()
+            .expect("Vesta affine maybe-identity verifier panicked")
+    }
+
+    fn vesta_fixed_window_select_table() -> Vec<(
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        bool,
+    )> {
+        let generator = VestaAffine::generator().to_curve();
+        let mut table = vec![(
+            [0; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [0; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            true,
+        )];
+        for scalar in 1..4 {
+            let point = (generator * Scalar::from(scalar)).to_affine();
+            let (x, y) = vesta_affine_limbs(point);
+            table.push((x, y, false));
+        }
+        table
+    }
+
+    fn verify_vesta_affine_fixed_window_select<const WINDOW_BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaAffineFixedWindowSelect<WINDOW_BITS>,
+    ) -> bool {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-fixed-window-select".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(8, &circuit, vec![])
+                    .expect("non-native Vesta affine fixed-window select mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn Vesta affine fixed-window select verifier")
+            .join()
+            .expect("Vesta affine fixed-window select verifier panicked")
+    }
+
+    fn vesta_point_instances(
+        point: (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+    ) -> Vec<Vec<Scalar>> {
+        point
+            .0
+            .into_iter()
+            .chain(point.1)
+            .map(Scalar::from)
+            .chain(core::iter::once(Scalar::from(u64::from(point.2))))
+            .map(|value| vec![value])
+            .collect()
+    }
+
+    fn verify_vesta_affine_fixed_window_table<const WINDOW_BITS: usize>(
+        base: (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+        circuit: pasta_tiny::NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>,
+    ) -> bool {
+        let instances = vesta_point_instances(base);
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-fixed-window-table".to_owned())
+            .stack_size(512 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(8, &circuit, instances)
+                    .expect("non-native Vesta affine fixed-window table mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn Vesta affine fixed-window table verifier")
+            .join()
+            .expect("Vesta affine fixed-window table verifier panicked")
+    }
+
+    fn run_vesta_affine_fixed_window_table_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-fixed-window-table-test".to_owned())
+            .stack_size(512 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta affine fixed-window table test")
+            .join()
+            .expect("Vesta affine fixed-window table test panicked");
+    }
+
+    fn vesta_affine_windowed_scalar_mul_native_scalar_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaAffineWindowedScalarMulNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = Vec::with_capacity(18);
+        append_complete_add_point_instances(
+            &mut instances,
+            &circuit
+                .tables
+                .first()
+                .expect("windowed scalar mul has a first table")
+                .table[1],
+        );
+        append_complete_add_point_instances(
+            &mut instances,
+            circuit
+                .sum_adds
+                .last()
+                .expect("windowed scalar mul has a final sum")
+                .r
+                .as_ref(),
+        );
+        instances
+    }
+
+    fn verify_vesta_affine_windowed_scalar_mul_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaAffineWindowedScalarMulNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> bool {
+        let instances = vesta_affine_windowed_scalar_mul_native_scalar_instances(&circuit);
+        verify_vesta_affine_windowed_scalar_mul_native_scalar_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_windowed_scalar_mul_native_scalar_with_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaAffineWindowedScalarMulNativeScalar<
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-windowed-scalar-mul-test".to_owned())
+            .stack_size(1024 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(8, &circuit, instances)
+                    .expect("non-native Vesta affine windowed scalar-mul mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn Vesta affine windowed scalar-mul verifier")
+            .join()
+            .expect("Vesta affine windowed scalar-mul verifier panicked")
+    }
+
+    fn run_vesta_affine_windowed_scalar_mul_native_scalar_test(
+        test: impl FnOnce() + Send + 'static,
+    ) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-windowed-scalar-mul-builder-test".to_owned())
+            .stack_size(1024 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta affine windowed scalar-mul test")
+            .join()
+            .expect("Vesta affine windowed scalar-mul test panicked");
+    }
+
+    fn vesta_affine_windowed_msm_native_scalar_instances<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar<
+            TERMS,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = Vec::with_capacity((TERMS + 1) * 9);
+        for term in &circuit.term_muls {
+            append_complete_add_point_instances(
+                &mut instances,
+                &term
+                    .tables
+                    .first()
+                    .expect("windowed MSM term has a first table")
+                    .table[1],
+            );
+        }
+        append_complete_add_point_instances(
+            &mut instances,
+            circuit
+                .sum_adds
+                .last()
+                .expect("windowed MSM has a final sum")
+                .r
+                .as_ref(),
+        );
+        instances
+    }
+
+    fn verify_vesta_affine_windowed_msm_native_scalar<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar<
+            TERMS,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> bool {
+        let instances = vesta_affine_windowed_msm_native_scalar_instances(&circuit);
+        verify_vesta_affine_windowed_msm_native_scalar_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_windowed_msm_native_scalar_with_instances<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar<
+            TERMS,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-windowed-msm-test".to_owned())
+            .stack_size(1536 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(8, &circuit, instances)
+                    .expect("non-native Vesta affine windowed MSM mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn Vesta affine windowed MSM verifier")
+            .join()
+            .expect("Vesta affine windowed MSM verifier panicked")
+    }
+
+    fn run_vesta_affine_windowed_msm_native_scalar_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-windowed-msm-builder-test".to_owned())
+            .stack_size(1536 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta affine windowed MSM test")
+            .join()
+            .expect("Vesta affine windowed MSM test panicked");
+    }
+
+    fn vesta_affine_ipa_final_windowed_msm_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaIpaFinalWindowedMsmNativeScalar<WINDOWS, WINDOW_BITS>,
+    ) -> Vec<Vec<Scalar>> {
+        vesta_affine_windowed_msm_native_scalar_instances(circuit.msm.as_ref())
+    }
+
+    fn verify_vesta_affine_ipa_final_windowed_msm<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaFinalWindowedMsmNativeScalar<WINDOWS, WINDOW_BITS>,
+    ) -> bool {
+        let instances = vesta_affine_ipa_final_windowed_msm_instances(&circuit);
+        verify_vesta_affine_ipa_final_windowed_msm_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_ipa_final_windowed_msm_with_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaFinalWindowedMsmNativeScalar<WINDOWS, WINDOW_BITS>,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-ipa-final-windowed-msm-test".to_owned())
+            .stack_size(2048 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(8, &circuit, instances)
+                    .expect("non-native Vesta IPA final windowed MSM mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn Vesta IPA final windowed MSM verifier")
+            .join()
+            .expect("Vesta IPA final windowed MSM verifier panicked")
+    }
+
+    fn run_vesta_affine_ipa_final_windowed_msm_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-ipa-final-windowed-msm-builder-test".to_owned())
+            .stack_size(2048 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta IPA final windowed MSM test")
+            .join()
+            .expect("Vesta IPA final windowed MSM test panicked");
+    }
+
+    fn vesta_affine_point_add_instances(
+        circuit: &pasta_tiny::NonNativeVestaAffinePointAdd,
+    ) -> Vec<Vec<Scalar>> {
+        circuit
+            .p
+            .x_squared
+            .lhs
+            .limbs
+            .iter()
+            .chain(circuit.p.y_squared.lhs.limbs.iter())
+            .chain(circuit.q.x_squared.lhs.limbs.iter())
+            .chain(circuit.q.y_squared.lhs.limbs.iter())
+            .chain(circuit.r.x_squared.lhs.limbs.iter())
+            .chain(circuit.r.y_squared.lhs.limbs.iter())
+            .copied()
+            .map(|limb| vec![limb])
+            .collect::<Vec<_>>()
+    }
+
+    fn verify_vesta_affine_point_add(circuit: pasta_tiny::NonNativeVestaAffinePointAdd) -> bool {
+        let instances = vesta_affine_point_add_instances(&circuit);
+        verify_vesta_affine_point_add_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_point_add_with_instances(
+        circuit: pasta_tiny::NonNativeVestaAffinePointAdd,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(7, &circuit, instances)
+            .expect("non-native Vesta affine point-add mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn run_vesta_affine_point_add_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-point-add-test".to_owned())
+            .stack_size(128 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta affine point-add test")
+            .join()
+            .expect("Vesta affine point-add test panicked");
+    }
+
+    fn vesta_affine_point_double_instances(
+        circuit: &pasta_tiny::NonNativeVestaAffinePointDouble,
+    ) -> Vec<Vec<Scalar>> {
+        circuit
+            .p
+            .x_squared
+            .lhs
+            .limbs
+            .iter()
+            .chain(circuit.p.y_squared.lhs.limbs.iter())
+            .chain(circuit.r.x_squared.lhs.limbs.iter())
+            .chain(circuit.r.y_squared.lhs.limbs.iter())
+            .copied()
+            .map(|limb| vec![limb])
+            .collect::<Vec<_>>()
+    }
+
+    fn verify_vesta_affine_point_double(
+        circuit: pasta_tiny::NonNativeVestaAffinePointDouble,
+    ) -> bool {
+        let instances = vesta_affine_point_double_instances(&circuit);
+        verify_vesta_affine_point_double_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_point_double_with_instances(
+        circuit: pasta_tiny::NonNativeVestaAffinePointDouble,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(7, &circuit, instances)
+            .expect("non-native Vesta affine point-double mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn run_vesta_affine_point_double_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-point-double-test".to_owned())
+            .stack_size(128 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta affine point-double test")
+            .join()
+            .expect("Vesta affine point-double test panicked");
+    }
+
+    fn vesta_identity_limbs() -> (
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        bool,
+    ) {
+        (
+            [0; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [0; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            true,
+        )
+    }
+
+    fn vesta_non_identity_limbs(
+        point: VestaAffine,
+    ) -> (
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        bool,
+    ) {
+        let (x, y) = vesta_affine_limbs(point);
+        (x, y, false)
+    }
+
+    fn vesta_inverse_add_test_points() -> (
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+    ) {
+        let generator = VestaAffine::generator();
+        let inverse = (-generator.to_curve()).to_affine();
+        (
+            vesta_non_identity_limbs(generator),
+            vesta_non_identity_limbs(inverse),
+            vesta_identity_limbs(),
+        )
+    }
+
+    fn vesta_complete_add_distinct_points() -> (
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+    ) {
+        let (p, q, r) = vesta_addition_test_points();
+        ((p.0, p.1, false), (q.0, q.1, false), (r.0, r.1, false))
+    }
+
+    fn vesta_complete_add_double_points() -> (
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+        (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+    ) {
+        let (p, r) = vesta_doubling_test_points();
+        ((p.0, p.1, false), (p.0, p.1, false), (r.0, r.1, false))
+    }
+
+    fn append_complete_add_point_instances(
+        instances: &mut Vec<Vec<Scalar>>,
+        point: &pasta_tiny::NonNativeVestaAffineMaybeIdentity,
+    ) {
+        instances.extend(
+            point
+                .x_squared
+                .lhs
+                .limbs
+                .iter()
+                .chain(point.y_squared.lhs.limbs.iter())
+                .copied()
+                .map(|limb| vec![limb]),
+        );
+        instances.push(vec![point.identity]);
+    }
+
+    fn vesta_affine_complete_add_instances(
+        circuit: &pasta_tiny::NonNativeVestaAffineCompleteAdd,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = Vec::with_capacity(27);
+        append_complete_add_point_instances(&mut instances, circuit.p.as_ref());
+        append_complete_add_point_instances(&mut instances, circuit.q.as_ref());
+        append_complete_add_point_instances(&mut instances, circuit.r.as_ref());
+        instances
+    }
+
+    fn verify_vesta_affine_complete_add(
+        circuit: pasta_tiny::NonNativeVestaAffineCompleteAdd,
+    ) -> bool {
+        let instances = vesta_affine_complete_add_instances(&circuit);
+        verify_vesta_affine_complete_add_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_complete_add_with_instances(
+        circuit: pasta_tiny::NonNativeVestaAffineCompleteAdd,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(7, &circuit, instances)
+            .expect("non-native Vesta affine complete-add mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn run_vesta_affine_complete_add_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-complete-add-test".to_owned())
+            .stack_size(256 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta affine complete-add test")
+            .join()
+            .expect("Vesta affine complete-add test panicked");
+    }
+
+    fn vesta_affine_conditional_add_instances(
+        circuit: &pasta_tiny::NonNativeVestaAffineConditionalAdd,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = Vec::with_capacity(27);
+        append_complete_add_point_instances(&mut instances, circuit.addend.as_ref());
+        append_complete_add_point_instances(&mut instances, circuit.addition.p.as_ref());
+        append_complete_add_point_instances(&mut instances, circuit.addition.r.as_ref());
+        instances
+    }
+
+    fn verify_vesta_affine_conditional_add(
+        circuit: pasta_tiny::NonNativeVestaAffineConditionalAdd,
+    ) -> bool {
+        let instances = vesta_affine_conditional_add_instances(&circuit);
+        verify_vesta_affine_conditional_add_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_conditional_add_with_instances(
+        circuit: pasta_tiny::NonNativeVestaAffineConditionalAdd,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(7, &circuit, instances)
+            .expect("non-native Vesta affine conditional-add mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn run_vesta_affine_conditional_add_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-conditional-add-test".to_owned())
+            .stack_size(256 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta affine conditional-add test")
+            .join()
+            .expect("Vesta affine conditional-add test panicked");
+    }
+
+    fn vesta_maybe_identity_limbs(
+        point: VestaAffine,
+    ) -> (
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        bool,
+    ) {
+        if point.coordinates().into_option().is_none() {
+            vesta_identity_limbs()
+        } else {
+            vesta_non_identity_limbs(point)
+        }
+    }
+
+    fn vesta_scalar_mul_output_limbs(
+        scalar: u64,
+    ) -> (
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        bool,
+    ) {
+        let base = VestaAffine::generator().to_curve();
+        let mut output = VestaAffine::identity().to_curve();
+        for _ in 0..scalar {
+            output += base;
+        }
+        vesta_maybe_identity_limbs(output.to_affine())
+    }
+
+    fn vesta_native_scalar_mul_output_limbs(
+        scalar: Scalar,
+    ) -> (
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        bool,
+    ) {
+        let output = VestaAffine::generator().to_curve() * scalar;
+        vesta_maybe_identity_limbs(output.to_affine())
+    }
+
+    type TestVestaPointEncoding = (
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        bool,
+    );
+
+    fn vesta_msm_encoded_terms<const TERMS: usize>(
+        terms: [(Scalar, VestaAffine); TERMS],
+    ) -> [(Scalar, TestVestaPointEncoding); TERMS] {
+        terms.map(|(scalar, base)| (scalar, vesta_maybe_identity_limbs(base)))
+    }
+
+    fn vesta_affine_msm_output_limbs<const TERMS: usize>(
+        terms: &[(Scalar, VestaAffine); TERMS],
+    ) -> TestVestaPointEncoding {
+        let mut output = VestaAffine::identity().to_curve();
+        for (scalar, base) in terms {
+            output += base.to_curve() * *scalar;
+        }
+        vesta_maybe_identity_limbs(output.to_affine())
+    }
+
+    fn vesta_affine_scalar_mul_instances<const BITS: usize>(
+        circuit: &pasta_tiny::NonNativeVestaAffineScalarMul<BITS>,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = Vec::with_capacity(19);
+        instances.push(vec![circuit.scalar.value]);
+        append_complete_add_point_instances(
+            &mut instances,
+            circuit
+                .conditional_adds
+                .first()
+                .expect("scalar-mul has a base addend")
+                .addend
+                .as_ref(),
+        );
+        append_complete_add_point_instances(
+            &mut instances,
+            circuit
+                .conditional_adds
+                .last()
+                .expect("scalar-mul has a final output")
+                .addition
+                .r
+                .as_ref(),
+        );
+        instances
+    }
+
+    fn verify_vesta_affine_scalar_mul<const BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaAffineScalarMul<BITS>,
+    ) -> bool {
+        let instances = vesta_affine_scalar_mul_instances(&circuit);
+        verify_vesta_affine_scalar_mul_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_scalar_mul_with_instances<const BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaAffineScalarMul<BITS>,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta affine scalar-mul mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn run_vesta_affine_scalar_mul_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-scalar-mul-test".to_owned())
+            .stack_size(512 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta affine scalar-mul test")
+            .join()
+            .expect("Vesta affine scalar-mul test panicked");
+    }
+
+    fn vesta_affine_scalar_mul_native_scalar_instances<const BITS: usize>(
+        circuit: &pasta_tiny::NonNativeVestaAffineScalarMulNativeScalar<BITS>,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = Vec::with_capacity(19);
+        instances.push(vec![circuit.scalar.value]);
+        append_complete_add_point_instances(
+            &mut instances,
+            circuit
+                .conditional_adds
+                .first()
+                .expect("native scalar-mul has a base addend")
+                .addend
+                .as_ref(),
+        );
+        append_complete_add_point_instances(
+            &mut instances,
+            circuit
+                .conditional_adds
+                .last()
+                .expect("native scalar-mul has a final output")
+                .addition
+                .r
+                .as_ref(),
+        );
+        instances
+    }
+
+    fn verify_vesta_affine_scalar_mul_native_scalar<const BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaAffineScalarMulNativeScalar<BITS>,
+    ) -> bool {
+        let instances = vesta_affine_scalar_mul_native_scalar_instances(&circuit);
+        verify_vesta_affine_scalar_mul_native_scalar_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_scalar_mul_native_scalar_with_instances<const BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaAffineScalarMulNativeScalar<BITS>,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta affine native-scalar-mul mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn run_vesta_affine_scalar_mul_native_scalar_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-native-scalar-mul-test".to_owned())
+            .stack_size(512 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta affine native-scalar-mul test")
+            .join()
+            .expect("Vesta affine native-scalar-mul test panicked");
+    }
+
+    fn vesta_affine_msm_native_scalar_instances<const TERMS: usize, const BITS: usize>(
+        circuit: &pasta_tiny::NonNativeVestaAffineMsmNativeScalar<TERMS, BITS>,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = Vec::with_capacity((TERMS + 1) * 9);
+        for term_steps in &circuit.conditional_adds {
+            append_complete_add_point_instances(
+                &mut instances,
+                term_steps
+                    .first()
+                    .expect("MSM term has a base addend")
+                    .addend
+                    .as_ref(),
+            );
+        }
+        append_complete_add_point_instances(
+            &mut instances,
+            circuit
+                .sum_adds
+                .last()
+                .expect("MSM has a final running sum")
+                .r
+                .as_ref(),
+        );
+        instances
+    }
+
+    fn verify_vesta_affine_msm_native_scalar<const TERMS: usize, const BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaAffineMsmNativeScalar<TERMS, BITS>,
+    ) -> bool {
+        let instances = vesta_affine_msm_native_scalar_instances(&circuit);
+        verify_vesta_affine_msm_native_scalar_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_msm_native_scalar_with_instances<
+        const TERMS: usize,
+        const BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaAffineMsmNativeScalar<TERMS, BITS>,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta affine native-scalar MSM mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn run_vesta_affine_msm_native_scalar_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-native-scalar-msm-test".to_owned())
+            .stack_size(1024 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta affine native-scalar MSM test")
+            .join()
+            .expect("Vesta affine native-scalar MSM test panicked");
+    }
+
+    fn vesta_affine_ipa_final_msm_output_limbs(
+        a_final: Scalar,
+        b_final: Scalar,
+        final_g: VestaAffine,
+        final_h: VestaAffine,
+        u: VestaAffine,
+    ) -> TestVestaPointEncoding {
+        let product = a_final * b_final;
+        let terms = [(a_final, final_g), (b_final, final_h), (product, u)];
+        vesta_affine_msm_output_limbs(&terms)
+    }
+
+    fn vesta_affine_ipa_final_msm_instances<const BITS: usize>(
+        circuit: &pasta_tiny::NonNativeVestaIpaFinalMsmNativeScalar<BITS>,
+    ) -> Vec<Vec<Scalar>> {
+        vesta_affine_msm_native_scalar_instances(circuit.msm.as_ref())
+    }
+
+    fn verify_vesta_affine_ipa_final_msm<const BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaIpaFinalMsmNativeScalar<BITS>,
+    ) -> bool {
+        let instances = vesta_affine_ipa_final_msm_instances(&circuit);
+        verify_vesta_affine_ipa_final_msm_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_ipa_final_msm_with_instances<const BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaIpaFinalMsmNativeScalar<BITS>,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta IPA final MSM mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn run_vesta_affine_ipa_final_msm_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-ipa-final-msm-test".to_owned())
+            .stack_size(1536 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta IPA final MSM test")
+            .join()
+            .expect("Vesta IPA final MSM test panicked");
+    }
+
+    fn vesta_affine_ipa_round_accumulator_output_limbs(
+        challenge: Scalar,
+        challenge_inverse: Scalar,
+        l: VestaAffine,
+        q_before: VestaAffine,
+        r: VestaAffine,
+    ) -> TestVestaPointEncoding {
+        let terms = [
+            (challenge * challenge, l),
+            (Scalar::from(1), q_before),
+            (challenge_inverse * challenge_inverse, r),
+        ];
+        vesta_affine_msm_output_limbs(&terms)
+    }
+
+    fn vesta_affine_ipa_round_accumulator_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaIpaRoundAccumulatorNativeScalar<WINDOWS, WINDOW_BITS>,
+    ) -> Vec<Vec<Scalar>> {
+        vesta_affine_windowed_msm_native_scalar_instances(circuit.msm.as_ref())
+    }
+
+    fn verify_vesta_affine_ipa_round_accumulator<const WINDOWS: usize, const WINDOW_BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaIpaRoundAccumulatorNativeScalar<WINDOWS, WINDOW_BITS>,
+    ) -> bool {
+        let instances = vesta_affine_ipa_round_accumulator_instances(&circuit);
+        verify_vesta_affine_ipa_round_accumulator_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_ipa_round_accumulator_with_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaRoundAccumulatorNativeScalar<WINDOWS, WINDOW_BITS>,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta IPA round accumulator mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn run_vesta_affine_ipa_round_accumulator_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-ipa-round-accumulator-test".to_owned())
+            .stack_size(1536 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta IPA round accumulator test")
+            .join()
+            .expect("Vesta IPA round accumulator test panicked");
+    }
+
+    fn vesta_affine_ipa_generator_fold_outputs(
+        challenge: Scalar,
+        challenge_inverse: Scalar,
+        g_left: VestaAffine,
+        g_right: VestaAffine,
+        h_left: VestaAffine,
+        h_right: VestaAffine,
+    ) -> (TestVestaPointEncoding, TestVestaPointEncoding) {
+        let g_terms = [(challenge_inverse, g_left), (challenge, g_right)];
+        let h_terms = [(challenge, h_left), (challenge_inverse, h_right)];
+        (
+            vesta_affine_msm_output_limbs(&g_terms),
+            vesta_affine_msm_output_limbs(&h_terms),
+        )
+    }
+
+    fn scalar_inverse(value: Scalar) -> Scalar {
+        Option::<Scalar>::from(value.invert()).expect("non-zero scalar has an inverse")
+    }
+
+    fn vesta_affine_ipa_generator_fold_instances<const WINDOWS: usize, const WINDOW_BITS: usize>(
+        circuit: &pasta_tiny::NonNativeVestaIpaGeneratorFoldNativeScalar<WINDOWS, WINDOW_BITS>,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances =
+            vesta_affine_windowed_msm_native_scalar_instances(circuit.g_msm.as_ref());
+        instances.extend(vesta_affine_windowed_msm_native_scalar_instances(
+            circuit.h_msm.as_ref(),
+        ));
+        instances
+    }
+
+    fn verify_vesta_affine_ipa_generator_fold<const WINDOWS: usize, const WINDOW_BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaIpaGeneratorFoldNativeScalar<WINDOWS, WINDOW_BITS>,
+    ) -> bool {
+        let instances = vesta_affine_ipa_generator_fold_instances(&circuit);
+        verify_vesta_affine_ipa_generator_fold_with_instances(circuit, instances)
+    }
+
+    fn verify_vesta_affine_ipa_generator_fold_with_instances<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaGeneratorFoldNativeScalar<WINDOWS, WINDOW_BITS>,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta IPA generator fold mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn run_vesta_affine_ipa_generator_fold_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-ipa-generator-fold-test".to_owned())
+            .stack_size(1536 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta IPA generator fold test")
+            .join()
+            .expect("Vesta IPA generator fold test panicked");
+    }
+
+    fn vesta_generator_multiple(factor: u64) -> VestaAffine {
+        (VestaAffine::generator().to_curve() * Scalar::from(factor)).to_affine()
+    }
+
+    fn vesta_affine_ipa_one_round_valid_circuit()
+    -> pasta_tiny::NonNativeVestaIpaOneRoundVerifierNativeScalar<1, 1> {
+        pasta_tiny::NonNativeVestaIpaOneRoundVerifierNativeScalar::<1, 1>::try_from_statement(
+            [Scalar::from(1), Scalar::from(0)],
+            Scalar::from(1),
+            Scalar::from(1),
+            Scalar::from(1),
+            vesta_non_identity_limbs(vesta_generator_multiple(1)),
+            vesta_non_identity_limbs(vesta_generator_multiple(8)),
+            vesta_non_identity_limbs(vesta_generator_multiple(2)),
+            vesta_non_identity_limbs(vesta_generator_multiple(1)),
+            vesta_non_identity_limbs(vesta_generator_multiple(2)),
+            vesta_non_identity_limbs(vesta_generator_multiple(3)),
+            vesta_non_identity_limbs(vesta_generator_multiple(4)),
+            vesta_non_identity_limbs(vesta_generator_multiple(1)),
+        )
+        .expect("valid one-round IPA verifier composition")
+    }
+
+    fn vesta_affine_ipa_one_round_instances<const WINDOWS: usize, const WINDOW_BITS: usize>(
+        circuit: &pasta_tiny::NonNativeVestaIpaOneRoundVerifierNativeScalar<WINDOWS, WINDOW_BITS>,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances =
+            native_pasta_fp_ipa_b_vector_reduction_instances(circuit.b_reduction.as_ref());
+        instances.extend(vesta_affine_ipa_round_accumulator_instances(
+            circuit.round_accumulator.as_ref(),
+        ));
+        instances.extend(vesta_affine_ipa_generator_fold_instances(
+            circuit.generator_fold.as_ref(),
+        ));
+        instances.extend(vesta_affine_ipa_final_windowed_msm_instances(
+            circuit.final_msm.as_ref(),
+        ));
+        instances
+    }
+
+    fn verify_vesta_affine_ipa_one_round<const WINDOWS: usize, const WINDOW_BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaIpaOneRoundVerifierNativeScalar<WINDOWS, WINDOW_BITS>,
+    ) -> bool {
+        let instances = vesta_affine_ipa_one_round_instances(&circuit);
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta one-round IPA verifier mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn run_vesta_affine_ipa_one_round_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-ipa-one-round-test".to_owned())
+            .stack_size(3 * 1024 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta one-round IPA verifier test")
+            .join()
+            .expect("Vesta one-round IPA verifier test panicked");
+    }
+
+    type TestVestaPointScalars = (
+        [Scalar; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        [Scalar; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+        Scalar,
+    );
+
+    fn vesta_maybe_identity_witness_scalars(
+        point: &pasta_tiny::NonNativeVestaAffineMaybeIdentity,
+    ) -> TestVestaPointScalars {
+        (
+            point.x_squared.lhs.limbs,
+            point.y_squared.lhs.limbs,
+            point.identity,
+        )
+    }
+
+    fn vesta_windowed_msm_term_base_scalars<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        msm: &pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar<TERMS, WINDOWS, WINDOW_BITS>,
+        term_index: usize,
+    ) -> TestVestaPointScalars {
+        vesta_maybe_identity_witness_scalars(&msm.term_muls[term_index].tables[0].table[1])
+    }
+
+    fn vesta_windowed_msm_output_scalars<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        msm: &pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar<TERMS, WINDOWS, WINDOW_BITS>,
+    ) -> TestVestaPointScalars {
+        vesta_maybe_identity_witness_scalars(
+            msm.sum_adds
+                .last()
+                .expect("windowed MSM has a final output")
+                .r
+                .as_ref(),
+        )
+    }
+
+    fn vesta_affine_sum(points: &[VestaAffine]) -> VestaAffine {
+        let mut sum = VestaAffine::identity().to_curve();
+        for point in points {
+            sum += point.to_curve();
+        }
+        sum.to_affine()
+    }
+
+    fn vesta_affine_ipa_verifier_four_point_valid_circuit()
+    -> pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<4, 1, 1> {
+        let g_points = [
+            vesta_generator_multiple(1),
+            vesta_generator_multiple(2),
+            vesta_generator_multiple(3),
+            vesta_generator_multiple(4),
+        ];
+        let h_points = [
+            vesta_generator_multiple(5),
+            vesta_generator_multiple(6),
+            vesta_generator_multiple(7),
+            vesta_generator_multiple(8),
+        ];
+        let u = vesta_generator_multiple(1);
+        let expected_q =
+            vesta_affine_sum(&[vesta_affine_sum(&g_points), vesta_affine_sum(&h_points), u]);
+        pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::try_from_statement(
+            [
+                Scalar::from(1),
+                Scalar::from(0),
+                Scalar::from(0),
+                Scalar::from(0),
+            ],
+            vec![Scalar::from(1), Scalar::from(1)],
+            vec![Scalar::from(1), Scalar::from(1)],
+            Scalar::from(1),
+            Scalar::from(1),
+            vec![vesta_identity_limbs(), vesta_identity_limbs()],
+            vesta_non_identity_limbs(expected_q),
+            vec![vesta_identity_limbs(), vesta_identity_limbs()],
+            g_points.map(vesta_non_identity_limbs),
+            h_points.map(vesta_non_identity_limbs),
+            vesta_non_identity_limbs(u),
+        )
+        .expect("valid two-round IPA verifier composition")
+    }
+
+    fn vesta_affine_ipa_verifier_host_links_hold<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
+    ) -> bool {
+        let rounds = circuit.round_accumulators.len();
+        if rounds == 0
+            || circuit.b_reduction.challenges.len() != rounds
+            || circuit.b_reduction.challenge_inverses.len() != rounds
+            || circuit.generator_folds.len() != rounds
+        {
+            return false;
+        }
+
+        let Some(final_b_layer) = circuit.b_reduction.vectors.last() else {
+            return false;
+        };
+        if final_b_layer.len() != 1
+            || final_b_layer[0].value != circuit.final_msm.msm.term_muls[1].scalar.scalar.value
+        {
+            return false;
+        }
+
+        for round_index in 0..rounds {
+            let b_challenge = circuit.b_reduction.challenges[round_index].value;
+            let b_challenge_inverse = circuit.b_reduction.challenge_inverses[round_index].value;
+            let round = &circuit.round_accumulators[round_index];
+            if b_challenge != round.challenge.value
+                || b_challenge_inverse != round.challenge_inverse.value
+            {
+                return false;
+            }
+            for generator_fold in &circuit.generator_folds[round_index] {
+                if b_challenge != generator_fold.challenge.value
+                    || b_challenge_inverse != generator_fold.challenge_inverse.value
+                {
+                    return false;
+                }
+            }
+        }
+
+        for round_index in 0..rounds {
+            let q_after = vesta_windowed_msm_output_scalars(
+                circuit.round_accumulators[round_index].msm.as_ref(),
+            );
+            let expected_next = if round_index + 1 < rounds {
+                vesta_windowed_msm_term_base_scalars(
+                    circuit.round_accumulators[round_index + 1].msm.as_ref(),
+                    1,
+                )
+            } else {
+                vesta_windowed_msm_output_scalars(circuit.final_msm.msm.as_ref())
+            };
+            if q_after != expected_next {
+                return false;
+            }
+        }
+
+        for round_index in 0..rounds {
+            let current_width = circuit.generator_folds[round_index].len();
+            for pair_index in 0..current_width {
+                let folded_g = vesta_windowed_msm_output_scalars(
+                    circuit.generator_folds[round_index][pair_index]
+                        .g_msm
+                        .as_ref(),
+                );
+                let folded_h = vesta_windowed_msm_output_scalars(
+                    circuit.generator_folds[round_index][pair_index]
+                        .h_msm
+                        .as_ref(),
+                );
+                let (expected_g, expected_h) = if round_index + 1 < rounds {
+                    let next_half = current_width / 2;
+                    let (next_pair, next_term) = if pair_index < next_half {
+                        (pair_index, 0)
+                    } else {
+                        (pair_index - next_half, 1)
+                    };
+                    (
+                        vesta_windowed_msm_term_base_scalars(
+                            circuit.generator_folds[round_index + 1][next_pair]
+                                .g_msm
+                                .as_ref(),
+                            next_term,
+                        ),
+                        vesta_windowed_msm_term_base_scalars(
+                            circuit.generator_folds[round_index + 1][next_pair]
+                                .h_msm
+                                .as_ref(),
+                            next_term,
+                        ),
+                    )
+                } else {
+                    (
+                        vesta_windowed_msm_term_base_scalars(circuit.final_msm.msm.as_ref(), 0),
+                        vesta_windowed_msm_term_base_scalars(circuit.final_msm.msm.as_ref(), 1),
+                    )
+                };
+                if folded_g != expected_g || folded_h != expected_h {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    fn run_vesta_affine_ipa_verifier_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-ipa-verifier-test".to_owned())
+            .stack_size(4 * 1024 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn Vesta IPA verifier test")
+            .join()
+            .expect("Vesta IPA verifier test panicked");
+    }
+
+    #[test]
+    fn kagemusha_non_native_u64_limb_range_accepts_zero_and_max() {
+        assert!(verify(pasta_tiny::NonNativeU64LimbRange::from_u64(0)));
+        assert!(verify(pasta_tiny::NonNativeU64LimbRange::from_u64(
+            u64::MAX
+        )));
+    }
+
+    #[test]
+    fn kagemusha_non_native_u64_limb_range_rejects_public_instance_substitution() {
+        let circuit = pasta_tiny::NonNativeU64LimbRange::from_u64(42);
+        assert!(!verify_with_public_value(Scalar::from(43), circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_u64_limb_range_rejects_non_boolean_bit_witness() {
+        let value = Scalar::from(3);
+        let mut bits = bits_for_u64(3);
+        bits[0] = Scalar::from(2);
+        let circuit = pasta_tiny::NonNativeU64LimbRange {
+            value,
+            bits,
+            accumulators: pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(value, bits),
+        };
+        assert!(!verify(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_u64_limb_range_rejects_wrong_decomposition() {
+        let value = Scalar::from(5);
+        let bits = bits_for_u64(4);
+        let circuit = pasta_tiny::NonNativeU64LimbRange {
+            value,
+            bits,
+            accumulators: pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(value, bits),
+        };
+        assert!(!verify(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_u64_limb_range_rejects_high_residue_above_64_bits() {
+        let value = two_pow_64() + Scalar::from(7);
+        let bits = bits_for_u64(7);
+        let circuit = pasta_tiny::NonNativeU64LimbRange {
+            value,
+            bits,
+            accumulators: pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(value, bits),
+        };
+        assert!(!verify(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_u64_limb_range_rejects_forged_final_zero_accumulator() {
+        let value = two_pow_64() + Scalar::from(7);
+        let bits = bits_for_u64(7);
+        let mut circuit = pasta_tiny::NonNativeU64LimbRange {
+            value,
+            bits,
+            accumulators: pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(value, bits),
+        };
+        circuit.accumulators[pasta_tiny::NON_NATIVE_U64_LIMB_BITS] = Scalar::from(0);
+        assert!(!verify(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_u64_limb_range_rejects_forged_mid_accumulator() {
+        let mut circuit = pasta_tiny::NonNativeU64LimbRange::from_u64(0xfeed_beef);
+        circuit.accumulators[17] += Scalar::from(1);
+        assert!(!verify(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_scalar_accepts_zero_and_modulus_minus_one() {
+        assert_eq!(
+            pasta_tiny::PASTA_FP_SCALAR_BITS,
+            <Scalar as halo2_proofs::halo2curves::ff::PrimeField>::NUM_BITS as usize,
+        );
+        assert!(verify_native_pasta_fp_scalar(
+            pasta_tiny::NativePastaFpScalar::try_from_limbs([0; 4]).expect("zero is canonical"),
+        ));
+        assert!(verify_native_pasta_fp_scalar(
+            pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(42)),
+        ));
+        assert!(verify_native_pasta_fp_scalar(
+            pasta_tiny::NativePastaFpScalar::try_from_limbs(pasta_tiny::PASTA_FP_MAX_LIMBS)
+                .expect("modulus minus one is canonical"),
+        ));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_scalar_rejects_modulus() {
+        assert!(
+            pasta_tiny::NativePastaFpScalar::try_from_limbs(pasta_tiny::PASTA_FP_MODULUS_LIMBS)
+                .is_err(),
+            "host witness builder must reject the modulus as non-canonical"
+        );
+        assert!(!verify_native_pasta_fp_scalar(
+            pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(
+                pasta_tiny::PASTA_FP_MODULUS_LIMBS
+            ),
+        ));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_scalar_rejects_public_value_substitution() {
+        let circuit = pasta_tiny::NativePastaFpScalar::try_from_limbs([42, 0, 0, 0])
+            .expect("canonical scalar");
+        assert!(!verify_native_pasta_fp_scalar_with_public_value(
+            Scalar::from(43),
+            circuit,
+        ));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_scalar_rejects_limb_value_substitution() {
+        let mut circuit = pasta_tiny::NativePastaFpScalar::try_from_limbs([43, 0, 0, 0])
+            .expect("canonical scalar");
+        circuit.value = Scalar::from(42);
+        assert!(!verify_native_pasta_fp_scalar(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_scalar_rejects_non_boolean_limb_bit() {
+        let mut circuit = pasta_tiny::NativePastaFpScalar::try_from_limbs([7, 0, 0, 0])
+            .expect("canonical scalar");
+        circuit.limb_bits[0][0] = Scalar::from(2);
+        circuit.limb_accumulators[0] = pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(
+            circuit.limbs[0],
+            circuit.limb_bits[0],
+        );
+        assert!(!verify_native_pasta_fp_scalar(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_scalar_rejects_wrong_slack_witness() {
+        let mut circuit = pasta_tiny::NativePastaFpScalar::try_from_limbs([1, 0, 0, 0])
+            .expect("canonical scalar");
+        let forged_slack = pasta_tiny::PASTA_FP_MAX_LIMBS[0];
+        circuit.slack_limbs[0] = Scalar::from(forged_slack);
+        circuit.slack_bits[0] = bits_for_u64(forged_slack);
+        circuit.slack_accumulators[0] = pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(
+            circuit.slack_limbs[0],
+            circuit.slack_bits[0],
+        );
+        assert!(!verify_native_pasta_fp_scalar(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_scalar_rejects_non_boolean_borrow() {
+        let mut circuit = pasta_tiny::NativePastaFpScalar::try_from_limbs([0, 0, 0, 0])
+            .expect("canonical scalar");
+        circuit.borrow_bits[1] = Scalar::from(2);
+        assert!(!verify_native_pasta_fp_scalar(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_scalar_rejects_value_plus_modulus_alias() {
+        let mut aliased_limbs = pasta_tiny::PASTA_FP_MODULUS_LIMBS;
+        aliased_limbs[0] = aliased_limbs[0]
+            .checked_add(7)
+            .expect("Pasta Fp modulus low limb has room for test offset");
+        let circuit = pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(aliased_limbs);
+        assert_eq!(circuit.value, Scalar::from(7));
+        assert!(!verify_native_pasta_fp_scalar(circuit));
+    }
+
+    #[test]
+    fn kagemusha_private_native_pasta_fp_scalar_accepts_canonical_scalar() {
+        let circuit = pasta_tiny::PrivateNativePastaFpScalar {
+            scalar: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(42)),
+        };
+        assert!(verify_private_native_pasta_fp_scalar(circuit));
+    }
+
+    #[test]
+    fn kagemusha_private_native_pasta_fp_scalar_rejects_limb_value_substitution() {
+        let mut scalar = pasta_tiny::NativePastaFpScalar::try_from_limbs([43, 0, 0, 0])
+            .expect("canonical scalar");
+        scalar.value = Scalar::from(42);
+        assert!(!verify_private_native_pasta_fp_scalar(
+            pasta_tiny::PrivateNativePastaFpScalar { scalar },
+        ));
+    }
+
+    #[test]
+    fn kagemusha_private_native_pasta_fp_scalar_rejects_value_plus_modulus_alias() {
+        let scalar = pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(
+            pasta_tiny::PASTA_FP_MODULUS_LIMBS,
+        );
+        assert!(!verify_private_native_pasta_fp_scalar(
+            pasta_tiny::PrivateNativePastaFpScalar { scalar },
+        ));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_accepts_three_windows() {
+        let circuit = pasta_tiny::NativePastaFpFixedWindowDecomposition::<3, 2>::try_from_scalar(
+            Scalar::from(29),
+        )
+        .expect("valid fixed-window scalar decomposition");
+
+        assert_eq!(
+            circuit.digits,
+            vec![Scalar::from(1), Scalar::from(3), Scalar::from(1)]
+        );
+        assert_eq!(
+            circuit.digit_bits,
+            vec![
+                vec![Scalar::from(1), Scalar::from(0)],
+                vec![Scalar::from(1), Scalar::from(1)],
+                vec![Scalar::from(1), Scalar::from(0)],
+            ]
+        );
+        assert!(verify_native_pasta_fp_fixed_window_decomposition(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_empty_windows_builder() {
+        let err = pasta_tiny::NativePastaFpFixedWindowDecomposition::<0, 2>::try_from_scalar(
+            Scalar::from(1),
+        )
+        .err()
+        .expect("builder must reject empty fixed-window decomposition");
+        assert!(err.contains("at least one window"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_large_window_builder() {
+        let err = pasta_tiny::NativePastaFpFixedWindowDecomposition::<1, 9>::try_from_scalar(
+            Scalar::from(1),
+        )
+        .err()
+        .expect("builder must reject unsupported fixed-window width");
+        assert!(err.contains("window width"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_oversized_width_builder() {
+        let err = pasta_tiny::NativePastaFpFixedWindowDecomposition::<32, 8>::try_from_scalar(
+            Scalar::from(1),
+        )
+        .err()
+        .expect("builder must reject fixed-window width above scalar bits");
+        assert!(err.contains("must not exceed scalar bits"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_scalar_exceeding_width_builder()
+    {
+        let err = pasta_tiny::NativePastaFpFixedWindowDecomposition::<3, 2>::try_from_scalar(
+            Scalar::from(64),
+        )
+        .err()
+        .expect("builder must reject scalar with high bit above fixed-window width");
+        assert!(err.contains("exceeds configured bit width"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_digit_value_tamper() {
+        let mut circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecomposition::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid fixed-window scalar decomposition");
+        circuit.digits[0] = Scalar::from(2);
+
+        assert!(!verify_native_pasta_fp_fixed_window_decomposition(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_digit_overflow_tamper() {
+        let mut circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecomposition::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid fixed-window scalar decomposition");
+        circuit.digits[1] = Scalar::from(4);
+
+        assert!(!verify_native_pasta_fp_fixed_window_decomposition(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_non_boolean_digit_bit() {
+        let mut circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecomposition::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid fixed-window scalar decomposition");
+        circuit.digit_bits[0][0] = Scalar::from(2);
+
+        assert!(!verify_native_pasta_fp_fixed_window_decomposition(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_digit_bit_substitution() {
+        let mut circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecomposition::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid fixed-window scalar decomposition");
+        circuit.digit_bits[1][0] = Scalar::from(0);
+        circuit.digits[1] = Scalar::from(2);
+
+        assert!(!verify_native_pasta_fp_fixed_window_decomposition(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_scalar_value_substitution() {
+        let mut circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecomposition::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid fixed-window scalar decomposition");
+        circuit.scalar = Box::new(pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(
+            30,
+        )));
+
+        assert!(!verify_native_pasta_fp_fixed_window_decomposition(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_noncanonical_scalar_alias() {
+        let mut circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecomposition::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid fixed-window scalar decomposition");
+        let mut aliased_scalar = pasta_tiny::PASTA_FP_MODULUS_LIMBS;
+        aliased_scalar[0] = aliased_scalar[0]
+            .checked_add(29)
+            .expect("Pasta Fp modulus low limb has room for test offset");
+        circuit.scalar = Box::new(pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(
+            aliased_scalar,
+        ));
+        assert_eq!(circuit.scalar.value, Scalar::from(29));
+
+        assert!(!verify_native_pasta_fp_fixed_window_decomposition(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_accepts_public_inputs() {
+        let circuit = pasta_tiny::NativePastaFpIpaScalarFold::try_from_scalars(
+            Scalar::from(7),
+            Scalar::from(11),
+            Scalar::from(1),
+            Scalar::from(1),
+            Scalar::from(18),
+        )
+        .expect("valid IPA scalar fold");
+        assert!(verify_native_pasta_fp_ipa_scalar_fold(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_rejects_inverse_mismatch_builder() {
+        let err = pasta_tiny::NativePastaFpIpaScalarFold::try_from_scalars(
+            Scalar::from(7),
+            Scalar::from(11),
+            Scalar::from(1),
+            Scalar::from(0),
+            Scalar::from(11),
+        )
+        .err()
+        .expect("builder must reject mismatched challenge inverse");
+        assert!(err.contains("inverse mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_rejects_output_mismatch_builder() {
+        let err = pasta_tiny::NativePastaFpIpaScalarFold::try_from_scalars(
+            Scalar::from(7),
+            Scalar::from(11),
+            Scalar::from(1),
+            Scalar::from(1),
+            Scalar::from(19),
+        )
+        .err()
+        .expect("builder must reject wrong IPA scalar fold output");
+        assert!(err.contains("output mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_rejects_public_output_substitution() {
+        let circuit = pasta_tiny::NativePastaFpIpaScalarFold::try_from_scalars(
+            Scalar::from(7),
+            Scalar::from(11),
+            Scalar::from(1),
+            Scalar::from(1),
+            Scalar::from(18),
+        )
+        .expect("valid IPA scalar fold");
+        let mut instances = native_pasta_fp_ipa_scalar_fold_instances(&circuit);
+        instances[2][0] = Scalar::from(19);
+        assert!(!verify_native_pasta_fp_ipa_scalar_fold_with_instances(
+            circuit, instances,
+        ));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_rejects_challenge_inverse_tamper() {
+        let circuit = pasta_tiny::NativePastaFpIpaScalarFold {
+            left: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(7)),
+            right: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(11)),
+            challenge: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+            challenge_inverse: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(0)),
+            output: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(11)),
+        };
+        assert!(!verify_native_pasta_fp_ipa_scalar_fold(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_rejects_noncanonical_output_alias() {
+        let mut circuit = pasta_tiny::NativePastaFpIpaScalarFold::try_from_scalars(
+            Scalar::from(7),
+            Scalar::from(11),
+            Scalar::from(1),
+            Scalar::from(1),
+            Scalar::from(18),
+        )
+        .expect("valid IPA scalar fold");
+        let mut aliased_output = pasta_tiny::PASTA_FP_MODULUS_LIMBS;
+        aliased_output[0] = aliased_output[0]
+            .checked_add(18)
+            .expect("Pasta Fp modulus low limb has room for test offset");
+        circuit.output = pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(aliased_output);
+        assert_eq!(circuit.output.value, Scalar::from(18));
+        assert!(!verify_native_pasta_fp_ipa_scalar_fold(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_vector_accepts_two_pairs() {
+        let lefts = [Scalar::from(7), Scalar::from(3)];
+        let rights = [Scalar::from(11), Scalar::from(5)];
+        let challenge = Scalar::from(3);
+        let challenge_inverse =
+            Option::<Scalar>::from(challenge.invert()).expect("non-zero challenge");
+        let outputs = [
+            lefts[0] * challenge_inverse + rights[0] * challenge,
+            lefts[1] * challenge_inverse + rights[1] * challenge,
+        ];
+        let circuit = pasta_tiny::NativePastaFpIpaScalarFoldVector::<2>::try_from_scalars(
+            lefts,
+            rights,
+            challenge,
+            challenge_inverse,
+            outputs,
+        )
+        .expect("valid IPA scalar fold vector");
+        assert!(verify_native_pasta_fp_ipa_scalar_fold_vector(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_vector_rejects_zero_pairs_builder() {
+        let err = pasta_tiny::NativePastaFpIpaScalarFoldVector::<0>::try_from_scalars(
+            [],
+            [],
+            Scalar::from(1),
+            Scalar::from(1),
+            [],
+        )
+        .err()
+        .expect("builder must reject empty IPA scalar fold vector");
+        assert!(err.contains("at least one pair"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_vector_rejects_inverse_mismatch_builder() {
+        let err = pasta_tiny::NativePastaFpIpaScalarFoldVector::<2>::try_from_scalars(
+            [Scalar::from(7), Scalar::from(3)],
+            [Scalar::from(11), Scalar::from(5)],
+            Scalar::from(1),
+            Scalar::from(0),
+            [Scalar::from(11), Scalar::from(5)],
+        )
+        .err()
+        .expect("builder must reject mismatched challenge inverse");
+        assert!(err.contains("inverse mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_vector_rejects_output_mismatch_builder() {
+        let err = pasta_tiny::NativePastaFpIpaScalarFoldVector::<2>::try_from_scalars(
+            [Scalar::from(7), Scalar::from(3)],
+            [Scalar::from(11), Scalar::from(5)],
+            Scalar::from(1),
+            Scalar::from(1),
+            [Scalar::from(18), Scalar::from(9)],
+        )
+        .err()
+        .expect("builder must reject wrong IPA scalar fold vector output");
+        assert!(err.contains("output mismatch at index 1"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_vector_rejects_public_left_substitution() {
+        let circuit = pasta_tiny::NativePastaFpIpaScalarFoldVector::<2>::try_from_scalars(
+            [Scalar::from(7), Scalar::from(3)],
+            [Scalar::from(11), Scalar::from(5)],
+            Scalar::from(1),
+            Scalar::from(1),
+            [Scalar::from(18), Scalar::from(8)],
+        )
+        .expect("valid IPA scalar fold vector");
+        let mut instances = native_pasta_fp_ipa_scalar_fold_vector_instances(&circuit);
+        instances[0][0] = Scalar::from(8);
+        assert!(!verify_native_pasta_fp_ipa_scalar_fold_vector_with_instances(circuit, instances,));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_vector_rejects_public_output_substitution() {
+        let circuit = pasta_tiny::NativePastaFpIpaScalarFoldVector::<2>::try_from_scalars(
+            [Scalar::from(7), Scalar::from(3)],
+            [Scalar::from(11), Scalar::from(5)],
+            Scalar::from(1),
+            Scalar::from(1),
+            [Scalar::from(18), Scalar::from(8)],
+        )
+        .expect("valid IPA scalar fold vector");
+        let mut instances = native_pasta_fp_ipa_scalar_fold_vector_instances(&circuit);
+        instances[4][0] = Scalar::from(19);
+        assert!(!verify_native_pasta_fp_ipa_scalar_fold_vector_with_instances(circuit, instances,));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_vector_rejects_challenge_inverse_tamper() {
+        let circuit = pasta_tiny::NativePastaFpIpaScalarFoldVector::<2> {
+            lefts: [Scalar::from(7), Scalar::from(3)]
+                .into_iter()
+                .map(pasta_tiny::NativePastaFpScalar::from_scalar)
+                .collect(),
+            rights: [Scalar::from(11), Scalar::from(5)]
+                .into_iter()
+                .map(pasta_tiny::NativePastaFpScalar::from_scalar)
+                .collect(),
+            challenge: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+            challenge_inverse: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(0)),
+            outputs: [Scalar::from(11), Scalar::from(5)]
+                .into_iter()
+                .map(pasta_tiny::NativePastaFpScalar::from_scalar)
+                .collect(),
+        };
+        assert!(!verify_native_pasta_fp_ipa_scalar_fold_vector(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_vector_rejects_noncanonical_challenge_alias() {
+        let mut circuit = pasta_tiny::NativePastaFpIpaScalarFoldVector::<2>::try_from_scalars(
+            [Scalar::from(7), Scalar::from(3)],
+            [Scalar::from(11), Scalar::from(5)],
+            Scalar::from(1),
+            Scalar::from(1),
+            [Scalar::from(18), Scalar::from(8)],
+        )
+        .expect("valid IPA scalar fold vector");
+        let mut aliased_challenge = pasta_tiny::PASTA_FP_MODULUS_LIMBS;
+        aliased_challenge[0] = aliased_challenge[0]
+            .checked_add(1)
+            .expect("Pasta Fp modulus low limb has room for test offset");
+        circuit.challenge =
+            pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(aliased_challenge);
+        assert_eq!(circuit.challenge.value, Scalar::from(1));
+        assert!(!verify_native_pasta_fp_ipa_scalar_fold_vector(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_scalar_fold_vector_rejects_noncanonical_output_alias() {
+        let mut circuit = pasta_tiny::NativePastaFpIpaScalarFoldVector::<2>::try_from_scalars(
+            [Scalar::from(7), Scalar::from(3)],
+            [Scalar::from(11), Scalar::from(5)],
+            Scalar::from(1),
+            Scalar::from(1),
+            [Scalar::from(18), Scalar::from(8)],
+        )
+        .expect("valid IPA scalar fold vector");
+        let mut aliased_output = pasta_tiny::PASTA_FP_MODULUS_LIMBS;
+        aliased_output[0] = aliased_output[0]
+            .checked_add(18)
+            .expect("Pasta Fp modulus low limb has room for test offset");
+        circuit.outputs[0] = pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(aliased_output);
+        assert_eq!(circuit.outputs[0].value, Scalar::from(18));
+        assert!(!verify_native_pasta_fp_ipa_scalar_fold_vector(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_accepts_four_scalars() {
+        let (initial, challenges, inverses, final_scalar) =
+            native_pasta_fp_ipa_b_vector_reduction_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaBVectorReduction::<4>::try_from_scalars(
+            initial,
+            challenges,
+            inverses,
+            final_scalar,
+        )
+        .expect("valid IPA b-vector reduction");
+        assert!(verify_native_pasta_fp_ipa_b_vector_reduction(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_non_power_of_two_builder() {
+        let err = pasta_tiny::NativePastaFpIpaBVectorReduction::<3>::try_from_scalars(
+            [Scalar::from(1), Scalar::from(2), Scalar::from(3)],
+            vec![],
+            vec![],
+            Scalar::from(0),
+        )
+        .err()
+        .expect("builder must reject non-power-of-two b vector");
+        assert!(err.contains("power of two greater than one"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_challenge_count_builder() {
+        let (initial, _challenges, inverses, final_scalar) =
+            native_pasta_fp_ipa_b_vector_reduction_test_scalars();
+        let err = pasta_tiny::NativePastaFpIpaBVectorReduction::<4>::try_from_scalars(
+            initial,
+            vec![Scalar::from(2)],
+            inverses,
+            final_scalar,
+        )
+        .err()
+        .expect("builder must reject wrong challenge count");
+        assert!(err.contains("challenge count mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_inverse_mismatch_builder() {
+        let (initial, challenges, mut inverses, final_scalar) =
+            native_pasta_fp_ipa_b_vector_reduction_test_scalars();
+        inverses[1] = Scalar::from(1);
+        let err = pasta_tiny::NativePastaFpIpaBVectorReduction::<4>::try_from_scalars(
+            initial,
+            challenges,
+            inverses,
+            final_scalar,
+        )
+        .err()
+        .expect("builder must reject mismatched b-vector challenge inverse");
+        assert!(err.contains("inverse mismatch at round 1"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_final_mismatch_builder() {
+        let (initial, challenges, inverses, final_scalar) =
+            native_pasta_fp_ipa_b_vector_reduction_test_scalars();
+        let err = pasta_tiny::NativePastaFpIpaBVectorReduction::<4>::try_from_scalars(
+            initial,
+            challenges,
+            inverses,
+            final_scalar + Scalar::from(1),
+        )
+        .err()
+        .expect("builder must reject wrong final folded scalar");
+        assert!(err.contains("final scalar mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_public_initial_substitution() {
+        let (initial, challenges, inverses, final_scalar) =
+            native_pasta_fp_ipa_b_vector_reduction_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaBVectorReduction::<4>::try_from_scalars(
+            initial,
+            challenges,
+            inverses,
+            final_scalar,
+        )
+        .expect("valid IPA b-vector reduction");
+        let mut instances = native_pasta_fp_ipa_b_vector_reduction_instances(&circuit);
+        instances[0][0] = Scalar::from(99);
+        assert!(!verify_native_pasta_fp_ipa_b_vector_reduction_with_instances(circuit, instances,));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_public_final_substitution() {
+        let (initial, challenges, inverses, final_scalar) =
+            native_pasta_fp_ipa_b_vector_reduction_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaBVectorReduction::<4>::try_from_scalars(
+            initial,
+            challenges,
+            inverses,
+            final_scalar,
+        )
+        .expect("valid IPA b-vector reduction");
+        let mut instances = native_pasta_fp_ipa_b_vector_reduction_instances(&circuit);
+        instances[4][0] = final_scalar + Scalar::from(1);
+        assert!(!verify_native_pasta_fp_ipa_b_vector_reduction_with_instances(circuit, instances,));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_public_challenge_substitution() {
+        let (initial, challenges, inverses, final_scalar) =
+            native_pasta_fp_ipa_b_vector_reduction_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaBVectorReduction::<4>::try_from_scalars(
+            initial,
+            challenges,
+            inverses,
+            final_scalar,
+        )
+        .expect("valid IPA b-vector reduction");
+        let mut instances = native_pasta_fp_ipa_b_vector_reduction_instances(&circuit);
+        instances[5][0] += Scalar::from(1);
+        assert!(!verify_native_pasta_fp_ipa_b_vector_reduction_with_instances(circuit, instances,));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_public_inverse_substitution() {
+        let (initial, challenges, inverses, final_scalar) =
+            native_pasta_fp_ipa_b_vector_reduction_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaBVectorReduction::<4>::try_from_scalars(
+            initial,
+            challenges,
+            inverses,
+            final_scalar,
+        )
+        .expect("valid IPA b-vector reduction");
+        let mut instances = native_pasta_fp_ipa_b_vector_reduction_instances(&circuit);
+        instances[7][0] += Scalar::from(1);
+        assert!(!verify_native_pasta_fp_ipa_b_vector_reduction_with_instances(circuit, instances,));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_intermediate_tamper() {
+        let (initial, challenges, inverses, final_scalar) =
+            native_pasta_fp_ipa_b_vector_reduction_test_scalars();
+        let mut circuit = pasta_tiny::NativePastaFpIpaBVectorReduction::<4>::try_from_scalars(
+            initial,
+            challenges,
+            inverses,
+            final_scalar,
+        )
+        .expect("valid IPA b-vector reduction");
+        circuit.vectors[1][0] = pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(123));
+        assert!(!verify_native_pasta_fp_ipa_b_vector_reduction(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_challenge_inverse_tamper() {
+        let circuit = pasta_tiny::NativePastaFpIpaBVectorReduction::<4> {
+            vectors: vec![
+                [
+                    Scalar::from(7),
+                    Scalar::from(3),
+                    Scalar::from(11),
+                    Scalar::from(5),
+                ]
+                .into_iter()
+                .map(pasta_tiny::NativePastaFpScalar::from_scalar)
+                .collect(),
+                [Scalar::from(11), Scalar::from(5)]
+                    .into_iter()
+                    .map(pasta_tiny::NativePastaFpScalar::from_scalar)
+                    .collect(),
+                vec![pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(
+                    16,
+                ))],
+            ],
+            challenges: vec![
+                pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+                pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+            ],
+            challenge_inverses: vec![
+                pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(0)),
+                pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+            ],
+        };
+        assert!(!verify_native_pasta_fp_ipa_b_vector_reduction(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_noncanonical_intermediate_alias() {
+        let initial = [
+            Scalar::from(2),
+            Scalar::from(5),
+            Scalar::from(7),
+            Scalar::from(11),
+        ];
+        let mut circuit = pasta_tiny::NativePastaFpIpaBVectorReduction::<4>::try_from_scalars(
+            initial,
+            vec![Scalar::from(1), Scalar::from(1)],
+            vec![Scalar::from(1), Scalar::from(1)],
+            Scalar::from(25),
+        )
+        .expect("valid IPA b-vector reduction");
+        let mut aliased = pasta_tiny::PASTA_FP_MODULUS_LIMBS;
+        aliased[0] = aliased[0]
+            .checked_add(9)
+            .expect("Pasta Fp modulus low limb has room for test offset");
+        circuit.vectors[1][0] = pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(aliased);
+        assert_eq!(circuit.vectors[1][0].value, Scalar::from(9));
+        assert!(!verify_native_pasta_fp_ipa_b_vector_reduction(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_b_vector_reduction_rejects_noncanonical_final_alias() {
+        let initial = [
+            Scalar::from(2),
+            Scalar::from(5),
+            Scalar::from(7),
+            Scalar::from(11),
+        ];
+        let mut circuit = pasta_tiny::NativePastaFpIpaBVectorReduction::<4>::try_from_scalars(
+            initial,
+            vec![Scalar::from(1), Scalar::from(1)],
+            vec![Scalar::from(1), Scalar::from(1)],
+            Scalar::from(25),
+        )
+        .expect("valid IPA b-vector reduction");
+        let mut aliased = pasta_tiny::PASTA_FP_MODULUS_LIMBS;
+        aliased[0] = aliased[0]
+            .checked_add(25)
+            .expect("Pasta Fp modulus low limb has room for test offset");
+        circuit.vectors[2][0] = pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(aliased);
+        assert_eq!(circuit.vectors[2][0].value, Scalar::from(25));
+        assert!(!verify_native_pasta_fp_ipa_b_vector_reduction(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_range_accepts_zero_and_modulus_minus_one() {
+        assert!(verify_vesta_fq_canonical(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([0; 4])
+                .expect("zero is canonical")
+        ));
+        assert!(verify_vesta_fq_canonical(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs(
+                pasta_tiny::VESTA_FQ_MAX_LIMBS,
+            )
+            .expect("modulus minus one is canonical")
+        ));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_range_rejects_modulus() {
+        assert!(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs(
+                pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+            )
+            .is_err(),
+            "host witness builder must reject the modulus as non-canonical"
+        );
+        assert!(!verify_vesta_fq_canonical(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::unchecked_from_limbs(
+                pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+            )
+        ));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_range_rejects_public_limb_substitution() {
+        let circuit = pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([42, 0, 0, 0])
+            .expect("canonical limbs");
+        let mut public_limbs = circuit.limbs;
+        public_limbs[0] = Scalar::from(43);
+        assert!(!verify_vesta_fq_canonical_with_public_limbs(
+            public_limbs,
+            circuit,
+        ));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_range_rejects_non_boolean_borrow() {
+        let mut circuit = pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([0, 0, 0, 0])
+            .expect("canonical limbs");
+        circuit.borrow_bits[1] = Scalar::from(2);
+        assert!(!verify_vesta_fq_canonical(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_range_rejects_wrong_slack_witness() {
+        let mut circuit = pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([1, 0, 0, 0])
+            .expect("canonical limbs");
+        let forged_slack = pasta_tiny::VESTA_FQ_MAX_LIMBS[0];
+        circuit.slack_limbs[0] = Scalar::from(forged_slack);
+        circuit.slack_bits[0] = bits_for_u64(forged_slack);
+        circuit.slack_accumulators[0] = pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(
+            circuit.slack_limbs[0],
+            circuit.slack_bits[0],
+        );
+        assert!(!verify_vesta_fq_canonical(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_range_rejects_high_residue_limb() {
+        let mut circuit = pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([0, 0, 0, 0])
+            .expect("canonical limbs");
+        circuit.limbs[0] = two_pow_64();
+        circuit.limb_bits[0] = [Scalar::from(0); pasta_tiny::NON_NATIVE_U64_LIMB_BITS];
+        circuit.limb_accumulators[0] = pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(
+            circuit.limbs[0],
+            circuit.limb_bits[0],
+        );
+        assert!(!verify_vesta_fq_canonical(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_add_accepts_without_reduction() {
+        let circuit = pasta_tiny::NonNativeVestaFqAdd::try_from_limbs([7, 0, 0, 0], [11, 0, 0, 0])
+            .expect("valid Fq addition");
+        assert_eq!(circuit.out.limbs[0], Scalar::from(18));
+        assert_eq!(circuit.reduction_bit, Scalar::from(0));
+        assert!(verify_vesta_fq_add(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_add_accepts_limb_carry_without_reduction() {
+        let circuit =
+            pasta_tiny::NonNativeVestaFqAdd::try_from_limbs([u64::MAX, 0, 0, 0], [1, 0, 0, 0])
+                .expect("valid Fq addition with carry");
+        assert_eq!(circuit.out.limbs[0], Scalar::from(0));
+        assert_eq!(circuit.out.limbs[1], Scalar::from(1));
+        assert_eq!(circuit.add_carries[1], Scalar::from(1));
+        assert!(verify_vesta_fq_add(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_add_accepts_modulus_reduction() {
+        let circuit = pasta_tiny::NonNativeVestaFqAdd::try_from_limbs(
+            pasta_tiny::VESTA_FQ_MAX_LIMBS,
+            [1, 0, 0, 0],
+        )
+        .expect("modulus minus one plus one reduces to zero");
+        assert_eq!(
+            circuit.out.limbs,
+            [Scalar::from(0); pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS]
+        );
+        assert_eq!(circuit.reduction_bit, Scalar::from(1));
+        assert!(verify_vesta_fq_add(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_add_rejects_wrong_output() {
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqAdd::try_from_limbs([7, 0, 0, 0], [11, 0, 0, 0])
+                .expect("valid Fq addition");
+        circuit.out = pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([19, 0, 0, 0])
+            .expect("canonical forged output");
+        assert!(!verify_vesta_fq_add(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_add_rejects_forged_reduction_bit() {
+        let mut circuit = pasta_tiny::NonNativeVestaFqAdd::try_from_limbs(
+            pasta_tiny::VESTA_FQ_MAX_LIMBS,
+            [1, 0, 0, 0],
+        )
+        .expect("valid reducing Fq addition");
+        circuit.reduction_bit = Scalar::from(0);
+        assert!(!verify_vesta_fq_add(circuit));
+
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqAdd::try_from_limbs([7, 0, 0, 0], [11, 0, 0, 0])
+                .expect("valid Fq addition");
+        circuit.reduction_bit = Scalar::from(2);
+        assert!(!verify_vesta_fq_add(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_add_rejects_forged_sum_limb() {
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqAdd::try_from_limbs([7, 0, 0, 0], [11, 0, 0, 0])
+                .expect("valid Fq addition");
+        set_add_sum_limb(&mut circuit, 0, 19);
+        assert!(!verify_vesta_fq_add(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_add_rejects_non_boolean_or_final_carry() {
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqAdd::try_from_limbs([u64::MAX, 0, 0, 0], [1, 0, 0, 0])
+                .expect("valid Fq addition with carry");
+        circuit.add_carries[1] = Scalar::from(2);
+        assert!(!verify_vesta_fq_add(circuit));
+
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqAdd::try_from_limbs([7, 0, 0, 0], [11, 0, 0, 0])
+                .expect("valid Fq addition");
+        circuit.reduction_carries[pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS] = Scalar::from(1);
+        assert!(!verify_vesta_fq_add(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_add_rejects_noncanonical_operand() {
+        assert!(
+            pasta_tiny::NonNativeVestaFqAdd::try_from_limbs(
+                pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+                [0, 0, 0, 0],
+            )
+            .is_err(),
+            "host witness builder must reject non-canonical addends"
+        );
+
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqAdd::try_from_limbs([0, 0, 0, 0], [0, 0, 0, 0])
+                .expect("valid zero addition");
+        circuit.lhs = pasta_tiny::NonNativeVestaFqCanonicalRange::unchecked_from_limbs(
+            pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+        );
+        assert!(!verify_vesta_fq_add(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_add_rejects_high_residue_sum_limb() {
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqAdd::try_from_limbs([0, 0, 0, 0], [0, 0, 0, 0])
+                .expect("valid zero addition");
+        circuit.sum_limbs[0] = two_pow_64();
+        circuit.sum_bits[0] = [Scalar::from(0); pasta_tiny::NON_NATIVE_U64_LIMB_BITS];
+        circuit.sum_accumulators[0] = pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(
+            circuit.sum_limbs[0],
+            circuit.sum_bits[0],
+        );
+        assert!(!verify_vesta_fq_add(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_accepts_without_reduction() {
+        let circuit = pasta_tiny::NonNativeVestaFqMul::try_from_limbs([7, 0, 0, 0], [11, 0, 0, 0])
+            .expect("valid Fq multiplication");
+        assert_eq!(circuit.out.limbs[0], Scalar::from(77));
+        assert_eq!(
+            circuit.quotient.limbs,
+            [Scalar::from(0); pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS]
+        );
+        assert!(verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_accepts_limb_carry_without_reduction() {
+        let circuit = pasta_tiny::NonNativeVestaFqMul::try_from_limbs(
+            [u64::MAX, 0, 0, 0],
+            [u64::MAX, 0, 0, 0],
+        )
+        .expect("valid Fq multiplication with product carry");
+        assert_eq!(circuit.out.limbs[0], Scalar::from(1));
+        assert_eq!(circuit.out.limbs[1], Scalar::from(u64::MAX - 1));
+        assert_eq!(circuit.product_carries[1].value, Scalar::from(u64::MAX - 1));
+        assert!(verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_accepts_modulus_reduction() {
+        let circuit = pasta_tiny::NonNativeVestaFqMul::try_from_limbs(
+            pasta_tiny::VESTA_FQ_MAX_LIMBS,
+            pasta_tiny::VESTA_FQ_MAX_LIMBS,
+        )
+        .expect("modulus minus one squared reduces to one");
+        assert_eq!(circuit.out.limbs[0], Scalar::from(1));
+        for limb in &circuit.out.limbs[1..] {
+            assert_eq!(*limb, Scalar::from(0));
+        }
+        assert_ne!(
+            circuit.quotient.limbs,
+            [Scalar::from(0); pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS]
+        );
+        assert!(verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_accepts_zero_product() {
+        let circuit = pasta_tiny::NonNativeVestaFqMul::try_from_limbs(
+            [0, 0, 0, 0],
+            pasta_tiny::VESTA_FQ_MAX_LIMBS,
+        )
+        .expect("zero product is valid");
+        assert_eq!(
+            circuit.out.limbs,
+            [Scalar::from(0); pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS]
+        );
+        assert!(verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_rejects_wrong_output() {
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqMul::try_from_limbs([7, 0, 0, 0], [11, 0, 0, 0])
+                .expect("valid Fq multiplication");
+        circuit.out = Box::new(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([78, 0, 0, 0])
+                .expect("canonical forged output"),
+        );
+        assert!(!verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_rejects_forged_private_quotient() {
+        let mut circuit = pasta_tiny::NonNativeVestaFqMul::try_from_limbs(
+            pasta_tiny::VESTA_FQ_MAX_LIMBS,
+            pasta_tiny::VESTA_FQ_MAX_LIMBS,
+        )
+        .expect("valid reducing Fq multiplication");
+        circuit.quotient = Box::new(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([0, 0, 0, 0])
+                .expect("canonical forged quotient"),
+        );
+        assert!(!verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_rejects_forged_product_limb() {
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqMul::try_from_limbs([7, 0, 0, 0], [11, 0, 0, 0])
+                .expect("valid Fq multiplication");
+        set_mul_product_limb(&mut circuit, 0, 78);
+        assert!(!verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_rejects_forged_product_carry() {
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqMul::try_from_limbs([7, 0, 0, 0], [11, 0, 0, 0])
+                .expect("valid Fq multiplication");
+        circuit.product_carries[1] = pasta_tiny::NonNativeU128Range::from_u128(1);
+        assert!(!verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_rejects_forged_reduction_carry() {
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqMul::try_from_limbs([7, 0, 0, 0], [11, 0, 0, 0])
+                .expect("valid Fq multiplication");
+        circuit.reduction_carries[1] = pasta_tiny::NonNativeU128Range::from_u128(1);
+        assert!(!verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_rejects_carry_limb_mismatch() {
+        let mut circuit = pasta_tiny::NonNativeVestaFqMul::try_from_limbs(
+            [u64::MAX, 0, 0, 0],
+            [u64::MAX, 0, 0, 0],
+        )
+        .expect("valid Fq multiplication with product carry");
+        circuit.product_carries[1].value += Scalar::from(1);
+        assert!(!verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_rejects_noncanonical_operand() {
+        assert!(
+            pasta_tiny::NonNativeVestaFqMul::try_from_limbs(
+                pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+                [1, 0, 0, 0],
+            )
+            .is_err(),
+            "host witness builder must reject non-canonical factors"
+        );
+
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqMul::try_from_limbs([0, 0, 0, 0], [1, 0, 0, 0])
+                .expect("valid zero multiplication");
+        circuit.lhs = Box::new(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::unchecked_from_limbs(
+                pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+            ),
+        );
+        assert!(!verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_fq_mul_rejects_high_residue_product_limb() {
+        let mut circuit =
+            pasta_tiny::NonNativeVestaFqMul::try_from_limbs([0, 0, 0, 0], [0, 0, 0, 0])
+                .expect("valid zero multiplication");
+        circuit.product_limbs[0] = two_pow_64();
+        circuit.product_bits[0] = [Scalar::from(0); pasta_tiny::NON_NATIVE_U64_LIMB_BITS];
+        circuit.product_accumulators[0] = pasta_tiny::NonNativeU64LimbRange::accumulators_for_bits(
+            circuit.product_limbs[0],
+            circuit.product_bits[0],
+        );
+        assert!(!verify_vesta_fq_mul(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_on_curve_accepts_generator() {
+        let (x, y) = vesta_generator_limbs();
+        let circuit = pasta_tiny::NonNativeVestaAffineOnCurve::try_from_limbs(x, y)
+            .expect("Vesta generator is on curve");
+        assert!(verify_vesta_affine_on_curve(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_on_curve_rejects_off_curve_host_witness() {
+        let (x, y) = vesta_generator_limbs();
+        assert!(
+            pasta_tiny::NonNativeVestaAffineOnCurve::try_from_limbs(
+                x,
+                increment_canonical_limb(y),
+            )
+            .is_err(),
+            "host witness builder must reject off-curve coordinates"
+        );
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_on_curve_rejects_noncanonical_coordinate() {
+        let (x, y) = vesta_generator_limbs();
+        assert!(
+            pasta_tiny::NonNativeVestaAffineOnCurve::try_from_limbs(
+                pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+                y,
+            )
+            .is_err(),
+            "host witness builder must reject non-canonical coordinates"
+        );
+
+        let mut circuit = pasta_tiny::NonNativeVestaAffineOnCurve::try_from_limbs(x, y)
+            .expect("Vesta generator is on curve");
+        circuit.x_squared.lhs = Box::new(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::unchecked_from_limbs(
+                pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+            ),
+        );
+        assert!(!verify_vesta_affine_on_curve(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_on_curve_rejects_public_y_substitution() {
+        let (x, y) = vesta_generator_limbs();
+        let mut circuit = pasta_tiny::NonNativeVestaAffineOnCurve::try_from_limbs(x, y)
+            .expect("Vesta generator is on curve");
+        circuit.y_squared.lhs = Box::new(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs(increment_canonical_limb(y))
+                .expect("mutated y remains canonical"),
+        );
+        assert!(!verify_vesta_affine_on_curve(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_on_curve_rejects_tampered_square_link() {
+        let (x, y) = vesta_generator_limbs();
+        let mut circuit = pasta_tiny::NonNativeVestaAffineOnCurve::try_from_limbs(x, y)
+            .expect("Vesta generator is on curve");
+        circuit.x_squared.rhs = Box::new(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([1, 0, 0, 0])
+                .expect("one is canonical"),
+        );
+        assert!(!verify_vesta_affine_on_curve(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_on_curve_rejects_tampered_curve_constant() {
+        let (x, y) = vesta_generator_limbs();
+        let mut circuit = pasta_tiny::NonNativeVestaAffineOnCurve::try_from_limbs(x, y)
+            .expect("Vesta generator is on curve");
+        circuit.rhs.rhs = pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([6, 0, 0, 0])
+            .expect("six is canonical");
+        assert!(!verify_vesta_affine_on_curve(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_maybe_identity_accepts_identity() {
+        let circuit =
+            pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs([0; 4], [0; 4], true)
+                .expect("canonical identity encoding is valid");
+        assert!(verify_vesta_affine_maybe_identity(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_maybe_identity_accepts_generator() {
+        let (x, y) = vesta_generator_limbs();
+        let circuit = pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(x, y, false)
+            .expect("Vesta generator is a valid non-identity point");
+        assert!(verify_vesta_affine_maybe_identity(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_maybe_identity_rejects_nonzero_identity_host_witness() {
+        let (x, y) = vesta_generator_limbs();
+        assert!(
+            pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(x, y, true).is_err(),
+            "host witness builder must reject identity flag with non-zero coordinates"
+        );
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_maybe_identity_rejects_off_curve_non_identity() {
+        let (x, y) = vesta_generator_limbs();
+        assert!(
+            pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                x,
+                increment_canonical_limb(y),
+                false,
+            )
+            .is_err(),
+            "host witness builder must reject off-curve non-identity coordinates"
+        );
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_maybe_identity_rejects_noncanonical_coordinate() {
+        let (_x, y) = vesta_generator_limbs();
+        assert!(
+            pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+                y,
+                false,
+            )
+            .is_err(),
+            "host witness builder must reject non-canonical point coordinates"
+        );
+
+        let mut circuit =
+            pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs([0; 4], [0; 4], true)
+                .expect("canonical identity encoding is valid");
+        circuit.x_squared.lhs = Box::new(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::unchecked_from_limbs(
+                pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+            ),
+        );
+        assert!(!verify_vesta_affine_maybe_identity(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_maybe_identity_rejects_non_boolean_identity_witness() {
+        let mut circuit =
+            pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs([0; 4], [0; 4], true)
+                .expect("canonical identity encoding is valid");
+        circuit.identity = Scalar::from(2);
+        assert!(!verify_vesta_affine_maybe_identity(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_maybe_identity_rejects_public_identity_substitution() {
+        let (x, y) = vesta_generator_limbs();
+        let circuit = pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(x, y, false)
+            .expect("Vesta generator is a valid non-identity point");
+        let mut instances = vesta_affine_maybe_identity_instances(&circuit);
+        let identity_column = instances
+            .last_mut()
+            .expect("maybe-identity instance columns include identity");
+        identity_column[0] = Scalar::from(1);
+        assert!(!verify_vesta_affine_maybe_identity_with_instances(
+            circuit, instances,
+        ));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_maybe_identity_rejects_identity_coordinate_substitution() {
+        let mut circuit =
+            pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs([0; 4], [0; 4], true)
+                .expect("canonical identity encoding is valid");
+        circuit.x_squared.lhs = Box::new(
+            pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([1, 0, 0, 0])
+                .expect("one is canonical"),
+        );
+        assert!(!verify_vesta_affine_maybe_identity(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_maybe_identity_rejects_tampered_nonidentity_curve_link() {
+        let (x, y) = vesta_generator_limbs();
+        let mut circuit =
+            pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(x, y, false)
+                .expect("Vesta generator is a valid non-identity point");
+        circuit.rhs.rhs = pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([6, 0, 0, 0])
+            .expect("six is canonical");
+        assert!(!verify_vesta_affine_maybe_identity(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_accepts_two_bit_digit() {
+        let table = vesta_fixed_window_select_table();
+        let circuit = pasta_tiny::NonNativeVestaAffineFixedWindowSelect::<2>::try_from_table(
+            2,
+            table.clone(),
+            table[2],
+        )
+        .expect("valid two-bit Vesta fixed-window selection");
+
+        assert_eq!(circuit.digit_bits, vec![Scalar::from(0), Scalar::from(1)]);
+        assert!(verify_vesta_affine_fixed_window_select(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_rejects_large_window_builder() {
+        let table = vesta_fixed_window_select_table();
+        let err = pasta_tiny::NonNativeVestaAffineFixedWindowSelect::<5>::try_from_table(
+            0,
+            table.clone(),
+            table[0],
+        )
+        .err()
+        .expect("builder must reject unsupported Vesta selection width");
+        assert!(err.contains("width"));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_rejects_table_length_builder() {
+        let mut table = vesta_fixed_window_select_table();
+        let selected = table[0];
+        table.pop();
+        let err = pasta_tiny::NonNativeVestaAffineFixedWindowSelect::<2>::try_from_table(
+            0, table, selected,
+        )
+        .err()
+        .expect("builder must reject wrong fixed-window table length");
+        assert!(err.contains("table length mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_rejects_digit_range_builder() {
+        let table = vesta_fixed_window_select_table();
+        let err = pasta_tiny::NonNativeVestaAffineFixedWindowSelect::<2>::try_from_table(
+            4,
+            table.clone(),
+            table[0],
+        )
+        .err()
+        .expect("builder must reject out-of-range fixed-window digit");
+        assert!(err.contains("out of range"));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_rejects_selected_mismatch_builder() {
+        let table = vesta_fixed_window_select_table();
+        let err = pasta_tiny::NonNativeVestaAffineFixedWindowSelect::<2>::try_from_table(
+            2,
+            table.clone(),
+            table[1],
+        )
+        .err()
+        .expect("builder must reject wrong selected point");
+        assert!(err.contains("selected point mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_rejects_digit_bit_tamper() {
+        let table = vesta_fixed_window_select_table();
+        let mut circuit = pasta_tiny::NonNativeVestaAffineFixedWindowSelect::<2>::try_from_table(
+            2,
+            table.clone(),
+            table[2],
+        )
+        .expect("valid fixed-window selection");
+        circuit.digit_bits[0] = Scalar::from(1);
+
+        assert!(!verify_vesta_affine_fixed_window_select(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_rejects_non_boolean_digit_bit() {
+        let table = vesta_fixed_window_select_table();
+        let mut circuit = pasta_tiny::NonNativeVestaAffineFixedWindowSelect::<2>::try_from_table(
+            2,
+            table.clone(),
+            table[2],
+        )
+        .expect("valid fixed-window selection");
+        circuit.digit_bits[1] = Scalar::from(2);
+
+        assert!(!verify_vesta_affine_fixed_window_select(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_rejects_selected_point_tamper() {
+        let table = vesta_fixed_window_select_table();
+        let mut circuit = pasta_tiny::NonNativeVestaAffineFixedWindowSelect::<2>::try_from_table(
+            2,
+            table.clone(),
+            table[2],
+        )
+        .expect("valid fixed-window selection");
+        circuit.selected = Box::new(
+            pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                table[1].0, table[1].1, table[1].2,
+            )
+            .expect("valid forged selected point"),
+        );
+
+        assert!(!verify_vesta_affine_fixed_window_select(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_rejects_table_point_tamper() {
+        let table = vesta_fixed_window_select_table();
+        let mut circuit = pasta_tiny::NonNativeVestaAffineFixedWindowSelect::<2>::try_from_table(
+            2,
+            table.clone(),
+            table[2],
+        )
+        .expect("valid fixed-window selection");
+        circuit.table[2] = pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+            table[1].0, table[1].1, table[1].2,
+        )
+        .expect("valid forged table point");
+
+        assert!(!verify_vesta_affine_fixed_window_select(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_rejects_selection_level_tamper() {
+        let table = vesta_fixed_window_select_table();
+        let mut circuit = pasta_tiny::NonNativeVestaAffineFixedWindowSelect::<2>::try_from_table(
+            2,
+            table.clone(),
+            table[2],
+        )
+        .expect("valid fixed-window selection");
+        circuit.selection_levels[0][1].0[0] += Scalar::from(1);
+
+        assert!(!verify_vesta_affine_fixed_window_select(circuit));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_accepts_two_bit_table() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let circuit = pasta_tiny::NonNativeVestaAffineFixedWindowTable::<2>::try_from_base(
+                base,
+                table.clone(),
+            )
+            .expect("valid two-bit Vesta fixed-window table");
+
+            assert!(verify_vesta_affine_fixed_window_table(base, circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_large_window_builder() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let err = pasta_tiny::NonNativeVestaAffineFixedWindowTable::<5>::try_from_base(
+                table[1], table,
+            )
+            .err()
+            .expect("builder must reject unsupported Vesta table width");
+            assert!(err.contains("width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_length_builder() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let mut table = vesta_fixed_window_select_table();
+            let base = table[1];
+            table.pop();
+            let err =
+                pasta_tiny::NonNativeVestaAffineFixedWindowTable::<2>::try_from_base(base, table)
+                    .err()
+                    .expect("builder must reject wrong Vesta fixed-window table length");
+            assert!(err.contains("table length mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_entry_mismatch_builder() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let mut table = vesta_fixed_window_select_table();
+            let base = table[1];
+            table.swap(2, 3);
+            let err =
+                pasta_tiny::NonNativeVestaAffineFixedWindowTable::<2>::try_from_base(base, table)
+                    .err()
+                    .expect("builder must reject wrong Vesta fixed-window table entry");
+            assert!(err.contains("entry mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_public_base_substitution() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let circuit = pasta_tiny::NonNativeVestaAffineFixedWindowTable::<2>::try_from_base(
+                base,
+                table.clone(),
+            )
+            .expect("valid fixed-window table");
+
+            assert!(!verify_vesta_affine_fixed_window_table(table[2], circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_identity_entry_tamper() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let mut circuit = pasta_tiny::NonNativeVestaAffineFixedWindowTable::<2>::try_from_base(
+                base,
+                table.clone(),
+            )
+            .expect("valid fixed-window table");
+            circuit.table[0] = pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                table[1].0, table[1].1, table[1].2,
+            )
+            .expect("valid forged non-identity table entry");
+
+            assert!(!verify_vesta_affine_fixed_window_table(base, circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_chain_link_tamper() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let mut circuit = pasta_tiny::NonNativeVestaAffineFixedWindowTable::<2>::try_from_base(
+                base,
+                table.clone(),
+            )
+            .expect("valid fixed-window table");
+            circuit.adds[0].q = Box::new(
+                pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                    table[2].0, table[2].1, table[2].2,
+                )
+                .expect("valid forged add input"),
+            );
+
+            assert!(!verify_vesta_affine_fixed_window_table(base, circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_accepts_two_one_bit_windows() {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid two-window scalar multiplication");
+
+            assert!(verify_vesta_affine_windowed_scalar_mul_native_scalar(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_high_scalar_builder() {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(4));
+            let err =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(4),
+                    base,
+                    output,
+                )
+                .err()
+                .expect("builder must reject scalar above two one-bit windows");
+            assert!(err.contains("exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_output_mismatch_builder() {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(2));
+            let err =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .err()
+                .expect("builder must reject wrong windowed scalar-mul output");
+            assert!(err.contains("output mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_public_output_substitution() {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid two-window scalar multiplication");
+            let mut instances = vesta_affine_windowed_scalar_mul_native_scalar_instances(&circuit);
+            let forged = vesta_native_scalar_mul_output_limbs(Scalar::from(2));
+            for (index, column) in vesta_point_instances(forged).into_iter().enumerate() {
+                instances[9 + index] = column;
+            }
+
+            assert!(
+                !verify_vesta_affine_windowed_scalar_mul_native_scalar_with_instances(
+                    circuit, instances,
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_selection_table_splice() {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid two-window scalar multiplication");
+            circuit.selections[1].table[1] = circuit.selections[0].table[1].clone();
+
+            assert!(!verify_vesta_affine_windowed_scalar_mul_native_scalar(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_window_base_transition_tamper()
+    {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid two-window scalar multiplication");
+            circuit.window_base_doubles[0][0].r = Box::new(circuit.tables[0].table[1].clone());
+
+            assert!(!verify_vesta_affine_windowed_scalar_mul_native_scalar(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_sum_chain_tamper() {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulNativeScalar::<2, 1>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("valid two-window scalar multiplication");
+            circuit.sum_adds[1].p = circuit.sum_adds[0].p.clone();
+
+            assert!(!verify_vesta_affine_windowed_scalar_mul_native_scalar(
+                circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_accepts_two_terms() {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(3), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<2, 2, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("two-term two-window native-scalar MSM witness");
+
+            assert!(verify_vesta_affine_windowed_msm_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_output_mismatch_builder()
+     {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let err =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<2, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject wrong windowed MSM output");
+            assert!(err.contains("output mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_high_scalar_builder() {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let terms = [(Scalar::from(2), generator)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let err =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<1, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .err()
+                .expect("builder must reject scalar above one one-bit window");
+            assert!(err.contains("exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_public_base_substitution()
+     {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<2, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("two-term one-window native-scalar MSM witness");
+            let mut instances = vesta_affine_windowed_msm_native_scalar_instances(&circuit);
+            instances[0][0] += Scalar::from(1);
+
+            assert!(
+                !verify_vesta_affine_windowed_msm_native_scalar_with_instances(circuit, instances,)
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_public_output_substitution()
+     {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<2, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("two-term one-window native-scalar MSM witness");
+            let mut instances = vesta_affine_windowed_msm_native_scalar_instances(&circuit);
+            let forged = vesta_non_identity_limbs(double);
+            for (index, column) in vesta_point_instances(forged).into_iter().enumerate() {
+                instances[18 + index] = column;
+            }
+
+            assert!(
+                !verify_vesta_affine_windowed_msm_native_scalar_with_instances(circuit, instances,)
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_selection_table_splice()
+    {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(3), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<2, 2, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("two-term two-window native-scalar MSM witness");
+            circuit.term_muls[1].selections[1].table[1] =
+                circuit.term_muls[0].selections[0].table[1].clone();
+
+            assert!(!verify_vesta_affine_windowed_msm_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_term_output_splice() {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<2, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("two-term one-window native-scalar MSM witness");
+            circuit.sum_adds[0] = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                vesta_identity_limbs(),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(double),
+            )
+            .expect("self-consistent forged first MSM sum");
+
+            assert!(!verify_vesta_affine_windowed_msm_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_sum_chain_tamper() {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<2, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("two-term one-window native-scalar MSM witness");
+            circuit.sum_adds[1] = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                vesta_identity_limbs(),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(double),
+            )
+            .expect("self-consistent but unchained second MSM sum");
+
+            assert!(!verify_vesta_affine_windowed_msm_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_noncanonical_scalar_alias()
+     {
+        run_vesta_affine_windowed_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let terms = [(Scalar::from(0), generator)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<1, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("zero native-scalar windowed MSM witness");
+            circuit.term_muls[0].scalar.scalar =
+                Box::new(pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(
+                    pasta_tiny::PASTA_FP_MODULUS_LIMBS,
+                ));
+
+            assert!(!verify_vesta_affine_windowed_msm_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_windowed_msm_accepts_one_bit_product() {
+        run_vesta_affine_ipa_final_windowed_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let triple = vesta_generator_multiple(3);
+            let output = vesta_affine_ipa_final_msm_output_limbs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+            );
+            let circuit =
+                pasta_tiny::NonNativeVestaIpaFinalWindowedMsmNativeScalar::<1, 1>::try_from_scalars(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    output,
+                )
+                .expect("one-bit IPA final windowed MSM witness");
+
+            assert!(verify_vesta_affine_ipa_final_windowed_msm(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_windowed_msm_rejects_output_mismatch_builder() {
+        run_vesta_affine_ipa_final_windowed_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let triple = vesta_generator_multiple(3);
+            let err =
+                pasta_tiny::NonNativeVestaIpaFinalWindowedMsmNativeScalar::<1, 1>::try_from_scalars(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject wrong IPA final windowed MSM output");
+            assert!(err.contains("output mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_windowed_msm_rejects_product_high_bit_builder() {
+        run_vesta_affine_ipa_final_windowed_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let triple = vesta_generator_multiple(3);
+            let output = vesta_affine_ipa_final_msm_output_limbs(
+                Scalar::from(2),
+                Scalar::from(2),
+                generator,
+                double,
+                triple,
+            );
+            let err =
+                pasta_tiny::NonNativeVestaIpaFinalWindowedMsmNativeScalar::<2, 1>::try_from_scalars(
+                    Scalar::from(2),
+                    Scalar::from(2),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    output,
+                )
+                .err()
+                .expect("builder must reject product above two-window MSM width");
+            assert!(err.contains("exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_windowed_msm_rejects_product_link_tamper() {
+        run_vesta_affine_ipa_final_windowed_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = vesta_generator_multiple(2);
+            let triple = vesta_generator_multiple(3);
+            let forged_terms = [
+                (Scalar::from(1), generator),
+                (Scalar::from(1), double),
+                (Scalar::from(0), triple),
+            ];
+            let forged_output = vesta_affine_msm_output_limbs(&forged_terms);
+            let msm =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<3, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(forged_terms),
+                    forged_output,
+                )
+                .expect("self-consistent windowed MSM with forged product scalar");
+            let circuit = pasta_tiny::NonNativeVestaIpaFinalWindowedMsmNativeScalar::<1, 1> {
+                msm: Box::new(msm),
+            };
+
+            assert!(!verify_vesta_affine_ipa_final_windowed_msm(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_accepts_identity_identity() {
+        run_vesta_affine_complete_add_test(|| {
+            let identity = vesta_identity_limbs();
+            let circuit = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                identity, identity, identity,
+            )
+            .expect("identity plus identity is identity");
+            assert!(verify_vesta_affine_complete_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_accepts_identity_passthrough() {
+        run_vesta_affine_complete_add_test(|| {
+            let generator = vesta_non_identity_limbs(VestaAffine::generator());
+            let identity = vesta_identity_limbs();
+            let left_identity = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                identity, generator, generator,
+            )
+            .expect("identity plus generator returns generator");
+            assert!(verify_vesta_affine_complete_add(left_identity));
+
+            let right_identity = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                generator, identity, generator,
+            )
+            .expect("generator plus identity returns generator");
+            assert!(verify_vesta_affine_complete_add(right_identity));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_accepts_inverse_pair() {
+        run_vesta_affine_complete_add_test(|| {
+            let (p, q, r) = vesta_inverse_add_test_points();
+            let circuit = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(p, q, r)
+                .expect("generator plus inverse returns identity");
+            assert!(verify_vesta_affine_complete_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_accepts_doubling() {
+        run_vesta_affine_complete_add_test(|| {
+            let (p, q, r) = vesta_complete_add_double_points();
+            let circuit = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(p, q, r)
+                .expect("generator plus generator returns doubled point");
+            assert!(verify_vesta_affine_complete_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_accepts_distinct_addition() {
+        run_vesta_affine_complete_add_test(|| {
+            let (p, q, r) = vesta_complete_add_distinct_points();
+            let circuit = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(p, q, r)
+                .expect("generator plus double returns triple");
+            assert!(verify_vesta_affine_complete_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_rejects_wrong_output_host_witness() {
+        run_vesta_affine_complete_add_test(|| {
+            let (p, q, _r) = vesta_complete_add_distinct_points();
+            assert!(
+                pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(p, q, p).is_err(),
+                "host witness builder must reject an incorrect complete-add output"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_rejects_public_coordinate_substitution() {
+        run_vesta_affine_complete_add_test(|| {
+            let (p, q, r) = vesta_complete_add_distinct_points();
+            let circuit = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(p, q, r)
+                .expect("valid complete addition");
+            let mut instances = vesta_affine_complete_add_instances(&circuit);
+            let last_column = instances
+                .last_mut()
+                .expect("complete-add instance columns include R identity flag");
+            last_column[0] = Scalar::from(1);
+            assert!(!verify_vesta_affine_complete_add_with_instances(
+                circuit, instances,
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_rejects_non_boolean_case_selector() {
+        run_vesta_affine_complete_add_test(|| {
+            let (p, q, r) = vesta_complete_add_distinct_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(p, q, r)
+                .expect("valid complete addition");
+            circuit.case_distinct = Scalar::from(2);
+            assert!(!verify_vesta_affine_complete_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_rejects_case_substitution() {
+        run_vesta_affine_complete_add_test(|| {
+            let (p, q, r) = vesta_complete_add_distinct_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(p, q, r)
+                .expect("valid complete addition");
+            circuit.case_distinct = Scalar::from(0);
+            circuit.case_inverse = Scalar::from(1);
+            assert!(!verify_vesta_affine_complete_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_rejects_tampered_inverse_branch() {
+        run_vesta_affine_complete_add_test(|| {
+            let (p, q, r) = vesta_inverse_add_test_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(p, q, r)
+                .expect("valid inverse-pair complete addition");
+            circuit.inverse_y_sum.out =
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([1, 0, 0, 0])
+                    .expect("one is canonical");
+            assert!(!verify_vesta_affine_complete_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_rejects_tampered_double_branch() {
+        run_vesta_affine_complete_add_test(|| {
+            let (p, q, r) = vesta_complete_add_double_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(p, q, r)
+                .expect("valid doubling complete addition");
+            circuit.double_x_sum_plus_x1.out =
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([0, 0, 0, 0])
+                    .expect("zero is canonical");
+            assert!(!verify_vesta_affine_complete_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_complete_add_rejects_tampered_distinct_branch() {
+        run_vesta_affine_complete_add_test(|| {
+            let (p, q, r) = vesta_complete_add_distinct_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(p, q, r)
+                .expect("valid distinct complete addition");
+            circuit.distinct_x_sum_plus_x2.out =
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([0, 0, 0, 0])
+                    .expect("zero is canonical");
+            assert!(!verify_vesta_affine_complete_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_conditional_add_accepts_false_bit_passthrough() {
+        run_vesta_affine_conditional_add_test(|| {
+            let (accumulator, addend, _sum) = vesta_complete_add_distinct_points();
+            let circuit = pasta_tiny::NonNativeVestaAffineConditionalAdd::try_from_limbs(
+                accumulator,
+                addend,
+                accumulator,
+                false,
+            )
+            .expect("false bit selects identity and leaves accumulator unchanged");
+            assert!(verify_vesta_affine_conditional_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_conditional_add_accepts_true_bit_addition() {
+        run_vesta_affine_conditional_add_test(|| {
+            let (accumulator, addend, sum) = vesta_complete_add_distinct_points();
+            let circuit = pasta_tiny::NonNativeVestaAffineConditionalAdd::try_from_limbs(
+                accumulator,
+                addend,
+                sum,
+                true,
+            )
+            .expect("true bit selects addend and adds it");
+            assert!(verify_vesta_affine_conditional_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_conditional_add_accepts_identity_addend() {
+        run_vesta_affine_conditional_add_test(|| {
+            let accumulator = vesta_non_identity_limbs(VestaAffine::generator());
+            let identity = vesta_identity_limbs();
+            let circuit = pasta_tiny::NonNativeVestaAffineConditionalAdd::try_from_limbs(
+                accumulator,
+                identity,
+                accumulator,
+                true,
+            )
+            .expect("selected identity addend leaves accumulator unchanged");
+            assert!(verify_vesta_affine_conditional_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_conditional_add_rejects_wrong_output_host_witness() {
+        run_vesta_affine_conditional_add_test(|| {
+            let (accumulator, addend, _sum) = vesta_complete_add_distinct_points();
+            assert!(
+                pasta_tiny::NonNativeVestaAffineConditionalAdd::try_from_limbs(
+                    accumulator,
+                    addend,
+                    addend,
+                    false,
+                )
+                .is_err(),
+                "false bit must not allow the addend to replace the accumulator"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_conditional_add_rejects_public_addend_substitution() {
+        run_vesta_affine_conditional_add_test(|| {
+            let (accumulator, addend, sum) = vesta_complete_add_distinct_points();
+            let circuit = pasta_tiny::NonNativeVestaAffineConditionalAdd::try_from_limbs(
+                accumulator,
+                addend,
+                sum,
+                true,
+            )
+            .expect("valid conditional addition");
+            let mut instances = vesta_affine_conditional_add_instances(&circuit);
+            instances[0][0] += Scalar::from(1);
+            assert!(!verify_vesta_affine_conditional_add_with_instances(
+                circuit, instances,
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_conditional_add_rejects_non_boolean_bit() {
+        run_vesta_affine_conditional_add_test(|| {
+            let (accumulator, addend, sum) = vesta_complete_add_distinct_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffineConditionalAdd::try_from_limbs(
+                accumulator,
+                addend,
+                sum,
+                true,
+            )
+            .expect("valid conditional addition");
+            circuit.bit = Scalar::from(2);
+            assert!(!verify_vesta_affine_conditional_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_conditional_add_rejects_false_bit_selected_point() {
+        run_vesta_affine_conditional_add_test(|| {
+            let (accumulator, addend, _sum) = vesta_complete_add_distinct_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffineConditionalAdd::try_from_limbs(
+                accumulator,
+                addend,
+                accumulator,
+                false,
+            )
+            .expect("valid false-bit conditional addition");
+            circuit.addition.q.x_squared.lhs = Box::new(
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([1, 0, 0, 0])
+                    .expect("one is canonical"),
+            );
+            assert!(!verify_vesta_affine_conditional_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_conditional_add_rejects_true_bit_selected_identity() {
+        run_vesta_affine_conditional_add_test(|| {
+            let (accumulator, addend, sum) = vesta_complete_add_distinct_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffineConditionalAdd::try_from_limbs(
+                accumulator,
+                addend,
+                sum,
+                true,
+            )
+            .expect("valid true-bit conditional addition");
+            circuit.addition.q.identity = Scalar::from(1);
+            assert!(!verify_vesta_affine_conditional_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_conditional_add_rejects_complete_add_case_tamper() {
+        run_vesta_affine_conditional_add_test(|| {
+            let (accumulator, addend, sum) = vesta_complete_add_distinct_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffineConditionalAdd::try_from_limbs(
+                accumulator,
+                addend,
+                sum,
+                true,
+            )
+            .expect("valid true-bit conditional addition");
+            circuit.addition.case_distinct = Scalar::from(0);
+            circuit.addition.case_q_identity = Scalar::from(1);
+            assert!(!verify_vesta_affine_conditional_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_scalar_mul_accepts_zero_scalar() {
+        run_vesta_affine_scalar_mul_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_identity_limbs();
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMul::<1>::try_from_limbs(0, base, output)
+                    .expect("zero scalar-mul witness");
+            assert!(verify_vesta_affine_scalar_mul(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_scalar_mul_accepts_bounded_scalar() {
+        run_vesta_affine_scalar_mul_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_scalar_mul_output_limbs(1);
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMul::<1>::try_from_limbs(1, base, output)
+                    .expect("bounded scalar-mul witness");
+            assert!(verify_vesta_affine_scalar_mul(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_output_mismatch_builder() {
+        run_vesta_affine_scalar_mul_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let wrong_output = vesta_identity_limbs();
+            let err = pasta_tiny::NonNativeVestaAffineScalarMul::<1>::try_from_limbs(
+                1,
+                base,
+                wrong_output,
+            )
+            .err()
+            .expect("builder must reject wrong scalar-mul output");
+            assert!(err.contains("output mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_public_scalar_substitution() {
+        run_vesta_affine_scalar_mul_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_scalar_mul_output_limbs(1);
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMul::<1>::try_from_limbs(1, base, output)
+                    .expect("bounded scalar-mul witness");
+            let mut instances = vesta_affine_scalar_mul_instances(&circuit);
+            instances[0][0] = Scalar::from(0);
+            assert!(!verify_vesta_affine_scalar_mul_with_instances(
+                circuit, instances
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_public_base_substitution() {
+        run_vesta_affine_scalar_mul_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_scalar_mul_output_limbs(1);
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMul::<1>::try_from_limbs(1, base, output)
+                    .expect("bounded scalar-mul witness");
+            let mut instances = vesta_affine_scalar_mul_instances(&circuit);
+            instances[1][0] += Scalar::from(1);
+            assert!(!verify_vesta_affine_scalar_mul_with_instances(
+                circuit, instances
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_public_output_substitution() {
+        run_vesta_affine_scalar_mul_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_scalar_mul_output_limbs(1);
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMul::<1>::try_from_limbs(1, base, output)
+                    .expect("bounded scalar-mul witness");
+            let mut instances = vesta_affine_scalar_mul_instances(&circuit);
+            instances[10][0] += Scalar::from(1);
+            assert!(!verify_vesta_affine_scalar_mul_with_instances(
+                circuit, instances
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_high_scalar_bit() {
+        run_vesta_affine_scalar_mul_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_scalar_mul_output_limbs(2);
+            let err =
+                pasta_tiny::NonNativeVestaAffineScalarMul::<1>::try_from_limbs(2, base, output)
+                    .err()
+                    .expect("builder must reject scalar above one-bit width");
+            assert!(err.contains("exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_conditional_bit_tamper() {
+        run_vesta_affine_scalar_mul_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_scalar_mul_output_limbs(1);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMul::<1>::try_from_limbs(1, base, output)
+                    .expect("bounded scalar-mul witness");
+            circuit.conditional_adds[0].bit = Scalar::from(0);
+            assert!(!verify_vesta_affine_scalar_mul(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_accumulator_chain_tamper() {
+        run_vesta_affine_scalar_mul_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_scalar_mul_output_limbs(3);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMul::<2>::try_from_limbs(3, base, output)
+                    .expect("bounded scalar-mul witness");
+            circuit.conditional_adds[1].addition.p = Box::new(
+                pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                    [0; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+                    [0; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+                    true,
+                )
+                .expect("identity witness"),
+            );
+            assert!(!verify_vesta_affine_scalar_mul(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_double_chain_case_tamper() {
+        run_vesta_affine_scalar_mul_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_scalar_mul_output_limbs(3);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMul::<2>::try_from_limbs(3, base, output)
+                    .expect("bounded scalar-mul witness");
+            circuit.doubles[0].case_double = Scalar::from(0);
+            circuit.doubles[0].case_distinct = Scalar::from(1);
+            assert!(!verify_vesta_affine_scalar_mul(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_mul_accepts_bounded_scalar() {
+        run_vesta_affine_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(1));
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMulNativeScalar::<1>::try_from_scalar(
+                    Scalar::from(1),
+                    base,
+                    output,
+                )
+                .expect("bounded native scalar-mul witness");
+            assert!(verify_vesta_affine_scalar_mul_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_mul_accepts_two_bit_scalar() {
+        run_vesta_affine_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMulNativeScalar::<2>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("two-bit native scalar-mul witness");
+            assert!(verify_vesta_affine_scalar_mul_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_high_scalar_bit() {
+        run_vesta_affine_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(2));
+            let err = pasta_tiny::NonNativeVestaAffineScalarMulNativeScalar::<1>::try_from_scalar(
+                Scalar::from(2),
+                base,
+                output,
+            )
+            .err()
+            .expect("builder must reject scalar above one-bit width");
+            assert!(err.contains("exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_public_scalar_substitution() {
+        run_vesta_affine_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(1));
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMulNativeScalar::<1>::try_from_scalar(
+                    Scalar::from(1),
+                    base,
+                    output,
+                )
+                .expect("bounded native scalar-mul witness");
+            let mut instances = vesta_affine_scalar_mul_native_scalar_instances(&circuit);
+            instances[0][0] = Scalar::from(0);
+            assert!(
+                !verify_vesta_affine_scalar_mul_native_scalar_with_instances(circuit, instances,)
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_conditional_bit_tamper() {
+        run_vesta_affine_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(1));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMulNativeScalar::<1>::try_from_scalar(
+                    Scalar::from(1),
+                    base,
+                    output,
+                )
+                .expect("bounded native scalar-mul witness");
+            circuit.conditional_adds[0].bit = Scalar::from(0);
+            assert!(!verify_vesta_affine_scalar_mul_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_noncanonical_scalar_alias() {
+        run_vesta_affine_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(0));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMulNativeScalar::<1>::try_from_scalar(
+                    Scalar::from(0),
+                    base,
+                    output,
+                )
+                .expect("zero native scalar-mul witness");
+            circuit.scalar = Box::new(pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(
+                pasta_tiny::PASTA_FP_MODULUS_LIMBS,
+            ));
+            assert!(!verify_vesta_affine_scalar_mul_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_double_chain_case_tamper() {
+        run_vesta_affine_scalar_mul_native_scalar_test(|| {
+            let base = vesta_non_identity_limbs(VestaAffine::generator());
+            let output = vesta_native_scalar_mul_output_limbs(Scalar::from(3));
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineScalarMulNativeScalar::<2>::try_from_scalar(
+                    Scalar::from(3),
+                    base,
+                    output,
+                )
+                .expect("two-bit native scalar-mul witness");
+            circuit.doubles[0].case_double = Scalar::from(0);
+            circuit.doubles[0].case_distinct = Scalar::from(1);
+            assert!(!verify_vesta_affine_scalar_mul_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_msm_accepts_two_terms_one_bit() {
+        run_vesta_affine_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit = pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<2, 1>::try_from_terms(
+                vesta_msm_encoded_terms(terms),
+                output,
+            )
+            .expect("two-term one-bit native-scalar MSM witness");
+            assert!(verify_vesta_affine_msm_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_msm_accepts_two_bit_scalar() {
+        run_vesta_affine_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let terms = [(Scalar::from(3), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit = pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<2, 2>::try_from_terms(
+                vesta_msm_encoded_terms(terms),
+                output,
+            )
+            .expect("two-term two-bit native-scalar MSM witness");
+            assert!(verify_vesta_affine_msm_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_output_mismatch_builder() {
+        run_vesta_affine_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let err = pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<2, 1>::try_from_terms(
+                vesta_msm_encoded_terms(terms),
+                vesta_identity_limbs(),
+            )
+            .err()
+            .expect("builder must reject wrong MSM output");
+            assert!(err.contains("output mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_high_scalar_bit() {
+        run_vesta_affine_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let terms = [(Scalar::from(2), generator)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let err = pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<1, 1>::try_from_terms(
+                vesta_msm_encoded_terms(terms),
+                output,
+            )
+            .err()
+            .expect("builder must reject scalar above one-bit MSM width");
+            assert!(err.contains("exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_public_base_substitution() {
+        run_vesta_affine_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit = pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<2, 1>::try_from_terms(
+                vesta_msm_encoded_terms(terms),
+                output,
+            )
+            .expect("two-term one-bit native-scalar MSM witness");
+            let mut instances = vesta_affine_msm_native_scalar_instances(&circuit);
+            instances[0][0] += Scalar::from(1);
+            assert!(!verify_vesta_affine_msm_native_scalar_with_instances(
+                circuit, instances,
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_public_output_substitution() {
+        run_vesta_affine_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let circuit = pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<2, 1>::try_from_terms(
+                vesta_msm_encoded_terms(terms),
+                output,
+            )
+            .expect("two-term one-bit native-scalar MSM witness");
+            let mut instances = vesta_affine_msm_native_scalar_instances(&circuit);
+            instances[2 * 9][0] += Scalar::from(1);
+            assert!(!verify_vesta_affine_msm_native_scalar_with_instances(
+                circuit, instances,
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_conditional_bit_tamper() {
+        run_vesta_affine_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let terms = [(Scalar::from(1), generator)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("single-term one-bit native-scalar MSM witness");
+            circuit.conditional_adds[0][0].bit = Scalar::from(0);
+            assert!(!verify_vesta_affine_msm_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_sum_chain_tamper() {
+        run_vesta_affine_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let terms = [(Scalar::from(1), generator), (Scalar::from(1), double)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<2, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("two-term one-bit native-scalar MSM witness");
+            circuit.sum_adds[1] = pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                vesta_identity_limbs(),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(double),
+            )
+            .expect("self-consistent but unchained second MSM sum");
+            assert!(!verify_vesta_affine_msm_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_noncanonical_scalar_alias() {
+        run_vesta_affine_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let terms = [(Scalar::from(0), generator)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("zero native-scalar MSM witness");
+            circuit.scalars[0] = pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(
+                pasta_tiny::PASTA_FP_MODULUS_LIMBS,
+            );
+            assert!(!verify_vesta_affine_msm_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_double_chain_case_tamper() {
+        run_vesta_affine_msm_native_scalar_test(|| {
+            let generator = VestaAffine::generator();
+            let terms = [(Scalar::from(3), generator)];
+            let output = vesta_affine_msm_output_limbs(&terms);
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<1, 2>::try_from_terms(
+                    vesta_msm_encoded_terms(terms),
+                    output,
+                )
+                .expect("single-term two-bit native-scalar MSM witness");
+            circuit.doubles[0][0].case_double = Scalar::from(0);
+            circuit.doubles[0][0].case_distinct = Scalar::from(1);
+            assert!(!verify_vesta_affine_msm_native_scalar(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_msm_accepts_one_bit_product() {
+        run_vesta_affine_ipa_final_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let output = vesta_affine_ipa_final_msm_output_limbs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+            );
+            let circuit = pasta_tiny::NonNativeVestaIpaFinalMsmNativeScalar::<1>::try_from_scalars(
+                Scalar::from(1),
+                Scalar::from(1),
+                vesta_non_identity_limbs(generator),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(triple),
+                output,
+            )
+            .expect("one-bit IPA final MSM witness");
+            assert!(verify_vesta_affine_ipa_final_msm(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_msm_rejects_output_mismatch_builder() {
+        run_vesta_affine_ipa_final_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let err = pasta_tiny::NonNativeVestaIpaFinalMsmNativeScalar::<1>::try_from_scalars(
+                Scalar::from(1),
+                Scalar::from(1),
+                vesta_non_identity_limbs(generator),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(triple),
+                vesta_identity_limbs(),
+            )
+            .err()
+            .expect("builder must reject wrong IPA final MSM output");
+            assert!(err.contains("output mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_msm_rejects_product_high_bit_builder() {
+        run_vesta_affine_ipa_final_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let output = vesta_affine_ipa_final_msm_output_limbs(
+                Scalar::from(2),
+                Scalar::from(2),
+                generator,
+                double,
+                triple,
+            );
+            let err = pasta_tiny::NonNativeVestaIpaFinalMsmNativeScalar::<2>::try_from_scalars(
+                Scalar::from(2),
+                Scalar::from(2),
+                vesta_non_identity_limbs(generator),
+                vesta_non_identity_limbs(double),
+                vesta_non_identity_limbs(triple),
+                output,
+            )
+            .err()
+            .expect("builder must reject product above two-bit MSM width");
+            assert!(err.contains("exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_final_msm_rejects_product_link_tamper() {
+        run_vesta_affine_ipa_final_msm_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let forged_terms = [
+                (Scalar::from(1), generator),
+                (Scalar::from(1), double),
+                (Scalar::from(0), triple),
+            ];
+            let forged_output = vesta_affine_msm_output_limbs(&forged_terms);
+            let msm = pasta_tiny::NonNativeVestaAffineMsmNativeScalar::<3, 1>::try_from_terms(
+                vesta_msm_encoded_terms(forged_terms),
+                forged_output,
+            )
+            .expect("self-consistent MSM with forged IPA product scalar");
+            let circuit =
+                pasta_tiny::NonNativeVestaIpaFinalMsmNativeScalar::<1> { msm: Box::new(msm) };
+            assert!(!verify_vesta_affine_ipa_final_msm(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_round_accumulator_accepts_one_bit_challenge() {
+        run_vesta_affine_ipa_round_accumulator_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let output = vesta_affine_ipa_round_accumulator_output_limbs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+            );
+            let circuit =
+                pasta_tiny::NonNativeVestaIpaRoundAccumulatorNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    output,
+                )
+                .expect("one-bit IPA round accumulator witness");
+            assert!(verify_vesta_affine_ipa_round_accumulator(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_round_accumulator_rejects_inverse_mismatch_builder() {
+        run_vesta_affine_ipa_round_accumulator_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let output = vesta_affine_ipa_round_accumulator_output_limbs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+            );
+            let err =
+                pasta_tiny::NonNativeVestaIpaRoundAccumulatorNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    output,
+                )
+                .err()
+                .expect("builder must reject bad IPA round inverse");
+            assert!(err.contains("inverse mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_round_accumulator_rejects_window_high_bit_builder() {
+        run_vesta_affine_ipa_round_accumulator_test(|| {
+            let generator = VestaAffine::generator();
+            let challenge = Scalar::from(2);
+            let err =
+                pasta_tiny::NonNativeVestaIpaRoundAccumulatorNativeScalar::<1, 1>::try_from_challenge(
+                    challenge,
+                    scalar_inverse(challenge),
+                    vesta_non_identity_limbs(generator),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject challenge square above fixed-window width");
+            assert!(err.contains("fixed-window scalar exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_round_accumulator_rejects_output_mismatch_builder() {
+        run_vesta_affine_ipa_round_accumulator_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let err =
+                pasta_tiny::NonNativeVestaIpaRoundAccumulatorNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject wrong IPA round output");
+            assert!(err.contains("output mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_round_accumulator_rejects_square_link_tamper() {
+        run_vesta_affine_ipa_round_accumulator_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let forged_terms = [
+                (Scalar::from(0), generator),
+                (Scalar::from(1), double),
+                (Scalar::from(1), triple),
+            ];
+            let forged_output = vesta_affine_msm_output_limbs(&forged_terms);
+            let msm =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<3, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(forged_terms),
+                    forged_output,
+                )
+                .expect("self-consistent MSM with forged IPA challenge square");
+            let circuit = pasta_tiny::NonNativeVestaIpaRoundAccumulatorNativeScalar::<1, 1> {
+                challenge: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+                challenge_inverse: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+                msm: Box::new(msm),
+            };
+            assert!(!verify_vesta_affine_ipa_round_accumulator(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_generator_fold_accepts_one_bit_challenge() {
+        run_vesta_affine_ipa_generator_fold_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let quadruple = (double.to_curve() + double.to_curve()).to_affine();
+            let (g_after, h_after) = vesta_affine_ipa_generator_fold_outputs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+                quadruple,
+            );
+            let circuit =
+                pasta_tiny::NonNativeVestaIpaGeneratorFoldNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    vesta_non_identity_limbs(quadruple),
+                    g_after,
+                    h_after,
+                )
+                .expect("one-bit IPA generator-fold witness");
+            assert!(verify_vesta_affine_ipa_generator_fold(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_generator_fold_rejects_inverse_mismatch_builder() {
+        run_vesta_affine_ipa_generator_fold_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let quadruple = (double.to_curve() + double.to_curve()).to_affine();
+            let (g_after, h_after) = vesta_affine_ipa_generator_fold_outputs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+                quadruple,
+            );
+            let err =
+                pasta_tiny::NonNativeVestaIpaGeneratorFoldNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    vesta_non_identity_limbs(quadruple),
+                    g_after,
+                    h_after,
+                )
+                .err()
+                .expect("builder must reject bad IPA generator-fold inverse");
+            assert!(err.contains("inverse mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_generator_fold_rejects_window_high_bit_builder() {
+        run_vesta_affine_ipa_generator_fold_test(|| {
+            let generator = VestaAffine::generator();
+            let challenge = Scalar::from(2);
+            let err =
+                pasta_tiny::NonNativeVestaIpaGeneratorFoldNativeScalar::<1, 1>::try_from_challenge(
+                    challenge,
+                    scalar_inverse(challenge),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject generator-fold scalar above fixed-window width");
+            assert!(err.contains("fixed-window scalar exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_generator_fold_rejects_output_mismatch_builder() {
+        run_vesta_affine_ipa_generator_fold_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let quadruple = (double.to_curve() + double.to_curve()).to_affine();
+            let (_, h_after) = vesta_affine_ipa_generator_fold_outputs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                double,
+                triple,
+                quadruple,
+            );
+            let err =
+                pasta_tiny::NonNativeVestaIpaGeneratorFoldNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(double),
+                    vesta_non_identity_limbs(triple),
+                    vesta_non_identity_limbs(quadruple),
+                    vesta_identity_limbs(),
+                    h_after,
+                )
+                .err()
+                .expect("builder must reject wrong IPA generator-fold output");
+            assert!(err.contains("output mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_generator_fold_rejects_scalar_link_tamper() {
+        run_vesta_affine_ipa_generator_fold_test(|| {
+            let generator = VestaAffine::generator();
+            let double = (generator.to_curve() + generator.to_curve()).to_affine();
+            let triple = (double.to_curve() + generator.to_curve()).to_affine();
+            let quadruple = (double.to_curve() + double.to_curve()).to_affine();
+            let forged_g_terms = [(Scalar::from(0), generator), (Scalar::from(1), double)];
+            let honest_h_terms = [(Scalar::from(1), triple), (Scalar::from(1), quadruple)];
+            let g_after = vesta_affine_msm_output_limbs(&forged_g_terms);
+            let h_after = vesta_affine_msm_output_limbs(&honest_h_terms);
+            let g_msm =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<2, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(forged_g_terms),
+                    g_after,
+                )
+                .expect("self-consistent G fold with forged inverse scalar");
+            let h_msm =
+                pasta_tiny::NonNativeVestaAffineWindowedMsmNativeScalar::<2, 1, 1>::try_from_terms(
+                    vesta_msm_encoded_terms(honest_h_terms),
+                    h_after,
+                )
+                .expect("honest H fold MSM");
+            let circuit = pasta_tiny::NonNativeVestaIpaGeneratorFoldNativeScalar::<1, 1> {
+                challenge: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+                challenge_inverse: pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(1)),
+                g_msm: Box::new(g_msm),
+                h_msm: Box::new(h_msm),
+            };
+            assert!(!verify_vesta_affine_ipa_generator_fold(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_one_round_verifier_accepts_one_bit_statement() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            assert!(verify_vesta_affine_ipa_one_round(
+                vesta_affine_ipa_one_round_valid_circuit(),
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_final_mismatch_builder() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let err =
+                pasta_tiny::NonNativeVestaIpaOneRoundVerifierNativeScalar::<1, 1>::try_from_statement(
+                    [Scalar::from(1), Scalar::from(0)],
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(vesta_generator_multiple(1)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(1)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(2)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(1)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(2)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(3)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(4)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(1)),
+                )
+                .err()
+                .expect("builder must reject inconsistent one-round IPA final comparison");
+            assert!(err.contains("output mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_window_high_bit_builder() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let challenge = Scalar::from(2);
+            let err =
+                pasta_tiny::NonNativeVestaIpaOneRoundVerifierNativeScalar::<1, 1>::try_from_statement(
+                    [Scalar::from(1), Scalar::from(0)],
+                    challenge,
+                    scalar_inverse(challenge),
+                    Scalar::from(1),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject one-round scalar above fixed-window width");
+            assert!(err.contains("fixed-window scalar exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_final_msm_substitution() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut circuit = vesta_affine_ipa_one_round_valid_circuit();
+            let tampered_final =
+                pasta_tiny::NonNativeVestaIpaFinalWindowedMsmNativeScalar::<1, 1>::try_from_scalars(
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    vesta_non_identity_limbs(vesta_generator_multiple(3)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(7)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(1)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(3)),
+                )
+                .expect("self-consistent final MSM with substituted b scalar");
+            circuit.final_msm = Box::new(tampered_final);
+            assert!(!verify_vesta_affine_ipa_one_round(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_generator_fold_substitution() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut circuit = vesta_affine_ipa_one_round_valid_circuit();
+            let tampered_generator =
+                pasta_tiny::NonNativeVestaIpaGeneratorFoldNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(vesta_generator_multiple(1)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(3)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(3)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(4)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(4)),
+                    vesta_non_identity_limbs(vesta_generator_multiple(7)),
+                )
+                .expect("self-consistent generator fold with substituted G output");
+            circuit.generator_fold = Box::new(tampered_generator);
+            assert!(!verify_vesta_affine_ipa_one_round(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_accepts_two_round_statement() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let circuit = vesta_affine_ipa_verifier_four_point_valid_circuit();
+            assert_eq!(circuit.round_accumulators.len(), 2);
+            assert_eq!(circuit.generator_folds.len(), 2);
+            assert_eq!(circuit.generator_folds[0].len(), 2);
+            assert_eq!(circuit.generator_folds[1].len(), 1);
+            assert!(vesta_affine_ipa_verifier_host_links_hold(&circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_rejects_final_b_mismatch() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::try_from_statement(
+                    [
+                        Scalar::from(1),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                    ],
+                    vec![Scalar::from(1), Scalar::from(1)],
+                    vec![Scalar::from(1), Scalar::from(1)],
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    vesta_identity_limbs(),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    [vesta_identity_limbs(); 4],
+                    [vesta_identity_limbs(); 4],
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject substituted final b scalar");
+            assert!(err.contains("final scalar mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_rejects_round_count_mismatch() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::try_from_statement(
+                    [
+                        Scalar::from(1),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                    ],
+                    vec![Scalar::from(1), Scalar::from(1)],
+                    vec![Scalar::from(1), Scalar::from(1)],
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vec![vesta_identity_limbs()],
+                    vesta_identity_limbs(),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    [vesta_identity_limbs(); 4],
+                    [vesta_identity_limbs(); 4],
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject missing L round");
+            assert!(err.contains("L round count mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_rejects_window_high_bit() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let challenge = Scalar::from(2);
+            let inverse = scalar_inverse(challenge);
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::try_from_statement(
+                    [
+                        Scalar::from(1),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                    ],
+                    vec![challenge, Scalar::from(1)],
+                    vec![inverse, Scalar::from(1)],
+                    Scalar::from(1),
+                    inverse,
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    vesta_identity_limbs(),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    [vesta_identity_limbs(); 4],
+                    [vesta_identity_limbs(); 4],
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject multi-round scalar above fixed-window width");
+            assert!(err.contains("fixed-window scalar exceeds configured bit width"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_four_point_host_links_reject_q_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_four_point_valid_circuit();
+            circuit.round_accumulators[1] =
+                pasta_tiny::NonNativeVestaIpaRoundAccumulatorNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                    vesta_identity_limbs(),
+                )
+                .expect("self-consistent but spliced accumulator round");
+            assert!(!vesta_affine_ipa_verifier_host_links_hold(&circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_four_point_host_links_reject_generator_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_four_point_valid_circuit();
+            let generator = VestaAffine::generator();
+            let (g_after, h_after) = vesta_affine_ipa_generator_fold_outputs(
+                Scalar::from(1),
+                Scalar::from(1),
+                generator,
+                generator,
+                generator,
+                generator,
+            );
+            circuit.generator_folds[0][1] =
+                pasta_tiny::NonNativeVestaIpaGeneratorFoldNativeScalar::<1, 1>::try_from_challenge(
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    vesta_non_identity_limbs(generator),
+                    g_after,
+                    h_after,
+                )
+                .expect("self-consistent but spliced generator fold");
+            assert!(!vesta_affine_ipa_verifier_host_links_hold(&circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_four_point_host_links_reject_challenge_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_four_point_valid_circuit();
+            circuit.b_reduction.challenges[1] =
+                pasta_tiny::NativePastaFpScalar::from_scalar(Scalar::from(0));
+            assert!(!vesta_affine_ipa_verifier_host_links_hold(&circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_add_accepts_generator_plus_double() {
+        run_vesta_affine_point_add_test(|| {
+            let (p, q, r) = vesta_addition_test_points();
+            let circuit = pasta_tiny::NonNativeVestaAffinePointAdd::try_from_limbs(p, q, r)
+                .expect("Vesta generator plus double is a valid distinct affine addition");
+            assert!(verify_vesta_affine_point_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_add_rejects_wrong_output_host_witness() {
+        run_vesta_affine_point_add_test(|| {
+            let (p, q, _r) = vesta_addition_test_points();
+            assert!(
+                pasta_tiny::NonNativeVestaAffinePointAdd::try_from_limbs(p, q, p).is_err(),
+                "host witness builder must reject an on-curve but incorrect output point"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_add_rejects_duplicate_x_host_witness() {
+        run_vesta_affine_point_add_test(|| {
+            let (p, _q, _r) = vesta_addition_test_points();
+            assert!(
+                pasta_tiny::NonNativeVestaAffinePointAdd::try_from_limbs(p, p, p).is_err(),
+                "distinct affine point addition must reject zero denominator"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_add_rejects_public_coordinate_substitution() {
+        run_vesta_affine_point_add_test(|| {
+            let (p, q, r) = vesta_addition_test_points();
+            let circuit = pasta_tiny::NonNativeVestaAffinePointAdd::try_from_limbs(p, q, r)
+                .expect("valid Vesta point addition");
+            let mut instances = vesta_affine_point_add_instances(&circuit);
+            let last_column = instances
+                .last_mut()
+                .expect("point-add instance columns include R.y");
+            last_column[0] += Scalar::from(1);
+            assert!(!verify_vesta_affine_point_add_with_instances(
+                circuit, instances,
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_add_rejects_noncanonical_coordinate() {
+        run_vesta_affine_point_add_test(|| {
+            let (p, q, r) = vesta_addition_test_points();
+            assert!(
+                pasta_tiny::NonNativeVestaAffinePointAdd::try_from_limbs(
+                    (pasta_tiny::VESTA_FQ_MODULUS_LIMBS, p.1),
+                    q,
+                    r,
+                )
+                .is_err(),
+                "host witness builder must reject non-canonical point coordinates"
+            );
+
+            let mut circuit = pasta_tiny::NonNativeVestaAffinePointAdd::try_from_limbs(p, q, r)
+                .expect("valid Vesta point addition");
+            circuit.p.x_squared.lhs = Box::new(
+                pasta_tiny::NonNativeVestaFqCanonicalRange::unchecked_from_limbs(
+                    pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+                ),
+            );
+            assert!(!verify_vesta_affine_point_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_add_rejects_tampered_x_delta() {
+        run_vesta_affine_point_add_test(|| {
+            let (p, q, r) = vesta_addition_test_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffinePointAdd::try_from_limbs(p, q, r)
+                .expect("valid Vesta point addition");
+            circuit.x_delta.rhs =
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([1, 0, 0, 0])
+                    .expect("one is canonical");
+            assert!(!verify_vesta_affine_point_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_add_rejects_tampered_denominator_inverse() {
+        run_vesta_affine_point_add_test(|| {
+            let (p, q, r) = vesta_addition_test_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffinePointAdd::try_from_limbs(p, q, r)
+                .expect("valid Vesta point addition");
+            circuit.x_delta_inverse.rhs = Box::new(
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([1, 0, 0, 0])
+                    .expect("one is canonical"),
+            );
+            assert!(!verify_vesta_affine_point_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_add_rejects_tampered_x_equation() {
+        run_vesta_affine_point_add_test(|| {
+            let (p, q, r) = vesta_addition_test_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffinePointAdd::try_from_limbs(p, q, r)
+                .expect("valid Vesta point addition");
+            circuit.x_sum_plus_x2.out =
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([0, 0, 0, 0])
+                    .expect("zero is canonical");
+            assert!(!verify_vesta_affine_point_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_add_rejects_tampered_y_equation() {
+        run_vesta_affine_point_add_test(|| {
+            let (p, q, r) = vesta_addition_test_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffinePointAdd::try_from_limbs(p, q, r)
+                .expect("valid Vesta point addition");
+            circuit.y3_plus_y1.out =
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([1, 0, 0, 0])
+                    .expect("one is canonical");
+            assert!(!verify_vesta_affine_point_add(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_double_accepts_generator() {
+        run_vesta_affine_point_double_test(|| {
+            let (p, r) = vesta_doubling_test_points();
+            let circuit = pasta_tiny::NonNativeVestaAffinePointDouble::try_from_limbs(p, r)
+                .expect("Vesta generator doubling is valid");
+            assert!(verify_vesta_affine_point_double(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_double_rejects_wrong_output_host_witness() {
+        run_vesta_affine_point_double_test(|| {
+            let (p, _r) = vesta_doubling_test_points();
+            assert!(
+                pasta_tiny::NonNativeVestaAffinePointDouble::try_from_limbs(p, p).is_err(),
+                "host witness builder must reject an on-curve but incorrect doubled point"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_double_rejects_public_coordinate_substitution() {
+        run_vesta_affine_point_double_test(|| {
+            let (p, r) = vesta_doubling_test_points();
+            let circuit = pasta_tiny::NonNativeVestaAffinePointDouble::try_from_limbs(p, r)
+                .expect("valid Vesta point doubling");
+            let mut instances = vesta_affine_point_double_instances(&circuit);
+            let last_column = instances
+                .last_mut()
+                .expect("point-double instance columns include R.y");
+            last_column[0] += Scalar::from(1);
+            assert!(!verify_vesta_affine_point_double_with_instances(
+                circuit, instances,
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_double_rejects_noncanonical_coordinate() {
+        run_vesta_affine_point_double_test(|| {
+            let (p, r) = vesta_doubling_test_points();
+            assert!(
+                pasta_tiny::NonNativeVestaAffinePointDouble::try_from_limbs(
+                    (pasta_tiny::VESTA_FQ_MODULUS_LIMBS, p.1),
+                    r,
+                )
+                .is_err(),
+                "host witness builder must reject non-canonical point coordinates"
+            );
+
+            let mut circuit = pasta_tiny::NonNativeVestaAffinePointDouble::try_from_limbs(p, r)
+                .expect("valid Vesta point doubling");
+            circuit.p.x_squared.lhs = Box::new(
+                pasta_tiny::NonNativeVestaFqCanonicalRange::unchecked_from_limbs(
+                    pasta_tiny::VESTA_FQ_MODULUS_LIMBS,
+                ),
+            );
+            assert!(!verify_vesta_affine_point_double(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_double_rejects_tampered_denominator() {
+        run_vesta_affine_point_double_test(|| {
+            let (p, r) = vesta_doubling_test_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffinePointDouble::try_from_limbs(p, r)
+                .expect("valid Vesta point doubling");
+            circuit.y_denominator.rhs =
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([1, 0, 0, 0])
+                    .expect("one is canonical");
+            assert!(!verify_vesta_affine_point_double(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_double_rejects_tampered_denominator_inverse() {
+        run_vesta_affine_point_double_test(|| {
+            let (p, r) = vesta_doubling_test_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffinePointDouble::try_from_limbs(p, r)
+                .expect("valid Vesta point doubling");
+            circuit.denominator_inverse.rhs = Box::new(
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([1, 0, 0, 0])
+                    .expect("one is canonical"),
+            );
+            assert!(!verify_vesta_affine_point_double(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_double_rejects_tampered_numerator() {
+        run_vesta_affine_point_double_test(|| {
+            let (p, r) = vesta_doubling_test_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffinePointDouble::try_from_limbs(p, r)
+                .expect("valid Vesta point doubling");
+            circuit.three_x_squared.out =
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([0, 0, 0, 0])
+                    .expect("zero is canonical");
+            assert!(!verify_vesta_affine_point_double(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_double_rejects_tampered_x_equation() {
+        run_vesta_affine_point_double_test(|| {
+            let (p, r) = vesta_doubling_test_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffinePointDouble::try_from_limbs(p, r)
+                .expect("valid Vesta point doubling");
+            circuit.x_sum_plus_x1.out =
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([0, 0, 0, 0])
+                    .expect("zero is canonical");
+            assert!(!verify_vesta_affine_point_double(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_point_double_rejects_tampered_y_equation() {
+        run_vesta_affine_point_double_test(|| {
+            let (p, r) = vesta_doubling_test_points();
+            let mut circuit = pasta_tiny::NonNativeVestaAffinePointDouble::try_from_limbs(p, r)
+                .expect("valid Vesta point doubling");
+            circuit.y3_plus_y1.out =
+                pasta_tiny::NonNativeVestaFqCanonicalRange::try_from_limbs([1, 0, 0, 0])
+                    .expect("one is canonical");
+            assert!(!verify_vesta_affine_point_double(circuit));
+        });
     }
 }
 
@@ -8517,6 +14068,26 @@ mod offline_note_real_prover_tests {
     }
 
     #[test]
+    fn prove_offline_note_redeem_rejects_recursive_circuit_aliases() {
+        let vk_box = offline_note_vk_box();
+        let redemption = sample_redemption();
+        for circuit_id in [
+            "halo2/ipa:offline-note-recursive",
+            "halo2/ipa/offline-note-recursive",
+            "halo2/pasta/offline-note-recursive",
+            "halo2/pasta/ipa/offline-note-recursive",
+            "halo2/ipa:offline-note-recursive-shadow",
+        ] {
+            let err = prove_offline_note_redeem(circuit_id, &vk_box, &redemption, None)
+                .expect_err("Offline recursive circuit aliases must reject before proving");
+            assert!(
+                err.contains("requires canonical circuit id"),
+                "unexpected alias-circuit error for {circuit_id}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn prove_offline_note_audit_emits_real_halo2_ipa_proof() {
         let vk_box = offline_note_vk_box();
         let audit = sample_audit();
@@ -8713,7 +14284,11 @@ mod kagemusha_folded_real_prover_tests {
         }
     }
 
-    fn sample_verified_hop(root_before: [u8; 32], root_after: [u8; 32], seed: u8) -> OwnedFoldHop {
+    fn sample_generic_verified_hop(
+        root_before: [u8; 32],
+        root_after: [u8; 32],
+        seed: u8,
+    ) -> OwnedFoldHop {
         let circuit_id = "halo2/ipa:tiny-add-public";
         let fixture_seed = test_utils::halo2_fixture_envelope(circuit_id, [0u8; 32]);
         let vk_box = fixture_seed
@@ -8738,6 +14313,16 @@ mod kagemusha_folded_real_prover_tests {
         }
     }
 
+    fn sample_verified_hop(root_before: [u8; 32], root_after: [u8; 32], seed: u8) -> OwnedFoldHop {
+        let mut hop = sample_generic_verified_hop(root_before, root_after, seed);
+        mutate_open_verify_envelope(&mut hop.attachment.proof, |envelope| {
+            envelope.circuit_id = confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned();
+            envelope.public_inputs =
+                confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
+        });
+        hop
+    }
+
     fn sample_confidential_v2_verified_hop()
     -> (ChainId, AssetDefinitionId, OwnedFoldHop, VerifyingKeyRecord) {
         let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
@@ -8745,8 +14330,9 @@ mod kagemusha_folded_real_prover_tests {
             DomainId::try_new("offline", "universal").expect("domain id"),
             "kgm".parse().expect("asset definition name"),
         );
-        let record = confidential_v2::confidential_transfer_v2_vk_record("offline_kagemusha", 3)
-            .expect("confidential transfer v2 verifier record");
+        let record =
+            confidential_v2::confidential_transfer_v2_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3)
+                .expect("confidential transfer v2 verifier record");
         let vk_box = record.key.clone().expect("inline transfer verifier key");
         let spend_key = [0x11_u8; 32];
         let input_rho = [0x21_u8; 32];
@@ -8922,9 +14508,23 @@ mod kagemusha_folded_real_prover_tests {
         )
         .expect_err("forged folded circuit id must reject before proving");
         assert!(
-            err.contains("unsupported Kagemusha folded circuit id"),
+            err.contains("requires canonical circuit id"),
             "unexpected forged-circuit error: {err}"
         );
+        for alias in [
+            "halo2/ipa:kagemusha-folded-v1",
+            "halo2/ipa/kagemusha-folded-v1",
+            "halo2/pasta/kagemusha-folded-v1",
+            "halo2/pasta/ipa/kagemusha-folded-v1",
+        ] {
+            let err =
+                prove_kagemusha_compact_payment_token(alias, &vk_box, public_inputs.clone(), None)
+                    .expect_err("folded circuit aliases must reject before proving");
+            assert!(
+                err.contains("requires canonical circuit id"),
+                "unexpected alias-circuit error for {alias}: {err}"
+            );
+        }
 
         let mut wrong_backend_vk = vk_box.clone();
         wrong_backend_vk.backend = "halo2/kzg".to_owned();
@@ -9136,11 +14736,29 @@ mod kagemusha_folded_real_prover_tests {
         token.folded_proof.verifier_key_id =
             VerifyingKeyId::new("stark/fri", KAGEMUSHA_FOLDED_CIRCUIT_ID);
         assert!(!verify_kagemusha_compact_payment_token(&token, &vk_box));
+
+        let mut alias_token = prove_kagemusha_compact_payment_token(
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            sample_public_inputs(),
+            None,
+        )
+        .expect("real Kagemusha folded proof");
+        alias_token.folded_proof.verifier_key_id =
+            VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "halo2/ipa:kagemusha-folded-v1");
+        mutate_open_verify_envelope(&mut alias_token.folded_proof.proof, |envelope| {
+            envelope.circuit_id = "halo2/ipa:kagemusha-folded-v1".to_owned();
+        });
+        assert!(
+            !verify_kagemusha_compact_payment_token(&alias_token, &vk_box),
+            "final folded-token verification must reject non-canonical circuit-id aliases"
+        );
     }
 
     #[test]
     fn kagemusha_compact_payment_token_rejects_non_production_folded_backend_labels() {
-        let record = kagemusha_folded_vk_record("offline_kagemusha", 3).expect("vk record");
+        let record =
+            kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
         let vk_box = record.key.as_ref().expect("inline verifier key");
         let public_inputs = sample_public_inputs();
         let token =
@@ -9226,7 +14844,8 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_compact_payment_token_rejects_envelope_aux_substitution() {
-        let record = kagemusha_folded_vk_record("offline_kagemusha", 3).expect("vk record");
+        let record =
+            kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
         let vk_box = record.key.as_ref().expect("inline verifier key");
         let public_inputs = sample_public_inputs();
         let mut token =
@@ -9245,12 +14864,13 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_folded_vk_record_embeds_real_active_verifier_key() {
-        let record = kagemusha_folded_vk_record("offline_kagemusha", 3).expect("vk record");
+        let record =
+            kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
         let vk_box = record.key.as_ref().expect("inline verifier key");
 
         assert_eq!(record.version, 3);
         assert_eq!(record.circuit_id, KAGEMUSHA_FOLDED_CIRCUIT_ID);
-        assert_eq!(record.namespace, "offline_kagemusha");
+        assert_eq!(record.namespace, KAGEMUSHA_VERIFIER_NAMESPACE);
         assert!(record.is_active());
         assert_eq!(record.max_proof_bytes, KAGEMUSHA_FOLDED_MAX_PROOF_BYTES);
         assert_eq!(record.vk_len as usize, vk_box.bytes.len());
@@ -9269,7 +14889,8 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_compact_payment_token_verifies_against_active_vk_record() {
-        let record = kagemusha_folded_vk_record("offline_kagemusha", 3).expect("vk record");
+        let record =
+            kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
         let vk_box = record.key.as_ref().expect("inline verifier key");
         let token = prove_kagemusha_compact_payment_token(
             &record.circuit_id,
@@ -9286,7 +14907,8 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_compact_payment_token_record_verifier_rejects_registry_mismatches() {
-        let record = kagemusha_folded_vk_record("offline_kagemusha", 3).expect("vk record");
+        let record =
+            kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
         let vk_box = record.key.as_ref().expect("inline verifier key");
         let token = prove_kagemusha_compact_payment_token(
             &record.circuit_id,
@@ -9300,6 +14922,20 @@ mod kagemusha_folded_real_prover_tests {
         inactive.status = ConfidentialStatus::Withdrawn;
         assert!(!verify_kagemusha_compact_payment_token_with_record(
             &token, &inactive
+        ));
+
+        let mut wrong_namespace = record.clone();
+        wrong_namespace.namespace = "generic_confidential_transfer".to_owned();
+        assert!(!verify_kagemusha_compact_payment_token_with_record(
+            &token,
+            &wrong_namespace
+        ));
+
+        let mut wrong_circuit_alias = record.clone();
+        wrong_circuit_alias.circuit_id = "halo2/ipa:kagemusha-folded-v1".to_owned();
+        assert!(!verify_kagemusha_compact_payment_token_with_record(
+            &token,
+            &wrong_circuit_alias
         ));
 
         let mut wrong_schema = record.clone();
@@ -9389,7 +15025,7 @@ mod kagemusha_folded_real_prover_tests {
         );
         let root0 = fixed_bytes(b"kagemusha-generic-hop-root-0");
         let root1 = fixed_bytes(b"kagemusha-generic-hop-root-1");
-        let hop = sample_verified_hop(root0, root1, 0x71);
+        let hop = sample_generic_verified_hop(root0, root1, 0x71);
 
         let err = kagemusha_verified_folded_public_inputs(&chain_id, &asset, &[hop.as_step()])
             .expect_err("generic transparent hop circuit must not fold into Kagemusha");
@@ -9745,7 +15381,8 @@ mod kagemusha_folded_real_prover_tests {
             steps: vec![hop.as_bundle_step()],
         };
         let id = hop.attachment.vk_ref.clone();
-        let record = sample_hop_record(&hop);
+        let mut record = sample_hop_record(&hop);
+        record.namespace = KAGEMUSHA_VERIFIER_NAMESPACE.to_owned();
         let records = [KagemushaHopVerifierRecord {
             id: &id,
             record: &record,
@@ -9826,6 +15463,17 @@ mod kagemusha_folded_real_prover_tests {
                 .expect_err("inactive hop verifier record must fail");
         assert!(err.contains("not active"), "unexpected error: {err}");
 
+        let mut wrong_namespace = valid.clone();
+        wrong_namespace.namespace = "generic_confidential_transfer".to_owned();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &wrong_namespace,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("wrong verifier namespace must fail");
+        assert!(err.contains("namespace"), "unexpected error: {err}");
+
         let mut wrong_schema = valid.clone();
         wrong_schema.public_inputs_schema_hash = [0x11; 32];
         let records = [KagemushaHopVerifierRecord {
@@ -9849,6 +15497,38 @@ mod kagemusha_folded_real_prover_tests {
         assert!(
             err.contains("circuit id") || err.contains("confidential-transfer-v2"),
             "unexpected error: {err}"
+        );
+
+        let mut alias_record = valid.clone();
+        alias_record.circuit_id = "anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &alias_record,
+        }];
+        let err =
+            kagemusha_verified_folded_public_inputs_from_bundle_with_records(&bundle, &records)
+                .expect_err("confidential-transfer-v2 circuit aliases must fail");
+        assert!(
+            err.contains("canonical confidential-transfer-v2"),
+            "unexpected alias-record error: {err}"
+        );
+
+        let mut alias_bundle = bundle.clone();
+        mutate_open_verify_envelope(&mut alias_bundle.steps[0].attachment.proof, |envelope| {
+            envelope.circuit_id = "anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
+        });
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &valid,
+        }];
+        let err = kagemusha_verified_folded_public_inputs_from_bundle_with_records(
+            &alias_bundle,
+            &records,
+        )
+        .expect_err("confidential-transfer-v2 envelope aliases must fail");
+        assert!(
+            err.contains("canonical confidential-transfer-v2"),
+            "unexpected alias-envelope error: {err}"
         );
 
         let mut wrong_commitment = valid.clone();
@@ -9917,12 +15597,12 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
-    fn prove_verified_kagemusha_compact_payment_token_verifies_hops_and_emits_real_proof() {
+    fn prove_verified_kagemusha_compact_payment_token_requires_verifier_records() {
         let (chain_id, asset, hop, _record) = sample_confidential_v2_verified_hop();
         let step = hop.as_step();
         let vk_box = kagemusha_vk_box();
 
-        let token = prove_verified_kagemusha_compact_payment_token(
+        let err = prove_verified_kagemusha_compact_payment_token(
             &chain_id,
             &asset,
             &[step],
@@ -9930,12 +15610,28 @@ mod kagemusha_folded_real_prover_tests {
             &vk_box,
             None,
         )
-        .expect("verified compact Kagemusha token");
+        .expect_err("unanchored direct compact prover must require verifier records");
+        assert!(
+            err.contains("verifier-record trust anchors"),
+            "unexpected error: {err}"
+        );
 
-        assert!(verify_kagemusha_compact_payment_token(&token, &vk_box));
-        assert_eq!(token.public_inputs.initial_root, hop.root_before);
-        assert_eq!(token.public_inputs.final_root, hop.root_after);
-        assert_eq!(token.public_inputs.hop_count, 1);
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let err = prove_verified_kagemusha_compact_payment_token_from_bundle(
+            &bundle,
+            KAGEMUSHA_FOLDED_CIRCUIT_ID,
+            &vk_box,
+            None,
+        )
+        .expect_err("unanchored bundle compact prover must require verifier records");
+        assert!(
+            err.contains("verifier-record trust anchors"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -9987,20 +15683,29 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn prove_verified_kagemusha_compact_payment_token_rejects_tampered_hop_proof() {
-        let (chain_id, asset, mut hop, _record) = sample_confidential_v2_verified_hop();
+        let (chain_id, asset, mut hop, record) = sample_confidential_v2_verified_hop();
         let last = hop.attachment.proof.bytes.last_mut().expect("proof bytes");
         *last ^= 0x01;
+        let id = hop.attachment.vk_ref.clone();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop.as_bundle_step()],
+        };
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
         let vk_box = kagemusha_vk_box();
 
-        let err = prove_verified_kagemusha_compact_payment_token(
-            &chain_id,
-            &asset,
-            &[hop.as_step()],
+        let err = prove_verified_kagemusha_compact_payment_token_from_bundle_with_records(
+            &bundle,
+            &records,
             KAGEMUSHA_FOLDED_CIRCUIT_ID,
             &vk_box,
             None,
         )
-        .expect_err("verified compact prover must reject tampered hop proof");
+        .expect_err("record-backed verified compact prover must reject tampered hop proof");
         assert!(
             err.contains("verification failed") || err.contains("not a valid OpenVerifyEnvelope"),
             "unexpected error: {err}"
@@ -10009,21 +15714,28 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn prove_verified_kagemusha_compact_payment_token_rejects_root_discontinuity() {
-        let (chain_id, asset, hop0, _record0) = sample_confidential_v2_verified_hop();
+        let (chain_id, asset, hop0, record) = sample_confidential_v2_verified_hop();
         let (_other_chain_id, _other_asset, hop1, _record1) = sample_confidential_v2_verified_hop();
-        let step0 = hop0.as_step();
-        let step1 = hop1.as_step();
+        let id = hop0.attachment.vk_ref.clone();
+        let bundle = KagemushaVerifiedFoldBundle {
+            chain_id,
+            asset,
+            steps: vec![hop0.as_bundle_step(), hop1.as_bundle_step()],
+        };
+        let records = [KagemushaHopVerifierRecord {
+            id: &id,
+            record: &record,
+        }];
         let vk_box = kagemusha_vk_box();
 
-        let err = prove_verified_kagemusha_compact_payment_token(
-            &chain_id,
-            &asset,
-            &[step0, step1],
+        let err = prove_verified_kagemusha_compact_payment_token_from_bundle_with_records(
+            &bundle,
+            &records,
             KAGEMUSHA_FOLDED_CIRCUIT_ID,
             &vk_box,
             None,
         )
-        .expect_err("verified compact prover must reject discontinuous folded roots");
+        .expect_err("record-backed verified compact prover must reject discontinuous folded roots");
         assert!(err.contains("does not continue from the previous root"));
     }
 
@@ -10044,23 +15756,29 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
-    fn kagemusha_verified_fold_step_binds_public_input_statement_metadata() {
+    fn kagemusha_verified_fold_step_rejects_noncanonical_halo2_metadata_before_proof_verify() {
         let root0 = fixed_bytes(b"kagemusha-verified-root-0");
         let root1 = fixed_bytes(b"kagemusha-verified-root-1");
-        let hop = sample_verified_hop(root0, root1, 0x92);
         let mut mutated = sample_verified_hop(root0, root1, 0x92);
 
-        let original = kagemusha_verified_fold_step(&hop.as_step()).expect("original verified hop");
         mutate_open_verify_envelope(&mut mutated.attachment.proof, |envelope| {
             envelope.public_inputs.extend_from_slice(b":forged-schema");
+            let last = envelope.proof_bytes.last_mut().expect("proof payload");
+            *last ^= 0x01;
         });
-        let changed =
-            kagemusha_verified_fold_step(&mutated.as_step()).expect("mutated verified hop");
+        let err = kagemusha_verified_fold_step(&mutated.as_step())
+            .expect_err("schema mutation must reject before proof verification");
+        assert!(err.contains("schema"), "unexpected error: {err}");
 
-        assert_ne!(
-            original.proof_public_inputs_digest,
-            changed.proof_public_inputs_digest
-        );
+        let mut alias = sample_verified_hop(root0, root1, 0x93);
+        mutate_open_verify_envelope(&mut alias.attachment.proof, |envelope| {
+            envelope.circuit_id = "anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
+            let last = envelope.proof_bytes.last_mut().expect("proof payload");
+            *last ^= 0x01;
+        });
+        let err = kagemusha_verified_fold_step(&alias.as_step())
+            .expect_err("circuit-id alias must reject before proof verification");
+        assert!(err.contains("canonical"), "unexpected error: {err}");
     }
 
     #[test]
@@ -10110,6 +15828,20 @@ mod kagemusha_folded_real_prover_tests {
         let err = kagemusha_fold_step_public_inputs_digest(&empty_circuit_id)
             .expect_err("empty Kagemusha proof circuit id must reject");
         assert!(err.contains("circuit id"), "unexpected error: {err}");
+
+        let mut halo2_alias = sample_verified_hop(
+            fixed_bytes(b"kagemusha-statement-root-0"),
+            fixed_bytes(b"kagemusha-statement-root-1"),
+            0x5A,
+        )
+        .attachment
+        .proof;
+        mutate_open_verify_envelope(&mut halo2_alias, |envelope| {
+            envelope.circuit_id = "anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
+        });
+        let err = kagemusha_fold_step_public_inputs_digest(&halo2_alias)
+            .expect_err("Halo2 Kagemusha proof circuit-id alias must reject");
+        assert!(err.contains("canonical"), "unexpected error: {err}");
 
         let mut empty_schema = stark_statement_proof(vec![vec![[0x11; 32]]], 1, "stark/fri");
         mutate_open_verify_envelope(&mut empty_schema, |envelope| {
@@ -10529,12 +16261,104 @@ fn extract_pasta_fp_instances_impl(
 // Tiny pasta circuits used for dispatch verification across transparent IPA paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod pasta_tiny {
+    // TODO: Remove this once aggregation mode 2 wires the non-native Vesta/Fq
+    // verifier foundations into the in-circuit Halo2 IPA verifier gadget.
+    #![cfg_attr(not(test), allow(dead_code))]
+
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
-        halo2curves::pasta::Fp as Scalar,
+        halo2curves::{
+            CurveAffine as _,
+            group::{Curve as _, prime::PrimeCurveAffine as _},
+            pasta::{EqAffine as VestaAffine, Fp as Scalar},
+        },
         plonk::{Circuit, ConstraintSystem, Error as PlonkError, Expression, Selector},
         poly::Rotation,
     };
+
+    /// Number of bits in each non-native verifier limb.
+    pub const NON_NATIVE_U64_LIMB_BITS: usize = 64;
+    /// Number of 64-bit limbs in a Pasta/Vesta base-field element.
+    pub const NON_NATIVE_PASTA_FIELD_LIMBS: usize = 4;
+    /// Number of 64-bit limbs in a Vesta/Fq product before reduction.
+    pub const NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS: usize = 8;
+    /// Number of 64-bit limbs used to range-bound multiplication carries.
+    pub const NON_NATIVE_U128_LIMBS: usize = 2;
+    /// Vesta base-field modulus as little-endian `u64` limbs.
+    pub const VESTA_FQ_MODULUS_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [
+        0x8c46_eb21_0000_0001,
+        0x2246_98fc_0994_a8dd,
+        0x0000_0000_0000_0000,
+        0x4000_0000_0000_0000,
+    ];
+    /// Maximum canonical Vesta base-field value, `q - 1`, as little-endian limbs.
+    pub const VESTA_FQ_MAX_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [
+        0x8c46_eb21_0000_0000,
+        0x2246_98fc_0994_a8dd,
+        0x0000_0000_0000_0000,
+        0x4000_0000_0000_0000,
+    ];
+    /// Native Pasta/Fp scalar modulus as little-endian `u64` limbs.
+    pub const PASTA_FP_MODULUS_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [
+        0x992d_30ed_0000_0001,
+        0x2246_98fc_094c_f91b,
+        0x0000_0000_0000_0000,
+        0x4000_0000_0000_0000,
+    ];
+    /// Maximum canonical native Pasta/Fp scalar, `p - 1`, as little-endian limbs.
+    pub const PASTA_FP_MAX_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [
+        0x992d_30ed_0000_0000,
+        0x2246_98fc_094c_f91b,
+        0x0000_0000_0000_0000,
+        0x4000_0000_0000_0000,
+    ];
+    /// Canonical native Pasta/Fp scalars occupy 255 bits.
+    pub const PASTA_FP_SCALAR_BITS: usize = 255;
+    /// Vesta curve equation constant `b = 5` for `y^2 = x^3 + b`.
+    pub const VESTA_CURVE_B_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [5, 0, 0, 0];
+    /// Vesta base-field one as little-endian limbs.
+    pub const VESTA_FQ_ONE_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [1, 0, 0, 0];
+
+    type VestaPointEncoding = (
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        bool,
+    );
+
+    type VestaPointExpressions = (
+        [Expression<Scalar>; NON_NATIVE_PASTA_FIELD_LIMBS],
+        [Expression<Scalar>; NON_NATIVE_PASTA_FIELD_LIMBS],
+        Expression<Scalar>,
+    );
+
+    fn scalar_two_pow_64() -> Scalar {
+        let mut value = Scalar::from(1);
+        for _ in 0..NON_NATIVE_U64_LIMB_BITS {
+            value += value;
+        }
+        value
+    }
+
+    fn scalar_from_limbs_wrapping(limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS]) -> Scalar {
+        let radix = scalar_two_pow_64();
+        let mut coefficient = Scalar::from(1);
+        let mut value = Scalar::from(0);
+        for limb in limbs {
+            value += Scalar::from(limb) * coefficient;
+            coefficient *= radix;
+        }
+        value
+    }
+
+    fn scalar_limb_bit(limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS], bit_index: usize) -> bool {
+        let limb_index = bit_index / NON_NATIVE_U64_LIMB_BITS;
+        let local_bit = bit_index % NON_NATIVE_U64_LIMB_BITS;
+        ((limbs[limb_index] >> local_bit) & 1) == 1
+    }
+
+    fn u64_limb_bits(value: u64) -> [Scalar; NON_NATIVE_U64_LIMB_BITS] {
+        std::array::from_fn(|index| Scalar::from((value >> index) & 1))
+    }
 
     #[derive(Clone, Default)]
     pub struct Add;
@@ -11416,14 +17240,22 @@ mod pasta_tiny {
     ///
     /// The circuit binds every chain-visible folded transcript column to the
     /// proof envelope, constrains the aggregation mode to checked pre-fold v1,
-    /// and constrains `hop_count` to the compact-token corridor `1..=64` using
-    /// a six-bit decomposition of `hop_count - 1`.
+    /// constrains `hop_count` to the compact-token corridor `1..=64`, and
+    /// rejects all-zero root/digest column groups and unchanged public root
+    /// transitions using inverse witnesses.
     #[derive(Clone)]
     pub struct KagemushaFoldedSemantic {
         /// Public instance values constrained to equal the proof envelope.
         pub public_values: [Scalar; super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS],
         /// Private boolean bits for `hop_count - 1`.
         pub hop_count_minus_one_bits: [Scalar; super::KAGEMUSHA_FOLDED_HOP_COUNT_BITS],
+        /// Private inverses proving folded root/digest groups are non-zero.
+        pub non_zero_public_field_inverses:
+            [Scalar; super::KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+        /// Private one-hot selector for a limb where final root differs from initial root.
+        pub root_difference_selectors: [Scalar; super::KAGEMUSHA_FOLDED_ROOT_LIMBS],
+        /// Private inverse for the selected non-zero root limb difference.
+        pub root_difference_inverse: Scalar,
     }
 
     impl Default for KagemushaFoldedSemantic {
@@ -11431,6 +17263,10 @@ mod pasta_tiny {
             Self {
                 public_values: [Scalar::from(0); super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS],
                 hop_count_minus_one_bits: [Scalar::from(0); super::KAGEMUSHA_FOLDED_HOP_COUNT_BITS],
+                non_zero_public_field_inverses: [Scalar::from(0);
+                    super::KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+                root_difference_selectors: [Scalar::from(0); super::KAGEMUSHA_FOLDED_ROOT_LIMBS],
+                root_difference_inverse: Scalar::from(0),
             }
         }
     }
@@ -11441,6 +17277,11 @@ mod pasta_tiny {
                 super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS],
             [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
                 super::KAGEMUSHA_FOLDED_HOP_COUNT_BITS],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::KAGEMUSHA_FOLDED_ROOT_LIMBS],
+            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
             [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
                 super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS],
             Selector,
@@ -11455,6 +17296,9 @@ mod pasta_tiny {
             meta.set_minimum_degree(3);
             let public_adv = std::array::from_fn(|_| meta.advice_column());
             let bit_adv = std::array::from_fn(|_| meta.advice_column());
+            let public_field_inverse_adv = std::array::from_fn(|_| meta.advice_column());
+            let root_difference_selector_adv = std::array::from_fn(|_| meta.advice_column());
+            let root_difference_inverse_adv = meta.advice_column();
             let inst = std::array::from_fn(|_| meta.instance_column());
             let s = meta.selector();
             meta.create_gate("kagemusha_folded_semantic", |meta| {
@@ -11467,11 +17311,26 @@ mod pasta_tiny {
                 for column in &bit_adv {
                     bits.push(meta.query_advice(*column, Rotation::cur()));
                 }
+                let mut public_field_inverses = Vec::with_capacity(
+                    super::KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT,
+                );
+                for column in &public_field_inverse_adv {
+                    public_field_inverses.push(meta.query_advice(*column, Rotation::cur()));
+                }
+                let mut root_difference_selectors =
+                    Vec::with_capacity(super::KAGEMUSHA_FOLDED_ROOT_LIMBS);
+                for column in &root_difference_selector_adv {
+                    root_difference_selectors.push(meta.query_advice(*column, Rotation::cur()));
+                }
+                let root_difference_inverse =
+                    meta.query_advice(root_difference_inverse_adv, Rotation::cur());
 
                 let mut cons = Vec::with_capacity(
                     super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS
                         + super::KAGEMUSHA_FOLDED_HOP_COUNT_BITS
-                        + 2,
+                        + super::KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUP_COUNT
+                        + super::KAGEMUSHA_FOLDED_ROOT_LIMBS
+                        + 4,
                 );
                 for i in 0..super::KAGEMUSHA_FOLDED_INSTANCE_COLUMNS {
                     let instance = meta.query_instance(inst[i], Rotation::cur());
@@ -11484,6 +17343,16 @@ mod pasta_tiny {
                             * (bit.clone() - Expression::Constant(Scalar::from(1))),
                     );
                 }
+                let mut selector_sum = Expression::Constant(Scalar::from(0));
+                for selector in &root_difference_selectors {
+                    selector_sum = selector_sum + selector.clone();
+                    cons.push(
+                        s.clone()
+                            * selector.clone()
+                            * (selector.clone() - Expression::Constant(Scalar::from(1))),
+                    );
+                }
+                cons.push(s.clone() * (selector_sum - Expression::Constant(Scalar::from(1))));
                 let mut bit_sum = Expression::Constant(Scalar::from(0));
                 for (index, bit) in bits.iter().enumerate() {
                     bit_sum = bit_sum
@@ -11502,18 +17371,71 @@ mod pasta_tiny {
                             )))),
                 );
                 let hop_count = public[super::KAGEMUSHA_FOLDED_HOP_COUNT_INDEX].clone();
-                cons.push(s * (hop_count - Expression::Constant(Scalar::from(1)) - bit_sum));
+                cons.push(
+                    s.clone() * (hop_count - Expression::Constant(Scalar::from(1)) - bit_sum),
+                );
+                let mut selected_root_difference = Expression::Constant(Scalar::from(0));
+                for limb_index in 0..super::KAGEMUSHA_FOLDED_ROOT_LIMBS {
+                    let initial =
+                        public[super::KAGEMUSHA_FOLDED_INITIAL_ROOT_START_INDEX + limb_index]
+                            .clone();
+                    let final_root =
+                        public[super::KAGEMUSHA_FOLDED_FINAL_ROOT_START_INDEX + limb_index]
+                            .clone();
+                    selected_root_difference = selected_root_difference
+                        + root_difference_selectors[limb_index].clone() * (final_root - initial);
+                }
+                cons.push(
+                    s.clone()
+                        * (selected_root_difference * root_difference_inverse
+                            - Expression::Constant(Scalar::from(1))),
+                );
+                for (group_index, group) in super::KAGEMUSHA_FOLDED_NON_ZERO_PUBLIC_FIELD_GROUPS
+                    .iter()
+                    .enumerate()
+                {
+                    let mut field_sum = Expression::Constant(Scalar::from(0));
+                    for index in group {
+                        field_sum = field_sum + public[*index].clone();
+                    }
+                    // Each root/digest group is four u64 limbs, so the sum cannot wrap
+                    // to zero in Pasta Fp unless all limbs are zero.
+                    cons.push(
+                        s.clone()
+                            * (field_sum * public_field_inverses[group_index].clone()
+                                - Expression::Constant(Scalar::from(1))),
+                    );
+                }
                 cons
             });
-            (public_adv, bit_adv, inst, s)
+            (
+                public_adv,
+                bit_adv,
+                public_field_inverse_adv,
+                root_difference_selector_adv,
+                root_difference_inverse_adv,
+                inst,
+                s,
+            )
         }
         fn synthesize(
             &self,
-            (public_adv, bit_adv, _inst, s): Self::Config,
+            (
+                public_adv,
+                bit_adv,
+                public_field_inverse_adv,
+                root_difference_selector_adv,
+                root_difference_inverse_adv,
+                _inst,
+                s,
+            ): Self::Config,
             mut layouter: impl Layouter<Scalar>,
         ) -> Result<(), PlonkError> {
             let public_values = self.public_values;
             let hop_count_minus_one_bits = self.hop_count_minus_one_bits;
+            let non_zero_public_field_inverses = self.non_zero_public_field_inverses;
+            let root_difference_selectors = self.root_difference_selectors;
+            let root_difference_inverse = self.root_difference_inverse;
             layouter.assign_region(
                 || "kagemusha_folded_semantic",
                 |mut region| {
@@ -11536,10 +17458,9782 @@ mod pasta_tiny {
                             || Value::known(hop_count_minus_one_bits[i]),
                         )?;
                     }
+                    for (i, column) in public_field_inverse_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("non_zero_public_field_inverse{i}"),
+                            *column,
+                            0,
+                            || Value::known(non_zero_public_field_inverses[i]),
+                        )?;
+                    }
+                    for (i, column) in root_difference_selector_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("root_difference_selector{i}"),
+                            *column,
+                            0,
+                            || Value::known(root_difference_selectors[i]),
+                        )?;
+                    }
+                    crate::zk::assign_advice_compat(
+                        &mut region,
+                        || "root_difference_inverse",
+                        root_difference_inverse_adv,
+                        0,
+                        || Value::known(root_difference_inverse),
+                    )?;
                     Ok(())
                 },
             )
         }
+    }
+
+    /// Reusable config for a non-native `u64` limb range/decomposition check.
+    ///
+    /// Future in-circuit IPA verification needs Vesta base-field elements split
+    /// into bounded limbs inside this Pasta-Fp circuit. This gadget proves that
+    /// an assigned field element is exactly a 64-bit little-endian bit
+    /// decomposition and has no high residue above bit 63.
+    #[derive(Clone)]
+    pub struct NonNativeU64LimbRangeConfig {
+        value: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        bit: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        accumulator: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        start: Selector,
+        step: Selector,
+        finish: Selector,
+    }
+
+    fn configure_non_native_u64_limb_range(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeU64LimbRangeConfig {
+        let value = meta.advice_column();
+        let bit = meta.advice_column();
+        let accumulator = meta.advice_column();
+        let start = meta.selector();
+        let step = meta.selector();
+        let finish = meta.selector();
+
+        meta.create_gate("non_native_u64_limb_start", |meta| {
+            let s = meta.query_selector(start);
+            let value = meta.query_advice(value, Rotation::cur());
+            let accumulator = meta.query_advice(accumulator, Rotation::cur());
+            vec![s * (accumulator - value)]
+        });
+        meta.create_gate("non_native_u64_limb_step", |meta| {
+            let s = meta.query_selector(step);
+            let bit = meta.query_advice(bit, Rotation::cur());
+            let accumulator_cur = meta.query_advice(accumulator, Rotation::cur());
+            let next_accumulator = meta.query_advice(accumulator, Rotation::next());
+            vec![
+                s.clone() * bit.clone() * (bit.clone() - Expression::Constant(Scalar::from(1))),
+                s * (accumulator_cur
+                    - bit
+                    - Expression::Constant(Scalar::from(2)) * next_accumulator),
+            ]
+        });
+        meta.create_gate("non_native_u64_limb_finish", |meta| {
+            let s = meta.query_selector(finish);
+            let accumulator = meta.query_advice(accumulator, Rotation::cur());
+            vec![s * accumulator]
+        });
+
+        NonNativeU64LimbRangeConfig {
+            value,
+            bit,
+            accumulator,
+            start,
+            step,
+            finish,
+        }
+    }
+
+    fn assign_non_native_u64_limb_range_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeU64LimbRangeConfig,
+        value: Scalar,
+        bits: [Scalar; NON_NATIVE_U64_LIMB_BITS],
+        accumulators: [Scalar; NON_NATIVE_U64_LIMB_BITS + 1],
+    ) -> Result<(), PlonkError> {
+        config.start.enable(region, 0)?;
+        config.finish.enable(region, NON_NATIVE_U64_LIMB_BITS)?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "limb_value",
+            config.value,
+            0,
+            || Value::known(value),
+        )?;
+        for (row, accumulator) in accumulators.iter().copied().enumerate() {
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("accumulator{row}"),
+                config.accumulator,
+                row,
+                || Value::known(accumulator),
+            )?;
+        }
+        for (row, bit) in bits.iter().copied().enumerate() {
+            config.step.enable(region, row)?;
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("bit{row}"),
+                config.bit,
+                row,
+                || Value::known(bit),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Public wrapper config for a non-native `u64` limb range proof.
+    #[derive(Clone)]
+    pub struct NonNativePublicU64LimbRangeConfig {
+        range: NonNativeU64LimbRangeConfig,
+        expose: Selector,
+    }
+
+    /// Circuit wrapper for the non-native `u64` limb range gadget.
+    #[derive(Clone)]
+    pub struct NonNativeU64LimbRange {
+        /// Public limb value constrained to a 64-bit decomposition.
+        pub value: Scalar,
+        /// Little-endian bit witness for `value`.
+        pub bits: [Scalar; NON_NATIVE_U64_LIMB_BITS],
+        /// Running decomposition accumulator witness.
+        pub accumulators: [Scalar; NON_NATIVE_U64_LIMB_BITS + 1],
+    }
+
+    impl Default for NonNativeU64LimbRange {
+        fn default() -> Self {
+            Self {
+                value: Scalar::from(0),
+                bits: [Scalar::from(0); NON_NATIVE_U64_LIMB_BITS],
+                accumulators: [Scalar::from(0); NON_NATIVE_U64_LIMB_BITS + 1],
+            }
+        }
+    }
+
+    impl NonNativeU64LimbRange {
+        /// Build an honest witness for a native `u64` limb.
+        #[must_use]
+        pub fn from_u64(value: u64) -> Self {
+            let scalar = Scalar::from(value);
+            let bits = u64_limb_bits(value);
+            Self {
+                value: scalar,
+                bits,
+                accumulators: Self::accumulators_for_bits(scalar, bits),
+            }
+        }
+
+        /// Build the running accumulator witness for an arbitrary scalar/bit pair.
+        #[must_use]
+        pub fn accumulators_for_bits(
+            value: Scalar,
+            bits: [Scalar; NON_NATIVE_U64_LIMB_BITS],
+        ) -> [Scalar; NON_NATIVE_U64_LIMB_BITS + 1] {
+            use ff::Field as _;
+
+            let two_inverse: Scalar = Option::<Scalar>::from(Scalar::from(2).invert())
+                .expect("two is invertible in Pasta Fp");
+            let mut remaining = value;
+            let mut accumulators = [Scalar::from(0); NON_NATIVE_U64_LIMB_BITS + 1];
+            accumulators[0] = remaining;
+            for (index, bit) in bits.iter().copied().enumerate() {
+                remaining = (remaining - bit) * two_inverse;
+                accumulators[index + 1] = remaining;
+            }
+            accumulators
+        }
+    }
+
+    impl Circuit<Scalar> for NonNativeU64LimbRange {
+        type Config = NonNativePublicU64LimbRangeConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let range = configure_non_native_u64_limb_range(meta);
+            let instance = meta.instance_column();
+            let expose = meta.selector();
+            meta.create_gate("non_native_u64_limb_public_instance", |meta| {
+                let s = meta.query_selector(expose);
+                let value = meta.query_advice(range.value, Rotation::cur());
+                let instance = meta.query_instance(instance, Rotation::cur());
+                vec![s * (value - instance)]
+            });
+            NonNativePublicU64LimbRangeConfig { range, expose }
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_public_u64_limb_range",
+                |mut region| {
+                    config.expose.enable(&mut region, 0)?;
+                    assign_non_native_u64_limb_range_region(
+                        &mut region,
+                        &config.range,
+                        self.value,
+                        self.bits,
+                        self.accumulators,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for native Pasta/Fp scalar canonical decomposition proofs.
+    #[derive(Clone)]
+    pub struct NativePastaFpScalarConfig {
+        value: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        limbs: [NonNativeU64LimbRangeConfig; NON_NATIVE_PASTA_FIELD_LIMBS],
+        slack_limbs: [NonNativeU64LimbRangeConfig; NON_NATIVE_PASTA_FIELD_LIMBS],
+        borrows: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+            NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+        public: Option<NativePastaFpScalarPublicConfig>,
+        bind: Selector,
+        subtract: Selector,
+    }
+
+    #[derive(Clone)]
+    struct NativePastaFpScalarPublicConfig {
+        expose: Selector,
+    }
+
+    /// Public wrapper proving a native Pasta/Fp scalar has a unique 255-bit limb form.
+    #[derive(Clone)]
+    pub struct NativePastaFpScalar {
+        /// Public native Pasta/Fp scalar.
+        pub value: Scalar,
+        /// Private little-endian `u64` limbs for the scalar's canonical integer.
+        pub limbs: [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Little-endian bit witnesses for each scalar limb.
+        pub limb_bits: [[Scalar; NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Running range accumulators for each scalar limb.
+        pub limb_accumulators:
+            [[Scalar; NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Private slack limbs for `(PastaFp::MODULUS - 1) - limbs`.
+        pub slack_limbs: [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Little-endian bit witnesses for each slack limb.
+        pub slack_bits: [[Scalar; NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Running range accumulators for each slack limb.
+        pub slack_accumulators:
+            [[Scalar; NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Borrow chain for canonical range subtraction. First and last entries must be zero.
+        pub borrow_bits: [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+    }
+
+    impl Default for NativePastaFpScalar {
+        fn default() -> Self {
+            let zero_bits =
+                [[Scalar::from(0); NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_PASTA_FIELD_LIMBS];
+            let zero_accumulators =
+                [[Scalar::from(0); NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_PASTA_FIELD_LIMBS];
+            Self {
+                value: Scalar::from(0),
+                limbs: [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS],
+                limb_bits: zero_bits,
+                limb_accumulators: zero_accumulators,
+                slack_limbs: [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS],
+                slack_bits: zero_bits,
+                slack_accumulators: zero_accumulators,
+                borrow_bits: [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+            }
+        }
+    }
+
+    impl NativePastaFpScalar {
+        /// Build an honest scalar-decomposition witness from a native scalar.
+        #[must_use]
+        pub fn from_scalar(value: Scalar) -> Self {
+            let limbs = pasta_fp_to_limbs(value);
+            let (slack, borrows) = pasta_fp_slack_witness(limbs);
+            Self::from_value_limbs_and_slack(value, limbs, slack, borrows)
+        }
+
+        /// Build an honest scalar-decomposition witness from canonical little-endian limbs.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `limbs >= PastaFp::MODULUS`.
+        pub fn try_from_limbs(limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS]) -> Result<Self, String> {
+            let (slack, borrows) = pasta_fp_slack_witness(limbs);
+            if borrows[NON_NATIVE_PASTA_FIELD_LIMBS] != 0 {
+                return Err("Pasta Fp limbs must be strictly less than the modulus".to_owned());
+            }
+            let value = pasta_fp_from_limbs(limbs)?;
+            Ok(Self::from_value_limbs_and_slack(
+                value, limbs, slack, borrows,
+            ))
+        }
+
+        /// Build a witness from the integer subtraction, even when it ends with a borrow.
+        #[must_use]
+        pub fn unchecked_from_limbs(limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS]) -> Self {
+            let (slack, borrows) = pasta_fp_slack_witness(limbs);
+            Self::from_value_limbs_and_slack(
+                scalar_from_limbs_wrapping(limbs),
+                limbs,
+                slack,
+                borrows,
+            )
+        }
+
+        fn from_value_limbs_and_slack(
+            value: Scalar,
+            limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            slack: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            borrows: [u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+        ) -> Self {
+            let (limb_bits, limb_accumulators) = u64_range_witnesses(limbs);
+            let (slack_bits, slack_accumulators) = u64_range_witnesses(slack);
+            Self {
+                value,
+                limbs: limbs.map(Scalar::from),
+                limb_bits,
+                limb_accumulators,
+                slack_limbs: slack.map(Scalar::from),
+                slack_bits,
+                slack_accumulators,
+                borrow_bits: borrows.map(Scalar::from),
+            }
+        }
+    }
+
+    fn configure_native_pasta_fp_scalar(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NativePastaFpScalarConfig {
+        configure_native_pasta_fp_scalar_with_public_inputs(meta, true)
+    }
+
+    fn configure_private_native_pasta_fp_scalar(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NativePastaFpScalarConfig {
+        configure_native_pasta_fp_scalar_with_public_inputs(meta, false)
+    }
+
+    fn configure_native_pasta_fp_scalar_with_public_inputs(
+        meta: &mut ConstraintSystem<Scalar>,
+        public_inputs: bool,
+    ) -> NativePastaFpScalarConfig {
+        let value = meta.advice_column();
+        let limbs = std::array::from_fn(|_| configure_non_native_u64_limb_range(meta));
+        let slack_limbs = std::array::from_fn(|_| configure_non_native_u64_limb_range(meta));
+        let borrows = std::array::from_fn(|_| meta.advice_column());
+        let bind = meta.selector();
+        let subtract = meta.selector();
+
+        let public = if public_inputs {
+            let instance = meta.instance_column();
+            let expose = meta.selector();
+            meta.create_gate("native_pasta_fp_scalar_public", |meta| {
+                let s = meta.query_selector(expose);
+                let value = meta.query_advice(value, Rotation::cur());
+                let instance = meta.query_instance(instance, Rotation::cur());
+                vec![s * (value - instance)]
+            });
+            Some(NativePastaFpScalarPublicConfig { expose })
+        } else {
+            None
+        };
+
+        meta.create_gate("native_pasta_fp_scalar_bind_limbs", |meta| {
+            let s = meta.query_selector(bind);
+            let value = meta.query_advice(value, Rotation::cur());
+            let radix = scalar_two_pow_64();
+            let mut coefficient = Scalar::from(1);
+            let mut composed = Expression::Constant(Scalar::from(0));
+            for limb_config in &limbs {
+                let limb = meta.query_advice(limb_config.value, Rotation::cur());
+                composed = composed + Expression::Constant(coefficient) * limb;
+                coefficient *= radix;
+            }
+            vec![s * (value - composed)]
+        });
+
+        meta.create_gate("native_pasta_fp_scalar_canonical_subtract", |meta| {
+            let s = meta.query_selector(subtract);
+            let mut constraints =
+                Vec::with_capacity(2 + borrows.len() + NON_NATIVE_PASTA_FIELD_LIMBS);
+            let borrow_values = borrows
+                .iter()
+                .map(|column| meta.query_advice(*column, Rotation::cur()))
+                .collect::<Vec<_>>();
+            for borrow in &borrow_values {
+                constraints.push(
+                    s.clone()
+                        * borrow.clone()
+                        * (borrow.clone() - Expression::Constant(Scalar::from(1))),
+                );
+            }
+            constraints.push(s.clone() * borrow_values[0].clone());
+            constraints.push(s.clone() * borrow_values[NON_NATIVE_PASTA_FIELD_LIMBS].clone());
+            let radix = Expression::Constant(scalar_two_pow_64());
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                let limb = meta.query_advice(limbs[index].value, Rotation::cur());
+                let slack = meta.query_advice(slack_limbs[index].value, Rotation::cur());
+                let bound = Expression::Constant(Scalar::from(PASTA_FP_MAX_LIMBS[index]));
+                constraints.push(
+                    s.clone()
+                        * (bound - limb - borrow_values[index].clone() - slack
+                            + radix.clone() * borrow_values[index + 1].clone()),
+                );
+            }
+            constraints
+        });
+
+        NativePastaFpScalarConfig {
+            value,
+            limbs,
+            slack_limbs,
+            borrows,
+            public,
+            bind,
+            subtract,
+        }
+    }
+
+    fn assign_native_pasta_fp_scalar_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NativePastaFpScalarConfig,
+        witness: &NativePastaFpScalar,
+        expose_public: bool,
+    ) -> Result<(), PlonkError> {
+        if expose_public {
+            let public = config.public.as_ref().expect("public native scalar config");
+            public.expose.enable(region, 0)?;
+        }
+        config.bind.enable(region, 0)?;
+        config.subtract.enable(region, 0)?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "pasta_fp_scalar_value",
+            config.value,
+            0,
+            || Value::known(witness.value),
+        )?;
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            assign_non_native_u64_limb_range_region(
+                region,
+                &config.limbs[index],
+                witness.limbs[index],
+                witness.limb_bits[index],
+                witness.limb_accumulators[index],
+            )?;
+            assign_non_native_u64_limb_range_region(
+                region,
+                &config.slack_limbs[index],
+                witness.slack_limbs[index],
+                witness.slack_bits[index],
+                witness.slack_accumulators[index],
+            )?;
+        }
+        for (index, borrow) in witness.borrow_bits.iter().copied().enumerate() {
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("pasta_fp_scalar_borrow{index}"),
+                config.borrows[index],
+                0,
+                || Value::known(borrow),
+            )?;
+        }
+        Ok(())
+    }
+
+    impl Circuit<Scalar> for NativePastaFpScalar {
+        type Config = NativePastaFpScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_native_pasta_fp_scalar(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let witness = self.clone();
+            layouter.assign_region(
+                || "native_pasta_fp_scalar",
+                |mut region| {
+                    assign_native_pasta_fp_scalar_region(&mut region, &config, &witness, true)
+                },
+            )
+        }
+    }
+
+    /// Circuit wrapper proving a private native Pasta/Fp scalar is canonically decomposed.
+    #[derive(Clone, Default)]
+    pub struct PrivateNativePastaFpScalar {
+        /// Private scalar decomposition witness.
+        pub scalar: NativePastaFpScalar,
+    }
+
+    impl Circuit<Scalar> for PrivateNativePastaFpScalar {
+        type Config = NativePastaFpScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_private_native_pasta_fp_scalar(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let witness = self.scalar.clone();
+            layouter.assign_region(
+                || "private_native_pasta_fp_scalar",
+                |mut region| {
+                    assign_native_pasta_fp_scalar_region(&mut region, &config, &witness, false)
+                },
+            )
+        }
+    }
+
+    /// Config for fixed-window decomposition of a private native Pasta/Fp scalar.
+    #[derive(Clone)]
+    pub struct NativePastaFpFixedWindowDecompositionConfig {
+        scalar: NativePastaFpScalarConfig,
+        digits: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
+        digit_bits: Vec<Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving a private scalar equals little-endian fixed-window digits.
+    ///
+    /// This is the scalar-witness layer needed by production windowed MSM. Each
+    /// digit is range-constrained by `WINDOW_BITS` boolean bits, every digit bit
+    /// is linked to the canonical private `NativePastaFpScalar` bit at the same
+    /// global offset, and every scalar bit above `WINDOWS * WINDOW_BITS` is
+    /// forced to zero.
+    #[derive(Clone)]
+    pub struct NativePastaFpFixedWindowDecomposition<const WINDOWS: usize, const WINDOW_BITS: usize> {
+        /// Private canonical scalar decomposed into fixed-width windows.
+        pub scalar: Box<NativePastaFpScalar>,
+        /// Little-endian window digit values.
+        pub digits: Vec<Scalar>,
+        /// Little-endian bits for each window digit.
+        pub digit_bits: Vec<Vec<Scalar>>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NativePastaFpFixedWindowDecomposition<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                scalar: Box::new(NativePastaFpScalar::default()),
+                digits: vec![Scalar::from(0); WINDOWS],
+                digit_bits: vec![vec![Scalar::from(0); WINDOW_BITS]; WINDOWS],
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NativePastaFpFixedWindowDecomposition<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest fixed-window decomposition witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the window shape is unsupported or if the scalar
+        /// has a non-zero canonical bit above `WINDOWS * WINDOW_BITS`.
+        pub fn try_from_scalar(scalar: Scalar) -> Result<Self, String> {
+            validate_fixed_window_shape::<WINDOWS, WINDOW_BITS>()?;
+            let scalar_limbs = pasta_fp_to_limbs(scalar);
+            let width = WINDOWS * WINDOW_BITS;
+            if (width..PASTA_FP_SCALAR_BITS)
+                .any(|bit_index| scalar_limb_bit(scalar_limbs, bit_index))
+            {
+                return Err("Pasta Fp fixed-window scalar exceeds configured bit width".to_owned());
+            }
+
+            let mut digits = Vec::with_capacity(WINDOWS);
+            let mut digit_bits = Vec::with_capacity(WINDOWS);
+            for window_index in 0..WINDOWS {
+                let mut digit = 0u64;
+                let mut bits = Vec::with_capacity(WINDOW_BITS);
+                for local_bit in 0..WINDOW_BITS {
+                    let global_bit = window_index * WINDOW_BITS + local_bit;
+                    let bit = scalar_limb_bit(scalar_limbs, global_bit);
+                    if bit {
+                        digit |= 1u64 << local_bit;
+                    }
+                    bits.push(Scalar::from(u64::from(bit)));
+                }
+                digits.push(Scalar::from(digit));
+                digit_bits.push(bits);
+            }
+
+            Ok(Self {
+                scalar: Box::new(NativePastaFpScalar::from_scalar(scalar)),
+                digits,
+                digit_bits,
+            })
+        }
+    }
+
+    fn validate_fixed_window_shape<const WINDOWS: usize, const WINDOW_BITS: usize>()
+    -> Result<(), String> {
+        if WINDOWS == 0 {
+            return Err(
+                "Pasta Fp fixed-window decomposition must contain at least one window".to_owned(),
+            );
+        }
+        if !(1..=8).contains(&WINDOW_BITS) {
+            return Err(
+                "Pasta Fp fixed-window decomposition window width must be in 1..=8".to_owned(),
+            );
+        }
+        let width = WINDOWS
+            .checked_mul(WINDOW_BITS)
+            .ok_or_else(|| "Pasta Fp fixed-window decomposition width overflow".to_owned())?;
+        if width > PASTA_FP_SCALAR_BITS {
+            return Err(
+                "Pasta Fp fixed-window decomposition width must not exceed scalar bits".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    fn configure_native_pasta_fp_fixed_window_decomposition<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NativePastaFpFixedWindowDecompositionConfig {
+        validate_fixed_window_shape::<WINDOWS, WINDOW_BITS>()
+            .expect("invalid Pasta Fp fixed-window decomposition shape");
+        let scalar = configure_private_native_pasta_fp_scalar(meta);
+        let digits = (0..WINDOWS)
+            .map(|_| meta.advice_column())
+            .collect::<Vec<_>>();
+        let digit_bits = (0..WINDOWS)
+            .map(|_| {
+                (0..WINDOW_BITS)
+                    .map(|_| meta.advice_column())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let link = meta.selector();
+
+        meta.create_gate("native_pasta_fp_fixed_window_decomposition_link", |meta| {
+            let s = meta.query_selector(link);
+            let mut constraints = Vec::with_capacity(
+                WINDOWS * (WINDOW_BITS * 2 + 1)
+                    + PASTA_FP_SCALAR_BITS.saturating_sub(WINDOWS * WINDOW_BITS)
+                    + 1,
+            );
+            let mut recomposed = Expression::Constant(Scalar::from(0));
+            let mut window_coefficient = Scalar::from(1);
+            let digit_radix = Scalar::from(1u64 << WINDOW_BITS);
+            for window_index in 0..WINDOWS {
+                let digit = meta.query_advice(digits[window_index], Rotation::cur());
+                let mut digit_sum = Expression::Constant(Scalar::from(0));
+                for local_bit in 0..WINDOW_BITS {
+                    let bit =
+                        meta.query_advice(digit_bits[window_index][local_bit], Rotation::cur());
+                    constraints.push(
+                        s.clone()
+                            * bit.clone()
+                            * (bit.clone() - Expression::Constant(Scalar::from(1))),
+                    );
+                    let global_bit = window_index * WINDOW_BITS + local_bit;
+                    let limb_index = global_bit / NON_NATIVE_U64_LIMB_BITS;
+                    let scalar_local_bit = global_bit % NON_NATIVE_U64_LIMB_BITS;
+                    let scalar_bit = meta.query_advice(
+                        scalar.limbs[limb_index].bit,
+                        Rotation(scalar_local_bit as i32),
+                    );
+                    constraints.push(s.clone() * (bit.clone() - scalar_bit));
+                    digit_sum = digit_sum
+                        + bit
+                            * Expression::Constant(Scalar::from(
+                                1u64 << u32::try_from(local_bit).expect("local bit fits"),
+                            ));
+                }
+                constraints.push(s.clone() * (digit.clone() - digit_sum));
+                recomposed = recomposed + Expression::Constant(window_coefficient) * digit;
+                window_coefficient *= digit_radix;
+            }
+
+            let width = WINDOWS * WINDOW_BITS;
+            for bit_index in width..PASTA_FP_SCALAR_BITS {
+                let limb_index = bit_index / NON_NATIVE_U64_LIMB_BITS;
+                let local_bit = bit_index % NON_NATIVE_U64_LIMB_BITS;
+                let high_bit =
+                    meta.query_advice(scalar.limbs[limb_index].bit, Rotation(local_bit as i32));
+                constraints.push(s.clone() * high_bit);
+            }
+            let scalar_value = meta.query_advice(scalar.value, Rotation::cur());
+            constraints.push(s * (scalar_value - recomposed));
+            constraints
+        });
+
+        NativePastaFpFixedWindowDecompositionConfig {
+            scalar,
+            digits,
+            digit_bits,
+            link,
+        }
+    }
+
+    fn assign_native_pasta_fp_fixed_window_decomposition_region<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NativePastaFpFixedWindowDecompositionConfig,
+        witness: &NativePastaFpFixedWindowDecomposition<WINDOWS, WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        assign_native_pasta_fp_scalar_region(
+            region,
+            &config.scalar,
+            witness.scalar.as_ref(),
+            false,
+        )?;
+        for (index, digit) in witness.digits.iter().copied().enumerate() {
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("fixed_window_digit{index}"),
+                config.digits[index],
+                0,
+                || Value::known(digit),
+            )?;
+        }
+        for (window_index, bits) in witness.digit_bits.iter().enumerate() {
+            for (local_bit, bit) in bits.iter().copied().enumerate() {
+                crate::zk::assign_advice_compat(
+                    region,
+                    move || format!("fixed_window_digit{window_index}_bit{local_bit}"),
+                    config.digit_bits[window_index][local_bit],
+                    0,
+                    || Value::known(bit),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NativePastaFpFixedWindowDecomposition<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NativePastaFpFixedWindowDecompositionConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_native_pasta_fp_fixed_window_decomposition::<WINDOWS, WINDOW_BITS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "native_pasta_fp_fixed_window_decomposition",
+                |mut region| {
+                    assign_native_pasta_fp_fixed_window_decomposition_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for one native-field IPA scalar-fold step.
+    #[derive(Clone)]
+    pub struct NativePastaFpIpaScalarFoldConfig {
+        left: NativePastaFpScalarConfig,
+        right: NativePastaFpScalarConfig,
+        challenge: NativePastaFpScalarConfig,
+        challenge_inverse: NativePastaFpScalarConfig,
+        output: NativePastaFpScalarConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `out = left*x^{-1} + right*x`.
+    ///
+    /// This is the native-field half of an IPA reduction round for the public
+    /// `b` vector. The left, right, and folded output scalars are public, while
+    /// `x` and `x^{-1}` stay private canonical Pasta/Fp scalars and are
+    /// constrained as inverses.
+    #[derive(Clone)]
+    pub struct NativePastaFpIpaScalarFold {
+        /// Public left scalar.
+        pub left: NativePastaFpScalar,
+        /// Public right scalar.
+        pub right: NativePastaFpScalar,
+        /// Private challenge `x`.
+        pub challenge: NativePastaFpScalar,
+        /// Private inverse challenge `x^{-1}`.
+        pub challenge_inverse: NativePastaFpScalar,
+        /// Public folded output scalar.
+        pub output: NativePastaFpScalar,
+    }
+
+    impl Default for NativePastaFpIpaScalarFold {
+        fn default() -> Self {
+            Self {
+                left: NativePastaFpScalar::default(),
+                right: NativePastaFpScalar::default(),
+                challenge: NativePastaFpScalar::default(),
+                challenge_inverse: NativePastaFpScalar::default(),
+                output: NativePastaFpScalar::default(),
+            }
+        }
+    }
+
+    impl NativePastaFpIpaScalarFold {
+        /// Build an honest IPA scalar-fold witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `challenge_inverse` is not the inverse of
+        /// `challenge` or if `output != left*challenge_inverse + right*challenge`.
+        pub fn try_from_scalars(
+            left: Scalar,
+            right: Scalar,
+            challenge: Scalar,
+            challenge_inverse: Scalar,
+            output: Scalar,
+        ) -> Result<Self, String> {
+            if challenge * challenge_inverse != Scalar::from(1) {
+                return Err("IPA scalar fold challenge inverse mismatch".to_owned());
+            }
+            let expected = left * challenge_inverse + right * challenge;
+            if output != expected {
+                return Err("IPA scalar fold output mismatch".to_owned());
+            }
+            Ok(Self {
+                left: NativePastaFpScalar::from_scalar(left),
+                right: NativePastaFpScalar::from_scalar(right),
+                challenge: NativePastaFpScalar::from_scalar(challenge),
+                challenge_inverse: NativePastaFpScalar::from_scalar(challenge_inverse),
+                output: NativePastaFpScalar::from_scalar(output),
+            })
+        }
+    }
+
+    fn configure_native_pasta_fp_ipa_scalar_fold(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NativePastaFpIpaScalarFoldConfig {
+        let left = configure_native_pasta_fp_scalar(meta);
+        let right = configure_native_pasta_fp_scalar(meta);
+        let challenge = configure_private_native_pasta_fp_scalar(meta);
+        let challenge_inverse = configure_private_native_pasta_fp_scalar(meta);
+        let output = configure_native_pasta_fp_scalar(meta);
+        let link = meta.selector();
+
+        meta.create_gate("native_pasta_fp_ipa_scalar_fold_link", |meta| {
+            let s = meta.query_selector(link);
+            let left_value = meta.query_advice(left.value, Rotation::cur());
+            let right_value = meta.query_advice(right.value, Rotation::cur());
+            let challenge_value = meta.query_advice(challenge.value, Rotation::cur());
+            let challenge_inverse_value =
+                meta.query_advice(challenge_inverse.value, Rotation::cur());
+            let output_value = meta.query_advice(output.value, Rotation::cur());
+            let one = Expression::Constant(Scalar::from(1));
+            vec![
+                s.clone() * (challenge_value.clone() * challenge_inverse_value.clone() - one),
+                s * (left_value * challenge_inverse_value + right_value * challenge_value
+                    - output_value),
+            ]
+        });
+
+        NativePastaFpIpaScalarFoldConfig {
+            left,
+            right,
+            challenge,
+            challenge_inverse,
+            output,
+            link,
+        }
+    }
+
+    impl Circuit<Scalar> for NativePastaFpIpaScalarFold {
+        type Config = NativePastaFpIpaScalarFoldConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_native_pasta_fp_ipa_scalar_fold(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "native_pasta_fp_ipa_scalar_fold",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.left,
+                        &self.left,
+                        true,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.right,
+                        &self.right,
+                        true,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge,
+                        &self.challenge,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge_inverse,
+                        &self.challenge_inverse,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.output,
+                        &self.output,
+                        true,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for a native-field IPA vector-fold step.
+    #[derive(Clone)]
+    pub struct NativePastaFpIpaScalarFoldVectorConfig {
+        lefts: Vec<NativePastaFpScalarConfig>,
+        rights: Vec<NativePastaFpScalarConfig>,
+        challenge: NativePastaFpScalarConfig,
+        challenge_inverse: NativePastaFpScalarConfig,
+        outputs: Vec<NativePastaFpScalarConfig>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `out_i = left_i*x^{-1} + right_i*x` for a segment.
+    ///
+    /// This batches the public `b`-vector folding constraints for one IPA round
+    /// behind a single private challenge/inverse pair.
+    #[derive(Clone)]
+    pub struct NativePastaFpIpaScalarFoldVector<const PAIRS: usize> {
+        /// Public left half of the vector segment.
+        pub lefts: Vec<NativePastaFpScalar>,
+        /// Public right half of the vector segment.
+        pub rights: Vec<NativePastaFpScalar>,
+        /// Private challenge `x`.
+        pub challenge: NativePastaFpScalar,
+        /// Private inverse challenge `x^{-1}`.
+        pub challenge_inverse: NativePastaFpScalar,
+        /// Public folded vector segment.
+        pub outputs: Vec<NativePastaFpScalar>,
+    }
+
+    impl<const PAIRS: usize> Default for NativePastaFpIpaScalarFoldVector<PAIRS> {
+        fn default() -> Self {
+            Self {
+                lefts: vec![NativePastaFpScalar::default(); PAIRS],
+                rights: vec![NativePastaFpScalar::default(); PAIRS],
+                challenge: NativePastaFpScalar::default(),
+                challenge_inverse: NativePastaFpScalar::default(),
+                outputs: vec![NativePastaFpScalar::default(); PAIRS],
+            }
+        }
+    }
+
+    impl<const PAIRS: usize> NativePastaFpIpaScalarFoldVector<PAIRS> {
+        /// Build an honest IPA vector-fold witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when no pairs are requested, the challenge inverse
+        /// is invalid, or any folded output is inconsistent with the inputs.
+        pub fn try_from_scalars(
+            lefts: [Scalar; PAIRS],
+            rights: [Scalar; PAIRS],
+            challenge: Scalar,
+            challenge_inverse: Scalar,
+            outputs: [Scalar; PAIRS],
+        ) -> Result<Self, String> {
+            if PAIRS == 0 {
+                return Err("IPA scalar fold vector must contain at least one pair".to_owned());
+            }
+            if challenge * challenge_inverse != Scalar::from(1) {
+                return Err("IPA scalar fold vector challenge inverse mismatch".to_owned());
+            }
+            for index in 0..PAIRS {
+                let expected = lefts[index] * challenge_inverse + rights[index] * challenge;
+                if outputs[index] != expected {
+                    return Err(format!(
+                        "IPA scalar fold vector output mismatch at index {index}"
+                    ));
+                }
+            }
+            Ok(Self {
+                lefts: lefts
+                    .iter()
+                    .copied()
+                    .map(NativePastaFpScalar::from_scalar)
+                    .collect(),
+                rights: rights
+                    .iter()
+                    .copied()
+                    .map(NativePastaFpScalar::from_scalar)
+                    .collect(),
+                challenge: NativePastaFpScalar::from_scalar(challenge),
+                challenge_inverse: NativePastaFpScalar::from_scalar(challenge_inverse),
+                outputs: outputs
+                    .iter()
+                    .copied()
+                    .map(NativePastaFpScalar::from_scalar)
+                    .collect(),
+            })
+        }
+    }
+
+    fn configure_native_pasta_fp_ipa_scalar_fold_vector<const PAIRS: usize>(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NativePastaFpIpaScalarFoldVectorConfig {
+        let lefts = (0..PAIRS)
+            .map(|_| configure_native_pasta_fp_scalar(meta))
+            .collect::<Vec<_>>();
+        let rights = (0..PAIRS)
+            .map(|_| configure_native_pasta_fp_scalar(meta))
+            .collect::<Vec<_>>();
+        let challenge = configure_private_native_pasta_fp_scalar(meta);
+        let challenge_inverse = configure_private_native_pasta_fp_scalar(meta);
+        let outputs = (0..PAIRS)
+            .map(|_| configure_native_pasta_fp_scalar(meta))
+            .collect::<Vec<_>>();
+        let link = meta.selector();
+
+        meta.create_gate("native_pasta_fp_ipa_scalar_fold_vector_link", |meta| {
+            let s = meta.query_selector(link);
+            let challenge_value = meta.query_advice(challenge.value, Rotation::cur());
+            let challenge_inverse_value =
+                meta.query_advice(challenge_inverse.value, Rotation::cur());
+            let mut constraints = Vec::with_capacity(PAIRS + 1);
+            constraints.push(
+                s.clone()
+                    * (challenge_value.clone() * challenge_inverse_value.clone()
+                        - Expression::Constant(Scalar::from(1))),
+            );
+            for ((left, right), output) in lefts.iter().zip(rights.iter()).zip(outputs.iter()) {
+                let left_value = meta.query_advice(left.value, Rotation::cur());
+                let right_value = meta.query_advice(right.value, Rotation::cur());
+                let output_value = meta.query_advice(output.value, Rotation::cur());
+                constraints.push(
+                    s.clone()
+                        * (left_value * challenge_inverse_value.clone()
+                            + right_value * challenge_value.clone()
+                            - output_value),
+                );
+            }
+            constraints
+        });
+
+        NativePastaFpIpaScalarFoldVectorConfig {
+            lefts,
+            rights,
+            challenge,
+            challenge_inverse,
+            outputs,
+            link,
+        }
+    }
+
+    impl<const PAIRS: usize> Circuit<Scalar> for NativePastaFpIpaScalarFoldVector<PAIRS> {
+        type Config = NativePastaFpIpaScalarFoldVectorConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_native_pasta_fp_ipa_scalar_fold_vector::<PAIRS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "native_pasta_fp_ipa_scalar_fold_vector",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    for (witness, config) in self.lefts.iter().zip(config.lefts.iter()) {
+                        assign_native_pasta_fp_scalar_region(&mut region, config, witness, true)?;
+                    }
+                    for (witness, config) in self.rights.iter().zip(config.rights.iter()) {
+                        assign_native_pasta_fp_scalar_region(&mut region, config, witness, true)?;
+                    }
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge,
+                        &self.challenge,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge_inverse,
+                        &self.challenge_inverse,
+                        false,
+                    )?;
+                    for (witness, config) in self.outputs.iter().zip(config.outputs.iter()) {
+                        assign_native_pasta_fp_scalar_region(&mut region, config, witness, true)?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    fn ipa_power_of_two_rounds(len: usize) -> Option<usize> {
+        (len > 1 && len.is_power_of_two()).then_some(len.trailing_zeros() as usize)
+    }
+
+    /// Config for a full native-field IPA public `b`-vector reduction.
+    #[derive(Clone)]
+    pub struct NativePastaFpIpaBVectorReductionConfig {
+        vectors: Vec<Vec<NativePastaFpScalarConfig>>,
+        challenges: Vec<NativePastaFpScalarConfig>,
+        challenge_inverses: Vec<NativePastaFpScalarConfig>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper folding a power-of-two public IPA `b` vector to one scalar.
+    ///
+    /// The initial `b` vector, final folded scalar, and transcript-derived
+    /// challenge/inverse scalars are public. Intermediate vectors stay private
+    /// and canonical while each round enforces
+    /// `b'_i = b_i*x^{-1} + b_{i+half}*x`.
+    #[derive(Clone)]
+    pub struct NativePastaFpIpaBVectorReduction<const LEN: usize> {
+        /// Initial, intermediate, and final folded vector layers.
+        pub vectors: Vec<Vec<NativePastaFpScalar>>,
+        /// Per-round transcript challenge `x`.
+        pub challenges: Vec<NativePastaFpScalar>,
+        /// Per-round transcript inverse challenge `x^{-1}`.
+        pub challenge_inverses: Vec<NativePastaFpScalar>,
+    }
+
+    impl<const LEN: usize> Default for NativePastaFpIpaBVectorReduction<LEN> {
+        fn default() -> Self {
+            let rounds = ipa_power_of_two_rounds(LEN).unwrap_or(0);
+            let mut layer_len = LEN;
+            let mut vectors = Vec::with_capacity(rounds + 1);
+            for _ in 0..=rounds {
+                vectors.push(vec![NativePastaFpScalar::default(); layer_len]);
+                layer_len = layer_len.saturating_div(2);
+            }
+            Self {
+                vectors,
+                challenges: vec![NativePastaFpScalar::default(); rounds],
+                challenge_inverses: vec![NativePastaFpScalar::default(); rounds],
+            }
+        }
+    }
+
+    impl<const LEN: usize> NativePastaFpIpaBVectorReduction<LEN> {
+        /// Build an honest multi-round IPA public `b`-vector reduction witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when `LEN` is not a power of two greater than one, the
+        /// challenge vector lengths are wrong, any challenge inverse is invalid,
+        /// or the supplied final folded scalar does not match the reduction.
+        pub fn try_from_scalars(
+            initial: [Scalar; LEN],
+            challenges: Vec<Scalar>,
+            challenge_inverses: Vec<Scalar>,
+            final_scalar: Scalar,
+        ) -> Result<Self, String> {
+            let rounds = ipa_power_of_two_rounds(LEN).ok_or_else(|| {
+                "IPA b-vector reduction length must be a power of two greater than one".to_owned()
+            })?;
+            if challenges.len() != rounds {
+                return Err(format!(
+                    "IPA b-vector reduction challenge count mismatch: expected {rounds}, found {}",
+                    challenges.len()
+                ));
+            }
+            if challenge_inverses.len() != rounds {
+                return Err(format!(
+                    "IPA b-vector reduction inverse count mismatch: expected {rounds}, found {}",
+                    challenge_inverses.len()
+                ));
+            }
+
+            let mut scalar_layers = Vec::with_capacity(rounds + 1);
+            scalar_layers.push(initial.to_vec());
+            for round_index in 0..rounds {
+                let challenge = challenges[round_index];
+                let challenge_inverse = challenge_inverses[round_index];
+                if challenge * challenge_inverse != Scalar::from(1) {
+                    return Err(format!(
+                        "IPA b-vector reduction challenge inverse mismatch at round {round_index}"
+                    ));
+                }
+                let current = scalar_layers
+                    .last()
+                    .expect("initial b-vector layer is present");
+                let half = current.len() / 2;
+                let mut next = Vec::with_capacity(half);
+                for index in 0..half {
+                    next.push(
+                        current[index] * challenge_inverse + current[half + index] * challenge,
+                    );
+                }
+                scalar_layers.push(next);
+            }
+
+            if scalar_layers[rounds][0] != final_scalar {
+                return Err("IPA b-vector reduction final scalar mismatch".to_owned());
+            }
+
+            Ok(Self {
+                vectors: scalar_layers
+                    .into_iter()
+                    .map(|layer| {
+                        layer
+                            .into_iter()
+                            .map(NativePastaFpScalar::from_scalar)
+                            .collect()
+                    })
+                    .collect(),
+                challenges: challenges
+                    .into_iter()
+                    .map(NativePastaFpScalar::from_scalar)
+                    .collect(),
+                challenge_inverses: challenge_inverses
+                    .into_iter()
+                    .map(NativePastaFpScalar::from_scalar)
+                    .collect(),
+            })
+        }
+    }
+
+    fn configure_native_pasta_fp_ipa_b_vector_reduction<const LEN: usize>(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NativePastaFpIpaBVectorReductionConfig {
+        let rounds = ipa_power_of_two_rounds(LEN)
+            .expect("IPA b-vector reduction length must be a power of two greater than one");
+        let mut layer_len = LEN;
+        let mut vectors = Vec::with_capacity(rounds + 1);
+        for layer_index in 0..=rounds {
+            let is_public_layer = layer_index == 0 || layer_index == rounds;
+            vectors.push(
+                (0..layer_len)
+                    .map(|_| {
+                        configure_native_pasta_fp_scalar_with_public_inputs(meta, is_public_layer)
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            layer_len /= 2;
+        }
+        let challenges = (0..rounds)
+            .map(|_| configure_native_pasta_fp_scalar_with_public_inputs(meta, true))
+            .collect::<Vec<_>>();
+        let challenge_inverses = (0..rounds)
+            .map(|_| configure_native_pasta_fp_scalar_with_public_inputs(meta, true))
+            .collect::<Vec<_>>();
+        let link = meta.selector();
+
+        meta.create_gate("native_pasta_fp_ipa_b_vector_reduction_link", |meta| {
+            let s = meta.query_selector(link);
+            let mut constraints = Vec::with_capacity(LEN + rounds);
+            for round_index in 0..rounds {
+                let challenge = meta.query_advice(challenges[round_index].value, Rotation::cur());
+                let challenge_inverse =
+                    meta.query_advice(challenge_inverses[round_index].value, Rotation::cur());
+                constraints.push(
+                    s.clone()
+                        * (challenge.clone() * challenge_inverse.clone()
+                            - Expression::Constant(Scalar::from(1))),
+                );
+                let half = vectors[round_index].len() / 2;
+                for index in 0..half {
+                    let left =
+                        meta.query_advice(vectors[round_index][index].value, Rotation::cur());
+                    let right = meta
+                        .query_advice(vectors[round_index][half + index].value, Rotation::cur());
+                    let output =
+                        meta.query_advice(vectors[round_index + 1][index].value, Rotation::cur());
+                    constraints.push(
+                        s.clone()
+                            * (left * challenge_inverse.clone() + right * challenge.clone()
+                                - output),
+                    );
+                }
+            }
+            constraints
+        });
+
+        NativePastaFpIpaBVectorReductionConfig {
+            vectors,
+            challenges,
+            challenge_inverses,
+            link,
+        }
+    }
+
+    impl<const LEN: usize> Circuit<Scalar> for NativePastaFpIpaBVectorReduction<LEN> {
+        type Config = NativePastaFpIpaBVectorReductionConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_native_pasta_fp_ipa_b_vector_reduction::<LEN>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "native_pasta_fp_ipa_b_vector_reduction",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    let final_layer_index = config.vectors.len().saturating_sub(1);
+                    for (layer_index, (witness_layer, config_layer)) in
+                        self.vectors.iter().zip(config.vectors.iter()).enumerate()
+                    {
+                        let expose_public = layer_index == 0 || layer_index == final_layer_index;
+                        for (witness, config) in witness_layer.iter().zip(config_layer.iter()) {
+                            assign_native_pasta_fp_scalar_region(
+                                &mut region,
+                                config,
+                                witness,
+                                expose_public,
+                            )?;
+                        }
+                    }
+                    for (witness, config) in self.challenges.iter().zip(config.challenges.iter()) {
+                        assign_native_pasta_fp_scalar_region(&mut region, config, witness, true)?;
+                    }
+                    for (witness, config) in self
+                        .challenge_inverses
+                        .iter()
+                        .zip(config.challenge_inverses.iter())
+                    {
+                        assign_native_pasta_fp_scalar_region(&mut region, config, witness, true)?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    fn canonical_slack_witness(
+        limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        max_limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> (
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+    ) {
+        let mut slack = [0u64; NON_NATIVE_PASTA_FIELD_LIMBS];
+        let mut borrows = [0u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1];
+        let mut borrow = 0u128;
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            borrows[index] = u64::try_from(borrow).expect("borrow is binary");
+            let bound = u128::from(max_limbs[index]);
+            let subtrahend = u128::from(limbs[index]) + borrow;
+            if bound >= subtrahend {
+                slack[index] = u64::try_from(bound - subtrahend).expect("slack fits");
+                borrow = 0;
+            } else {
+                slack[index] =
+                    u64::try_from((1u128 << 64) + bound - subtrahend).expect("slack fits");
+                borrow = 1;
+            }
+        }
+        borrows[NON_NATIVE_PASTA_FIELD_LIMBS] = u64::try_from(borrow).expect("borrow is binary");
+        (slack, borrows)
+    }
+
+    fn vesta_fq_slack_witness(
+        limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> (
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+    ) {
+        canonical_slack_witness(limbs, VESTA_FQ_MAX_LIMBS)
+    }
+
+    fn pasta_fp_slack_witness(
+        limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> (
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+    ) {
+        canonical_slack_witness(limbs, PASTA_FP_MAX_LIMBS)
+    }
+
+    fn u64_range_witnesses(
+        limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> (
+        [[Scalar; NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_PASTA_FIELD_LIMBS],
+        [[Scalar; NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) {
+        let bits = limbs.map(u64_limb_bits);
+        let accumulators = std::array::from_fn(|index| {
+            NonNativeU64LimbRange::accumulators_for_bits(Scalar::from(limbs[index]), bits[index])
+        });
+        (bits, accumulators)
+    }
+
+    fn cmp_limbs_le(
+        lhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        rhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> core::cmp::Ordering {
+        for index in (0..NON_NATIVE_PASTA_FIELD_LIMBS).rev() {
+            match lhs[index].cmp(&rhs[index]) {
+                core::cmp::Ordering::Equal => {}
+                ordering => return ordering,
+            }
+        }
+        core::cmp::Ordering::Equal
+    }
+
+    fn sub_limbs_le(
+        lhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        rhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> (
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+    ) {
+        let mut out = [0u64; NON_NATIVE_PASTA_FIELD_LIMBS];
+        let mut borrows = [0u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1];
+        let mut borrow = 0u128;
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            borrows[index] = u64::try_from(borrow).expect("borrow is binary");
+            let minuend = u128::from(lhs[index]);
+            let subtrahend = u128::from(rhs[index]) + borrow;
+            if minuend >= subtrahend {
+                out[index] = u64::try_from(minuend - subtrahend).expect("limb fits");
+                borrow = 0;
+            } else {
+                out[index] =
+                    u64::try_from((1u128 << 64) + minuend - subtrahend).expect("limb fits");
+                borrow = 1;
+            }
+        }
+        borrows[NON_NATIVE_PASTA_FIELD_LIMBS] = u64::try_from(borrow).expect("borrow is binary");
+        (out, borrows)
+    }
+
+    fn add_limbs_le(
+        lhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        rhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> (
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        [u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+    ) {
+        let mut out = [0u64; NON_NATIVE_PASTA_FIELD_LIMBS];
+        let mut carries = [0u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1];
+        let mut carry = 0u128;
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            carries[index] = u64::try_from(carry).expect("carry is binary");
+            let sum = u128::from(lhs[index]) + u128::from(rhs[index]) + carry;
+            out[index] = sum as u64;
+            carry = sum >> 64;
+        }
+        carries[NON_NATIVE_PASTA_FIELD_LIMBS] = u64::try_from(carry).expect("carry is binary");
+        (out, carries)
+    }
+
+    fn split_u128_limbs(value: u128) -> [u64; NON_NATIVE_U128_LIMBS] {
+        [
+            value as u64,
+            u64::try_from(value >> 64).expect("high limb fits"),
+        ]
+    }
+
+    fn scalar_from_u128(value: u128) -> Scalar {
+        let limbs = split_u128_limbs(value);
+        Scalar::from(limbs[0]) + scalar_two_pow_64() * Scalar::from(limbs[1])
+    }
+
+    fn u64_pair_range_witnesses(
+        limbs: [u64; NON_NATIVE_U128_LIMBS],
+    ) -> (
+        [[Scalar; NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_U128_LIMBS],
+        [[Scalar; NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_U128_LIMBS],
+    ) {
+        let bits = limbs.map(u64_limb_bits);
+        let accumulators = std::array::from_fn(|index| {
+            NonNativeU64LimbRange::accumulators_for_bits(Scalar::from(limbs[index]), bits[index])
+        });
+        (bits, accumulators)
+    }
+
+    fn u64_product_range_witnesses(
+        limbs: [u64; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS],
+    ) -> (
+        [[Scalar; NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS],
+        [[Scalar; NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS],
+    ) {
+        let bits = limbs.map(u64_limb_bits);
+        let accumulators = std::array::from_fn(|index| {
+            NonNativeU64LimbRange::accumulators_for_bits(Scalar::from(limbs[index]), bits[index])
+        });
+        (bits, accumulators)
+    }
+
+    fn bigint_from_limbs<const LIMBS: usize>(
+        limbs: [u64; LIMBS],
+    ) -> Result<iroha_primitives::bigint::BigInt, String> {
+        let mut bytes = Vec::with_capacity(LIMBS * 8);
+        for limb in limbs {
+            bytes.extend_from_slice(&limb.to_le_bytes());
+        }
+        iroha_primitives::bigint::BigInt::from_twos_bytes(&bytes)
+            .map_err(|err| format!("failed to build bounded bigint from limbs: {err}"))
+    }
+
+    fn bigint_to_limbs<const LIMBS: usize>(
+        value: &iroha_primitives::bigint::BigInt,
+    ) -> Result<[u64; LIMBS], String> {
+        if value.is_negative() {
+            return Err("bounded bigint must be non-negative".to_owned());
+        }
+        let bytes = value.to_twos_bytes();
+        let max = LIMBS * 8;
+        if bytes.len() > max && bytes[max..].iter().any(|byte| *byte != 0) {
+            return Err("bounded bigint does not fit requested limb width".to_owned());
+        }
+        let mut padded = vec![0u8; max];
+        let copy_len = bytes.len().min(max);
+        padded[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        Ok(std::array::from_fn(|index| {
+            let mut limb = [0u8; 8];
+            let start = index * 8;
+            limb.copy_from_slice(&padded[start..start + 8]);
+            u64::from_le_bytes(limb)
+        }))
+    }
+
+    fn bigint_to_u128(value: &iroha_primitives::bigint::BigInt) -> Result<u128, String> {
+        if value.is_negative() {
+            return Err("bounded bigint carry must be non-negative".to_owned());
+        }
+        let bytes = value.to_twos_bytes();
+        if bytes.len() > 16 && bytes[16..].iter().any(|byte| *byte != 0) {
+            return Err("bounded bigint carry does not fit u128".to_owned());
+        }
+        let mut padded = [0u8; 16];
+        let copy_len = bytes.len().min(16);
+        padded[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        Ok(u128::from_le_bytes(padded))
+    }
+
+    fn bigint_radix() -> iroha_primitives::bigint::BigInt {
+        iroha_primitives::bigint::BigInt::from(1u128 << 64)
+    }
+
+    fn checked_bigint_add(
+        lhs: &iroha_primitives::bigint::BigInt,
+        rhs: &iroha_primitives::bigint::BigInt,
+    ) -> Result<iroha_primitives::bigint::BigInt, String> {
+        lhs.checked_add(rhs)
+            .map_err(|err| format!("bounded bigint addition failed: {err}"))
+    }
+
+    fn checked_bigint_sub(
+        lhs: &iroha_primitives::bigint::BigInt,
+        rhs: &iroha_primitives::bigint::BigInt,
+    ) -> Result<iroha_primitives::bigint::BigInt, String> {
+        lhs.checked_sub(rhs)
+            .map_err(|err| format!("bounded bigint subtraction failed: {err}"))
+    }
+
+    fn checked_bigint_mul(
+        lhs: &iroha_primitives::bigint::BigInt,
+        rhs: &iroha_primitives::bigint::BigInt,
+    ) -> Result<iroha_primitives::bigint::BigInt, String> {
+        lhs.checked_mul(rhs)
+            .map_err(|err| format!("bounded bigint multiplication failed: {err}"))
+    }
+
+    fn carry_from_limb_relation(
+        total: iroha_primitives::bigint::BigInt,
+        limb: u64,
+    ) -> Result<u128, String> {
+        let numerator = checked_bigint_sub(&total, &iroha_primitives::bigint::BigInt::from(limb))?;
+        let (quotient, remainder) = numerator
+            .checked_div_rem(&bigint_radix())
+            .map_err(|err| format!("bounded bigint carry division failed: {err}"))?;
+        if !remainder.is_zero() {
+            return Err("limb relation leaves non-zero carry remainder".to_owned());
+        }
+        bigint_to_u128(&quotient)
+    }
+
+    fn mul_limbs_le(
+        lhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        rhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> Result<[u64; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS], String> {
+        let product = checked_bigint_mul(&bigint_from_limbs(lhs)?, &bigint_from_limbs(rhs)?)?;
+        bigint_to_limbs(&product)
+    }
+
+    fn add_mod_vesta_fq_limbs(
+        lhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        rhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> Result<[u64; NON_NATIVE_PASTA_FIELD_LIMBS], String> {
+        let (sum, add_carries) = add_limbs_le(lhs, rhs);
+        if add_carries[NON_NATIVE_PASTA_FIELD_LIMBS] != 0 {
+            return Err("Vesta Fq addition exceeded the 256-bit corridor".to_owned());
+        }
+        let reduction = matches!(
+            cmp_limbs_le(sum, VESTA_FQ_MODULUS_LIMBS),
+            core::cmp::Ordering::Equal | core::cmp::Ordering::Greater
+        );
+        if reduction {
+            let (reduced, borrows) = sub_limbs_le(sum, VESTA_FQ_MODULUS_LIMBS);
+            if borrows[NON_NATIVE_PASTA_FIELD_LIMBS] != 0 {
+                return Err("Vesta Fq reduction underflowed".to_owned());
+            }
+            Ok(reduced)
+        } else {
+            Ok(sum)
+        }
+    }
+
+    fn mul_mod_vesta_fq_limbs(
+        lhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        rhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> Result<[u64; NON_NATIVE_PASTA_FIELD_LIMBS], String> {
+        let product = checked_bigint_mul(&bigint_from_limbs(lhs)?, &bigint_from_limbs(rhs)?)?;
+        let (_, remainder) = quotient_and_remainder_limbs(&product)?;
+        Ok(remainder)
+    }
+
+    fn vesta_fq_from_limbs(
+        limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+    ) -> Result<halo2_proofs::halo2curves::pasta::Fq, String> {
+        NonNativeVestaFqCanonicalRange::try_from_limbs(limbs)?;
+        let mut repr =
+            <halo2_proofs::halo2curves::pasta::Fq as halo2_proofs::halo2curves::ff::PrimeField>::Repr::default();
+        for (index, limb) in limbs.iter().enumerate() {
+            let start = index * 8;
+            repr.as_mut()[start..start + 8].copy_from_slice(&limb.to_le_bytes());
+        }
+        Option::from(
+            <halo2_proofs::halo2curves::pasta::Fq as halo2_proofs::halo2curves::ff::PrimeField>::from_repr(repr),
+        )
+        .ok_or_else(|| "Vesta Fq limbs failed canonical field decoding".to_owned())
+    }
+
+    fn vesta_fq_to_limbs(
+        value: halo2_proofs::halo2curves::pasta::Fq,
+    ) -> [u64; NON_NATIVE_PASTA_FIELD_LIMBS] {
+        let repr =
+            <halo2_proofs::halo2curves::pasta::Fq as halo2_proofs::halo2curves::ff::PrimeField>::to_repr(&value);
+        let bytes = repr.as_ref();
+        std::array::from_fn(|index| {
+            let start = index * 8;
+            u64::from_le_bytes(bytes[start..start + 8].try_into().expect("Fq limb bytes"))
+        })
+    }
+
+    fn pasta_fp_from_limbs(limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS]) -> Result<Scalar, String> {
+        let mut repr = <Scalar as halo2_proofs::halo2curves::ff::PrimeField>::Repr::default();
+        for (index, limb) in limbs.iter().enumerate() {
+            let start = index * 8;
+            repr.as_mut()[start..start + 8].copy_from_slice(&limb.to_le_bytes());
+        }
+        Option::from(<Scalar as halo2_proofs::halo2curves::ff::PrimeField>::from_repr(repr))
+            .ok_or_else(|| "Pasta Fp limbs failed canonical field decoding".to_owned())
+    }
+
+    fn pasta_fp_to_limbs(value: Scalar) -> [u64; NON_NATIVE_PASTA_FIELD_LIMBS] {
+        let repr = <Scalar as halo2_proofs::halo2curves::ff::PrimeField>::to_repr(&value);
+        let bytes = repr.as_ref();
+        std::array::from_fn(|index| {
+            let start = index * 8;
+            u64::from_le_bytes(bytes[start..start + 8].try_into().expect("Fp limb bytes"))
+        })
+    }
+
+    fn vesta_affine_from_limbs(point: VestaPointEncoding) -> Result<VestaAffine, String> {
+        if point.2 {
+            if point.0 != [0; NON_NATIVE_PASTA_FIELD_LIMBS]
+                || point.1 != [0; NON_NATIVE_PASTA_FIELD_LIMBS]
+            {
+                return Err("Vesta identity must use canonical zero coordinates".to_owned());
+            }
+            return Ok(VestaAffine::identity());
+        }
+        let x = vesta_fq_from_limbs(point.0)?;
+        let y = vesta_fq_from_limbs(point.1)?;
+        Option::from(VestaAffine::from_xy(x, y))
+            .ok_or_else(|| "Vesta affine coordinates are not on curve".to_owned())
+    }
+
+    fn vesta_affine_to_limbs(point: VestaAffine) -> VestaPointEncoding {
+        let Some(coordinates) = point.coordinates().into_option() else {
+            return (
+                [0; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [0; NON_NATIVE_PASTA_FIELD_LIMBS],
+                true,
+            );
+        };
+        (
+            vesta_fq_to_limbs(*coordinates.x()),
+            vesta_fq_to_limbs(*coordinates.y()),
+            false,
+        )
+    }
+
+    fn quotient_and_remainder_limbs(
+        product: &iroha_primitives::bigint::BigInt,
+    ) -> Result<
+        (
+            [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        ),
+        String,
+    > {
+        let modulus = bigint_from_limbs(VESTA_FQ_MODULUS_LIMBS)?;
+        let (quotient, remainder) = product
+            .checked_div_rem(&modulus)
+            .map_err(|err| format!("bounded bigint modular division failed: {err}"))?;
+        Ok((bigint_to_limbs(&quotient)?, bigint_to_limbs(&remainder)?))
+    }
+
+    fn product_carry_witness(
+        lhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        rhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        product: [u64; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS],
+    ) -> Result<[u128; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS + 1], String> {
+        let mut carries = [0u128; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS + 1];
+        for index in 0..NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS {
+            let mut total = iroha_primitives::bigint::BigInt::from(carries[index]);
+            for lhs_index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                if lhs_index > index {
+                    continue;
+                }
+                let rhs_index = index - lhs_index;
+                if rhs_index >= NON_NATIVE_PASTA_FIELD_LIMBS {
+                    continue;
+                }
+                let term = checked_bigint_mul(
+                    &iroha_primitives::bigint::BigInt::from(lhs[lhs_index]),
+                    &iroha_primitives::bigint::BigInt::from(rhs[rhs_index]),
+                )?;
+                total = checked_bigint_add(&total, &term)?;
+            }
+            carries[index + 1] = carry_from_limb_relation(total, product[index])?;
+        }
+        if carries[NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS] != 0 {
+            return Err("product carry chain did not close".to_owned());
+        }
+        Ok(carries)
+    }
+
+    fn reduction_carry_witness(
+        out: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        quotient: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        product: [u64; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS],
+    ) -> Result<[u128; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS + 1], String> {
+        let mut carries = [0u128; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS + 1];
+        for index in 0..NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS {
+            let mut total = iroha_primitives::bigint::BigInt::from(carries[index]);
+            if index < NON_NATIVE_PASTA_FIELD_LIMBS {
+                total = checked_bigint_add(
+                    &total,
+                    &iroha_primitives::bigint::BigInt::from(out[index]),
+                )?;
+            }
+            for modulus_index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                if modulus_index > index {
+                    continue;
+                }
+                let quotient_index = index - modulus_index;
+                if quotient_index >= NON_NATIVE_PASTA_FIELD_LIMBS {
+                    continue;
+                }
+                let term = checked_bigint_mul(
+                    &iroha_primitives::bigint::BigInt::from(VESTA_FQ_MODULUS_LIMBS[modulus_index]),
+                    &iroha_primitives::bigint::BigInt::from(quotient[quotient_index]),
+                )?;
+                total = checked_bigint_add(&total, &term)?;
+            }
+            carries[index + 1] = carry_from_limb_relation(total, product[index])?;
+        }
+        if carries[NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS] != 0 {
+            return Err("reduction carry chain did not close".to_owned());
+        }
+        Ok(carries)
+    }
+
+    /// Config for canonical Vesta base-field element range proofs.
+    #[derive(Clone)]
+    pub struct NonNativeVestaFqCanonicalRangeConfig {
+        limbs: [NonNativeU64LimbRangeConfig; NON_NATIVE_PASTA_FIELD_LIMBS],
+        slack_limbs: [NonNativeU64LimbRangeConfig; NON_NATIVE_PASTA_FIELD_LIMBS],
+        borrows: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+            NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+        public: Option<NonNativeVestaFqCanonicalPublicConfig>,
+        subtract: Selector,
+    }
+
+    #[derive(Clone)]
+    struct NonNativeVestaFqCanonicalPublicConfig {
+        expose: Selector,
+    }
+
+    /// Circuit wrapper proving four non-native limbs encode a canonical Vesta Fq element.
+    #[derive(Clone)]
+    pub struct NonNativeVestaFqCanonicalRange {
+        /// Public little-endian `u64` limbs of the candidate Vesta base-field element.
+        pub limbs: [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Little-endian bit witnesses for each public limb.
+        pub limb_bits: [[Scalar; NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Running range accumulators for each public limb.
+        pub limb_accumulators:
+            [[Scalar; NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Private slack limbs for `(VestaFq::MODULUS - 1) - limbs`.
+        pub slack_limbs: [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Little-endian bit witnesses for each slack limb.
+        pub slack_bits: [[Scalar; NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Running range accumulators for each slack limb.
+        pub slack_accumulators:
+            [[Scalar; NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Borrow chain for the private slack subtraction. First and last entries must be zero.
+        pub borrow_bits: [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+    }
+
+    impl Default for NonNativeVestaFqCanonicalRange {
+        fn default() -> Self {
+            let zero_bits =
+                [[Scalar::from(0); NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_PASTA_FIELD_LIMBS];
+            let zero_accumulators =
+                [[Scalar::from(0); NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_PASTA_FIELD_LIMBS];
+            Self {
+                limbs: [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS],
+                limb_bits: zero_bits,
+                limb_accumulators: zero_accumulators,
+                slack_limbs: [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS],
+                slack_bits: zero_bits,
+                slack_accumulators: zero_accumulators,
+                borrow_bits: [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+            }
+        }
+    }
+
+    impl NonNativeVestaFqCanonicalRange {
+        /// Build an honest witness for canonical little-endian Vesta Fq limbs.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `limbs >= VestaFq::MODULUS`.
+        pub fn try_from_limbs(limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS]) -> Result<Self, String> {
+            let (slack, borrows) = vesta_fq_slack_witness(limbs);
+            if borrows[NON_NATIVE_PASTA_FIELD_LIMBS] != 0 {
+                return Err("Vesta Fq limbs must be strictly less than the modulus".to_owned());
+            }
+            Ok(Self::from_limbs_and_slack(limbs, slack, borrows))
+        }
+
+        /// Build a witness from the integer subtraction, even when it ends with a borrow.
+        #[must_use]
+        pub fn unchecked_from_limbs(limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS]) -> Self {
+            let (slack, borrows) = vesta_fq_slack_witness(limbs);
+            Self::from_limbs_and_slack(limbs, slack, borrows)
+        }
+
+        fn from_limbs_and_slack(
+            limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            slack: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            borrows: [u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+        ) -> Self {
+            let (limb_bits, limb_accumulators) = u64_range_witnesses(limbs);
+            let (slack_bits, slack_accumulators) = u64_range_witnesses(slack);
+            Self {
+                limbs: limbs.map(Scalar::from),
+                limb_bits,
+                limb_accumulators,
+                slack_limbs: slack.map(Scalar::from),
+                slack_bits,
+                slack_accumulators,
+                borrow_bits: borrows.map(Scalar::from),
+            }
+        }
+    }
+
+    fn configure_non_native_vesta_fq_canonical_range(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaFqCanonicalRangeConfig {
+        configure_non_native_vesta_fq_canonical_range_with_public_inputs(meta, true)
+    }
+
+    fn configure_private_non_native_vesta_fq_canonical_range(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaFqCanonicalRangeConfig {
+        configure_non_native_vesta_fq_canonical_range_with_public_inputs(meta, false)
+    }
+
+    fn configure_non_native_vesta_fq_canonical_range_with_public_inputs(
+        meta: &mut ConstraintSystem<Scalar>,
+        public_inputs: bool,
+    ) -> NonNativeVestaFqCanonicalRangeConfig {
+        let limbs = std::array::from_fn(|_| configure_non_native_u64_limb_range(meta));
+        let slack_limbs = std::array::from_fn(|_| configure_non_native_u64_limb_range(meta));
+        let borrows = std::array::from_fn(|_| meta.advice_column());
+        let subtract = meta.selector();
+
+        let public = if public_inputs {
+            let instances: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
+                NON_NATIVE_PASTA_FIELD_LIMBS] = std::array::from_fn(|_| meta.instance_column());
+            let expose = meta.selector();
+            meta.create_gate("non_native_vesta_fq_canonical_public", |meta| {
+                let s = meta.query_selector(expose);
+                let mut constraints = Vec::with_capacity(NON_NATIVE_PASTA_FIELD_LIMBS);
+                for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                    let limb = meta.query_advice(limbs[index].value, Rotation::cur());
+                    let instance = meta.query_instance(instances[index], Rotation::cur());
+                    constraints.push(s.clone() * (limb - instance));
+                }
+                constraints
+            });
+            Some(NonNativeVestaFqCanonicalPublicConfig { expose })
+        } else {
+            None
+        };
+
+        meta.create_gate("non_native_vesta_fq_canonical_subtract", |meta| {
+            let s = meta.query_selector(subtract);
+            let mut constraints =
+                Vec::with_capacity(2 + borrows.len() + NON_NATIVE_PASTA_FIELD_LIMBS);
+            let borrow_values = borrows
+                .iter()
+                .map(|column| meta.query_advice(*column, Rotation::cur()))
+                .collect::<Vec<_>>();
+            for borrow in &borrow_values {
+                constraints.push(
+                    s.clone()
+                        * borrow.clone()
+                        * (borrow.clone() - Expression::Constant(Scalar::from(1))),
+                );
+            }
+            constraints.push(s.clone() * borrow_values[0].clone());
+            constraints.push(s.clone() * borrow_values[NON_NATIVE_PASTA_FIELD_LIMBS].clone());
+            let radix = Expression::Constant(scalar_two_pow_64());
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                let limb = meta.query_advice(limbs[index].value, Rotation::cur());
+                let slack = meta.query_advice(slack_limbs[index].value, Rotation::cur());
+                let bound = Expression::Constant(Scalar::from(VESTA_FQ_MAX_LIMBS[index]));
+                constraints.push(
+                    s.clone()
+                        * (bound - limb - borrow_values[index].clone() - slack
+                            + radix.clone() * borrow_values[index + 1].clone()),
+                );
+            }
+            constraints
+        });
+
+        NonNativeVestaFqCanonicalRangeConfig {
+            limbs,
+            slack_limbs,
+            borrows,
+            public,
+            subtract,
+        }
+    }
+
+    fn assign_non_native_vesta_fq_canonical_range_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaFqCanonicalRangeConfig,
+        witness: &NonNativeVestaFqCanonicalRange,
+        expose_public: bool,
+    ) -> Result<(), PlonkError> {
+        if expose_public {
+            let public = config
+                .public
+                .as_ref()
+                .expect("public non-native range config");
+            public.expose.enable(region, 0)?;
+        }
+        config.subtract.enable(region, 0)?;
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            assign_non_native_u64_limb_range_region(
+                region,
+                &config.limbs[index],
+                witness.limbs[index],
+                witness.limb_bits[index],
+                witness.limb_accumulators[index],
+            )?;
+            assign_non_native_u64_limb_range_region(
+                region,
+                &config.slack_limbs[index],
+                witness.slack_limbs[index],
+                witness.slack_bits[index],
+                witness.slack_accumulators[index],
+            )?;
+        }
+        for (index, borrow) in witness.borrow_bits.iter().copied().enumerate() {
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("borrow{index}"),
+                config.borrows[index],
+                0,
+                || Value::known(borrow),
+            )?;
+        }
+        Ok(())
+    }
+
+    impl Circuit<Scalar> for NonNativeVestaFqCanonicalRange {
+        type Config = NonNativeVestaFqCanonicalRangeConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_fq_canonical_range(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let witness = self.clone();
+            layouter.assign_region(
+                || "non_native_vesta_fq_canonical_range",
+                |mut region| {
+                    assign_non_native_vesta_fq_canonical_range_region(
+                        &mut region,
+                        &config,
+                        &witness,
+                        true,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for a private `u128` range check represented by two `u64` limbs.
+    #[derive(Clone)]
+    pub struct NonNativeU128RangeConfig {
+        value: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        limbs: [NonNativeU64LimbRangeConfig; NON_NATIVE_U128_LIMBS],
+        bind: Selector,
+    }
+
+    /// Private witness proving a carry fits in two 64-bit limbs.
+    #[derive(Clone)]
+    pub struct NonNativeU128Range {
+        /// Scalar value used by arithmetic gates.
+        pub value: Scalar,
+        /// Little-endian `u64` limbs for the carry.
+        pub limbs: [Scalar; NON_NATIVE_U128_LIMBS],
+        /// Bit witnesses for each carry limb.
+        pub limb_bits: Box<[[Scalar; NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_U128_LIMBS]>,
+        /// Running range accumulators for each carry limb.
+        pub limb_accumulators: Box<[[Scalar; NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_U128_LIMBS]>,
+    }
+
+    impl Default for NonNativeU128Range {
+        fn default() -> Self {
+            Self {
+                value: Scalar::from(0),
+                limbs: [Scalar::from(0); NON_NATIVE_U128_LIMBS],
+                limb_bits: Box::new(
+                    [[Scalar::from(0); NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_U128_LIMBS],
+                ),
+                limb_accumulators: Box::new(
+                    [[Scalar::from(0); NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_U128_LIMBS],
+                ),
+            }
+        }
+    }
+
+    impl NonNativeU128Range {
+        /// Build an honest two-limb range witness for `value`.
+        #[must_use]
+        pub fn from_u128(value: u128) -> Self {
+            let limbs = split_u128_limbs(value);
+            let (limb_bits, limb_accumulators) = u64_pair_range_witnesses(limbs);
+            Self {
+                value: scalar_from_u128(value),
+                limbs: limbs.map(Scalar::from),
+                limb_bits: Box::new(limb_bits),
+                limb_accumulators: Box::new(limb_accumulators),
+            }
+        }
+    }
+
+    fn configure_non_native_u128_range(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeU128RangeConfig {
+        let value = meta.advice_column();
+        let limbs = std::array::from_fn(|_| configure_non_native_u64_limb_range(meta));
+        let bind = meta.selector();
+        meta.create_gate("non_native_u128_range_bind", |meta| {
+            let s = meta.query_selector(bind);
+            let value = meta.query_advice(value, Rotation::cur());
+            let lo = meta.query_advice(limbs[0].value, Rotation::cur());
+            let hi = meta.query_advice(limbs[1].value, Rotation::cur());
+            vec![s * (value - lo - Expression::Constant(scalar_two_pow_64()) * hi)]
+        });
+        NonNativeU128RangeConfig { value, limbs, bind }
+    }
+
+    fn assign_non_native_u128_range_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeU128RangeConfig,
+        witness: &NonNativeU128Range,
+    ) -> Result<(), PlonkError> {
+        config.bind.enable(region, 0)?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "u128_value",
+            config.value,
+            0,
+            || Value::known(witness.value),
+        )?;
+        for index in 0..NON_NATIVE_U128_LIMBS {
+            assign_non_native_u64_limb_range_region(
+                region,
+                &config.limbs[index],
+                witness.limbs[index],
+                witness.limb_bits[index],
+                witness.limb_accumulators[index],
+            )?;
+        }
+        Ok(())
+    }
+
+    #[derive(Clone, Copy)]
+    struct NonNativeVestaFqBinaryExposure {
+        lhs: bool,
+        rhs: bool,
+        out: bool,
+    }
+
+    const NON_NATIVE_VESTA_FQ_BINARY_PUBLIC: NonNativeVestaFqBinaryExposure =
+        NonNativeVestaFqBinaryExposure {
+            lhs: true,
+            rhs: true,
+            out: true,
+        };
+
+    const NON_NATIVE_VESTA_FQ_BINARY_PRIVATE: NonNativeVestaFqBinaryExposure =
+        NonNativeVestaFqBinaryExposure {
+            lhs: false,
+            rhs: false,
+            out: false,
+        };
+
+    fn configure_non_native_vesta_fq_range_for_exposure(
+        meta: &mut ConstraintSystem<Scalar>,
+        public: bool,
+    ) -> NonNativeVestaFqCanonicalRangeConfig {
+        if public {
+            configure_non_native_vesta_fq_canonical_range(meta)
+        } else {
+            configure_private_non_native_vesta_fq_canonical_range(meta)
+        }
+    }
+
+    /// Config for non-native modular addition in Vesta/Fq.
+    #[derive(Clone)]
+    pub struct NonNativeVestaFqAddConfig {
+        lhs: NonNativeVestaFqCanonicalRangeConfig,
+        rhs: NonNativeVestaFqCanonicalRangeConfig,
+        out: NonNativeVestaFqCanonicalRangeConfig,
+        sum_limbs: [NonNativeU64LimbRangeConfig; NON_NATIVE_PASTA_FIELD_LIMBS],
+        reduction_bit: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        add_carries: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+            NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+        reduction_carries: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+            NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+        add: Selector,
+    }
+
+    /// Circuit wrapper proving `lhs + rhs = out (mod VestaFq::MODULUS)`.
+    #[derive(Clone)]
+    pub struct NonNativeVestaFqAdd {
+        /// Canonical left addend.
+        pub lhs: NonNativeVestaFqCanonicalRange,
+        /// Canonical right addend.
+        pub rhs: NonNativeVestaFqCanonicalRange,
+        /// Canonical modular addition result.
+        pub out: NonNativeVestaFqCanonicalRange,
+        /// Private unreduced `lhs + rhs` limbs.
+        pub sum_limbs: [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Little-endian bit witnesses for each unreduced sum limb.
+        pub sum_bits: [[Scalar; NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Running range accumulators for each unreduced sum limb.
+        pub sum_accumulators:
+            [[Scalar; NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_PASTA_FIELD_LIMBS],
+        /// Boolean witness proving whether one modulus was subtracted.
+        pub reduction_bit: Scalar,
+        /// Carry chain for `lhs + rhs = sum`.
+        pub add_carries: [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+        /// Carry chain for `out + reduction*q = sum`.
+        pub reduction_carries: [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+    }
+
+    impl Default for NonNativeVestaFqAdd {
+        fn default() -> Self {
+            let zero_bits =
+                [[Scalar::from(0); NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_PASTA_FIELD_LIMBS];
+            let zero_accumulators =
+                [[Scalar::from(0); NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_PASTA_FIELD_LIMBS];
+            Self {
+                lhs: NonNativeVestaFqCanonicalRange::default(),
+                rhs: NonNativeVestaFqCanonicalRange::default(),
+                out: NonNativeVestaFqCanonicalRange::default(),
+                sum_limbs: [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS],
+                sum_bits: zero_bits,
+                sum_accumulators: zero_accumulators,
+                reduction_bit: Scalar::from(0),
+                add_carries: [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+                reduction_carries: [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+            }
+        }
+    }
+
+    impl NonNativeVestaFqAdd {
+        /// Build an honest modular-addition witness for canonical Vesta/Fq limbs.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if either input is non-canonical or if the carry
+        /// relation would leave the supported Vesta/Fq corridor.
+        pub fn try_from_limbs(
+            lhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            rhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        ) -> Result<Self, String> {
+            let lhs_witness = NonNativeVestaFqCanonicalRange::try_from_limbs(lhs)?;
+            let rhs_witness = NonNativeVestaFqCanonicalRange::try_from_limbs(rhs)?;
+            let (sum, add_carries) = add_limbs_le(lhs, rhs);
+            if add_carries[NON_NATIVE_PASTA_FIELD_LIMBS] != 0 {
+                return Err("Vesta Fq addition exceeded the 256-bit corridor".to_owned());
+            }
+            let reduction = u64::from(matches!(
+                cmp_limbs_le(sum, VESTA_FQ_MODULUS_LIMBS),
+                core::cmp::Ordering::Equal | core::cmp::Ordering::Greater
+            ));
+            let out = if reduction == 1 {
+                let (reduced, borrows) = sub_limbs_le(sum, VESTA_FQ_MODULUS_LIMBS);
+                if borrows[NON_NATIVE_PASTA_FIELD_LIMBS] != 0 {
+                    return Err("Vesta Fq reduction underflowed".to_owned());
+                }
+                reduced
+            } else {
+                sum
+            };
+            let out_witness = NonNativeVestaFqCanonicalRange::try_from_limbs(out)?;
+            let reduction_carries = Self::reduction_carry_witness(out, sum, reduction)?;
+            let (sum_bits, sum_accumulators) = u64_range_witnesses(sum);
+            Ok(Self {
+                lhs: lhs_witness,
+                rhs: rhs_witness,
+                out: out_witness,
+                sum_limbs: sum.map(Scalar::from),
+                sum_bits,
+                sum_accumulators,
+                reduction_bit: Scalar::from(reduction),
+                add_carries: add_carries.map(Scalar::from),
+                reduction_carries: reduction_carries.map(Scalar::from),
+            })
+        }
+
+        fn reduction_carry_witness(
+            out: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            sum: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            reduction: u64,
+        ) -> Result<[u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1], String> {
+            let mut carries = [0u64; NON_NATIVE_PASTA_FIELD_LIMBS + 1];
+            let mut carry = 0u128;
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                carries[index] = u64::try_from(carry).expect("carry is binary");
+                let total = u128::from(out[index])
+                    + u128::from(reduction) * u128::from(VESTA_FQ_MODULUS_LIMBS[index])
+                    + carry;
+                if (total as u64) != sum[index] {
+                    return Err("Vesta Fq reduction carry witness does not match sum".to_owned());
+                }
+                carry = total >> 64;
+            }
+            carries[NON_NATIVE_PASTA_FIELD_LIMBS] = u64::try_from(carry).expect("carry is binary");
+            if carries[NON_NATIVE_PASTA_FIELD_LIMBS] != 0 {
+                return Err("Vesta Fq reduction carry did not close".to_owned());
+            }
+            Ok(carries)
+        }
+    }
+
+    fn configure_non_native_vesta_fq_add_with_exposure(
+        meta: &mut ConstraintSystem<Scalar>,
+        exposure: NonNativeVestaFqBinaryExposure,
+    ) -> NonNativeVestaFqAddConfig {
+        let lhs = configure_non_native_vesta_fq_range_for_exposure(meta, exposure.lhs);
+        let rhs = configure_non_native_vesta_fq_range_for_exposure(meta, exposure.rhs);
+        let out = configure_non_native_vesta_fq_range_for_exposure(meta, exposure.out);
+        let sum_limbs = std::array::from_fn(|_| configure_non_native_u64_limb_range(meta));
+        let reduction_bit = meta.advice_column();
+        let add_carries = std::array::from_fn(|_| meta.advice_column());
+        let reduction_carries = std::array::from_fn(|_| meta.advice_column());
+        let add = meta.selector();
+
+        meta.create_gate("non_native_vesta_fq_add", |meta| {
+            let s = meta.query_selector(add);
+            let reduction_bit = meta.query_advice(reduction_bit, Rotation::cur());
+            let mut add_carry_values = Vec::with_capacity(NON_NATIVE_PASTA_FIELD_LIMBS + 1);
+            let mut reduction_carry_values = Vec::with_capacity(NON_NATIVE_PASTA_FIELD_LIMBS + 1);
+            for column in &add_carries {
+                add_carry_values.push(meta.query_advice(*column, Rotation::cur()));
+            }
+            for column in &reduction_carries {
+                reduction_carry_values.push(meta.query_advice(*column, Rotation::cur()));
+            }
+
+            let mut constraints = Vec::with_capacity(
+                5 + add_carry_values.len()
+                    + reduction_carry_values.len()
+                    + 2 * NON_NATIVE_PASTA_FIELD_LIMBS,
+            );
+            constraints.push(
+                s.clone()
+                    * reduction_bit.clone()
+                    * (reduction_bit.clone() - Expression::Constant(Scalar::from(1))),
+            );
+            for carry in add_carry_values.iter().chain(reduction_carry_values.iter()) {
+                constraints.push(
+                    s.clone()
+                        * carry.clone()
+                        * (carry.clone() - Expression::Constant(Scalar::from(1))),
+                );
+            }
+            constraints.push(s.clone() * add_carry_values[0].clone());
+            constraints.push(s.clone() * add_carry_values[NON_NATIVE_PASTA_FIELD_LIMBS].clone());
+            constraints.push(s.clone() * reduction_carry_values[0].clone());
+            constraints
+                .push(s.clone() * reduction_carry_values[NON_NATIVE_PASTA_FIELD_LIMBS].clone());
+
+            let radix = Expression::Constant(scalar_two_pow_64());
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                let lhs_limb = meta.query_advice(lhs.limbs[index].value, Rotation::cur());
+                let rhs_limb = meta.query_advice(rhs.limbs[index].value, Rotation::cur());
+                let out_limb = meta.query_advice(out.limbs[index].value, Rotation::cur());
+                let sum_limb = meta.query_advice(sum_limbs[index].value, Rotation::cur());
+                let modulus_limb =
+                    Expression::Constant(Scalar::from(VESTA_FQ_MODULUS_LIMBS[index]));
+                constraints.push(
+                    s.clone()
+                        * (lhs_limb + rhs_limb + add_carry_values[index].clone()
+                            - sum_limb.clone()
+                            - radix.clone() * add_carry_values[index + 1].clone()),
+                );
+                constraints.push(
+                    s.clone()
+                        * (out_limb
+                            + reduction_bit.clone() * modulus_limb
+                            + reduction_carry_values[index].clone()
+                            - sum_limb
+                            - radix.clone() * reduction_carry_values[index + 1].clone()),
+                );
+            }
+            constraints
+        });
+
+        NonNativeVestaFqAddConfig {
+            lhs,
+            rhs,
+            out,
+            sum_limbs,
+            reduction_bit,
+            add_carries,
+            reduction_carries,
+            add,
+        }
+    }
+
+    fn assign_non_native_vesta_fq_add_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaFqAddConfig,
+        witness: &NonNativeVestaFqAdd,
+        exposure: NonNativeVestaFqBinaryExposure,
+    ) -> Result<(), PlonkError> {
+        config.add.enable(region, 0)?;
+        assign_non_native_vesta_fq_canonical_range_region(
+            region,
+            &config.lhs,
+            &witness.lhs,
+            exposure.lhs,
+        )?;
+        assign_non_native_vesta_fq_canonical_range_region(
+            region,
+            &config.rhs,
+            &witness.rhs,
+            exposure.rhs,
+        )?;
+        assign_non_native_vesta_fq_canonical_range_region(
+            region,
+            &config.out,
+            &witness.out,
+            exposure.out,
+        )?;
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            assign_non_native_u64_limb_range_region(
+                region,
+                &config.sum_limbs[index],
+                witness.sum_limbs[index],
+                witness.sum_bits[index],
+                witness.sum_accumulators[index],
+            )?;
+        }
+        crate::zk::assign_advice_compat(
+            region,
+            || "reduction_bit",
+            config.reduction_bit,
+            0,
+            || Value::known(witness.reduction_bit),
+        )?;
+        for (index, carry) in witness.add_carries.iter().copied().enumerate() {
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("add_carry{index}"),
+                config.add_carries[index],
+                0,
+                || Value::known(carry),
+            )?;
+        }
+        for (index, carry) in witness.reduction_carries.iter().copied().enumerate() {
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("reduction_carry{index}"),
+                config.reduction_carries[index],
+                0,
+                || Value::known(carry),
+            )?;
+        }
+        Ok(())
+    }
+
+    impl Circuit<Scalar> for NonNativeVestaFqAdd {
+        type Config = NonNativeVestaFqAddConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_fq_add_with_exposure(meta, NON_NATIVE_VESTA_FQ_BINARY_PUBLIC)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let witness = self.clone();
+            layouter.assign_region(
+                || "non_native_vesta_fq_add",
+                |mut region| {
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config,
+                        &witness,
+                        NON_NATIVE_VESTA_FQ_BINARY_PUBLIC,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for non-native modular multiplication in Vesta/Fq.
+    #[derive(Clone)]
+    pub struct NonNativeVestaFqMulConfig {
+        lhs: NonNativeVestaFqCanonicalRangeConfig,
+        rhs: NonNativeVestaFqCanonicalRangeConfig,
+        out: NonNativeVestaFqCanonicalRangeConfig,
+        quotient: NonNativeVestaFqCanonicalRangeConfig,
+        product_limbs: [NonNativeU64LimbRangeConfig; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS],
+        product_carries: [NonNativeU128RangeConfig; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS + 1],
+        reduction_carries: [NonNativeU128RangeConfig; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS + 1],
+        mul: Selector,
+    }
+
+    /// Circuit wrapper proving `lhs * rhs = out (mod VestaFq::MODULUS)`.
+    #[derive(Clone)]
+    pub struct NonNativeVestaFqMul {
+        /// Canonical left factor.
+        pub lhs: Box<NonNativeVestaFqCanonicalRange>,
+        /// Canonical right factor.
+        pub rhs: Box<NonNativeVestaFqCanonicalRange>,
+        /// Canonical modular multiplication result.
+        pub out: Box<NonNativeVestaFqCanonicalRange>,
+        /// Private canonical quotient in `lhs * rhs = out + quotient * q`.
+        pub quotient: Box<NonNativeVestaFqCanonicalRange>,
+        /// Private unreduced product limbs.
+        pub product_limbs: [Scalar; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS],
+        /// Little-endian bit witnesses for each unreduced product limb.
+        pub product_bits:
+            Box<[[Scalar; NON_NATIVE_U64_LIMB_BITS]; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS]>,
+        /// Running range accumulators for each unreduced product limb.
+        pub product_accumulators:
+            Box<[[Scalar; NON_NATIVE_U64_LIMB_BITS + 1]; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS]>,
+        /// Carry chain for schoolbook multiplication.
+        pub product_carries: [NonNativeU128Range; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS + 1],
+        /// Carry chain for `out + quotient * q = product`.
+        pub reduction_carries: [NonNativeU128Range; NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS + 1],
+    }
+
+    impl Default for NonNativeVestaFqMul {
+        fn default() -> Self {
+            Self {
+                lhs: Box::new(NonNativeVestaFqCanonicalRange::default()),
+                rhs: Box::new(NonNativeVestaFqCanonicalRange::default()),
+                out: Box::new(NonNativeVestaFqCanonicalRange::default()),
+                quotient: Box::new(NonNativeVestaFqCanonicalRange::default()),
+                product_limbs: [Scalar::from(0); NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS],
+                product_bits: Box::new(
+                    [[Scalar::from(0); NON_NATIVE_U64_LIMB_BITS];
+                        NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS],
+                ),
+                product_accumulators: Box::new(
+                    [[Scalar::from(0); NON_NATIVE_U64_LIMB_BITS + 1];
+                        NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS],
+                ),
+                product_carries: std::array::from_fn(|_| NonNativeU128Range::default()),
+                reduction_carries: std::array::from_fn(|_| NonNativeU128Range::default()),
+            }
+        }
+    }
+
+    impl NonNativeVestaFqMul {
+        /// Build an honest modular-multiplication witness for canonical Vesta/Fq limbs.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if either input is non-canonical or if the bounded
+        /// quotient/product corridor is exceeded.
+        pub fn try_from_limbs(
+            lhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            rhs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        ) -> Result<Self, String> {
+            let lhs_witness = NonNativeVestaFqCanonicalRange::try_from_limbs(lhs)?;
+            let rhs_witness = NonNativeVestaFqCanonicalRange::try_from_limbs(rhs)?;
+            let lhs_big = bigint_from_limbs(lhs)?;
+            let rhs_big = bigint_from_limbs(rhs)?;
+            let product_big = checked_bigint_mul(&lhs_big, &rhs_big)?;
+            let product = mul_limbs_le(lhs, rhs)?;
+            let (quotient, out) = quotient_and_remainder_limbs(&product_big)?;
+            let out_witness = NonNativeVestaFqCanonicalRange::try_from_limbs(out)?;
+            let quotient_witness = NonNativeVestaFqCanonicalRange::try_from_limbs(quotient)?;
+            let (product_bits, product_accumulators) = u64_product_range_witnesses(product);
+            let product_carries =
+                product_carry_witness(lhs, rhs, product)?.map(NonNativeU128Range::from_u128);
+            let reduction_carries =
+                reduction_carry_witness(out, quotient, product)?.map(NonNativeU128Range::from_u128);
+            Ok(Self {
+                lhs: Box::new(lhs_witness),
+                rhs: Box::new(rhs_witness),
+                out: Box::new(out_witness),
+                quotient: Box::new(quotient_witness),
+                product_limbs: product.map(Scalar::from),
+                product_bits: Box::new(product_bits),
+                product_accumulators: Box::new(product_accumulators),
+                product_carries,
+                reduction_carries,
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_fq_mul_with_exposure(
+        meta: &mut ConstraintSystem<Scalar>,
+        exposure: NonNativeVestaFqBinaryExposure,
+    ) -> NonNativeVestaFqMulConfig {
+        let lhs = configure_non_native_vesta_fq_range_for_exposure(meta, exposure.lhs);
+        let rhs = configure_non_native_vesta_fq_range_for_exposure(meta, exposure.rhs);
+        let out = configure_non_native_vesta_fq_range_for_exposure(meta, exposure.out);
+        let quotient = configure_private_non_native_vesta_fq_canonical_range(meta);
+        let product_limbs = std::array::from_fn(|_| configure_non_native_u64_limb_range(meta));
+        let product_carries = std::array::from_fn(|_| configure_non_native_u128_range(meta));
+        let reduction_carries = std::array::from_fn(|_| configure_non_native_u128_range(meta));
+        let mul = meta.selector();
+
+        meta.create_gate("non_native_vesta_fq_mul", |meta| {
+            let s = meta.query_selector(mul);
+            let product_carry_values = product_carries
+                .iter()
+                .map(|config| meta.query_advice(config.value, Rotation::cur()))
+                .collect::<Vec<_>>();
+            let reduction_carry_values = reduction_carries
+                .iter()
+                .map(|config| meta.query_advice(config.value, Rotation::cur()))
+                .collect::<Vec<_>>();
+            let mut constraints = Vec::with_capacity(4 + 2 * NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS);
+            constraints.push(s.clone() * product_carry_values[0].clone());
+            constraints
+                .push(s.clone() * product_carry_values[NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS].clone());
+            constraints.push(s.clone() * reduction_carry_values[0].clone());
+            constraints.push(
+                s.clone() * reduction_carry_values[NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS].clone(),
+            );
+
+            let radix = Expression::Constant(scalar_two_pow_64());
+            for index in 0..NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS {
+                let product_limb = meta.query_advice(product_limbs[index].value, Rotation::cur());
+                let mut product_total = product_carry_values[index].clone();
+                for lhs_index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                    if lhs_index > index {
+                        continue;
+                    }
+                    let rhs_index = index - lhs_index;
+                    if rhs_index >= NON_NATIVE_PASTA_FIELD_LIMBS {
+                        continue;
+                    }
+                    let lhs_limb = meta.query_advice(lhs.limbs[lhs_index].value, Rotation::cur());
+                    let rhs_limb = meta.query_advice(rhs.limbs[rhs_index].value, Rotation::cur());
+                    product_total = product_total + lhs_limb * rhs_limb;
+                }
+                constraints.push(
+                    s.clone()
+                        * (product_total
+                            - product_limb.clone()
+                            - radix.clone() * product_carry_values[index + 1].clone()),
+                );
+
+                let mut reduction_total = reduction_carry_values[index].clone();
+                if index < NON_NATIVE_PASTA_FIELD_LIMBS {
+                    reduction_total = reduction_total
+                        + meta.query_advice(out.limbs[index].value, Rotation::cur());
+                }
+                for modulus_index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                    if modulus_index > index {
+                        continue;
+                    }
+                    let quotient_index = index - modulus_index;
+                    if quotient_index >= NON_NATIVE_PASTA_FIELD_LIMBS {
+                        continue;
+                    }
+                    let modulus_limb =
+                        Expression::Constant(Scalar::from(VESTA_FQ_MODULUS_LIMBS[modulus_index]));
+                    let quotient_limb =
+                        meta.query_advice(quotient.limbs[quotient_index].value, Rotation::cur());
+                    reduction_total = reduction_total + modulus_limb * quotient_limb;
+                }
+                constraints.push(
+                    s.clone()
+                        * (reduction_total
+                            - product_limb
+                            - radix.clone() * reduction_carry_values[index + 1].clone()),
+                );
+            }
+            constraints
+        });
+
+        NonNativeVestaFqMulConfig {
+            lhs,
+            rhs,
+            out,
+            quotient,
+            product_limbs,
+            product_carries,
+            reduction_carries,
+            mul,
+        }
+    }
+
+    fn assign_non_native_vesta_fq_mul_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaFqMulConfig,
+        witness: &NonNativeVestaFqMul,
+        exposure: NonNativeVestaFqBinaryExposure,
+    ) -> Result<(), PlonkError> {
+        config.mul.enable(region, 0)?;
+        assign_non_native_vesta_fq_canonical_range_region(
+            region,
+            &config.lhs,
+            witness.lhs.as_ref(),
+            exposure.lhs,
+        )?;
+        assign_non_native_vesta_fq_canonical_range_region(
+            region,
+            &config.rhs,
+            witness.rhs.as_ref(),
+            exposure.rhs,
+        )?;
+        assign_non_native_vesta_fq_canonical_range_region(
+            region,
+            &config.out,
+            witness.out.as_ref(),
+            exposure.out,
+        )?;
+        assign_non_native_vesta_fq_canonical_range_region(
+            region,
+            &config.quotient,
+            witness.quotient.as_ref(),
+            false,
+        )?;
+        for index in 0..NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS {
+            assign_non_native_u64_limb_range_region(
+                region,
+                &config.product_limbs[index],
+                witness.product_limbs[index],
+                witness.product_bits[index],
+                witness.product_accumulators[index],
+            )?;
+        }
+        for (index, carry) in witness.product_carries.iter().enumerate() {
+            assign_non_native_u128_range_region(region, &config.product_carries[index], carry)?;
+        }
+        for (index, carry) in witness.reduction_carries.iter().enumerate() {
+            assign_non_native_u128_range_region(region, &config.reduction_carries[index], carry)?;
+        }
+        Ok(())
+    }
+
+    impl Circuit<Scalar> for NonNativeVestaFqMul {
+        type Config = NonNativeVestaFqMulConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_fq_mul_with_exposure(meta, NON_NATIVE_VESTA_FQ_BINARY_PUBLIC)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let witness = self.clone();
+            layouter.assign_region(
+                || "non_native_vesta_fq_mul",
+                |mut region| {
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config,
+                        &witness,
+                        NON_NATIVE_VESTA_FQ_BINARY_PUBLIC,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for checking an affine Vesta point over non-native Fq limbs.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineOnCurveConfig {
+        x_squared: NonNativeVestaFqMulConfig,
+        y_squared: NonNativeVestaFqMulConfig,
+        x_cubed: NonNativeVestaFqMulConfig,
+        rhs: NonNativeVestaFqAddConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving public affine coordinates satisfy `y^2 = x^3 + 5`.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineOnCurve {
+        /// Multiplication witness for public `x * x`.
+        pub x_squared: Box<NonNativeVestaFqMul>,
+        /// Multiplication witness for public `y * y`.
+        pub y_squared: Box<NonNativeVestaFqMul>,
+        /// Multiplication witness for `x^2 * x`.
+        pub x_cubed: Box<NonNativeVestaFqMul>,
+        /// Addition witness for `x^3 + 5`.
+        pub rhs: Box<NonNativeVestaFqAdd>,
+    }
+
+    impl Default for NonNativeVestaAffineOnCurve {
+        fn default() -> Self {
+            Self {
+                x_squared: Box::new(NonNativeVestaFqMul::default()),
+                y_squared: Box::new(NonNativeVestaFqMul::default()),
+                x_cubed: Box::new(NonNativeVestaFqMul::default()),
+                rhs: Box::new(NonNativeVestaFqAdd::default()),
+            }
+        }
+    }
+
+    impl NonNativeVestaAffineOnCurve {
+        /// Build an honest on-curve witness for canonical affine Vesta coordinates.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if either coordinate is non-canonical or if the
+        /// coordinates do not satisfy `y^2 = x^3 + 5`.
+        pub fn try_from_limbs(
+            x: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            y: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+        ) -> Result<Self, String> {
+            NonNativeVestaFqCanonicalRange::try_from_limbs(x)?;
+            NonNativeVestaFqCanonicalRange::try_from_limbs(y)?;
+            let x2 = mul_mod_vesta_fq_limbs(x, x)?;
+            let y2 = mul_mod_vesta_fq_limbs(y, y)?;
+            let x3 = mul_mod_vesta_fq_limbs(x2, x)?;
+            let rhs = add_mod_vesta_fq_limbs(x3, VESTA_CURVE_B_LIMBS)?;
+            if rhs != y2 {
+                return Err("Vesta affine coordinates are not on curve".to_owned());
+            }
+            Ok(Self {
+                x_squared: Box::new(NonNativeVestaFqMul::try_from_limbs(x, x)?),
+                y_squared: Box::new(NonNativeVestaFqMul::try_from_limbs(y, y)?),
+                x_cubed: Box::new(NonNativeVestaFqMul::try_from_limbs(x2, x)?),
+                rhs: Box::new(NonNativeVestaFqAdd::try_from_limbs(
+                    x3,
+                    VESTA_CURVE_B_LIMBS,
+                )?),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_on_curve(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineOnCurveConfig {
+        let public_lhs_private_rhs_out = NonNativeVestaFqBinaryExposure {
+            lhs: true,
+            rhs: false,
+            out: false,
+        };
+        let x_squared =
+            configure_non_native_vesta_fq_mul_with_exposure(meta, public_lhs_private_rhs_out);
+        let y_squared =
+            configure_non_native_vesta_fq_mul_with_exposure(meta, public_lhs_private_rhs_out);
+        let x_cubed = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let rhs = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_on_curve_link", |meta| {
+            let s = meta.query_selector(link);
+            let mut constraints = Vec::with_capacity(7 * NON_NATIVE_PASTA_FIELD_LIMBS);
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                let x_public = meta.query_advice(x_squared.lhs.limbs[index].value, Rotation::cur());
+                let x_square_rhs =
+                    meta.query_advice(x_squared.rhs.limbs[index].value, Rotation::cur());
+                let x_square_out =
+                    meta.query_advice(x_squared.out.limbs[index].value, Rotation::cur());
+                let y_public = meta.query_advice(y_squared.lhs.limbs[index].value, Rotation::cur());
+                let y_square_rhs =
+                    meta.query_advice(y_squared.rhs.limbs[index].value, Rotation::cur());
+                let y_square_out =
+                    meta.query_advice(y_squared.out.limbs[index].value, Rotation::cur());
+                let x_cube_lhs = meta.query_advice(x_cubed.lhs.limbs[index].value, Rotation::cur());
+                let x_cube_rhs = meta.query_advice(x_cubed.rhs.limbs[index].value, Rotation::cur());
+                let x_cube_out = meta.query_advice(x_cubed.out.limbs[index].value, Rotation::cur());
+                let rhs_lhs = meta.query_advice(rhs.lhs.limbs[index].value, Rotation::cur());
+                let rhs_b = meta.query_advice(rhs.rhs.limbs[index].value, Rotation::cur());
+                let rhs_out = meta.query_advice(rhs.out.limbs[index].value, Rotation::cur());
+                constraints.push(s.clone() * (x_public.clone() - x_square_rhs));
+                constraints.push(s.clone() * (y_public.clone() - y_square_rhs));
+                constraints.push(s.clone() * (x_cube_lhs - x_square_out));
+                constraints.push(s.clone() * (x_cube_rhs - x_public));
+                constraints.push(s.clone() * (rhs_lhs - x_cube_out));
+                constraints.push(
+                    s.clone()
+                        * (rhs_b - Expression::Constant(Scalar::from(VESTA_CURVE_B_LIMBS[index]))),
+                );
+                constraints.push(s.clone() * (rhs_out - y_square_out));
+            }
+            constraints
+        });
+
+        NonNativeVestaAffineOnCurveConfig {
+            x_squared,
+            y_squared,
+            x_cubed,
+            rhs,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_on_curve_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineOnCurveConfig,
+        witness: &NonNativeVestaAffineOnCurve,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        let public_lhs_private_rhs_out = NonNativeVestaFqBinaryExposure {
+            lhs: true,
+            rhs: false,
+            out: false,
+        };
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.x_squared,
+            witness.x_squared.as_ref(),
+            public_lhs_private_rhs_out,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.y_squared,
+            witness.y_squared.as_ref(),
+            public_lhs_private_rhs_out,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.x_cubed,
+            witness.x_cubed.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.rhs,
+            witness.rhs.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        Ok(())
+    }
+
+    impl Circuit<Scalar> for NonNativeVestaAffineOnCurve {
+        type Config = NonNativeVestaAffineOnCurveConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_on_curve(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_on_curve",
+                |mut region| {
+                    assign_non_native_vesta_affine_on_curve_region(&mut region, &config, self)
+                },
+            )
+        }
+    }
+
+    /// Config for validating a canonical affine Vesta point or the identity.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineMaybeIdentityConfig {
+        x_squared: NonNativeVestaFqMulConfig,
+        y_squared: NonNativeVestaFqMulConfig,
+        x_cubed: NonNativeVestaFqMulConfig,
+        rhs: NonNativeVestaFqAddConfig,
+        identity: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        public_coordinates: bool,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving public `(x, y, identity)` encodes a Vesta point.
+    ///
+    /// The identity is canonically encoded as `(0, 0, 1)`. Non-identity points
+    /// use `identity = 0` and must satisfy `y^2 = x^3 + 5`.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineMaybeIdentity {
+        /// Multiplication witness for public `x * x`.
+        pub x_squared: Box<NonNativeVestaFqMul>,
+        /// Multiplication witness for public `y * y`.
+        pub y_squared: Box<NonNativeVestaFqMul>,
+        /// Multiplication witness for `x^2 * x`.
+        pub x_cubed: Box<NonNativeVestaFqMul>,
+        /// Addition witness for `x^3 + 5`.
+        pub rhs: Box<NonNativeVestaFqAdd>,
+        /// Public identity flag, encoded as 0 or 1.
+        pub identity: Scalar,
+    }
+
+    impl Default for NonNativeVestaAffineMaybeIdentity {
+        fn default() -> Self {
+            Self {
+                x_squared: Box::new(NonNativeVestaFqMul::default()),
+                y_squared: Box::new(NonNativeVestaFqMul::default()),
+                x_cubed: Box::new(NonNativeVestaFqMul::default()),
+                rhs: Box::new(NonNativeVestaFqAdd::default()),
+                identity: Scalar::from(0),
+            }
+        }
+    }
+
+    impl NonNativeVestaAffineMaybeIdentity {
+        /// Build a witness for a canonical point-or-identity encoding.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if either coordinate is non-canonical, the identity
+        /// flag is true with non-zero coordinates, or the flag is false and the
+        /// coordinates are not on curve.
+        pub fn try_from_limbs(
+            x: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            y: [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            identity: bool,
+        ) -> Result<Self, String> {
+            NonNativeVestaFqCanonicalRange::try_from_limbs(x)?;
+            NonNativeVestaFqCanonicalRange::try_from_limbs(y)?;
+            let x2 = mul_mod_vesta_fq_limbs(x, x)?;
+            let y2 = mul_mod_vesta_fq_limbs(y, y)?;
+            let x3 = mul_mod_vesta_fq_limbs(x2, x)?;
+            let rhs = add_mod_vesta_fq_limbs(x3, VESTA_CURVE_B_LIMBS)?;
+            if identity {
+                if x != [0; NON_NATIVE_PASTA_FIELD_LIMBS] || y != [0; NON_NATIVE_PASTA_FIELD_LIMBS]
+                {
+                    return Err("Vesta identity must use canonical zero coordinates".to_owned());
+                }
+            } else if rhs != y2 {
+                return Err("Vesta affine coordinates are not on curve".to_owned());
+            }
+            Ok(Self {
+                x_squared: Box::new(NonNativeVestaFqMul::try_from_limbs(x, x)?),
+                y_squared: Box::new(NonNativeVestaFqMul::try_from_limbs(y, y)?),
+                x_cubed: Box::new(NonNativeVestaFqMul::try_from_limbs(x2, x)?),
+                rhs: Box::new(NonNativeVestaFqAdd::try_from_limbs(
+                    x3,
+                    VESTA_CURVE_B_LIMBS,
+                )?),
+                identity: Scalar::from(u64::from(identity)),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_maybe_identity(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineMaybeIdentityConfig {
+        configure_non_native_vesta_affine_maybe_identity_with_exposure(meta, true, true)
+    }
+
+    fn configure_non_native_vesta_affine_maybe_identity_with_exposure(
+        meta: &mut ConstraintSystem<Scalar>,
+        public_coordinates: bool,
+        public_identity: bool,
+    ) -> NonNativeVestaAffineMaybeIdentityConfig {
+        let lhs_private_rhs_out = NonNativeVestaFqBinaryExposure {
+            lhs: public_coordinates,
+            rhs: false,
+            out: false,
+        };
+        let x_squared = configure_non_native_vesta_fq_mul_with_exposure(meta, lhs_private_rhs_out);
+        let y_squared = configure_non_native_vesta_fq_mul_with_exposure(meta, lhs_private_rhs_out);
+        let x_cubed = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let rhs = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let identity = meta.advice_column();
+        let identity_instance = public_identity.then(|| meta.instance_column());
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_maybe_identity_link", |meta| {
+            let s = meta.query_selector(link);
+            let identity = meta.query_advice(identity, Rotation::cur());
+            let non_identity = Expression::Constant(Scalar::from(1)) - identity.clone();
+            let mut constraints = Vec::with_capacity(3 + 9 * NON_NATIVE_PASTA_FIELD_LIMBS);
+            if let Some(identity_instance) = identity_instance {
+                let identity_instance = meta.query_instance(identity_instance, Rotation::cur());
+                constraints.push(s.clone() * (identity.clone() - identity_instance));
+            }
+            constraints.push(
+                s.clone()
+                    * identity.clone()
+                    * (identity.clone() - Expression::Constant(Scalar::from(1))),
+            );
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                let x_public = meta.query_advice(x_squared.lhs.limbs[index].value, Rotation::cur());
+                let x_square_rhs =
+                    meta.query_advice(x_squared.rhs.limbs[index].value, Rotation::cur());
+                let x_square_out =
+                    meta.query_advice(x_squared.out.limbs[index].value, Rotation::cur());
+                let y_public = meta.query_advice(y_squared.lhs.limbs[index].value, Rotation::cur());
+                let y_square_rhs =
+                    meta.query_advice(y_squared.rhs.limbs[index].value, Rotation::cur());
+                let y_square_out =
+                    meta.query_advice(y_squared.out.limbs[index].value, Rotation::cur());
+                let x_cube_lhs = meta.query_advice(x_cubed.lhs.limbs[index].value, Rotation::cur());
+                let x_cube_rhs = meta.query_advice(x_cubed.rhs.limbs[index].value, Rotation::cur());
+                let x_cube_out = meta.query_advice(x_cubed.out.limbs[index].value, Rotation::cur());
+                let rhs_lhs = meta.query_advice(rhs.lhs.limbs[index].value, Rotation::cur());
+                let rhs_b = meta.query_advice(rhs.rhs.limbs[index].value, Rotation::cur());
+                let rhs_out = meta.query_advice(rhs.out.limbs[index].value, Rotation::cur());
+                constraints.push(s.clone() * identity.clone() * x_public.clone());
+                constraints.push(s.clone() * identity.clone() * y_public.clone());
+                constraints
+                    .push(s.clone() * non_identity.clone() * (x_public.clone() - x_square_rhs));
+                constraints
+                    .push(s.clone() * non_identity.clone() * (y_public.clone() - y_square_rhs));
+                constraints.push(s.clone() * non_identity.clone() * (x_cube_lhs - x_square_out));
+                constraints.push(s.clone() * non_identity.clone() * (x_cube_rhs - x_public));
+                constraints.push(s.clone() * non_identity.clone() * (rhs_lhs - x_cube_out));
+                constraints.push(
+                    s.clone()
+                        * non_identity.clone()
+                        * (rhs_b - Expression::Constant(Scalar::from(VESTA_CURVE_B_LIMBS[index]))),
+                );
+                constraints.push(s.clone() * non_identity.clone() * (rhs_out - y_square_out));
+            }
+            constraints
+        });
+
+        NonNativeVestaAffineMaybeIdentityConfig {
+            x_squared,
+            y_squared,
+            x_cubed,
+            rhs,
+            identity,
+            public_coordinates,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_maybe_identity_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineMaybeIdentityConfig,
+        witness: &NonNativeVestaAffineMaybeIdentity,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        let lhs_private_rhs_out = NonNativeVestaFqBinaryExposure {
+            lhs: config.public_coordinates,
+            rhs: false,
+            out: false,
+        };
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.x_squared,
+            witness.x_squared.as_ref(),
+            lhs_private_rhs_out,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.y_squared,
+            witness.y_squared.as_ref(),
+            lhs_private_rhs_out,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.x_cubed,
+            witness.x_cubed.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.rhs,
+            witness.rhs.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "identity",
+            config.identity,
+            0,
+            || Value::known(witness.identity),
+        )?;
+        Ok(())
+    }
+
+    impl Circuit<Scalar> for NonNativeVestaAffineMaybeIdentity {
+        type Config = NonNativeVestaAffineMaybeIdentityConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_maybe_identity(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_maybe_identity",
+                |mut region| {
+                    assign_non_native_vesta_affine_maybe_identity_region(&mut region, &config, self)
+                },
+            )
+        }
+    }
+
+    /// Config for distinct affine Vesta point addition over non-native Fq limbs.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffinePointAddConfig {
+        p: NonNativeVestaAffineOnCurveConfig,
+        q: NonNativeVestaAffineOnCurveConfig,
+        r: NonNativeVestaAffineOnCurveConfig,
+        x_delta: NonNativeVestaFqAddConfig,
+        y_delta: NonNativeVestaFqAddConfig,
+        lambda_times_x_delta: NonNativeVestaFqMulConfig,
+        x_delta_inverse: NonNativeVestaFqMulConfig,
+        lambda_squared: NonNativeVestaFqMulConfig,
+        x3_plus_x1: NonNativeVestaFqAddConfig,
+        x_sum_plus_x2: NonNativeVestaFqAddConfig,
+        x3_plus_x_diff: NonNativeVestaFqAddConfig,
+        lambda_times_x_diff: NonNativeVestaFqMulConfig,
+        y3_plus_y1: NonNativeVestaFqAddConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving public distinct affine Vesta points satisfy `P + Q = R`.
+    ///
+    /// This gadget covers the non-doubling, non-infinity affine formula where
+    /// `x(P) != x(Q)`.
+    /// TODO: Add complete addition and point-at-infinity handling in the final
+    /// IPA verifier composition.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffinePointAdd {
+        /// On-curve witness for the public left input point `P`.
+        pub p: Box<NonNativeVestaAffineOnCurve>,
+        /// On-curve witness for the public right input point `Q`.
+        pub q: Box<NonNativeVestaAffineOnCurve>,
+        /// On-curve witness for the public output point `R`.
+        pub r: Box<NonNativeVestaAffineOnCurve>,
+        /// Addition witness for `x(P) + x_delta = x(Q)`.
+        pub x_delta: Box<NonNativeVestaFqAdd>,
+        /// Addition witness for `y(P) + y_delta = y(Q)`.
+        pub y_delta: Box<NonNativeVestaFqAdd>,
+        /// Multiplication witness for `lambda * x_delta = y_delta`.
+        pub lambda_times_x_delta: Box<NonNativeVestaFqMul>,
+        /// Multiplication witness for `x_delta * x_delta_inv = 1`.
+        pub x_delta_inverse: Box<NonNativeVestaFqMul>,
+        /// Multiplication witness for `lambda * lambda`.
+        pub lambda_squared: Box<NonNativeVestaFqMul>,
+        /// Addition witness for `x(R) + x(P)`.
+        pub x3_plus_x1: Box<NonNativeVestaFqAdd>,
+        /// Addition witness for `x(R) + x(P) + x(Q) = lambda^2`.
+        pub x_sum_plus_x2: Box<NonNativeVestaFqAdd>,
+        /// Addition witness for `x(R) + x_diff = x(P)`.
+        pub x3_plus_x_diff: Box<NonNativeVestaFqAdd>,
+        /// Multiplication witness for `lambda * x_diff`.
+        pub lambda_times_x_diff: Box<NonNativeVestaFqMul>,
+        /// Addition witness for `y(R) + y(P) = lambda * x_diff`.
+        pub y3_plus_y1: Box<NonNativeVestaFqAdd>,
+    }
+
+    impl Default for NonNativeVestaAffinePointAdd {
+        fn default() -> Self {
+            Self {
+                p: Box::new(NonNativeVestaAffineOnCurve::default()),
+                q: Box::new(NonNativeVestaAffineOnCurve::default()),
+                r: Box::new(NonNativeVestaAffineOnCurve::default()),
+                x_delta: Box::new(NonNativeVestaFqAdd::default()),
+                y_delta: Box::new(NonNativeVestaFqAdd::default()),
+                lambda_times_x_delta: Box::new(NonNativeVestaFqMul::default()),
+                x_delta_inverse: Box::new(NonNativeVestaFqMul::default()),
+                lambda_squared: Box::new(NonNativeVestaFqMul::default()),
+                x3_plus_x1: Box::new(NonNativeVestaFqAdd::default()),
+                x_sum_plus_x2: Box::new(NonNativeVestaFqAdd::default()),
+                x3_plus_x_diff: Box::new(NonNativeVestaFqAdd::default()),
+                lambda_times_x_diff: Box::new(NonNativeVestaFqMul::default()),
+                y3_plus_y1: Box::new(NonNativeVestaFqAdd::default()),
+            }
+        }
+    }
+
+    impl NonNativeVestaAffinePointAdd {
+        /// Build an honest witness for distinct affine Vesta point addition.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if any coordinate is non-canonical, any point is not
+        /// on curve, `x(P) == x(Q)`, or the supplied output is not `P + Q`.
+        pub fn try_from_limbs(
+            p: (
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            ),
+            q: (
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            ),
+            r: (
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            ),
+        ) -> Result<Self, String> {
+            use ff::Field as _;
+
+            let p_on_curve = NonNativeVestaAffineOnCurve::try_from_limbs(p.0, p.1)?;
+            let q_on_curve = NonNativeVestaAffineOnCurve::try_from_limbs(q.0, q.1)?;
+            let r_on_curve = NonNativeVestaAffineOnCurve::try_from_limbs(r.0, r.1)?;
+
+            let x1 = vesta_fq_from_limbs(p.0)?;
+            let y1 = vesta_fq_from_limbs(p.1)?;
+            let x2 = vesta_fq_from_limbs(q.0)?;
+            let y2 = vesta_fq_from_limbs(q.1)?;
+            let x3 = vesta_fq_from_limbs(r.0)?;
+            let y3 = vesta_fq_from_limbs(r.1)?;
+
+            let x_delta: halo2_proofs::halo2curves::pasta::Fq = x2 - x1;
+            let x_delta_inverse = Option::from(x_delta.invert()).ok_or_else(|| {
+                "Vesta affine point addition requires distinct x-coordinates".to_owned()
+            })?;
+            let y_delta: halo2_proofs::halo2curves::pasta::Fq = y2 - y1;
+            let lambda: halo2_proofs::halo2curves::pasta::Fq = y_delta * x_delta_inverse;
+            let lambda_squared: halo2_proofs::halo2curves::pasta::Fq = lambda.square();
+            let expected_x3 = lambda_squared - x1 - x2;
+            if expected_x3 != x3 {
+                return Err("Vesta affine point addition output x-coordinate mismatch".to_owned());
+            }
+            let x_diff = x1 - x3;
+            let expected_y3 = lambda * x_diff - y1;
+            if expected_y3 != y3 {
+                return Err("Vesta affine point addition output y-coordinate mismatch".to_owned());
+            }
+
+            let x_delta = vesta_fq_to_limbs(x_delta);
+            let y_delta = vesta_fq_to_limbs(y_delta);
+            let lambda = vesta_fq_to_limbs(lambda);
+            let x_delta_inverse = vesta_fq_to_limbs(x_delta_inverse);
+            let lambda_squared = vesta_fq_to_limbs(lambda_squared);
+            let x3_plus_x1 = add_mod_vesta_fq_limbs(r.0, p.0)?;
+            let x_diff = vesta_fq_to_limbs(x_diff);
+            let lambda_times_x_diff = mul_mod_vesta_fq_limbs(lambda, x_diff)?;
+            let y3_plus_y1 = add_mod_vesta_fq_limbs(r.1, p.1)?;
+
+            Ok(Self {
+                p: Box::new(p_on_curve),
+                q: Box::new(q_on_curve),
+                r: Box::new(r_on_curve),
+                x_delta: Box::new(NonNativeVestaFqAdd::try_from_limbs(p.0, x_delta)?),
+                y_delta: Box::new(NonNativeVestaFqAdd::try_from_limbs(p.1, y_delta)?),
+                lambda_times_x_delta: Box::new(NonNativeVestaFqMul::try_from_limbs(
+                    lambda, x_delta,
+                )?),
+                x_delta_inverse: Box::new(NonNativeVestaFqMul::try_from_limbs(
+                    x_delta,
+                    x_delta_inverse,
+                )?),
+                lambda_squared: Box::new(NonNativeVestaFqMul::try_from_limbs(lambda, lambda)?),
+                x3_plus_x1: Box::new(NonNativeVestaFqAdd::try_from_limbs(r.0, p.0)?),
+                x_sum_plus_x2: Box::new(NonNativeVestaFqAdd::try_from_limbs(x3_plus_x1, q.0)?),
+                x3_plus_x_diff: Box::new(NonNativeVestaFqAdd::try_from_limbs(r.0, x_diff)?),
+                lambda_times_x_diff: Box::new(NonNativeVestaFqMul::try_from_limbs(lambda, x_diff)?),
+                y3_plus_y1: Box::new(NonNativeVestaFqAdd::try_from_limbs(r.1, p.1)?),
+            })
+            .and_then(|witness| {
+                if witness.x_delta.out.limbs != q.0.map(Scalar::from) {
+                    return Err("Vesta affine point addition x-delta witness mismatch".to_owned());
+                }
+                if witness.y_delta.out.limbs != q.1.map(Scalar::from) {
+                    return Err("Vesta affine point addition y-delta witness mismatch".to_owned());
+                }
+                if witness.lambda_times_x_delta.out.limbs != y_delta.map(Scalar::from) {
+                    return Err("Vesta affine point addition slope witness mismatch".to_owned());
+                }
+                if witness.x_delta_inverse.out.limbs != VESTA_FQ_ONE_LIMBS.map(Scalar::from) {
+                    return Err("Vesta affine point addition inverse witness mismatch".to_owned());
+                }
+                if witness.x_sum_plus_x2.out.limbs != lambda_squared.map(Scalar::from) {
+                    return Err(
+                        "Vesta affine point addition x equation witness mismatch".to_owned()
+                    );
+                }
+                if witness.lambda_times_x_diff.out.limbs != lambda_times_x_diff.map(Scalar::from)
+                    || witness.y3_plus_y1.out.limbs != y3_plus_y1.map(Scalar::from)
+                    || witness.lambda_times_x_diff.out.limbs != witness.y3_plus_y1.out.limbs
+                {
+                    return Err(
+                        "Vesta affine point addition y equation witness mismatch".to_owned()
+                    );
+                }
+                Ok(witness)
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_point_add(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffinePointAddConfig {
+        let p = configure_non_native_vesta_affine_on_curve(meta);
+        let q = configure_non_native_vesta_affine_on_curve(meta);
+        let r = configure_non_native_vesta_affine_on_curve(meta);
+        let x_delta = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let y_delta = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let lambda_times_x_delta = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let x_delta_inverse = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let lambda_squared = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let x3_plus_x1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let x_sum_plus_x2 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let x3_plus_x_diff = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let lambda_times_x_diff = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let y3_plus_y1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_point_add_link", |meta| {
+            let s = meta.query_selector(link);
+            let mut constraints = Vec::with_capacity(23 * NON_NATIVE_PASTA_FIELD_LIMBS);
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                let x1 = meta.query_advice(p.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y1 = meta.query_advice(p.y_squared.lhs.limbs[index].value, Rotation::cur());
+                let x2 = meta.query_advice(q.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y2 = meta.query_advice(q.y_squared.lhs.limbs[index].value, Rotation::cur());
+                let x3 = meta.query_advice(r.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y3 = meta.query_advice(r.y_squared.lhs.limbs[index].value, Rotation::cur());
+
+                let x_delta_lhs =
+                    meta.query_advice(x_delta.lhs.limbs[index].value, Rotation::cur());
+                let x_delta_rhs =
+                    meta.query_advice(x_delta.rhs.limbs[index].value, Rotation::cur());
+                let x_delta_out =
+                    meta.query_advice(x_delta.out.limbs[index].value, Rotation::cur());
+                let y_delta_lhs =
+                    meta.query_advice(y_delta.lhs.limbs[index].value, Rotation::cur());
+                let y_delta_rhs =
+                    meta.query_advice(y_delta.rhs.limbs[index].value, Rotation::cur());
+                let y_delta_out =
+                    meta.query_advice(y_delta.out.limbs[index].value, Rotation::cur());
+
+                let lambda =
+                    meta.query_advice(lambda_times_x_delta.lhs.limbs[index].value, Rotation::cur());
+                let lambda_x_delta_rhs =
+                    meta.query_advice(lambda_times_x_delta.rhs.limbs[index].value, Rotation::cur());
+                let lambda_x_delta_out =
+                    meta.query_advice(lambda_times_x_delta.out.limbs[index].value, Rotation::cur());
+                let inverse_lhs =
+                    meta.query_advice(x_delta_inverse.lhs.limbs[index].value, Rotation::cur());
+                let inverse_out =
+                    meta.query_advice(x_delta_inverse.out.limbs[index].value, Rotation::cur());
+                let lambda_sq_lhs =
+                    meta.query_advice(lambda_squared.lhs.limbs[index].value, Rotation::cur());
+                let lambda_sq_rhs =
+                    meta.query_advice(lambda_squared.rhs.limbs[index].value, Rotation::cur());
+                let lambda_sq_out =
+                    meta.query_advice(lambda_squared.out.limbs[index].value, Rotation::cur());
+
+                let x3_plus_x1_lhs =
+                    meta.query_advice(x3_plus_x1.lhs.limbs[index].value, Rotation::cur());
+                let x3_plus_x1_rhs =
+                    meta.query_advice(x3_plus_x1.rhs.limbs[index].value, Rotation::cur());
+                let x3_plus_x1_out =
+                    meta.query_advice(x3_plus_x1.out.limbs[index].value, Rotation::cur());
+                let x_sum_lhs =
+                    meta.query_advice(x_sum_plus_x2.lhs.limbs[index].value, Rotation::cur());
+                let x_sum_rhs =
+                    meta.query_advice(x_sum_plus_x2.rhs.limbs[index].value, Rotation::cur());
+                let x_sum_out =
+                    meta.query_advice(x_sum_plus_x2.out.limbs[index].value, Rotation::cur());
+                let x3_plus_x_diff_lhs =
+                    meta.query_advice(x3_plus_x_diff.lhs.limbs[index].value, Rotation::cur());
+                let x3_plus_x_diff_rhs =
+                    meta.query_advice(x3_plus_x_diff.rhs.limbs[index].value, Rotation::cur());
+                let x3_plus_x_diff_out =
+                    meta.query_advice(x3_plus_x_diff.out.limbs[index].value, Rotation::cur());
+
+                let lambda_x_diff_lhs =
+                    meta.query_advice(lambda_times_x_diff.lhs.limbs[index].value, Rotation::cur());
+                let lambda_x_diff_rhs =
+                    meta.query_advice(lambda_times_x_diff.rhs.limbs[index].value, Rotation::cur());
+                let lambda_x_diff_out =
+                    meta.query_advice(lambda_times_x_diff.out.limbs[index].value, Rotation::cur());
+                let y3_plus_y1_lhs =
+                    meta.query_advice(y3_plus_y1.lhs.limbs[index].value, Rotation::cur());
+                let y3_plus_y1_rhs =
+                    meta.query_advice(y3_plus_y1.rhs.limbs[index].value, Rotation::cur());
+                let y3_plus_y1_out =
+                    meta.query_advice(y3_plus_y1.out.limbs[index].value, Rotation::cur());
+
+                constraints.push(s.clone() * (x_delta_lhs - x1.clone()));
+                constraints.push(s.clone() * (x_delta_out - x2.clone()));
+                constraints.push(s.clone() * (y_delta_lhs - y1.clone()));
+                constraints.push(s.clone() * (y_delta_out - y2.clone()));
+                constraints.push(s.clone() * (lambda_x_delta_rhs - x_delta_rhs.clone()));
+                constraints.push(s.clone() * (lambda_x_delta_out - y_delta_rhs));
+                constraints.push(s.clone() * (inverse_lhs - x_delta_rhs));
+                constraints.push(
+                    s.clone()
+                        * (inverse_out
+                            - Expression::Constant(Scalar::from(VESTA_FQ_ONE_LIMBS[index]))),
+                );
+                constraints.push(s.clone() * (lambda_sq_lhs - lambda.clone()));
+                constraints.push(s.clone() * (lambda_sq_rhs - lambda.clone()));
+                constraints.push(s.clone() * (x3_plus_x1_lhs - x3.clone()));
+                constraints.push(s.clone() * (x3_plus_x1_rhs - x1.clone()));
+                constraints.push(s.clone() * (x_sum_lhs - x3_plus_x1_out));
+                constraints.push(s.clone() * (x_sum_rhs - x2));
+                constraints.push(s.clone() * (x_sum_out - lambda_sq_out));
+                constraints.push(s.clone() * (x3_plus_x_diff_lhs - x3));
+                constraints.push(s.clone() * (x3_plus_x_diff_out - x1));
+                constraints.push(s.clone() * (lambda_x_diff_lhs - lambda));
+                constraints.push(s.clone() * (lambda_x_diff_rhs - x3_plus_x_diff_rhs));
+                constraints.push(s.clone() * (y3_plus_y1_lhs - y3));
+                constraints.push(s.clone() * (y3_plus_y1_rhs - y1));
+                constraints.push(s.clone() * (y3_plus_y1_out - lambda_x_diff_out));
+            }
+            constraints
+        });
+
+        NonNativeVestaAffinePointAddConfig {
+            p,
+            q,
+            r,
+            x_delta,
+            y_delta,
+            lambda_times_x_delta,
+            x_delta_inverse,
+            lambda_squared,
+            x3_plus_x1,
+            x_sum_plus_x2,
+            x3_plus_x_diff,
+            lambda_times_x_diff,
+            y3_plus_y1,
+            link,
+        }
+    }
+
+    impl Circuit<Scalar> for NonNativeVestaAffinePointAdd {
+        type Config = NonNativeVestaAffinePointAddConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_point_add(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_point_add",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    assign_non_native_vesta_affine_on_curve_region(
+                        &mut region,
+                        &config.p,
+                        self.p.as_ref(),
+                    )?;
+                    assign_non_native_vesta_affine_on_curve_region(
+                        &mut region,
+                        &config.q,
+                        self.q.as_ref(),
+                    )?;
+                    assign_non_native_vesta_affine_on_curve_region(
+                        &mut region,
+                        &config.r,
+                        self.r.as_ref(),
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.x_delta,
+                        self.x_delta.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.y_delta,
+                        self.y_delta.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.lambda_times_x_delta,
+                        self.lambda_times_x_delta.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.x_delta_inverse,
+                        self.x_delta_inverse.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.lambda_squared,
+                        self.lambda_squared.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.x3_plus_x1,
+                        self.x3_plus_x1.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.x_sum_plus_x2,
+                        self.x_sum_plus_x2.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.x3_plus_x_diff,
+                        self.x3_plus_x_diff.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.lambda_times_x_diff,
+                        self.lambda_times_x_diff.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.y3_plus_y1,
+                        self.y3_plus_y1.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    /// Config for affine Vesta point doubling over non-native Fq limbs.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffinePointDoubleConfig {
+        p: NonNativeVestaAffineOnCurveConfig,
+        r: NonNativeVestaAffineOnCurveConfig,
+        y_denominator: NonNativeVestaFqAddConfig,
+        x_squared: NonNativeVestaFqMulConfig,
+        two_x_squared: NonNativeVestaFqAddConfig,
+        three_x_squared: NonNativeVestaFqAddConfig,
+        lambda_times_denominator: NonNativeVestaFqMulConfig,
+        denominator_inverse: NonNativeVestaFqMulConfig,
+        lambda_squared: NonNativeVestaFqMulConfig,
+        x3_plus_x1: NonNativeVestaFqAddConfig,
+        x_sum_plus_x1: NonNativeVestaFqAddConfig,
+        x3_plus_x_diff: NonNativeVestaFqAddConfig,
+        lambda_times_x_diff: NonNativeVestaFqMulConfig,
+        y3_plus_y1: NonNativeVestaFqAddConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving public affine Vesta points satisfy `P + P = R`.
+    ///
+    /// This gadget covers the affine doubling formula for non-infinity points
+    /// with `y(P) != 0`.
+    /// TODO: Add point-at-infinity handling in the final IPA verifier
+    /// composition.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffinePointDouble {
+        /// On-curve witness for the public input point `P`.
+        pub p: Box<NonNativeVestaAffineOnCurve>,
+        /// On-curve witness for the public output point `R`.
+        pub r: Box<NonNativeVestaAffineOnCurve>,
+        /// Addition witness for `y(P) + y(P) = denominator`.
+        pub y_denominator: Box<NonNativeVestaFqAdd>,
+        /// Multiplication witness for `x(P) * x(P)`.
+        pub x_squared: Box<NonNativeVestaFqMul>,
+        /// Addition witness for `x^2 + x^2`.
+        pub two_x_squared: Box<NonNativeVestaFqAdd>,
+        /// Addition witness for `2*x^2 + x^2`.
+        pub three_x_squared: Box<NonNativeVestaFqAdd>,
+        /// Multiplication witness for `lambda * denominator = 3*x^2`.
+        pub lambda_times_denominator: Box<NonNativeVestaFqMul>,
+        /// Multiplication witness for `denominator * denominator_inv = 1`.
+        pub denominator_inverse: Box<NonNativeVestaFqMul>,
+        /// Multiplication witness for `lambda * lambda`.
+        pub lambda_squared: Box<NonNativeVestaFqMul>,
+        /// Addition witness for `x(R) + x(P)`.
+        pub x3_plus_x1: Box<NonNativeVestaFqAdd>,
+        /// Addition witness for `x(R) + x(P) + x(P) = lambda^2`.
+        pub x_sum_plus_x1: Box<NonNativeVestaFqAdd>,
+        /// Addition witness for `x(R) + x_diff = x(P)`.
+        pub x3_plus_x_diff: Box<NonNativeVestaFqAdd>,
+        /// Multiplication witness for `lambda * x_diff`.
+        pub lambda_times_x_diff: Box<NonNativeVestaFqMul>,
+        /// Addition witness for `y(R) + y(P) = lambda * x_diff`.
+        pub y3_plus_y1: Box<NonNativeVestaFqAdd>,
+    }
+
+    impl Default for NonNativeVestaAffinePointDouble {
+        fn default() -> Self {
+            Self {
+                p: Box::new(NonNativeVestaAffineOnCurve::default()),
+                r: Box::new(NonNativeVestaAffineOnCurve::default()),
+                y_denominator: Box::new(NonNativeVestaFqAdd::default()),
+                x_squared: Box::new(NonNativeVestaFqMul::default()),
+                two_x_squared: Box::new(NonNativeVestaFqAdd::default()),
+                three_x_squared: Box::new(NonNativeVestaFqAdd::default()),
+                lambda_times_denominator: Box::new(NonNativeVestaFqMul::default()),
+                denominator_inverse: Box::new(NonNativeVestaFqMul::default()),
+                lambda_squared: Box::new(NonNativeVestaFqMul::default()),
+                x3_plus_x1: Box::new(NonNativeVestaFqAdd::default()),
+                x_sum_plus_x1: Box::new(NonNativeVestaFqAdd::default()),
+                x3_plus_x_diff: Box::new(NonNativeVestaFqAdd::default()),
+                lambda_times_x_diff: Box::new(NonNativeVestaFqMul::default()),
+                y3_plus_y1: Box::new(NonNativeVestaFqAdd::default()),
+            }
+        }
+    }
+
+    impl NonNativeVestaAffinePointDouble {
+        /// Build an honest witness for affine Vesta point doubling.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if any coordinate is non-canonical, either point is
+        /// not on curve, `y(P) == 0`, or the supplied output is not `2P`.
+        pub fn try_from_limbs(
+            p: (
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            ),
+            r: (
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+            ),
+        ) -> Result<Self, String> {
+            use ff::Field as _;
+
+            let p_on_curve = NonNativeVestaAffineOnCurve::try_from_limbs(p.0, p.1)?;
+            let r_on_curve = NonNativeVestaAffineOnCurve::try_from_limbs(r.0, r.1)?;
+
+            let x1 = vesta_fq_from_limbs(p.0)?;
+            let y1 = vesta_fq_from_limbs(p.1)?;
+            let x3 = vesta_fq_from_limbs(r.0)?;
+            let y3 = vesta_fq_from_limbs(r.1)?;
+
+            let x_squared: halo2_proofs::halo2curves::pasta::Fq = x1.square();
+            let three_x_squared = x_squared + x_squared + x_squared;
+            let denominator = y1 + y1;
+            let denominator_inverse = Option::from(denominator.invert())
+                .ok_or_else(|| "Vesta affine point doubling requires y(P) != 0".to_owned())?;
+            let lambda: halo2_proofs::halo2curves::pasta::Fq =
+                three_x_squared * denominator_inverse;
+            let lambda_squared: halo2_proofs::halo2curves::pasta::Fq = lambda.square();
+            let expected_x3 = lambda_squared - x1 - x1;
+            if expected_x3 != x3 {
+                return Err("Vesta affine point doubling output x-coordinate mismatch".to_owned());
+            }
+            let x_diff = x1 - x3;
+            let expected_y3 = lambda * x_diff - y1;
+            if expected_y3 != y3 {
+                return Err("Vesta affine point doubling output y-coordinate mismatch".to_owned());
+            }
+
+            let denominator = vesta_fq_to_limbs(denominator);
+            let denominator_inverse = vesta_fq_to_limbs(denominator_inverse);
+            let lambda = vesta_fq_to_limbs(lambda);
+            let lambda_squared = vesta_fq_to_limbs(lambda_squared);
+            let x_squared = vesta_fq_to_limbs(x_squared);
+            let two_x_squared = add_mod_vesta_fq_limbs(x_squared, x_squared)?;
+            let three_x_squared = vesta_fq_to_limbs(three_x_squared);
+            let x3_plus_x1 = add_mod_vesta_fq_limbs(r.0, p.0)?;
+            let x_diff = vesta_fq_to_limbs(x_diff);
+            let lambda_times_x_diff = mul_mod_vesta_fq_limbs(lambda, x_diff)?;
+            let y3_plus_y1 = add_mod_vesta_fq_limbs(r.1, p.1)?;
+
+            Ok(Self {
+                p: Box::new(p_on_curve),
+                r: Box::new(r_on_curve),
+                y_denominator: Box::new(NonNativeVestaFqAdd::try_from_limbs(p.1, p.1)?),
+                x_squared: Box::new(NonNativeVestaFqMul::try_from_limbs(p.0, p.0)?),
+                two_x_squared: Box::new(NonNativeVestaFqAdd::try_from_limbs(x_squared, x_squared)?),
+                three_x_squared: Box::new(NonNativeVestaFqAdd::try_from_limbs(
+                    two_x_squared,
+                    x_squared,
+                )?),
+                lambda_times_denominator: Box::new(NonNativeVestaFqMul::try_from_limbs(
+                    lambda,
+                    denominator,
+                )?),
+                denominator_inverse: Box::new(NonNativeVestaFqMul::try_from_limbs(
+                    denominator,
+                    denominator_inverse,
+                )?),
+                lambda_squared: Box::new(NonNativeVestaFqMul::try_from_limbs(lambda, lambda)?),
+                x3_plus_x1: Box::new(NonNativeVestaFqAdd::try_from_limbs(r.0, p.0)?),
+                x_sum_plus_x1: Box::new(NonNativeVestaFqAdd::try_from_limbs(x3_plus_x1, p.0)?),
+                x3_plus_x_diff: Box::new(NonNativeVestaFqAdd::try_from_limbs(r.0, x_diff)?),
+                lambda_times_x_diff: Box::new(NonNativeVestaFqMul::try_from_limbs(lambda, x_diff)?),
+                y3_plus_y1: Box::new(NonNativeVestaFqAdd::try_from_limbs(r.1, p.1)?),
+            })
+            .and_then(|witness| {
+                if witness.y_denominator.out.limbs != denominator.map(Scalar::from) {
+                    return Err(
+                        "Vesta affine point doubling denominator witness mismatch".to_owned()
+                    );
+                }
+                if witness.three_x_squared.out.limbs != three_x_squared.map(Scalar::from) {
+                    return Err("Vesta affine point doubling numerator witness mismatch".to_owned());
+                }
+                if witness.lambda_times_denominator.out.limbs != three_x_squared.map(Scalar::from) {
+                    return Err("Vesta affine point doubling slope witness mismatch".to_owned());
+                }
+                if witness.denominator_inverse.out.limbs != VESTA_FQ_ONE_LIMBS.map(Scalar::from) {
+                    return Err("Vesta affine point doubling inverse witness mismatch".to_owned());
+                }
+                if witness.x_sum_plus_x1.out.limbs != lambda_squared.map(Scalar::from) {
+                    return Err(
+                        "Vesta affine point doubling x equation witness mismatch".to_owned()
+                    );
+                }
+                if witness.lambda_times_x_diff.out.limbs != lambda_times_x_diff.map(Scalar::from)
+                    || witness.y3_plus_y1.out.limbs != y3_plus_y1.map(Scalar::from)
+                    || witness.lambda_times_x_diff.out.limbs != witness.y3_plus_y1.out.limbs
+                {
+                    return Err(
+                        "Vesta affine point doubling y equation witness mismatch".to_owned()
+                    );
+                }
+                Ok(witness)
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_point_double(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffinePointDoubleConfig {
+        let p = configure_non_native_vesta_affine_on_curve(meta);
+        let r = configure_non_native_vesta_affine_on_curve(meta);
+        let y_denominator = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let x_squared = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let two_x_squared = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let three_x_squared = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let lambda_times_denominator = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let denominator_inverse = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let lambda_squared = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let x3_plus_x1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let x_sum_plus_x1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let x3_plus_x_diff = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let lambda_times_x_diff = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let y3_plus_y1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_point_double_link", |meta| {
+            let s = meta.query_selector(link);
+            let mut constraints = Vec::with_capacity(22 * NON_NATIVE_PASTA_FIELD_LIMBS);
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                let x1 = meta.query_advice(p.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y1 = meta.query_advice(p.y_squared.lhs.limbs[index].value, Rotation::cur());
+                let x3 = meta.query_advice(r.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y3 = meta.query_advice(r.y_squared.lhs.limbs[index].value, Rotation::cur());
+
+                let denominator_lhs =
+                    meta.query_advice(y_denominator.lhs.limbs[index].value, Rotation::cur());
+                let denominator_rhs =
+                    meta.query_advice(y_denominator.rhs.limbs[index].value, Rotation::cur());
+                let denominator_out =
+                    meta.query_advice(y_denominator.out.limbs[index].value, Rotation::cur());
+                let x_sq_lhs = meta.query_advice(x_squared.lhs.limbs[index].value, Rotation::cur());
+                let x_sq_rhs = meta.query_advice(x_squared.rhs.limbs[index].value, Rotation::cur());
+                let x_sq_out = meta.query_advice(x_squared.out.limbs[index].value, Rotation::cur());
+                let two_x_sq_lhs =
+                    meta.query_advice(two_x_squared.lhs.limbs[index].value, Rotation::cur());
+                let two_x_sq_rhs =
+                    meta.query_advice(two_x_squared.rhs.limbs[index].value, Rotation::cur());
+                let two_x_sq_out =
+                    meta.query_advice(two_x_squared.out.limbs[index].value, Rotation::cur());
+                let three_x_sq_lhs =
+                    meta.query_advice(three_x_squared.lhs.limbs[index].value, Rotation::cur());
+                let three_x_sq_rhs =
+                    meta.query_advice(three_x_squared.rhs.limbs[index].value, Rotation::cur());
+                let three_x_sq_out =
+                    meta.query_advice(three_x_squared.out.limbs[index].value, Rotation::cur());
+
+                let lambda = meta.query_advice(
+                    lambda_times_denominator.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let lambda_denominator_rhs = meta.query_advice(
+                    lambda_times_denominator.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let lambda_denominator_out = meta.query_advice(
+                    lambda_times_denominator.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let inverse_lhs =
+                    meta.query_advice(denominator_inverse.lhs.limbs[index].value, Rotation::cur());
+                let inverse_out =
+                    meta.query_advice(denominator_inverse.out.limbs[index].value, Rotation::cur());
+                let lambda_sq_lhs =
+                    meta.query_advice(lambda_squared.lhs.limbs[index].value, Rotation::cur());
+                let lambda_sq_rhs =
+                    meta.query_advice(lambda_squared.rhs.limbs[index].value, Rotation::cur());
+                let lambda_sq_out =
+                    meta.query_advice(lambda_squared.out.limbs[index].value, Rotation::cur());
+
+                let x3_plus_x1_lhs =
+                    meta.query_advice(x3_plus_x1.lhs.limbs[index].value, Rotation::cur());
+                let x3_plus_x1_rhs =
+                    meta.query_advice(x3_plus_x1.rhs.limbs[index].value, Rotation::cur());
+                let x3_plus_x1_out =
+                    meta.query_advice(x3_plus_x1.out.limbs[index].value, Rotation::cur());
+                let x_sum_lhs =
+                    meta.query_advice(x_sum_plus_x1.lhs.limbs[index].value, Rotation::cur());
+                let x_sum_rhs =
+                    meta.query_advice(x_sum_plus_x1.rhs.limbs[index].value, Rotation::cur());
+                let x_sum_out =
+                    meta.query_advice(x_sum_plus_x1.out.limbs[index].value, Rotation::cur());
+                let x3_plus_x_diff_lhs =
+                    meta.query_advice(x3_plus_x_diff.lhs.limbs[index].value, Rotation::cur());
+                let x3_plus_x_diff_rhs =
+                    meta.query_advice(x3_plus_x_diff.rhs.limbs[index].value, Rotation::cur());
+                let x3_plus_x_diff_out =
+                    meta.query_advice(x3_plus_x_diff.out.limbs[index].value, Rotation::cur());
+                let lambda_x_diff_lhs =
+                    meta.query_advice(lambda_times_x_diff.lhs.limbs[index].value, Rotation::cur());
+                let lambda_x_diff_rhs =
+                    meta.query_advice(lambda_times_x_diff.rhs.limbs[index].value, Rotation::cur());
+                let lambda_x_diff_out =
+                    meta.query_advice(lambda_times_x_diff.out.limbs[index].value, Rotation::cur());
+                let y3_plus_y1_lhs =
+                    meta.query_advice(y3_plus_y1.lhs.limbs[index].value, Rotation::cur());
+                let y3_plus_y1_rhs =
+                    meta.query_advice(y3_plus_y1.rhs.limbs[index].value, Rotation::cur());
+                let y3_plus_y1_out =
+                    meta.query_advice(y3_plus_y1.out.limbs[index].value, Rotation::cur());
+
+                constraints.push(s.clone() * (denominator_lhs - y1.clone()));
+                constraints.push(s.clone() * (denominator_rhs - y1.clone()));
+                constraints.push(s.clone() * (x_sq_lhs - x1.clone()));
+                constraints.push(s.clone() * (x_sq_rhs - x1.clone()));
+                constraints.push(s.clone() * (two_x_sq_lhs - x_sq_out.clone()));
+                constraints.push(s.clone() * (two_x_sq_rhs - x_sq_out.clone()));
+                constraints.push(s.clone() * (three_x_sq_lhs - two_x_sq_out));
+                constraints.push(s.clone() * (three_x_sq_rhs - x_sq_out));
+                constraints.push(s.clone() * (lambda_denominator_rhs - denominator_out.clone()));
+                constraints.push(s.clone() * (lambda_denominator_out - three_x_sq_out));
+                constraints.push(s.clone() * (inverse_lhs - denominator_out));
+                constraints.push(
+                    s.clone()
+                        * (inverse_out
+                            - Expression::Constant(Scalar::from(VESTA_FQ_ONE_LIMBS[index]))),
+                );
+                constraints.push(s.clone() * (lambda_sq_lhs - lambda.clone()));
+                constraints.push(s.clone() * (lambda_sq_rhs - lambda.clone()));
+                constraints.push(s.clone() * (x3_plus_x1_lhs - x3.clone()));
+                constraints.push(s.clone() * (x3_plus_x1_rhs - x1.clone()));
+                constraints.push(s.clone() * (x_sum_lhs - x3_plus_x1_out));
+                constraints.push(s.clone() * (x_sum_rhs - x1.clone()));
+                constraints.push(s.clone() * (x_sum_out - lambda_sq_out));
+                constraints.push(s.clone() * (x3_plus_x_diff_lhs - x3));
+                constraints.push(s.clone() * (x3_plus_x_diff_out - x1));
+                constraints.push(s.clone() * (lambda_x_diff_lhs - lambda));
+                constraints.push(s.clone() * (lambda_x_diff_rhs - x3_plus_x_diff_rhs));
+                constraints.push(s.clone() * (y3_plus_y1_lhs - y3));
+                constraints.push(s.clone() * (y3_plus_y1_rhs - y1));
+                constraints.push(s.clone() * (y3_plus_y1_out - lambda_x_diff_out));
+            }
+            constraints
+        });
+
+        NonNativeVestaAffinePointDoubleConfig {
+            p,
+            r,
+            y_denominator,
+            x_squared,
+            two_x_squared,
+            three_x_squared,
+            lambda_times_denominator,
+            denominator_inverse,
+            lambda_squared,
+            x3_plus_x1,
+            x_sum_plus_x1,
+            x3_plus_x_diff,
+            lambda_times_x_diff,
+            y3_plus_y1,
+            link,
+        }
+    }
+
+    impl Circuit<Scalar> for NonNativeVestaAffinePointDouble {
+        type Config = NonNativeVestaAffinePointDoubleConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_point_double(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_point_double",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    assign_non_native_vesta_affine_on_curve_region(
+                        &mut region,
+                        &config.p,
+                        self.p.as_ref(),
+                    )?;
+                    assign_non_native_vesta_affine_on_curve_region(
+                        &mut region,
+                        &config.r,
+                        self.r.as_ref(),
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.y_denominator,
+                        self.y_denominator.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.x_squared,
+                        self.x_squared.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.two_x_squared,
+                        self.two_x_squared.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.three_x_squared,
+                        self.three_x_squared.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.lambda_times_denominator,
+                        self.lambda_times_denominator.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.denominator_inverse,
+                        self.denominator_inverse.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.lambda_squared,
+                        self.lambda_squared.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.x3_plus_x1,
+                        self.x3_plus_x1.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.x_sum_plus_x1,
+                        self.x_sum_plus_x1.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.x3_plus_x_diff,
+                        self.x3_plus_x_diff.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.lambda_times_x_diff,
+                        self.lambda_times_x_diff.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.y3_plus_y1,
+                        self.y3_plus_y1.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum VestaCompleteAddCase {
+        PIdentity,
+        QIdentity,
+        Inverse,
+        Double,
+        Distinct,
+    }
+
+    fn zero_vesta_fq_add() -> Result<Box<NonNativeVestaFqAdd>, String> {
+        Ok(Box::new(NonNativeVestaFqAdd::try_from_limbs(
+            [0; NON_NATIVE_PASTA_FIELD_LIMBS],
+            [0; NON_NATIVE_PASTA_FIELD_LIMBS],
+        )?))
+    }
+
+    fn zero_vesta_fq_mul() -> Result<Box<NonNativeVestaFqMul>, String> {
+        Ok(Box::new(NonNativeVestaFqMul::try_from_limbs(
+            [0; NON_NATIVE_PASTA_FIELD_LIMBS],
+            [0; NON_NATIVE_PASTA_FIELD_LIMBS],
+        )?))
+    }
+
+    /// Config for complete affine Vesta point addition over non-native Fq limbs.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineCompleteAddConfig {
+        p: NonNativeVestaAffineMaybeIdentityConfig,
+        q: NonNativeVestaAffineMaybeIdentityConfig,
+        r: NonNativeVestaAffineMaybeIdentityConfig,
+        inverse_y_sum: NonNativeVestaFqAddConfig,
+        distinct_x_delta: NonNativeVestaFqAddConfig,
+        distinct_y_delta: NonNativeVestaFqAddConfig,
+        distinct_lambda_times_x_delta: NonNativeVestaFqMulConfig,
+        distinct_x_delta_inverse: NonNativeVestaFqMulConfig,
+        distinct_lambda_squared: NonNativeVestaFqMulConfig,
+        distinct_x3_plus_x1: NonNativeVestaFqAddConfig,
+        distinct_x_sum_plus_x2: NonNativeVestaFqAddConfig,
+        distinct_x3_plus_x_diff: NonNativeVestaFqAddConfig,
+        distinct_lambda_times_x_diff: NonNativeVestaFqMulConfig,
+        distinct_y3_plus_y1: NonNativeVestaFqAddConfig,
+        double_y_denominator: NonNativeVestaFqAddConfig,
+        double_x_squared: NonNativeVestaFqMulConfig,
+        double_two_x_squared: NonNativeVestaFqAddConfig,
+        double_three_x_squared: NonNativeVestaFqAddConfig,
+        double_lambda_times_denominator: NonNativeVestaFqMulConfig,
+        double_denominator_inverse: NonNativeVestaFqMulConfig,
+        double_lambda_squared: NonNativeVestaFqMulConfig,
+        double_x3_plus_x1: NonNativeVestaFqAddConfig,
+        double_x_sum_plus_x1: NonNativeVestaFqAddConfig,
+        double_x3_plus_x_diff: NonNativeVestaFqAddConfig,
+        double_lambda_times_x_diff: NonNativeVestaFqMulConfig,
+        double_y3_plus_y1: NonNativeVestaFqAddConfig,
+        case_p_identity: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        case_q_identity: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        case_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        case_double: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        case_distinct: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving public point-or-identity encodings satisfy `P + Q = R`.
+    ///
+    /// This gadget covers identity passthrough, inverse-pair output identity,
+    /// ordinary doubling, and distinct affine addition under one-hot private
+    /// branch selectors. It is the group-operation layer needed before the
+    /// recursive IPA verifier can accumulate Vesta commitments in-circuit.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineCompleteAdd {
+        /// Point-or-identity witness for the public left input point `P`.
+        pub p: Box<NonNativeVestaAffineMaybeIdentity>,
+        /// Point-or-identity witness for the public right input point `Q`.
+        pub q: Box<NonNativeVestaAffineMaybeIdentity>,
+        /// Point-or-identity witness for the public output point `R`.
+        pub r: Box<NonNativeVestaAffineMaybeIdentity>,
+        /// Inverse-pair witness for `y(P) + y(Q) = 0`.
+        pub inverse_y_sum: Box<NonNativeVestaFqAdd>,
+        /// Distinct-add witness for `x(P) + dx = x(Q)`.
+        pub distinct_x_delta: Box<NonNativeVestaFqAdd>,
+        /// Distinct-add witness for `y(P) + dy = y(Q)`.
+        pub distinct_y_delta: Box<NonNativeVestaFqAdd>,
+        /// Distinct-add witness for `lambda * dx = dy`.
+        pub distinct_lambda_times_x_delta: Box<NonNativeVestaFqMul>,
+        /// Distinct-add witness for `dx * dx_inv = 1`.
+        pub distinct_x_delta_inverse: Box<NonNativeVestaFqMul>,
+        /// Distinct-add witness for `lambda^2`.
+        pub distinct_lambda_squared: Box<NonNativeVestaFqMul>,
+        /// Distinct-add witness for `x(R) + x(P)`.
+        pub distinct_x3_plus_x1: Box<NonNativeVestaFqAdd>,
+        /// Distinct-add witness for `x(R) + x(P) + x(Q) = lambda^2`.
+        pub distinct_x_sum_plus_x2: Box<NonNativeVestaFqAdd>,
+        /// Distinct-add witness for `x(R) + x_diff = x(P)`.
+        pub distinct_x3_plus_x_diff: Box<NonNativeVestaFqAdd>,
+        /// Distinct-add witness for `lambda * x_diff`.
+        pub distinct_lambda_times_x_diff: Box<NonNativeVestaFqMul>,
+        /// Distinct-add witness for `y(R) + y(P) = lambda * x_diff`.
+        pub distinct_y3_plus_y1: Box<NonNativeVestaFqAdd>,
+        /// Doubling witness for `y(P) + y(P) = denominator`.
+        pub double_y_denominator: Box<NonNativeVestaFqAdd>,
+        /// Doubling witness for `x(P)^2`.
+        pub double_x_squared: Box<NonNativeVestaFqMul>,
+        /// Doubling witness for `2*x(P)^2`.
+        pub double_two_x_squared: Box<NonNativeVestaFqAdd>,
+        /// Doubling witness for `3*x(P)^2`.
+        pub double_three_x_squared: Box<NonNativeVestaFqAdd>,
+        /// Doubling witness for `lambda * denominator = 3*x(P)^2`.
+        pub double_lambda_times_denominator: Box<NonNativeVestaFqMul>,
+        /// Doubling witness for `denominator * denominator_inv = 1`.
+        pub double_denominator_inverse: Box<NonNativeVestaFqMul>,
+        /// Doubling witness for `lambda^2`.
+        pub double_lambda_squared: Box<NonNativeVestaFqMul>,
+        /// Doubling witness for `x(R) + x(P)`.
+        pub double_x3_plus_x1: Box<NonNativeVestaFqAdd>,
+        /// Doubling witness for `x(R) + x(P) + x(P) = lambda^2`.
+        pub double_x_sum_plus_x1: Box<NonNativeVestaFqAdd>,
+        /// Doubling witness for `x(R) + x_diff = x(P)`.
+        pub double_x3_plus_x_diff: Box<NonNativeVestaFqAdd>,
+        /// Doubling witness for `lambda * x_diff`.
+        pub double_lambda_times_x_diff: Box<NonNativeVestaFqMul>,
+        /// Doubling witness for `y(R) + y(P) = lambda * x_diff`.
+        pub double_y3_plus_y1: Box<NonNativeVestaFqAdd>,
+        /// Private one-hot selector for `P` identity passthrough.
+        pub case_p_identity: Scalar,
+        /// Private one-hot selector for `Q` identity passthrough.
+        pub case_q_identity: Scalar,
+        /// Private one-hot selector for inverse-pair output identity.
+        pub case_inverse: Scalar,
+        /// Private one-hot selector for point doubling.
+        pub case_double: Scalar,
+        /// Private one-hot selector for distinct affine addition.
+        pub case_distinct: Scalar,
+    }
+
+    impl Default for NonNativeVestaAffineCompleteAdd {
+        fn default() -> Self {
+            Self {
+                p: Box::new(NonNativeVestaAffineMaybeIdentity::default()),
+                q: Box::new(NonNativeVestaAffineMaybeIdentity::default()),
+                r: Box::new(NonNativeVestaAffineMaybeIdentity::default()),
+                inverse_y_sum: Box::new(NonNativeVestaFqAdd::default()),
+                distinct_x_delta: Box::new(NonNativeVestaFqAdd::default()),
+                distinct_y_delta: Box::new(NonNativeVestaFqAdd::default()),
+                distinct_lambda_times_x_delta: Box::new(NonNativeVestaFqMul::default()),
+                distinct_x_delta_inverse: Box::new(NonNativeVestaFqMul::default()),
+                distinct_lambda_squared: Box::new(NonNativeVestaFqMul::default()),
+                distinct_x3_plus_x1: Box::new(NonNativeVestaFqAdd::default()),
+                distinct_x_sum_plus_x2: Box::new(NonNativeVestaFqAdd::default()),
+                distinct_x3_plus_x_diff: Box::new(NonNativeVestaFqAdd::default()),
+                distinct_lambda_times_x_diff: Box::new(NonNativeVestaFqMul::default()),
+                distinct_y3_plus_y1: Box::new(NonNativeVestaFqAdd::default()),
+                double_y_denominator: Box::new(NonNativeVestaFqAdd::default()),
+                double_x_squared: Box::new(NonNativeVestaFqMul::default()),
+                double_two_x_squared: Box::new(NonNativeVestaFqAdd::default()),
+                double_three_x_squared: Box::new(NonNativeVestaFqAdd::default()),
+                double_lambda_times_denominator: Box::new(NonNativeVestaFqMul::default()),
+                double_denominator_inverse: Box::new(NonNativeVestaFqMul::default()),
+                double_lambda_squared: Box::new(NonNativeVestaFqMul::default()),
+                double_x3_plus_x1: Box::new(NonNativeVestaFqAdd::default()),
+                double_x_sum_plus_x1: Box::new(NonNativeVestaFqAdd::default()),
+                double_x3_plus_x_diff: Box::new(NonNativeVestaFqAdd::default()),
+                double_lambda_times_x_diff: Box::new(NonNativeVestaFqMul::default()),
+                double_y3_plus_y1: Box::new(NonNativeVestaFqAdd::default()),
+                case_p_identity: Scalar::from(1),
+                case_q_identity: Scalar::from(0),
+                case_inverse: Scalar::from(0),
+                case_double: Scalar::from(0),
+                case_distinct: Scalar::from(0),
+            }
+        }
+    }
+
+    impl NonNativeVestaAffineCompleteAdd {
+        /// Build an honest complete-addition witness for canonical point encodings.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if any point encoding is non-canonical, if any
+        /// non-identity coordinate is off-curve, or if `R` is not the group-law
+        /// result of `P + Q`.
+        pub fn try_from_limbs(
+            p: (
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                bool,
+            ),
+            q: (
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                bool,
+            ),
+            r: (
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                bool,
+            ),
+        ) -> Result<Self, String> {
+            use ff::Field as _;
+
+            let p_witness = NonNativeVestaAffineMaybeIdentity::try_from_limbs(p.0, p.1, p.2)?;
+            let q_witness = NonNativeVestaAffineMaybeIdentity::try_from_limbs(q.0, q.1, q.2)?;
+            let r_witness = NonNativeVestaAffineMaybeIdentity::try_from_limbs(r.0, r.1, r.2)?;
+
+            let case = if p.2 {
+                if r != q {
+                    return Err("Vesta complete addition identity-P output mismatch".to_owned());
+                }
+                VestaCompleteAddCase::PIdentity
+            } else if q.2 {
+                if r != p {
+                    return Err("Vesta complete addition identity-Q output mismatch".to_owned());
+                }
+                VestaCompleteAddCase::QIdentity
+            } else {
+                let x1 = vesta_fq_from_limbs(p.0)?;
+                let y1 = vesta_fq_from_limbs(p.1)?;
+                let x2 = vesta_fq_from_limbs(q.0)?;
+                let y2 = vesta_fq_from_limbs(q.1)?;
+                if r.2 {
+                    if x1 != x2 || !bool::from((y1 + y2).is_zero()) {
+                        return Err(
+                            "Vesta complete addition identity output requires inverse inputs"
+                                .to_owned(),
+                        );
+                    }
+                    VestaCompleteAddCase::Inverse
+                } else if x1 == x2 {
+                    if y1 != y2 {
+                        return Err(
+                            "Vesta complete addition equal-x non-identity output requires doubling"
+                                .to_owned(),
+                        );
+                    }
+                    NonNativeVestaAffinePointDouble::try_from_limbs((p.0, p.1), (r.0, r.1))?;
+                    VestaCompleteAddCase::Double
+                } else {
+                    NonNativeVestaAffinePointAdd::try_from_limbs(
+                        (p.0, p.1),
+                        (q.0, q.1),
+                        (r.0, r.1),
+                    )?;
+                    VestaCompleteAddCase::Distinct
+                }
+            };
+
+            let inverse_y_sum = if case == VestaCompleteAddCase::Inverse {
+                let witness = NonNativeVestaFqAdd::try_from_limbs(p.1, q.1)?;
+                if witness.out.limbs != [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS] {
+                    return Err("Vesta complete addition inverse y-sum mismatch".to_owned());
+                }
+                Box::new(witness)
+            } else {
+                zero_vesta_fq_add()?
+            };
+
+            let (
+                distinct_x_delta,
+                distinct_y_delta,
+                distinct_lambda_times_x_delta,
+                distinct_x_delta_inverse,
+                distinct_lambda_squared,
+                distinct_x3_plus_x1,
+                distinct_x_sum_plus_x2,
+                distinct_x3_plus_x_diff,
+                distinct_lambda_times_x_diff,
+                distinct_y3_plus_y1,
+            ) = if case == VestaCompleteAddCase::Distinct {
+                let witness = NonNativeVestaAffinePointAdd::try_from_limbs(
+                    (p.0, p.1),
+                    (q.0, q.1),
+                    (r.0, r.1),
+                )?;
+                (
+                    witness.x_delta,
+                    witness.y_delta,
+                    witness.lambda_times_x_delta,
+                    witness.x_delta_inverse,
+                    witness.lambda_squared,
+                    witness.x3_plus_x1,
+                    witness.x_sum_plus_x2,
+                    witness.x3_plus_x_diff,
+                    witness.lambda_times_x_diff,
+                    witness.y3_plus_y1,
+                )
+            } else {
+                (
+                    zero_vesta_fq_add()?,
+                    zero_vesta_fq_add()?,
+                    zero_vesta_fq_mul()?,
+                    zero_vesta_fq_mul()?,
+                    zero_vesta_fq_mul()?,
+                    zero_vesta_fq_add()?,
+                    zero_vesta_fq_add()?,
+                    zero_vesta_fq_add()?,
+                    zero_vesta_fq_mul()?,
+                    zero_vesta_fq_add()?,
+                )
+            };
+
+            let (
+                double_y_denominator,
+                double_x_squared,
+                double_two_x_squared,
+                double_three_x_squared,
+                double_lambda_times_denominator,
+                double_denominator_inverse,
+                double_lambda_squared,
+                double_x3_plus_x1,
+                double_x_sum_plus_x1,
+                double_x3_plus_x_diff,
+                double_lambda_times_x_diff,
+                double_y3_plus_y1,
+            ) = if case == VestaCompleteAddCase::Double {
+                let witness =
+                    NonNativeVestaAffinePointDouble::try_from_limbs((p.0, p.1), (r.0, r.1))?;
+                (
+                    witness.y_denominator,
+                    witness.x_squared,
+                    witness.two_x_squared,
+                    witness.three_x_squared,
+                    witness.lambda_times_denominator,
+                    witness.denominator_inverse,
+                    witness.lambda_squared,
+                    witness.x3_plus_x1,
+                    witness.x_sum_plus_x1,
+                    witness.x3_plus_x_diff,
+                    witness.lambda_times_x_diff,
+                    witness.y3_plus_y1,
+                )
+            } else {
+                (
+                    zero_vesta_fq_add()?,
+                    zero_vesta_fq_mul()?,
+                    zero_vesta_fq_add()?,
+                    zero_vesta_fq_add()?,
+                    zero_vesta_fq_mul()?,
+                    zero_vesta_fq_mul()?,
+                    zero_vesta_fq_mul()?,
+                    zero_vesta_fq_add()?,
+                    zero_vesta_fq_add()?,
+                    zero_vesta_fq_add()?,
+                    zero_vesta_fq_mul()?,
+                    zero_vesta_fq_add()?,
+                )
+            };
+
+            Ok(Self {
+                p: Box::new(p_witness),
+                q: Box::new(q_witness),
+                r: Box::new(r_witness),
+                inverse_y_sum,
+                distinct_x_delta,
+                distinct_y_delta,
+                distinct_lambda_times_x_delta,
+                distinct_x_delta_inverse,
+                distinct_lambda_squared,
+                distinct_x3_plus_x1,
+                distinct_x_sum_plus_x2,
+                distinct_x3_plus_x_diff,
+                distinct_lambda_times_x_diff,
+                distinct_y3_plus_y1,
+                double_y_denominator,
+                double_x_squared,
+                double_two_x_squared,
+                double_three_x_squared,
+                double_lambda_times_denominator,
+                double_denominator_inverse,
+                double_lambda_squared,
+                double_x3_plus_x1,
+                double_x_sum_plus_x1,
+                double_x3_plus_x_diff,
+                double_lambda_times_x_diff,
+                double_y3_plus_y1,
+                case_p_identity: Scalar::from(u64::from(case == VestaCompleteAddCase::PIdentity)),
+                case_q_identity: Scalar::from(u64::from(case == VestaCompleteAddCase::QIdentity)),
+                case_inverse: Scalar::from(u64::from(case == VestaCompleteAddCase::Inverse)),
+                case_double: Scalar::from(u64::from(case == VestaCompleteAddCase::Double)),
+                case_distinct: Scalar::from(u64::from(case == VestaCompleteAddCase::Distinct)),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_complete_add(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineCompleteAddConfig {
+        configure_non_native_vesta_affine_complete_add_with_exposure(meta, true, true, true)
+    }
+
+    fn configure_non_native_vesta_affine_complete_add_with_exposure(
+        meta: &mut ConstraintSystem<Scalar>,
+        p_public: bool,
+        q_public: bool,
+        r_public: bool,
+    ) -> NonNativeVestaAffineCompleteAddConfig {
+        let p = configure_non_native_vesta_affine_maybe_identity_with_exposure(
+            meta, p_public, p_public,
+        );
+        let q = configure_non_native_vesta_affine_maybe_identity_with_exposure(
+            meta, q_public, q_public,
+        );
+        let r = configure_non_native_vesta_affine_maybe_identity_with_exposure(
+            meta, r_public, r_public,
+        );
+        let inverse_y_sum = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_x_delta = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_y_delta = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_lambda_times_x_delta = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_x_delta_inverse = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_lambda_squared = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_x3_plus_x1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_x_sum_plus_x2 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_x3_plus_x_diff = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_lambda_times_x_diff = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let distinct_y3_plus_y1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_y_denominator = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_x_squared = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_two_x_squared = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_three_x_squared = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_lambda_times_denominator = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_denominator_inverse = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_lambda_squared = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_x3_plus_x1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_x_sum_plus_x1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_x3_plus_x_diff = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_lambda_times_x_diff = configure_non_native_vesta_fq_mul_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let double_y3_plus_y1 = configure_non_native_vesta_fq_add_with_exposure(
+            meta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        );
+        let case_p_identity = meta.advice_column();
+        let case_q_identity = meta.advice_column();
+        let case_inverse = meta.advice_column();
+        let case_double = meta.advice_column();
+        let case_distinct = meta.advice_column();
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_complete_add_link", |meta| {
+            let s = meta.query_selector(link);
+            let case_p_identity = meta.query_advice(case_p_identity, Rotation::cur());
+            let case_q_identity = meta.query_advice(case_q_identity, Rotation::cur());
+            let case_inverse = meta.query_advice(case_inverse, Rotation::cur());
+            let case_double = meta.query_advice(case_double, Rotation::cur());
+            let case_distinct = meta.query_advice(case_distinct, Rotation::cur());
+            let p_identity = meta.query_advice(p.identity, Rotation::cur());
+            let q_identity = meta.query_advice(q.identity, Rotation::cur());
+            let r_identity = meta.query_advice(r.identity, Rotation::cur());
+            let one = Expression::Constant(Scalar::from(1));
+            let zero_limb = Expression::Constant(Scalar::from(0));
+            let mut constraints = Vec::with_capacity(260);
+            for case in [
+                case_p_identity.clone(),
+                case_q_identity.clone(),
+                case_inverse.clone(),
+                case_double.clone(),
+                case_distinct.clone(),
+            ] {
+                constraints.push(s.clone() * case.clone() * (case - one.clone()));
+            }
+            constraints.push(
+                s.clone()
+                    * (case_p_identity.clone()
+                        + case_q_identity.clone()
+                        + case_inverse.clone()
+                        + case_double.clone()
+                        + case_distinct.clone()
+                        - one.clone()),
+            );
+            constraints
+                .push(s.clone() * case_p_identity.clone() * (p_identity.clone() - one.clone()));
+            constraints.push(
+                s.clone() * case_p_identity.clone() * (r_identity.clone() - q_identity.clone()),
+            );
+            constraints.push(s.clone() * case_q_identity.clone() * p_identity.clone());
+            constraints
+                .push(s.clone() * case_q_identity.clone() * (q_identity.clone() - one.clone()));
+            constraints.push(
+                s.clone() * case_q_identity.clone() * (r_identity.clone() - p_identity.clone()),
+            );
+            for case in [
+                case_inverse.clone(),
+                case_double.clone(),
+                case_distinct.clone(),
+            ] {
+                constraints.push(s.clone() * case.clone() * p_identity.clone());
+                constraints.push(s.clone() * case * q_identity.clone());
+            }
+            constraints.push(s.clone() * case_inverse.clone() * (r_identity.clone() - one.clone()));
+            constraints.push(s.clone() * case_double.clone() * r_identity.clone());
+            constraints.push(s.clone() * case_distinct.clone() * r_identity.clone());
+
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                let x1 = meta.query_advice(p.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y1 = meta.query_advice(p.y_squared.lhs.limbs[index].value, Rotation::cur());
+                let x2 = meta.query_advice(q.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y2 = meta.query_advice(q.y_squared.lhs.limbs[index].value, Rotation::cur());
+                let x3 = meta.query_advice(r.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let y3 = meta.query_advice(r.y_squared.lhs.limbs[index].value, Rotation::cur());
+
+                constraints.push(s.clone() * case_p_identity.clone() * (x3.clone() - x2.clone()));
+                constraints.push(s.clone() * case_p_identity.clone() * (y3.clone() - y2.clone()));
+                constraints.push(s.clone() * case_q_identity.clone() * (x3.clone() - x1.clone()));
+                constraints.push(s.clone() * case_q_identity.clone() * (y3.clone() - y1.clone()));
+
+                let inverse_y_lhs =
+                    meta.query_advice(inverse_y_sum.lhs.limbs[index].value, Rotation::cur());
+                let inverse_y_rhs =
+                    meta.query_advice(inverse_y_sum.rhs.limbs[index].value, Rotation::cur());
+                let inverse_y_out =
+                    meta.query_advice(inverse_y_sum.out.limbs[index].value, Rotation::cur());
+                constraints.push(s.clone() * case_inverse.clone() * (x1.clone() - x2.clone()));
+                constraints.push(s.clone() * case_inverse.clone() * (inverse_y_lhs - y1.clone()));
+                constraints.push(s.clone() * case_inverse.clone() * (inverse_y_rhs - y2.clone()));
+                constraints
+                    .push(s.clone() * case_inverse.clone() * (inverse_y_out - zero_limb.clone()));
+
+                constraints.push(s.clone() * case_double.clone() * (x1.clone() - x2.clone()));
+                constraints.push(s.clone() * case_double.clone() * (y1.clone() - y2.clone()));
+
+                let d_den_lhs =
+                    meta.query_advice(double_y_denominator.lhs.limbs[index].value, Rotation::cur());
+                let d_den_rhs =
+                    meta.query_advice(double_y_denominator.rhs.limbs[index].value, Rotation::cur());
+                let d_den_out =
+                    meta.query_advice(double_y_denominator.out.limbs[index].value, Rotation::cur());
+                let d_x_sq_lhs =
+                    meta.query_advice(double_x_squared.lhs.limbs[index].value, Rotation::cur());
+                let d_x_sq_rhs =
+                    meta.query_advice(double_x_squared.rhs.limbs[index].value, Rotation::cur());
+                let d_x_sq_out =
+                    meta.query_advice(double_x_squared.out.limbs[index].value, Rotation::cur());
+                let d_two_x_sq_lhs =
+                    meta.query_advice(double_two_x_squared.lhs.limbs[index].value, Rotation::cur());
+                let d_two_x_sq_rhs =
+                    meta.query_advice(double_two_x_squared.rhs.limbs[index].value, Rotation::cur());
+                let d_two_x_sq_out =
+                    meta.query_advice(double_two_x_squared.out.limbs[index].value, Rotation::cur());
+                let d_three_x_sq_lhs = meta.query_advice(
+                    double_three_x_squared.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_three_x_sq_rhs = meta.query_advice(
+                    double_three_x_squared.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_three_x_sq_out = meta.query_advice(
+                    double_three_x_squared.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda = meta.query_advice(
+                    double_lambda_times_denominator.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_den_rhs = meta.query_advice(
+                    double_lambda_times_denominator.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_den_out = meta.query_advice(
+                    double_lambda_times_denominator.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_inverse_lhs = meta.query_advice(
+                    double_denominator_inverse.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_inverse_out = meta.query_advice(
+                    double_denominator_inverse.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_sq_lhs = meta.query_advice(
+                    double_lambda_squared.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_sq_rhs = meta.query_advice(
+                    double_lambda_squared.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_sq_out = meta.query_advice(
+                    double_lambda_squared.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_x3_plus_x1_lhs =
+                    meta.query_advice(double_x3_plus_x1.lhs.limbs[index].value, Rotation::cur());
+                let d_x3_plus_x1_rhs =
+                    meta.query_advice(double_x3_plus_x1.rhs.limbs[index].value, Rotation::cur());
+                let d_x3_plus_x1_out =
+                    meta.query_advice(double_x3_plus_x1.out.limbs[index].value, Rotation::cur());
+                let d_x_sum_lhs =
+                    meta.query_advice(double_x_sum_plus_x1.lhs.limbs[index].value, Rotation::cur());
+                let d_x_sum_rhs =
+                    meta.query_advice(double_x_sum_plus_x1.rhs.limbs[index].value, Rotation::cur());
+                let d_x_sum_out =
+                    meta.query_advice(double_x_sum_plus_x1.out.limbs[index].value, Rotation::cur());
+                let d_x3_plus_x_diff_lhs = meta.query_advice(
+                    double_x3_plus_x_diff.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_x3_plus_x_diff_rhs = meta.query_advice(
+                    double_x3_plus_x_diff.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_x3_plus_x_diff_out = meta.query_advice(
+                    double_x3_plus_x_diff.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_x_diff_lhs = meta.query_advice(
+                    double_lambda_times_x_diff.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_x_diff_rhs = meta.query_advice(
+                    double_lambda_times_x_diff.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_lambda_x_diff_out = meta.query_advice(
+                    double_lambda_times_x_diff.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let d_y3_plus_y1_lhs =
+                    meta.query_advice(double_y3_plus_y1.lhs.limbs[index].value, Rotation::cur());
+                let d_y3_plus_y1_rhs =
+                    meta.query_advice(double_y3_plus_y1.rhs.limbs[index].value, Rotation::cur());
+                let d_y3_plus_y1_out =
+                    meta.query_advice(double_y3_plus_y1.out.limbs[index].value, Rotation::cur());
+                constraints.push(s.clone() * case_double.clone() * (d_den_lhs - y1.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_den_rhs - y1.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_x_sq_lhs - x1.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_x_sq_rhs - x1.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_two_x_sq_lhs - d_x_sq_out.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_two_x_sq_rhs - d_x_sq_out.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_three_x_sq_lhs - d_two_x_sq_out));
+                constraints.push(s.clone() * case_double.clone() * (d_three_x_sq_rhs - d_x_sq_out));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_lambda_den_rhs - d_den_out.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_lambda_den_out - d_three_x_sq_out));
+                constraints.push(s.clone() * case_double.clone() * (d_inverse_lhs - d_den_out));
+                constraints.push(
+                    s.clone()
+                        * case_double.clone()
+                        * (d_inverse_out
+                            - Expression::Constant(Scalar::from(VESTA_FQ_ONE_LIMBS[index]))),
+                );
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_lambda_sq_lhs - d_lambda.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_lambda_sq_rhs - d_lambda.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_x3_plus_x1_lhs - x3.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_x3_plus_x1_rhs - x1.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_x_sum_lhs - d_x3_plus_x1_out));
+                constraints.push(s.clone() * case_double.clone() * (d_x_sum_rhs - x1.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_x_sum_out - d_lambda_sq_out));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_x3_plus_x_diff_lhs - x3.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_x3_plus_x_diff_out - x1.clone()));
+                constraints
+                    .push(s.clone() * case_double.clone() * (d_lambda_x_diff_lhs - d_lambda));
+                constraints.push(
+                    s.clone() * case_double.clone() * (d_lambda_x_diff_rhs - d_x3_plus_x_diff_rhs),
+                );
+                constraints.push(s.clone() * case_double.clone() * (d_y3_plus_y1_lhs - y3.clone()));
+                constraints.push(s.clone() * case_double.clone() * (d_y3_plus_y1_rhs - y1.clone()));
+                constraints.push(
+                    s.clone() * case_double.clone() * (d_y3_plus_y1_out - d_lambda_x_diff_out),
+                );
+
+                let a_x_delta_lhs =
+                    meta.query_advice(distinct_x_delta.lhs.limbs[index].value, Rotation::cur());
+                let a_x_delta_rhs =
+                    meta.query_advice(distinct_x_delta.rhs.limbs[index].value, Rotation::cur());
+                let a_x_delta_out =
+                    meta.query_advice(distinct_x_delta.out.limbs[index].value, Rotation::cur());
+                let a_y_delta_lhs =
+                    meta.query_advice(distinct_y_delta.lhs.limbs[index].value, Rotation::cur());
+                let a_y_delta_rhs =
+                    meta.query_advice(distinct_y_delta.rhs.limbs[index].value, Rotation::cur());
+                let a_y_delta_out =
+                    meta.query_advice(distinct_y_delta.out.limbs[index].value, Rotation::cur());
+                let a_lambda = meta.query_advice(
+                    distinct_lambda_times_x_delta.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_x_delta_rhs = meta.query_advice(
+                    distinct_lambda_times_x_delta.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_x_delta_out = meta.query_advice(
+                    distinct_lambda_times_x_delta.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_inverse_lhs = meta.query_advice(
+                    distinct_x_delta_inverse.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_inverse_out = meta.query_advice(
+                    distinct_x_delta_inverse.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_sq_lhs = meta.query_advice(
+                    distinct_lambda_squared.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_sq_rhs = meta.query_advice(
+                    distinct_lambda_squared.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_sq_out = meta.query_advice(
+                    distinct_lambda_squared.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x3_plus_x1_lhs =
+                    meta.query_advice(distinct_x3_plus_x1.lhs.limbs[index].value, Rotation::cur());
+                let a_x3_plus_x1_rhs =
+                    meta.query_advice(distinct_x3_plus_x1.rhs.limbs[index].value, Rotation::cur());
+                let a_x3_plus_x1_out =
+                    meta.query_advice(distinct_x3_plus_x1.out.limbs[index].value, Rotation::cur());
+                let a_x_sum_lhs = meta.query_advice(
+                    distinct_x_sum_plus_x2.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x_sum_rhs = meta.query_advice(
+                    distinct_x_sum_plus_x2.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x_sum_out = meta.query_advice(
+                    distinct_x_sum_plus_x2.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x3_plus_x_diff_lhs = meta.query_advice(
+                    distinct_x3_plus_x_diff.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x3_plus_x_diff_rhs = meta.query_advice(
+                    distinct_x3_plus_x_diff.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_x3_plus_x_diff_out = meta.query_advice(
+                    distinct_x3_plus_x_diff.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_x_diff_lhs = meta.query_advice(
+                    distinct_lambda_times_x_diff.lhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_x_diff_rhs = meta.query_advice(
+                    distinct_lambda_times_x_diff.rhs.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_lambda_x_diff_out = meta.query_advice(
+                    distinct_lambda_times_x_diff.out.limbs[index].value,
+                    Rotation::cur(),
+                );
+                let a_y3_plus_y1_lhs =
+                    meta.query_advice(distinct_y3_plus_y1.lhs.limbs[index].value, Rotation::cur());
+                let a_y3_plus_y1_rhs =
+                    meta.query_advice(distinct_y3_plus_y1.rhs.limbs[index].value, Rotation::cur());
+                let a_y3_plus_y1_out =
+                    meta.query_advice(distinct_y3_plus_y1.out.limbs[index].value, Rotation::cur());
+                constraints.push(s.clone() * case_distinct.clone() * (a_x_delta_lhs - x1.clone()));
+                constraints.push(s.clone() * case_distinct.clone() * (a_x_delta_out.clone() - x2));
+                constraints.push(s.clone() * case_distinct.clone() * (a_y_delta_lhs - y1.clone()));
+                constraints.push(s.clone() * case_distinct.clone() * (a_y_delta_out - y2));
+                constraints.push(
+                    s.clone()
+                        * case_distinct.clone()
+                        * (a_lambda_x_delta_rhs - a_x_delta_rhs.clone()),
+                );
+                constraints.push(
+                    s.clone() * case_distinct.clone() * (a_lambda_x_delta_out - a_y_delta_rhs),
+                );
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_inverse_lhs - a_x_delta_rhs));
+                constraints.push(
+                    s.clone()
+                        * case_distinct.clone()
+                        * (a_inverse_out
+                            - Expression::Constant(Scalar::from(VESTA_FQ_ONE_LIMBS[index]))),
+                );
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_lambda_sq_lhs - a_lambda.clone()));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_lambda_sq_rhs - a_lambda.clone()));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_x3_plus_x1_lhs.clone() - x3));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_x3_plus_x1_rhs - x1.clone()));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_x_sum_lhs - a_x3_plus_x1_out));
+                constraints.push(s.clone() * case_distinct.clone() * (a_x_sum_rhs - a_x_delta_out));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_x_sum_out - a_lambda_sq_out));
+                constraints.push(
+                    s.clone() * case_distinct.clone() * (a_x3_plus_x_diff_lhs - a_x3_plus_x1_lhs),
+                );
+                constraints.push(s.clone() * case_distinct.clone() * (a_x3_plus_x_diff_out - x1));
+                constraints
+                    .push(s.clone() * case_distinct.clone() * (a_lambda_x_diff_lhs - a_lambda));
+                constraints.push(
+                    s.clone()
+                        * case_distinct.clone()
+                        * (a_lambda_x_diff_rhs - a_x3_plus_x_diff_rhs),
+                );
+                constraints.push(s.clone() * case_distinct.clone() * (a_y3_plus_y1_lhs - y3));
+                constraints.push(s.clone() * case_distinct.clone() * (a_y3_plus_y1_rhs - y1));
+                constraints.push(
+                    s.clone() * case_distinct.clone() * (a_y3_plus_y1_out - a_lambda_x_diff_out),
+                );
+            }
+            constraints
+        });
+
+        NonNativeVestaAffineCompleteAddConfig {
+            p,
+            q,
+            r,
+            inverse_y_sum,
+            distinct_x_delta,
+            distinct_y_delta,
+            distinct_lambda_times_x_delta,
+            distinct_x_delta_inverse,
+            distinct_lambda_squared,
+            distinct_x3_plus_x1,
+            distinct_x_sum_plus_x2,
+            distinct_x3_plus_x_diff,
+            distinct_lambda_times_x_diff,
+            distinct_y3_plus_y1,
+            double_y_denominator,
+            double_x_squared,
+            double_two_x_squared,
+            double_three_x_squared,
+            double_lambda_times_denominator,
+            double_denominator_inverse,
+            double_lambda_squared,
+            double_x3_plus_x1,
+            double_x_sum_plus_x1,
+            double_x3_plus_x_diff,
+            double_lambda_times_x_diff,
+            double_y3_plus_y1,
+            case_p_identity,
+            case_q_identity,
+            case_inverse,
+            case_double,
+            case_distinct,
+            link,
+        }
+    }
+
+    impl Circuit<Scalar> for NonNativeVestaAffineCompleteAdd {
+        type Config = NonNativeVestaAffineCompleteAddConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_complete_add(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_complete_add",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    assign_non_native_vesta_affine_maybe_identity_region(
+                        &mut region,
+                        &config.p,
+                        self.p.as_ref(),
+                    )?;
+                    assign_non_native_vesta_affine_maybe_identity_region(
+                        &mut region,
+                        &config.q,
+                        self.q.as_ref(),
+                    )?;
+                    assign_non_native_vesta_affine_maybe_identity_region(
+                        &mut region,
+                        &config.r,
+                        self.r.as_ref(),
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.inverse_y_sum,
+                        self.inverse_y_sum.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.distinct_x_delta,
+                        self.distinct_x_delta.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.distinct_y_delta,
+                        self.distinct_y_delta.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.distinct_lambda_times_x_delta,
+                        self.distinct_lambda_times_x_delta.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.distinct_x_delta_inverse,
+                        self.distinct_x_delta_inverse.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.distinct_lambda_squared,
+                        self.distinct_lambda_squared.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.distinct_x3_plus_x1,
+                        self.distinct_x3_plus_x1.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.distinct_x_sum_plus_x2,
+                        self.distinct_x_sum_plus_x2.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.distinct_x3_plus_x_diff,
+                        self.distinct_x3_plus_x_diff.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.distinct_lambda_times_x_diff,
+                        self.distinct_lambda_times_x_diff.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.distinct_y3_plus_y1,
+                        self.distinct_y3_plus_y1.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.double_y_denominator,
+                        self.double_y_denominator.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.double_x_squared,
+                        self.double_x_squared.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.double_two_x_squared,
+                        self.double_two_x_squared.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.double_three_x_squared,
+                        self.double_three_x_squared.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.double_lambda_times_denominator,
+                        self.double_lambda_times_denominator.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.double_denominator_inverse,
+                        self.double_denominator_inverse.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.double_lambda_squared,
+                        self.double_lambda_squared.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.double_x3_plus_x1,
+                        self.double_x3_plus_x1.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.double_x_sum_plus_x1,
+                        self.double_x_sum_plus_x1.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.double_x3_plus_x_diff,
+                        self.double_x3_plus_x_diff.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_mul_region(
+                        &mut region,
+                        &config.double_lambda_times_x_diff,
+                        self.double_lambda_times_x_diff.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    assign_non_native_vesta_fq_add_region(
+                        &mut region,
+                        &config.double_y3_plus_y1,
+                        self.double_y3_plus_y1.as_ref(),
+                        NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+                    )?;
+                    for (label, column, value) in [
+                        (
+                            "case_p_identity",
+                            config.case_p_identity,
+                            self.case_p_identity,
+                        ),
+                        (
+                            "case_q_identity",
+                            config.case_q_identity,
+                            self.case_q_identity,
+                        ),
+                        ("case_inverse", config.case_inverse, self.case_inverse),
+                        ("case_double", config.case_double, self.case_double),
+                        ("case_distinct", config.case_distinct, self.case_distinct),
+                    ] {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            || label,
+                            column,
+                            0,
+                            || Value::known(value),
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    fn query_non_native_vesta_affine_maybe_identity_point(
+        meta: &mut halo2_proofs::plonk::VirtualCells<'_, Scalar>,
+        point: &NonNativeVestaAffineMaybeIdentityConfig,
+        rotation: Rotation,
+    ) -> VestaPointExpressions {
+        (
+            std::array::from_fn(|index| {
+                meta.query_advice(point.x_squared.lhs.limbs[index].value, rotation)
+            }),
+            std::array::from_fn(|index| {
+                meta.query_advice(point.y_squared.lhs.limbs[index].value, rotation)
+            }),
+            meta.query_advice(point.identity, rotation),
+        )
+    }
+
+    fn query_non_native_vesta_affine_point_instances(
+        meta: &mut halo2_proofs::plonk::VirtualCells<'_, Scalar>,
+        instances: &[halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
+             2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+        rotation: Rotation,
+    ) -> VestaPointExpressions {
+        (
+            std::array::from_fn(|index| meta.query_instance(instances[index], rotation)),
+            std::array::from_fn(|index| {
+                meta.query_instance(instances[NON_NATIVE_PASTA_FIELD_LIMBS + index], rotation)
+            }),
+            meta.query_instance(instances[2 * NON_NATIVE_PASTA_FIELD_LIMBS], rotation),
+        )
+    }
+
+    fn push_non_native_vesta_point_equality_constraints(
+        constraints: &mut Vec<Expression<Scalar>>,
+        selector: &Expression<Scalar>,
+        lhs: &VestaPointExpressions,
+        rhs: &VestaPointExpressions,
+    ) {
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            constraints.push(selector.clone() * (lhs.0[index].clone() - rhs.0[index].clone()));
+            constraints.push(selector.clone() * (lhs.1[index].clone() - rhs.1[index].clone()));
+        }
+        constraints.push(selector.clone() * (lhs.2.clone() - rhs.2.clone()));
+    }
+
+    fn push_non_native_vesta_identity_constraints(
+        constraints: &mut Vec<Expression<Scalar>>,
+        selector: &Expression<Scalar>,
+        point: &VestaPointExpressions,
+    ) {
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            constraints.push(selector.clone() * point.0[index].clone());
+            constraints.push(selector.clone() * point.1[index].clone());
+        }
+        constraints
+            .push(selector.clone() * (point.2.clone() - Expression::Constant(Scalar::from(1))));
+    }
+
+    #[derive(Clone)]
+    struct NonNativeVestaPointAdviceConfig {
+        x: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; NON_NATIVE_PASTA_FIELD_LIMBS],
+        y: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; NON_NATIVE_PASTA_FIELD_LIMBS],
+        identity: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    }
+
+    fn configure_non_native_vesta_point_advice(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaPointAdviceConfig {
+        NonNativeVestaPointAdviceConfig {
+            x: std::array::from_fn(|_| meta.advice_column()),
+            y: std::array::from_fn(|_| meta.advice_column()),
+            identity: meta.advice_column(),
+        }
+    }
+
+    fn query_non_native_vesta_point_advice(
+        meta: &mut halo2_proofs::plonk::VirtualCells<'_, Scalar>,
+        point: &NonNativeVestaPointAdviceConfig,
+        rotation: Rotation,
+    ) -> VestaPointExpressions {
+        (
+            std::array::from_fn(|index| meta.query_advice(point.x[index], rotation)),
+            std::array::from_fn(|index| meta.query_advice(point.y[index], rotation)),
+            meta.query_advice(point.identity, rotation),
+        )
+    }
+
+    fn assign_non_native_vesta_point_advice(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaPointAdviceConfig,
+        label: &str,
+        point: &(
+            [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+            [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+            Scalar,
+        ),
+    ) -> Result<(), PlonkError> {
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            crate::zk::assign_advice_compat(
+                region,
+                || format!("{label}_x{index}"),
+                config.x[index],
+                0,
+                || Value::known(point.0[index]),
+            )?;
+            crate::zk::assign_advice_compat(
+                region,
+                || format!("{label}_y{index}"),
+                config.y[index],
+                0,
+                || Value::known(point.1[index]),
+            )?;
+        }
+        crate::zk::assign_advice_compat(
+            region,
+            || format!("{label}_identity"),
+            config.identity,
+            0,
+            || Value::known(point.2),
+        )?;
+        Ok(())
+    }
+
+    fn push_non_native_vesta_point_select_constraints(
+        constraints: &mut Vec<Expression<Scalar>>,
+        selector: &Expression<Scalar>,
+        bit: &Expression<Scalar>,
+        left: &VestaPointExpressions,
+        right: &VestaPointExpressions,
+        out: &VestaPointExpressions,
+    ) {
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            constraints.push(
+                selector.clone()
+                    * (out.0[index].clone()
+                        - left.0[index].clone()
+                        - bit.clone() * (right.0[index].clone() - left.0[index].clone())),
+            );
+            constraints.push(
+                selector.clone()
+                    * (out.1[index].clone()
+                        - left.1[index].clone()
+                        - bit.clone() * (right.1[index].clone() - left.1[index].clone())),
+            );
+        }
+        constraints.push(
+            selector.clone()
+                * (out.2.clone()
+                    - left.2.clone()
+                    - bit.clone() * (right.2.clone() - left.2.clone())),
+        );
+    }
+
+    fn vesta_point_encoding_to_scalars(
+        point: VestaPointEncoding,
+    ) -> (
+        [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+        [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+        Scalar,
+    ) {
+        (
+            point.0.map(Scalar::from),
+            point.1.map(Scalar::from),
+            Scalar::from(u64::from(point.2)),
+        )
+    }
+
+    /// Config for fixed-window private Vesta point-table selection.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowSelectConfig {
+        digit_bits: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
+        table: Vec<NonNativeVestaAffineMaybeIdentityConfig>,
+        selection_levels: Vec<Vec<NonNativeVestaPointAdviceConfig>>,
+        selected: NonNativeVestaAffineMaybeIdentityConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving a selected Vesta point comes from a fixed-window table.
+    ///
+    /// The table and selected point stay private in this primitive. A later
+    /// windowed scalar-multiplication composition links the table to public
+    /// base-point multiples. The selection network is boolean and quadratic:
+    /// each level chooses between point pairs with one canonical window bit.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowSelect<const WINDOW_BITS: usize> {
+        /// Little-endian window bits.
+        pub digit_bits: Vec<Scalar>,
+        /// Private point-or-identity table with `2^WINDOW_BITS` entries.
+        pub table: Vec<NonNativeVestaAffineMaybeIdentity>,
+        /// Intermediate selected points for each binary selection level.
+        pub selection_levels: Vec<
+            Vec<(
+                [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+                Scalar,
+            )>,
+        >,
+        /// Final selected point.
+        pub selected: Box<NonNativeVestaAffineMaybeIdentity>,
+    }
+
+    impl<const WINDOW_BITS: usize> Default for NonNativeVestaAffineFixedWindowSelect<WINDOW_BITS> {
+        fn default() -> Self {
+            let table_len = if (1..=4).contains(&WINDOW_BITS) {
+                1usize << WINDOW_BITS
+            } else {
+                0
+            };
+            let selection_levels = (0..WINDOW_BITS)
+                .map(|level| {
+                    let width = table_len >> (level + 1);
+                    vec![
+                        (
+                            [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS],
+                            [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS],
+                            Scalar::from(1)
+                        );
+                        width
+                    ]
+                })
+                .collect();
+            Self {
+                digit_bits: vec![Scalar::from(0); WINDOW_BITS],
+                table: vec![NonNativeVestaAffineMaybeIdentity::default(); table_len],
+                selection_levels,
+                selected: Box::new(NonNativeVestaAffineMaybeIdentity::default()),
+            }
+        }
+    }
+
+    impl<const WINDOW_BITS: usize> NonNativeVestaAffineFixedWindowSelect<WINDOW_BITS> {
+        /// Build an honest fixed-window point-selection witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when the window width is unsupported, table length
+        /// is not `2^WINDOW_BITS`, the digit is out of range, any point encoding
+        /// is invalid, or `selected` is not the table entry selected by `digit`.
+        pub fn try_from_table(
+            digit: u64,
+            table: Vec<VestaPointEncoding>,
+            selected: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()?;
+            let table_len = 1usize << WINDOW_BITS;
+            if table.len() != table_len {
+                return Err(format!(
+                    "Vesta fixed-window selection table length mismatch: expected {table_len}, found {}",
+                    table.len()
+                ));
+            }
+            let digit_index = usize::try_from(digit)
+                .map_err(|_| "Vesta fixed-window selection digit does not fit usize".to_owned())?;
+            if digit_index >= table_len {
+                return Err("Vesta fixed-window selection digit is out of range".to_owned());
+            }
+            if table[digit_index] != selected {
+                return Err("Vesta fixed-window selected point mismatch".to_owned());
+            }
+
+            let mut current = table
+                .iter()
+                .copied()
+                .map(vesta_point_encoding_to_scalars)
+                .collect::<Vec<_>>();
+            let mut selection_levels = Vec::with_capacity(WINDOW_BITS);
+            let mut digit_bits = Vec::with_capacity(WINDOW_BITS);
+            for local_bit in 0..WINDOW_BITS {
+                let bit = ((digit >> local_bit) & 1) != 0;
+                digit_bits.push(Scalar::from(u64::from(bit)));
+                let mut next = Vec::with_capacity(current.len() / 2);
+                for pair in current.chunks_exact(2) {
+                    next.push(if bit { pair[1] } else { pair[0] });
+                }
+                selection_levels.push(next.clone());
+                current = next;
+            }
+
+            Ok(Self {
+                digit_bits,
+                table: table
+                    .into_iter()
+                    .map(|point| {
+                        NonNativeVestaAffineMaybeIdentity::try_from_limbs(point.0, point.1, point.2)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                selection_levels,
+                selected: Box::new(NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                    selected.0, selected.1, selected.2,
+                )?),
+            })
+        }
+    }
+
+    fn validate_vesta_fixed_window_select_shape<const WINDOW_BITS: usize>() -> Result<(), String> {
+        if !(1..=4).contains(&WINDOW_BITS) {
+            return Err("Vesta fixed-window selection width must be in 1..=4".to_owned());
+        }
+        Ok(())
+    }
+
+    fn configure_non_native_vesta_affine_fixed_window_select<const WINDOW_BITS: usize>(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineFixedWindowSelectConfig {
+        validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()
+            .expect("invalid Vesta fixed-window selection shape");
+        let table_len = 1usize << WINDOW_BITS;
+        let digit_bits = (0..WINDOW_BITS)
+            .map(|_| meta.advice_column())
+            .collect::<Vec<_>>();
+        let table = (0..table_len)
+            .map(|_| {
+                configure_non_native_vesta_affine_maybe_identity_with_exposure(meta, false, false)
+            })
+            .collect::<Vec<_>>();
+        let selection_levels = (0..WINDOW_BITS)
+            .map(|level| {
+                let width = table_len >> (level + 1);
+                (0..width)
+                    .map(|_| configure_non_native_vesta_point_advice(meta))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let selected =
+            configure_non_native_vesta_affine_maybe_identity_with_exposure(meta, false, false);
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_fixed_window_select_link", |meta| {
+            let s = meta.query_selector(link);
+            let bits = digit_bits
+                .iter()
+                .map(|column| meta.query_advice(*column, Rotation::cur()))
+                .collect::<Vec<_>>();
+            let mut constraints = Vec::with_capacity(
+                WINDOW_BITS + table_len * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1),
+            );
+            for bit in &bits {
+                constraints.push(
+                    s.clone() * bit.clone() * (bit.clone() - Expression::Constant(Scalar::from(1))),
+                );
+            }
+            for level in 0..WINDOW_BITS {
+                let bit = &bits[level];
+                let width = table_len >> (level + 1);
+                for index in 0..width {
+                    let out = query_non_native_vesta_point_advice(
+                        meta,
+                        &selection_levels[level][index],
+                        Rotation::cur(),
+                    );
+                    let left;
+                    let right;
+                    if level == 0 {
+                        left = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &table[2 * index],
+                            Rotation::cur(),
+                        );
+                        right = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &table[2 * index + 1],
+                            Rotation::cur(),
+                        );
+                    } else {
+                        left = query_non_native_vesta_point_advice(
+                            meta,
+                            &selection_levels[level - 1][2 * index],
+                            Rotation::cur(),
+                        );
+                        right = query_non_native_vesta_point_advice(
+                            meta,
+                            &selection_levels[level - 1][2 * index + 1],
+                            Rotation::cur(),
+                        );
+                    }
+                    push_non_native_vesta_point_select_constraints(
+                        &mut constraints,
+                        &s,
+                        bit,
+                        &left,
+                        &right,
+                        &out,
+                    );
+                }
+            }
+            let final_level = selection_levels
+                .last()
+                .expect("fixed-window selection has at least one level");
+            let final_selection =
+                query_non_native_vesta_point_advice(meta, &final_level[0], Rotation::cur());
+            let selected_point = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &selected,
+                Rotation::cur(),
+            );
+            push_non_native_vesta_point_equality_constraints(
+                &mut constraints,
+                &s,
+                &final_selection,
+                &selected_point,
+            );
+            constraints
+        });
+
+        NonNativeVestaAffineFixedWindowSelectConfig {
+            digit_bits,
+            table,
+            selection_levels,
+            selected,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_fixed_window_select_region<const WINDOW_BITS: usize>(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowSelectConfig,
+        witness: &NonNativeVestaAffineFixedWindowSelect<WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        for (index, bit) in witness.digit_bits.iter().copied().enumerate() {
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("fixed_window_select_bit{index}"),
+                config.digit_bits[index],
+                0,
+                || Value::known(bit),
+            )?;
+        }
+        for (point_config, point) in config.table.iter().zip(witness.table.iter()) {
+            assign_non_native_vesta_affine_maybe_identity_region(region, point_config, point)?;
+        }
+        for (level_index, (level_configs, level_points)) in config
+            .selection_levels
+            .iter()
+            .zip(witness.selection_levels.iter())
+            .enumerate()
+        {
+            for (point_index, (point_config, point)) in
+                level_configs.iter().zip(level_points.iter()).enumerate()
+            {
+                assign_non_native_vesta_point_advice(
+                    region,
+                    point_config,
+                    &format!("fixed_window_level{level_index}_point{point_index}"),
+                    point,
+                )?;
+            }
+        }
+        assign_non_native_vesta_affine_maybe_identity_region(
+            region,
+            &config.selected,
+            witness.selected.as_ref(),
+        )?;
+        Ok(())
+    }
+
+    impl<const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaAffineFixedWindowSelect<WINDOW_BITS>
+    {
+        type Config = NonNativeVestaAffineFixedWindowSelectConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_fixed_window_select::<WINDOW_BITS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_fixed_window_select",
+                |mut region| {
+                    assign_non_native_vesta_affine_fixed_window_select_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for deriving a fixed-window Vesta point table from a public base.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowTableConfig {
+        table: Vec<NonNativeVestaAffineMaybeIdentityConfig>,
+        adds: Vec<NonNativeVestaAffineCompleteAddConfig>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving a fixed-window table is `[0, B, 2B, ...]`.
+    ///
+    /// The base point is public. Table entries and addition-chain witnesses stay
+    /// private, and the table can be linked to
+    /// `NonNativeVestaAffineFixedWindowSelect` by a later composition wrapper.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowTable<const WINDOW_BITS: usize> {
+        /// Private point-or-identity table with `2^WINDOW_BITS` entries.
+        pub table: Vec<NonNativeVestaAffineMaybeIdentity>,
+        /// Private addition-chain witnesses deriving table entries after `B`.
+        pub adds: Vec<NonNativeVestaAffineCompleteAdd>,
+    }
+
+    impl<const WINDOW_BITS: usize> Default for NonNativeVestaAffineFixedWindowTable<WINDOW_BITS> {
+        fn default() -> Self {
+            let table_len = if (1..=4).contains(&WINDOW_BITS) {
+                1usize << WINDOW_BITS
+            } else {
+                0
+            };
+            Self {
+                table: vec![NonNativeVestaAffineMaybeIdentity::default(); table_len],
+                adds: vec![NonNativeVestaAffineCompleteAdd::default(); table_len.saturating_sub(2)],
+            }
+        }
+    }
+
+    impl<const WINDOW_BITS: usize> NonNativeVestaAffineFixedWindowTable<WINDOW_BITS> {
+        /// Build an honest fixed-window table-derivation witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the window width is unsupported, table length is
+        /// not `2^WINDOW_BITS`, any point encoding is invalid, or the supplied
+        /// table is not exactly `[0, B, 2B, ...]` for `base`.
+        pub fn try_from_base(
+            base: VestaPointEncoding,
+            table: Vec<VestaPointEncoding>,
+        ) -> Result<Self, String> {
+            validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()?;
+            let table_len = 1usize << WINDOW_BITS;
+            if table.len() != table_len {
+                return Err(format!(
+                    "Vesta fixed-window table length mismatch: expected {table_len}, found {}",
+                    table.len()
+                ));
+            }
+            let base_affine = vesta_affine_from_limbs(base)?;
+            let base_curve = base_affine.to_curve();
+            for (index, point) in table.iter().copied().enumerate() {
+                vesta_affine_from_limbs(point)?;
+                let expected =
+                    vesta_affine_to_limbs((base_curve * Scalar::from(index as u64)).to_affine());
+                if point != expected {
+                    return Err(format!(
+                        "Vesta fixed-window table entry mismatch at index {index}"
+                    ));
+                }
+            }
+
+            let mut adds = Vec::with_capacity(table_len.saturating_sub(2));
+            for index in 2..table_len {
+                adds.push(NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                    table[index - 1],
+                    base,
+                    table[index],
+                )?);
+            }
+
+            Ok(Self {
+                table: table
+                    .into_iter()
+                    .map(|point| {
+                        NonNativeVestaAffineMaybeIdentity::try_from_limbs(point.0, point.1, point.2)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                adds,
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_fixed_window_table<const WINDOW_BITS: usize>(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineFixedWindowTableConfig {
+        configure_non_native_vesta_affine_fixed_window_table_with_public_base::<WINDOW_BITS>(
+            meta, true,
+        )
+    }
+
+    fn configure_non_native_vesta_affine_fixed_window_table_with_public_base<
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+        public_base: bool,
+    ) -> NonNativeVestaAffineFixedWindowTableConfig {
+        validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()
+            .expect("invalid Vesta fixed-window table shape");
+        let table_len = 1usize << WINDOW_BITS;
+        let table = (0..table_len)
+            .map(|_| {
+                configure_non_native_vesta_affine_maybe_identity_with_exposure(meta, false, false)
+            })
+            .collect::<Vec<_>>();
+        let adds = (2..table_len)
+            .map(|_| {
+                configure_non_native_vesta_affine_complete_add_with_exposure(
+                    meta, false, false, false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let base_instances = public_base.then(|| std::array::from_fn(|_| meta.instance_column()));
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_fixed_window_table_link", |meta| {
+            let s = meta.query_selector(link);
+            let mut constraints = Vec::with_capacity(
+                2 * (table_len + adds.len()) * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1),
+            );
+            let identity = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &table[0],
+                Rotation::cur(),
+            );
+            let base_table = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &table[1],
+                Rotation::cur(),
+            );
+            push_non_native_vesta_identity_constraints(&mut constraints, &s, &identity);
+            if let Some(base_instances) = &base_instances {
+                let base_public = query_non_native_vesta_affine_point_instances(
+                    meta,
+                    base_instances,
+                    Rotation::cur(),
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &base_table,
+                    &base_public,
+                );
+            }
+            for index in 2..table_len {
+                let add = &adds[index - 2];
+                let previous = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &table[index - 1],
+                    Rotation::cur(),
+                );
+                let current = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &table[index],
+                    Rotation::cur(),
+                );
+                let add_p = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &add.p,
+                    Rotation::cur(),
+                );
+                let add_q = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &add.q,
+                    Rotation::cur(),
+                );
+                let add_r = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &add.r,
+                    Rotation::cur(),
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &previous,
+                    &add_p,
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &base_table,
+                    &add_q,
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &current,
+                    &add_r,
+                );
+            }
+            constraints
+        });
+
+        NonNativeVestaAffineFixedWindowTableConfig { table, adds, link }
+    }
+
+    fn assign_non_native_vesta_affine_fixed_window_table_region<const WINDOW_BITS: usize>(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowTableConfig,
+        witness: &NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        for (point_config, point) in config.table.iter().zip(witness.table.iter()) {
+            assign_non_native_vesta_affine_maybe_identity_region(region, point_config, point)?;
+        }
+        for (add_config, add) in config.adds.iter().zip(witness.adds.iter()) {
+            assign_non_native_vesta_affine_complete_add_region(region, add_config, add)?;
+        }
+        Ok(())
+    }
+
+    impl<const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>
+    {
+        type Config = NonNativeVestaAffineFixedWindowTableConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_fixed_window_table::<WINDOW_BITS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_fixed_window_table",
+                |mut region| {
+                    assign_non_native_vesta_affine_fixed_window_table_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for fixed-window native-scalar Vesta scalar multiplication.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineWindowedScalarMulNativeScalarConfig {
+        scalar: NativePastaFpFixedWindowDecompositionConfig,
+        tables: Vec<NonNativeVestaAffineFixedWindowTableConfig>,
+        selections: Vec<NonNativeVestaAffineFixedWindowSelectConfig>,
+        window_base_doubles: Vec<Vec<NonNativeVestaAffineCompleteAddConfig>>,
+        sum_adds: Vec<NonNativeVestaAffineCompleteAddConfig>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `output = scalar * base` through fixed windows.
+    ///
+    /// The scalar is private and canonical. The public base is expanded into
+    /// private per-window tables, each window selects one table entry under the
+    /// canonical scalar window bits, and selected points are accumulated into
+    /// the public output.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineWindowedScalarMulNativeScalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Private scalar fixed-window decomposition.
+        pub scalar: Box<NativePastaFpFixedWindowDecomposition<WINDOWS, WINDOW_BITS>>,
+        /// Private shifted-base tables for each window.
+        pub tables: Vec<NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>>,
+        /// Private table selections for each scalar window.
+        pub selections: Vec<NonNativeVestaAffineFixedWindowSelect<WINDOW_BITS>>,
+        /// Private doubling chains deriving each next window base.
+        pub window_base_doubles: Vec<Vec<NonNativeVestaAffineCompleteAdd>>,
+        /// Private selected-point accumulation chain.
+        pub sum_adds: Vec<NonNativeVestaAffineCompleteAdd>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaAffineWindowedScalarMulNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                scalar: Box::new(NativePastaFpFixedWindowDecomposition::default()),
+                tables: vec![NonNativeVestaAffineFixedWindowTable::default(); WINDOWS],
+                selections: vec![NonNativeVestaAffineFixedWindowSelect::default(); WINDOWS],
+                window_base_doubles: vec![
+                    vec![
+                        NonNativeVestaAffineCompleteAdd::default();
+                        WINDOW_BITS
+                    ];
+                    WINDOWS.saturating_sub(1)
+                ],
+                sum_adds: vec![NonNativeVestaAffineCompleteAdd::default(); WINDOWS],
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaAffineWindowedScalarMulNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest fixed-window native-scalar multiplication witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the window shape is unsupported, the scalar
+        /// exceeds the configured width, any point encoding is invalid, or the
+        /// supplied output is not equal to `scalar * base`.
+        pub fn try_from_scalar(
+            scalar: Scalar,
+            base: VestaPointEncoding,
+            output: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            validate_windowed_vesta_scalar_mul_shape::<WINDOWS, WINDOW_BITS>()?;
+            let scalar_witness =
+                NativePastaFpFixedWindowDecomposition::<WINDOWS, WINDOW_BITS>::try_from_scalar(
+                    scalar,
+                )?;
+            let scalar_limbs = pasta_fp_to_limbs(scalar);
+            let base_affine = vesta_affine_from_limbs(base)?;
+            let expected_output = vesta_affine_from_limbs(output)?;
+            let table_len = 1usize << WINDOW_BITS;
+
+            let mut window_base = base_affine.to_curve();
+            let mut accumulator = VestaAffine::identity().to_curve();
+            let mut tables = Vec::with_capacity(WINDOWS);
+            let mut selections = Vec::with_capacity(WINDOWS);
+            let mut window_base_doubles = Vec::with_capacity(WINDOWS.saturating_sub(1));
+            let mut sum_adds = Vec::with_capacity(WINDOWS);
+
+            for window_index in 0..WINDOWS {
+                let window_base_limbs = vesta_affine_to_limbs(window_base.to_affine());
+                let table = (0..table_len)
+                    .map(|index| {
+                        vesta_affine_to_limbs(
+                            (window_base * Scalar::from(index as u64)).to_affine(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let mut digit = 0u64;
+                for local_bit in 0..WINDOW_BITS {
+                    let global_bit = window_index * WINDOW_BITS + local_bit;
+                    if scalar_limb_bit(scalar_limbs, global_bit) {
+                        digit |= 1u64 << local_bit;
+                    }
+                }
+                let selected = table[usize::try_from(digit).expect("digit fits usize")];
+                tables.push(
+                    NonNativeVestaAffineFixedWindowTable::<WINDOW_BITS>::try_from_base(
+                        window_base_limbs,
+                        table.clone(),
+                    )?,
+                );
+                selections.push(
+                    NonNativeVestaAffineFixedWindowSelect::<WINDOW_BITS>::try_from_table(
+                        digit, table, selected,
+                    )?,
+                );
+
+                let accumulator_before = vesta_affine_to_limbs(accumulator.to_affine());
+                accumulator += vesta_affine_from_limbs(selected)?.to_curve();
+                let accumulator_after = vesta_affine_to_limbs(accumulator.to_affine());
+                sum_adds.push(NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                    accumulator_before,
+                    selected,
+                    accumulator_after,
+                )?);
+
+                if window_index + 1 < WINDOWS {
+                    let mut doubles = Vec::with_capacity(WINDOW_BITS);
+                    let mut current = window_base;
+                    for _ in 0..WINDOW_BITS {
+                        let before = vesta_affine_to_limbs(current.to_affine());
+                        let next = current + current;
+                        let after = vesta_affine_to_limbs(next.to_affine());
+                        doubles.push(NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                            before, before, after,
+                        )?);
+                        current = next;
+                    }
+                    window_base = current;
+                    window_base_doubles.push(doubles);
+                }
+            }
+
+            if accumulator.to_affine() != expected_output {
+                return Err("Vesta windowed native-scalar mul output mismatch".to_owned());
+            }
+
+            Ok(Self {
+                scalar: Box::new(scalar_witness),
+                tables,
+                selections,
+                window_base_doubles,
+                sum_adds,
+            })
+        }
+    }
+
+    fn validate_windowed_vesta_scalar_mul_shape<const WINDOWS: usize, const WINDOW_BITS: usize>()
+    -> Result<(), String> {
+        validate_fixed_window_shape::<WINDOWS, WINDOW_BITS>()?;
+        validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()?;
+        Ok(())
+    }
+
+    fn configure_non_native_vesta_affine_windowed_scalar_mul_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineWindowedScalarMulNativeScalarConfig {
+        configure_non_native_vesta_affine_windowed_scalar_mul_native_scalar_with_public_io::<
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta, true, true)
+    }
+
+    fn configure_non_native_vesta_affine_windowed_scalar_mul_native_scalar_with_public_io<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+        public_base: bool,
+        public_output: bool,
+    ) -> NonNativeVestaAffineWindowedScalarMulNativeScalarConfig {
+        validate_windowed_vesta_scalar_mul_shape::<WINDOWS, WINDOW_BITS>()
+            .expect("invalid Vesta windowed native-scalar mul shape");
+        let scalar =
+            configure_native_pasta_fp_fixed_window_decomposition::<WINDOWS, WINDOW_BITS>(meta);
+        let tables =
+            (0..WINDOWS)
+                .map(|_| {
+                    configure_non_native_vesta_affine_fixed_window_table_with_public_base::<
+                        WINDOW_BITS,
+                    >(meta, false)
+                })
+                .collect::<Vec<_>>();
+        let selections = (0..WINDOWS)
+            .map(|_| configure_non_native_vesta_affine_fixed_window_select::<WINDOW_BITS>(meta))
+            .collect::<Vec<_>>();
+        let window_base_doubles = (0..WINDOWS.saturating_sub(1))
+            .map(|_| {
+                (0..WINDOW_BITS)
+                    .map(|_| {
+                        configure_non_native_vesta_affine_complete_add_with_exposure(
+                            meta, false, false, false,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let sum_adds = (0..WINDOWS)
+            .map(|_| {
+                configure_non_native_vesta_affine_complete_add_with_exposure(
+                    meta, false, false, false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let base_instances = public_base.then(|| std::array::from_fn(|_| meta.instance_column()));
+        let output_instances =
+            public_output.then(|| std::array::from_fn(|_| meta.instance_column()));
+        let link = meta.selector();
+
+        meta.create_gate(
+            "non_native_vesta_affine_windowed_scalar_mul_native_scalar_link",
+            |meta| {
+                let s = meta.query_selector(link);
+                let table_len = 1usize << WINDOW_BITS;
+                let mut constraints = Vec::with_capacity(
+                    WINDOWS
+                        * (WINDOW_BITS
+                            + table_len * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1)
+                            + 3 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1)),
+                );
+
+                if let Some(base_instances) = &base_instances {
+                    let base_public = query_non_native_vesta_affine_point_instances(
+                        meta,
+                        base_instances,
+                        Rotation::cur(),
+                    );
+                    let first_base = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &tables[0].table[1],
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &first_base,
+                        &base_public,
+                    );
+                }
+
+                for window_index in 0..WINDOWS {
+                    for local_bit in 0..WINDOW_BITS {
+                        let selection_bit = meta.query_advice(
+                            selections[window_index].digit_bits[local_bit],
+                            Rotation::cur(),
+                        );
+                        let scalar_bit = meta.query_advice(
+                            scalar.digit_bits[window_index][local_bit],
+                            Rotation::cur(),
+                        );
+                        constraints.push(s.clone() * (selection_bit - scalar_bit));
+                    }
+                    for table_index in 0..table_len {
+                        let derived = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &tables[window_index].table[table_index],
+                            Rotation::cur(),
+                        );
+                        let selected_table = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &selections[window_index].table[table_index],
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &derived,
+                            &selected_table,
+                        );
+                    }
+
+                    let selected = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &selections[window_index].selected,
+                        Rotation::cur(),
+                    );
+                    let sum_q = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &sum_adds[window_index].q,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &selected,
+                        &sum_q,
+                    );
+                    if window_index == 0 {
+                        let first_acc = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[0].p,
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_identity_constraints(
+                            &mut constraints,
+                            &s,
+                            &first_acc,
+                        );
+                    } else {
+                        let previous = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[window_index - 1].r,
+                            Rotation::cur(),
+                        );
+                        let current = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[window_index].p,
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &previous,
+                            &current,
+                        );
+                    }
+                }
+
+                for window_index in 0..WINDOWS.saturating_sub(1) {
+                    for double_index in 0..WINDOW_BITS {
+                        let double = &window_base_doubles[window_index][double_index];
+                        let source = if double_index == 0 {
+                            query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &tables[window_index].table[1],
+                                Rotation::cur(),
+                            )
+                        } else {
+                            query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &window_base_doubles[window_index][double_index - 1].r,
+                                Rotation::cur(),
+                            )
+                        };
+                        let double_p = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &double.p,
+                            Rotation::cur(),
+                        );
+                        let double_q = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &double.q,
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &source,
+                            &double_p,
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &source,
+                            &double_q,
+                        );
+                    }
+                    let transition_output = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &window_base_doubles[window_index][WINDOW_BITS - 1].r,
+                        Rotation::cur(),
+                    );
+                    let next_base = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &tables[window_index + 1].table[1],
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &transition_output,
+                        &next_base,
+                    );
+                }
+
+                if let Some(output_instances) = &output_instances {
+                    let output_public = query_non_native_vesta_affine_point_instances(
+                        meta,
+                        output_instances,
+                        Rotation::cur(),
+                    );
+                    let final_sum = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &sum_adds[WINDOWS - 1].r,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &final_sum,
+                        &output_public,
+                    );
+                }
+                constraints
+            },
+        );
+
+        NonNativeVestaAffineWindowedScalarMulNativeScalarConfig {
+            scalar,
+            tables,
+            selections,
+            window_base_doubles,
+            sum_adds,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_windowed_scalar_mul_native_scalar_region<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineWindowedScalarMulNativeScalarConfig,
+        witness: &NonNativeVestaAffineWindowedScalarMulNativeScalar<WINDOWS, WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        assign_native_pasta_fp_fixed_window_decomposition_region(
+            region,
+            &config.scalar,
+            witness.scalar.as_ref(),
+        )?;
+        for (table_config, table) in config.tables.iter().zip(witness.tables.iter()) {
+            assign_non_native_vesta_affine_fixed_window_table_region(region, table_config, table)?;
+        }
+        for (selection_config, selection) in config.selections.iter().zip(witness.selections.iter())
+        {
+            assign_non_native_vesta_affine_fixed_window_select_region(
+                region,
+                selection_config,
+                selection,
+            )?;
+        }
+        for (transition_configs, transition_witnesses) in config
+            .window_base_doubles
+            .iter()
+            .zip(witness.window_base_doubles.iter())
+        {
+            for (double_config, double) in transition_configs.iter().zip(transition_witnesses) {
+                assign_non_native_vesta_affine_complete_add_region(region, double_config, double)?;
+            }
+        }
+        for (sum_config, sum) in config.sum_adds.iter().zip(witness.sum_adds.iter()) {
+            assign_non_native_vesta_affine_complete_add_region(region, sum_config, sum)?;
+        }
+        Ok(())
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaAffineWindowedScalarMulNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaAffineWindowedScalarMulNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_windowed_scalar_mul_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_windowed_scalar_mul_native_scalar",
+                |mut region| {
+                    assign_non_native_vesta_affine_windowed_scalar_mul_native_scalar_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for fixed-window native-scalar Vesta MSM.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineWindowedMsmNativeScalarConfig {
+        term_muls: Vec<NonNativeVestaAffineWindowedScalarMulNativeScalarConfig>,
+        sum_adds: Vec<NonNativeVestaAffineCompleteAddConfig>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `output = sum_i scalar_i * base_i` through fixed windows.
+    ///
+    /// Scalars are private canonical Pasta/Fp fixed-window decompositions.
+    /// Bases and the final MSM output are public point-or-identity encodings.
+    /// Per-term scalar-multiplication outputs remain private and are chained
+    /// into the final public output by complete-add constraints.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineWindowedMsmNativeScalar<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Per-term fixed-window scalar multiplications.
+        pub term_muls: Vec<NonNativeVestaAffineWindowedScalarMulNativeScalar<WINDOWS, WINDOW_BITS>>,
+        /// Private running MSM accumulation chain.
+        pub sum_adds: Vec<NonNativeVestaAffineCompleteAdd>,
+    }
+
+    impl<const TERMS: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaAffineWindowedMsmNativeScalar<TERMS, WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                term_muls: vec![
+                    NonNativeVestaAffineWindowedScalarMulNativeScalar::default();
+                    TERMS
+                ],
+                sum_adds: vec![NonNativeVestaAffineCompleteAdd::default(); TERMS],
+            }
+        }
+    }
+
+    impl<const TERMS: usize, const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaAffineWindowedMsmNativeScalar<TERMS, WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest fixed-window MSM witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the MSM/window shape is unsupported, any scalar
+        /// exceeds the configured fixed-window width, any point encoding is
+        /// invalid, or the supplied output is not the MSM result.
+        pub fn try_from_terms(
+            terms: [(Scalar, VestaPointEncoding); TERMS],
+            output: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            validate_windowed_vesta_msm_shape::<TERMS, WINDOWS, WINDOW_BITS>()?;
+            let expected_output = vesta_affine_from_limbs(output)?;
+
+            let mut term_muls = Vec::with_capacity(TERMS);
+            let mut sum_adds = Vec::with_capacity(TERMS);
+            let mut msm_accumulator = VestaAffine::identity().to_curve();
+            for (scalar, base) in terms {
+                let base_affine = vesta_affine_from_limbs(base)?;
+                let term_output = base_affine.to_curve() * scalar;
+                let term_output_limbs = vesta_affine_to_limbs(term_output.to_affine());
+                term_muls.push(NonNativeVestaAffineWindowedScalarMulNativeScalar::<
+                    WINDOWS,
+                    WINDOW_BITS,
+                >::try_from_scalar(
+                    scalar, base, term_output_limbs
+                )?);
+
+                let accumulator_before = vesta_affine_to_limbs(msm_accumulator.to_affine());
+                msm_accumulator += term_output;
+                let accumulator_after = vesta_affine_to_limbs(msm_accumulator.to_affine());
+                sum_adds.push(NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                    accumulator_before,
+                    term_output_limbs,
+                    accumulator_after,
+                )?);
+            }
+
+            if msm_accumulator.to_affine() != expected_output {
+                return Err("Vesta windowed native-scalar MSM output mismatch".to_owned());
+            }
+
+            Ok(Self {
+                term_muls,
+                sum_adds,
+            })
+        }
+    }
+
+    fn validate_windowed_vesta_msm_shape<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >() -> Result<(), String> {
+        if TERMS == 0 {
+            return Err("Vesta windowed native-scalar MSM must have at least one term".to_owned());
+        }
+        validate_windowed_vesta_scalar_mul_shape::<WINDOWS, WINDOW_BITS>()?;
+        Ok(())
+    }
+
+    fn configure_non_native_vesta_affine_windowed_msm_native_scalar<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineWindowedMsmNativeScalarConfig {
+        validate_windowed_vesta_msm_shape::<TERMS, WINDOWS, WINDOW_BITS>()
+            .expect("invalid Vesta windowed native-scalar MSM shape");
+        let term_muls = (0..TERMS)
+            .map(|_| {
+                configure_non_native_vesta_affine_windowed_scalar_mul_native_scalar_with_public_io::<
+                    WINDOWS,
+                    WINDOW_BITS,
+                >(meta, false, false)
+            })
+            .collect::<Vec<_>>();
+        let sum_adds = (0..TERMS)
+            .map(|_| {
+                configure_non_native_vesta_affine_complete_add_with_exposure(
+                    meta, false, false, false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let base_instances = (0..TERMS)
+            .map(|_| std::array::from_fn(|_| meta.instance_column()))
+            .collect::<Vec<_>>();
+        let output_instances = std::array::from_fn(|_| meta.instance_column());
+        let link = meta.selector();
+
+        meta.create_gate(
+            "non_native_vesta_affine_windowed_msm_native_scalar_link",
+            |meta| {
+                let s = meta.query_selector(link);
+                let mut constraints =
+                    Vec::with_capacity((TERMS + 1) * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1));
+
+                for term_index in 0..TERMS {
+                    let base_public = query_non_native_vesta_affine_point_instances(
+                        meta,
+                        &base_instances[term_index],
+                        Rotation::cur(),
+                    );
+                    let first_window_base = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &term_muls[term_index].tables[0].table[1],
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &first_window_base,
+                        &base_public,
+                    );
+
+                    let term_output = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &term_muls[term_index].sum_adds[WINDOWS - 1].r,
+                        Rotation::cur(),
+                    );
+                    let sum_term = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &sum_adds[term_index].q,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &term_output,
+                        &sum_term,
+                    );
+
+                    if term_index == 0 {
+                        let first_sum_accumulator =
+                            query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &sum_adds[0].p,
+                                Rotation::cur(),
+                            );
+                        push_non_native_vesta_identity_constraints(
+                            &mut constraints,
+                            &s,
+                            &first_sum_accumulator,
+                        );
+                    } else {
+                        let previous_sum = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[term_index - 1].r,
+                            Rotation::cur(),
+                        );
+                        let current_sum_input = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &sum_adds[term_index].p,
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &previous_sum,
+                            &current_sum_input,
+                        );
+                    }
+                }
+
+                let output_public = query_non_native_vesta_affine_point_instances(
+                    meta,
+                    &output_instances,
+                    Rotation::cur(),
+                );
+                let final_sum = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &sum_adds[TERMS - 1].r,
+                    Rotation::cur(),
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &final_sum,
+                    &output_public,
+                );
+                constraints
+            },
+        );
+
+        NonNativeVestaAffineWindowedMsmNativeScalarConfig {
+            term_muls,
+            sum_adds,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_windowed_msm_native_scalar_region<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineWindowedMsmNativeScalarConfig,
+        witness: &NonNativeVestaAffineWindowedMsmNativeScalar<TERMS, WINDOWS, WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        for (term_config, term_witness) in config.term_muls.iter().zip(witness.term_muls.iter()) {
+            assign_non_native_vesta_affine_windowed_scalar_mul_native_scalar_region(
+                region,
+                term_config,
+                term_witness,
+            )?;
+        }
+        for (sum_config, sum) in config.sum_adds.iter().zip(witness.sum_adds.iter()) {
+            assign_non_native_vesta_affine_complete_add_region(region, sum_config, sum)?;
+        }
+        Ok(())
+    }
+
+    impl<const TERMS: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaAffineWindowedMsmNativeScalar<TERMS, WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaAffineWindowedMsmNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_windowed_msm_native_scalar::<
+                TERMS,
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_windowed_msm_native_scalar",
+                |mut region| {
+                    assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for the fixed-window final IPA verifier MSM comparison.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaFinalWindowedMsmNativeScalarConfig {
+        msm: NonNativeVestaAffineWindowedMsmNativeScalarConfig,
+        product_link: Selector,
+    }
+
+    /// Circuit wrapper proving `Q = a*G + b*H + (a*b)*U` through fixed-window MSM.
+    ///
+    /// This is the optimized final group comparison used by the native
+    /// transparent IPA verifier. It keeps `a`, `b`, and `a*b` private and
+    /// canonical, routes the group work through fixed-window table selection,
+    /// and links the third MSM scalar to the native-field product of the first
+    /// two scalars.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaFinalWindowedMsmNativeScalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Underlying three-term fixed-window MSM witness.
+        pub msm: Box<NonNativeVestaAffineWindowedMsmNativeScalar<3, WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaIpaFinalWindowedMsmNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                msm: Box::new(NonNativeVestaAffineWindowedMsmNativeScalar::default()),
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaFinalWindowedMsmNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest fixed-window IPA final-comparison witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if any scalar exceeds the configured fixed-window
+        /// width, any point encoding is invalid, or
+        /// `output != a*final_g + b*final_h + (a*b)*u`.
+        pub fn try_from_scalars(
+            a_final: Scalar,
+            b_final: Scalar,
+            final_g: VestaPointEncoding,
+            final_h: VestaPointEncoding,
+            u: VestaPointEncoding,
+            output: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            let product = a_final * b_final;
+            let msm =
+                NonNativeVestaAffineWindowedMsmNativeScalar::<3, WINDOWS, WINDOW_BITS>::try_from_terms(
+                    [(a_final, final_g), (b_final, final_h), (product, u)],
+                    output,
+                )?;
+            Ok(Self { msm: Box::new(msm) })
+        }
+    }
+
+    fn configure_non_native_vesta_ipa_final_windowed_msm_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaIpaFinalWindowedMsmNativeScalarConfig {
+        let msm = configure_non_native_vesta_affine_windowed_msm_native_scalar::<
+            3,
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let product_link = meta.selector();
+
+        meta.create_gate(
+            "non_native_vesta_ipa_final_windowed_msm_product_link",
+            |meta| {
+                let s = meta.query_selector(product_link);
+                let a = meta.query_advice(msm.term_muls[0].scalar.scalar.value, Rotation::cur());
+                let b = meta.query_advice(msm.term_muls[1].scalar.scalar.value, Rotation::cur());
+                let product =
+                    meta.query_advice(msm.term_muls[2].scalar.scalar.value, Rotation::cur());
+                vec![s * (a * b - product)]
+            },
+        );
+
+        NonNativeVestaIpaFinalWindowedMsmNativeScalarConfig { msm, product_link }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaIpaFinalWindowedMsmNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaIpaFinalWindowedMsmNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_ipa_final_windowed_msm_native_scalar::<WINDOWS, WINDOW_BITS>(
+                meta,
+            )
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_ipa_final_windowed_msm_native_scalar",
+                |mut region| {
+                    config.product_link.enable(&mut region, 0)?;
+                    assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                        &mut region,
+                        &config.msm,
+                        self.msm.as_ref(),
+                    )
+                },
+            )
+        }
+    }
+
+    fn assign_non_native_vesta_affine_complete_add_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineCompleteAddConfig,
+        witness: &NonNativeVestaAffineCompleteAdd,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        assign_non_native_vesta_affine_maybe_identity_region(
+            region,
+            &config.p,
+            witness.p.as_ref(),
+        )?;
+        assign_non_native_vesta_affine_maybe_identity_region(
+            region,
+            &config.q,
+            witness.q.as_ref(),
+        )?;
+        assign_non_native_vesta_affine_maybe_identity_region(
+            region,
+            &config.r,
+            witness.r.as_ref(),
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.inverse_y_sum,
+            witness.inverse_y_sum.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_x_delta,
+            witness.distinct_x_delta.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_y_delta,
+            witness.distinct_y_delta.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.distinct_lambda_times_x_delta,
+            witness.distinct_lambda_times_x_delta.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.distinct_x_delta_inverse,
+            witness.distinct_x_delta_inverse.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.distinct_lambda_squared,
+            witness.distinct_lambda_squared.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_x3_plus_x1,
+            witness.distinct_x3_plus_x1.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_x_sum_plus_x2,
+            witness.distinct_x_sum_plus_x2.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_x3_plus_x_diff,
+            witness.distinct_x3_plus_x_diff.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.distinct_lambda_times_x_diff,
+            witness.distinct_lambda_times_x_diff.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.distinct_y3_plus_y1,
+            witness.distinct_y3_plus_y1.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_y_denominator,
+            witness.double_y_denominator.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.double_x_squared,
+            witness.double_x_squared.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_two_x_squared,
+            witness.double_two_x_squared.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_three_x_squared,
+            witness.double_three_x_squared.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.double_lambda_times_denominator,
+            witness.double_lambda_times_denominator.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.double_denominator_inverse,
+            witness.double_denominator_inverse.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.double_lambda_squared,
+            witness.double_lambda_squared.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_x3_plus_x1,
+            witness.double_x3_plus_x1.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_x_sum_plus_x1,
+            witness.double_x_sum_plus_x1.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_x3_plus_x_diff,
+            witness.double_x3_plus_x_diff.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_mul_region(
+            region,
+            &config.double_lambda_times_x_diff,
+            witness.double_lambda_times_x_diff.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        assign_non_native_vesta_fq_add_region(
+            region,
+            &config.double_y3_plus_y1,
+            witness.double_y3_plus_y1.as_ref(),
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        for (label, column, value) in [
+            (
+                "case_p_identity",
+                config.case_p_identity,
+                witness.case_p_identity,
+            ),
+            (
+                "case_q_identity",
+                config.case_q_identity,
+                witness.case_q_identity,
+            ),
+            ("case_inverse", config.case_inverse, witness.case_inverse),
+            ("case_double", config.case_double, witness.case_double),
+            ("case_distinct", config.case_distinct, witness.case_distinct),
+        ] {
+            crate::zk::assign_advice_compat(region, || label, column, 0, || Value::known(value))?;
+        }
+        Ok(())
+    }
+
+    /// Config for conditional affine Vesta addition over point-or-identity encodings.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineConditionalAddConfig {
+        addend: NonNativeVestaAffineMaybeIdentityConfig,
+        addition: NonNativeVestaAffineCompleteAddConfig,
+        bit: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `R = Acc + (bit ? Addend : Identity)`.
+    ///
+    /// The accumulator, addend, and output are public point-or-identity
+    /// encodings. The selected addend is private and constrained to equal the
+    /// canonical identity when `bit = 0`, or the public addend when `bit = 1`.
+    /// This is the per-bit building block for double-and-add scalar
+    /// multiplication and future MSM verification.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineConditionalAdd {
+        /// Public addend selected when `bit = 1`.
+        pub addend: Box<NonNativeVestaAffineMaybeIdentity>,
+        /// Complete addition witness for accumulator + selected addend = output.
+        pub addition: Box<NonNativeVestaAffineCompleteAdd>,
+        /// Private selector bit.
+        pub bit: Scalar,
+    }
+
+    impl Default for NonNativeVestaAffineConditionalAdd {
+        fn default() -> Self {
+            Self {
+                addend: Box::new(NonNativeVestaAffineMaybeIdentity::default()),
+                addition: Box::new(NonNativeVestaAffineCompleteAdd::default()),
+                bit: Scalar::from(0),
+            }
+        }
+    }
+
+    impl NonNativeVestaAffineConditionalAdd {
+        /// Build an honest conditional-add witness for canonical point encodings.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the addend/accumulator/output encodings are
+        /// invalid, if `output != accumulator + selected`, or if the selected
+        /// addend cannot be represented canonically.
+        pub fn try_from_limbs(
+            accumulator: (
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                bool,
+            ),
+            addend: (
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                bool,
+            ),
+            output: (
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
+                bool,
+            ),
+            bit: bool,
+        ) -> Result<Self, String> {
+            let addend_witness =
+                NonNativeVestaAffineMaybeIdentity::try_from_limbs(addend.0, addend.1, addend.2)?;
+            let selected = if bit {
+                addend
+            } else {
+                (
+                    [0; NON_NATIVE_PASTA_FIELD_LIMBS],
+                    [0; NON_NATIVE_PASTA_FIELD_LIMBS],
+                    true,
+                )
+            };
+            let addition =
+                NonNativeVestaAffineCompleteAdd::try_from_limbs(accumulator, selected, output)?;
+            Ok(Self {
+                addend: Box::new(addend_witness),
+                addition: Box::new(addition),
+                bit: Scalar::from(u64::from(bit)),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_conditional_add(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineConditionalAddConfig {
+        configure_non_native_vesta_affine_conditional_add_with_exposure(meta, true, true, true)
+    }
+
+    fn configure_non_native_vesta_affine_conditional_add_with_exposure(
+        meta: &mut ConstraintSystem<Scalar>,
+        addend_public: bool,
+        accumulator_public: bool,
+        output_public: bool,
+    ) -> NonNativeVestaAffineConditionalAddConfig {
+        let addend = configure_non_native_vesta_affine_maybe_identity_with_exposure(
+            meta,
+            addend_public,
+            addend_public,
+        );
+        let addition = configure_non_native_vesta_affine_complete_add_with_exposure(
+            meta,
+            accumulator_public,
+            false,
+            output_public,
+        );
+        let bit = meta.advice_column();
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_conditional_add_link", |meta| {
+            let s = meta.query_selector(link);
+            let bit = meta.query_advice(bit, Rotation::cur());
+            let selected_identity = meta.query_advice(addition.q.identity, Rotation::cur());
+            let addend_identity = meta.query_advice(addend.identity, Rotation::cur());
+            let one = Expression::Constant(Scalar::from(1));
+            let not_bit = one.clone() - bit.clone();
+            let mut constraints = Vec::with_capacity(3 + 4 * NON_NATIVE_PASTA_FIELD_LIMBS);
+            constraints.push(s.clone() * bit.clone() * (bit.clone() - one.clone()));
+            constraints.push(
+                s.clone() * (selected_identity - not_bit.clone() - bit.clone() * addend_identity),
+            );
+            for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+                let selected_x =
+                    meta.query_advice(addition.q.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let selected_y =
+                    meta.query_advice(addition.q.y_squared.lhs.limbs[index].value, Rotation::cur());
+                let addend_x =
+                    meta.query_advice(addend.x_squared.lhs.limbs[index].value, Rotation::cur());
+                let addend_y =
+                    meta.query_advice(addend.y_squared.lhs.limbs[index].value, Rotation::cur());
+                constraints.push(s.clone() * bit.clone() * (selected_x.clone() - addend_x));
+                constraints.push(s.clone() * bit.clone() * (selected_y.clone() - addend_y));
+                constraints.push(s.clone() * not_bit.clone() * selected_x);
+                constraints.push(s.clone() * not_bit.clone() * selected_y);
+            }
+            constraints
+        });
+
+        NonNativeVestaAffineConditionalAddConfig {
+            addend,
+            addition,
+            bit,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_conditional_add_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineConditionalAddConfig,
+        witness: &NonNativeVestaAffineConditionalAdd,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        assign_non_native_vesta_affine_maybe_identity_region(
+            region,
+            &config.addend,
+            witness.addend.as_ref(),
+        )?;
+        assign_non_native_vesta_affine_complete_add_region(
+            region,
+            &config.addition,
+            witness.addition.as_ref(),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "conditional_bit",
+            config.bit,
+            0,
+            || Value::known(witness.bit),
+        )?;
+        Ok(())
+    }
+
+    impl Circuit<Scalar> for NonNativeVestaAffineConditionalAdd {
+        type Config = NonNativeVestaAffineConditionalAddConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_conditional_add(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_conditional_add",
+                |mut region| {
+                    assign_non_native_vesta_affine_conditional_add_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for a bounded non-native Vesta scalar multiplication chain.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineScalarMulConfig {
+        scalar_range: NonNativeU64LimbRangeConfig,
+        conditional_adds: Vec<NonNativeVestaAffineConditionalAddConfig>,
+        doubles: Vec<NonNativeVestaAffineCompleteAddConfig>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `output = scalar * base` for a bounded bit width.
+    ///
+    /// The scalar is public as a single `u64` limb and is decomposed by the shared
+    /// range gadget. The public base and output are point-or-identity encodings.
+    /// Intermediate accumulator values, doubled addends, and selected addends
+    /// stay private while being linked by complete-add and conditional-add
+    /// constraints.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineScalarMul<const BITS: usize> {
+        /// Public scalar limb whose high bits above `BITS` must be zero.
+        pub scalar: Box<NonNativeU64LimbRange>,
+        /// Conditional accumulator steps driven by the scalar bits.
+        pub conditional_adds: Vec<NonNativeVestaAffineConditionalAdd>,
+        /// Doubling steps proving the per-bit addend ladder from the base.
+        pub doubles: Vec<NonNativeVestaAffineCompleteAdd>,
+    }
+
+    impl<const BITS: usize> Default for NonNativeVestaAffineScalarMul<BITS> {
+        fn default() -> Self {
+            Self {
+                scalar: Box::new(NonNativeU64LimbRange::default()),
+                conditional_adds: vec![NonNativeVestaAffineConditionalAdd::default(); BITS],
+                doubles: vec![NonNativeVestaAffineCompleteAdd::default(); BITS.saturating_sub(1)],
+            }
+        }
+    }
+
+    impl<const BITS: usize> NonNativeVestaAffineScalarMul<BITS> {
+        /// Build an honest bounded scalar-multiplication witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `BITS` is outside `1..=64`, if `scalar` has any
+        /// high bit above the circuit width, if `base` or `output` is not a
+        /// canonical point-or-identity encoding, or if the supplied output is not
+        /// equal to `scalar * base`.
+        pub fn try_from_limbs(
+            scalar: u64,
+            base: VestaPointEncoding,
+            output: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            if !(1..=NON_NATIVE_U64_LIMB_BITS).contains(&BITS) {
+                return Err("Vesta scalar-mul bit width must be in 1..=64".to_owned());
+            }
+            if BITS < NON_NATIVE_U64_LIMB_BITS && (scalar >> BITS) != 0 {
+                return Err("Vesta scalar-mul scalar exceeds configured bit width".to_owned());
+            }
+
+            let base_affine = vesta_affine_from_limbs(base)?;
+            let expected_output = vesta_affine_from_limbs(output)?;
+            let mut accumulator = VestaAffine::identity().to_curve();
+            let mut addend = base_affine.to_curve();
+            let mut conditional_adds = Vec::with_capacity(BITS);
+            let mut doubles = Vec::with_capacity(BITS.saturating_sub(1));
+
+            for bit_index in 0..BITS {
+                let bit = ((scalar >> bit_index) & 1) == 1;
+                let accumulator_before = vesta_affine_to_limbs(accumulator.to_affine());
+                let addend_before = vesta_affine_to_limbs(addend.to_affine());
+                if bit {
+                    accumulator += addend;
+                }
+                let accumulator_after = vesta_affine_to_limbs(accumulator.to_affine());
+                conditional_adds.push(NonNativeVestaAffineConditionalAdd::try_from_limbs(
+                    accumulator_before,
+                    addend_before,
+                    accumulator_after,
+                    bit,
+                )?);
+                if bit_index + 1 < BITS {
+                    let next_addend = addend + addend;
+                    let next_addend_limbs = vesta_affine_to_limbs(next_addend.to_affine());
+                    doubles.push(NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                        addend_before,
+                        addend_before,
+                        next_addend_limbs,
+                    )?);
+                    addend = next_addend;
+                }
+            }
+
+            if accumulator.to_affine() != expected_output {
+                return Err("Vesta scalar-mul output mismatch".to_owned());
+            }
+
+            Ok(Self {
+                scalar: Box::new(NonNativeU64LimbRange::from_u64(scalar)),
+                conditional_adds,
+                doubles,
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_scalar_mul<const BITS: usize>(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineScalarMulConfig {
+        assert!(
+            (1..=NON_NATIVE_U64_LIMB_BITS).contains(&BITS),
+            "Vesta scalar-mul bit width must be in 1..=64"
+        );
+        let scalar_range = configure_non_native_u64_limb_range(meta);
+        let conditional_adds = (0..BITS)
+            .map(|_| {
+                configure_non_native_vesta_affine_conditional_add_with_exposure(
+                    meta, false, false, false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let doubles = (0..BITS.saturating_sub(1))
+            .map(|_| {
+                configure_non_native_vesta_affine_complete_add_with_exposure(
+                    meta, false, false, false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let scalar_instance = meta.instance_column();
+        let base_instances = std::array::from_fn(|_| meta.instance_column());
+        let output_instances = std::array::from_fn(|_| meta.instance_column());
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_scalar_mul_link", |meta| {
+            let s = meta.query_selector(link);
+            let scalar_value = meta.query_advice(scalar_range.value, Rotation::cur());
+            let scalar_instance = meta.query_instance(scalar_instance, Rotation::cur());
+            let mut constraints = Vec::with_capacity(32 + BITS * 28);
+            constraints.push(s.clone() * (scalar_value - scalar_instance));
+            for bit_index in BITS..NON_NATIVE_U64_LIMB_BITS {
+                let high_bit = meta.query_advice(scalar_range.bit, Rotation(bit_index as i32));
+                constraints.push(s.clone() * high_bit);
+            }
+
+            let base_public = query_non_native_vesta_affine_point_instances(
+                meta,
+                &base_instances,
+                Rotation::cur(),
+            );
+            let output_public = query_non_native_vesta_affine_point_instances(
+                meta,
+                &output_instances,
+                Rotation::cur(),
+            );
+            let first_addend = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &conditional_adds[0].addend,
+                Rotation::cur(),
+            );
+            let first_accumulator = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &conditional_adds[0].addition.p,
+                Rotation::cur(),
+            );
+            let final_output = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &conditional_adds[BITS - 1].addition.r,
+                Rotation::cur(),
+            );
+
+            push_non_native_vesta_point_equality_constraints(
+                &mut constraints,
+                &s,
+                &first_addend,
+                &base_public,
+            );
+            push_non_native_vesta_identity_constraints(&mut constraints, &s, &first_accumulator);
+            push_non_native_vesta_point_equality_constraints(
+                &mut constraints,
+                &s,
+                &final_output,
+                &output_public,
+            );
+
+            for (bit_index, conditional_add) in conditional_adds.iter().enumerate() {
+                let scalar_bit = meta.query_advice(scalar_range.bit, Rotation(bit_index as i32));
+                let conditional_bit = meta.query_advice(conditional_add.bit, Rotation::cur());
+                constraints.push(s.clone() * (conditional_bit - scalar_bit));
+                if bit_index > 0 {
+                    let previous_output = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &conditional_adds[bit_index - 1].addition.r,
+                        Rotation::cur(),
+                    );
+                    let current_accumulator = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &conditional_add.addition.p,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &previous_output,
+                        &current_accumulator,
+                    );
+                }
+            }
+
+            for (bit_index, double) in doubles.iter().enumerate() {
+                let addend = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &conditional_adds[bit_index].addend,
+                    Rotation::cur(),
+                );
+                let double_p = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &double.p,
+                    Rotation::cur(),
+                );
+                let double_q = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &double.q,
+                    Rotation::cur(),
+                );
+                let double_r = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &double.r,
+                    Rotation::cur(),
+                );
+                let next_addend = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &conditional_adds[bit_index + 1].addend,
+                    Rotation::cur(),
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &addend,
+                    &double_p,
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &addend,
+                    &double_q,
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &double_r,
+                    &next_addend,
+                );
+            }
+            constraints
+        });
+
+        NonNativeVestaAffineScalarMulConfig {
+            scalar_range,
+            conditional_adds,
+            doubles,
+            link,
+        }
+    }
+
+    impl<const BITS: usize> Circuit<Scalar> for NonNativeVestaAffineScalarMul<BITS> {
+        type Config = NonNativeVestaAffineScalarMulConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_scalar_mul::<BITS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_scalar_mul",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    assign_non_native_u64_limb_range_region(
+                        &mut region,
+                        &config.scalar_range,
+                        self.scalar.value,
+                        self.scalar.bits,
+                        self.scalar.accumulators,
+                    )?;
+                    for (step_config, step) in config
+                        .conditional_adds
+                        .iter()
+                        .zip(self.conditional_adds.iter())
+                    {
+                        assign_non_native_vesta_affine_conditional_add_region(
+                            &mut region,
+                            step_config,
+                            step,
+                        )?;
+                    }
+                    for (double_config, double) in config.doubles.iter().zip(self.doubles.iter()) {
+                        assign_non_native_vesta_affine_complete_add_region(
+                            &mut region,
+                            double_config,
+                            double,
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    /// Config for a native-Pasta-scalar Vesta scalar multiplication chain.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineScalarMulNativeScalarConfig {
+        scalar: NativePastaFpScalarConfig,
+        conditional_adds: Vec<NonNativeVestaAffineConditionalAddConfig>,
+        doubles: Vec<NonNativeVestaAffineCompleteAddConfig>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `output = scalar * base` from native Pasta/Fp scalar bits.
+    ///
+    /// The scalar is public as a native Pasta/Fp element and decomposed into
+    /// canonical private `u64` limbs by `NativePastaFpScalar`. The public base
+    /// and output are point-or-identity encodings. Intermediate accumulator
+    /// values, doubled addends, and selected addends stay private while being
+    /// linked by complete-add and conditional-add constraints.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineScalarMulNativeScalar<const BITS: usize> {
+        /// Public native Pasta/Fp scalar whose high bits above `BITS` must be zero.
+        pub scalar: Box<NativePastaFpScalar>,
+        /// Conditional accumulator steps driven by canonical scalar bits.
+        pub conditional_adds: Vec<NonNativeVestaAffineConditionalAdd>,
+        /// Doubling steps proving the per-bit addend ladder from the base.
+        pub doubles: Vec<NonNativeVestaAffineCompleteAdd>,
+    }
+
+    impl<const BITS: usize> Default for NonNativeVestaAffineScalarMulNativeScalar<BITS> {
+        fn default() -> Self {
+            Self {
+                scalar: Box::new(NativePastaFpScalar::default()),
+                conditional_adds: vec![NonNativeVestaAffineConditionalAdd::default(); BITS],
+                doubles: vec![NonNativeVestaAffineCompleteAdd::default(); BITS.saturating_sub(1)],
+            }
+        }
+    }
+
+    impl<const BITS: usize> NonNativeVestaAffineScalarMulNativeScalar<BITS> {
+        /// Build an honest native-scalar multiplication witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `BITS` is outside `1..=255`, if `scalar` has any
+        /// high canonical bit above the circuit width, if `base` or `output` is
+        /// not a canonical point-or-identity encoding, or if the supplied output
+        /// is not equal to `scalar * base`.
+        pub fn try_from_scalar(
+            scalar: Scalar,
+            base: VestaPointEncoding,
+            output: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            if !(1..=PASTA_FP_SCALAR_BITS).contains(&BITS) {
+                return Err("Vesta native-scalar mul bit width must be in 1..=255".to_owned());
+            }
+            let scalar_limbs = pasta_fp_to_limbs(scalar);
+            if (BITS..PASTA_FP_SCALAR_BITS)
+                .any(|bit_index| scalar_limb_bit(scalar_limbs, bit_index))
+            {
+                return Err(
+                    "Vesta native-scalar mul scalar exceeds configured bit width".to_owned(),
+                );
+            }
+
+            let base_affine = vesta_affine_from_limbs(base)?;
+            let expected_output = vesta_affine_from_limbs(output)?;
+            let mut accumulator = VestaAffine::identity().to_curve();
+            let mut addend = base_affine.to_curve();
+            let mut conditional_adds = Vec::with_capacity(BITS);
+            let mut doubles = Vec::with_capacity(BITS.saturating_sub(1));
+
+            for bit_index in 0..BITS {
+                let bit = scalar_limb_bit(scalar_limbs, bit_index);
+                let accumulator_before = vesta_affine_to_limbs(accumulator.to_affine());
+                let addend_before = vesta_affine_to_limbs(addend.to_affine());
+                if bit {
+                    accumulator += addend;
+                }
+                let accumulator_after = vesta_affine_to_limbs(accumulator.to_affine());
+                conditional_adds.push(NonNativeVestaAffineConditionalAdd::try_from_limbs(
+                    accumulator_before,
+                    addend_before,
+                    accumulator_after,
+                    bit,
+                )?);
+                if bit_index + 1 < BITS {
+                    let next_addend = addend + addend;
+                    let next_addend_limbs = vesta_affine_to_limbs(next_addend.to_affine());
+                    doubles.push(NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                        addend_before,
+                        addend_before,
+                        next_addend_limbs,
+                    )?);
+                    addend = next_addend;
+                }
+            }
+
+            if accumulator.to_affine() != expected_output {
+                return Err("Vesta native-scalar mul output mismatch".to_owned());
+            }
+
+            Ok(Self {
+                scalar: Box::new(NativePastaFpScalar::from_scalar(scalar)),
+                conditional_adds,
+                doubles,
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_scalar_mul_native_scalar<const BITS: usize>(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineScalarMulNativeScalarConfig {
+        assert!(
+            (1..=PASTA_FP_SCALAR_BITS).contains(&BITS),
+            "Vesta native-scalar mul bit width must be in 1..=255"
+        );
+        let scalar = configure_native_pasta_fp_scalar(meta);
+        let conditional_adds = (0..BITS)
+            .map(|_| {
+                configure_non_native_vesta_affine_conditional_add_with_exposure(
+                    meta, false, false, false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let doubles = (0..BITS.saturating_sub(1))
+            .map(|_| {
+                configure_non_native_vesta_affine_complete_add_with_exposure(
+                    meta, false, false, false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let base_instances = std::array::from_fn(|_| meta.instance_column());
+        let output_instances = std::array::from_fn(|_| meta.instance_column());
+        let link = meta.selector();
+
+        meta.create_gate(
+            "non_native_vesta_affine_scalar_mul_native_scalar_link",
+            |meta| {
+                let s = meta.query_selector(link);
+                let mut constraints =
+                    Vec::with_capacity(32 + BITS * 28 + PASTA_FP_SCALAR_BITS.saturating_sub(BITS));
+                for bit_index in BITS..PASTA_FP_SCALAR_BITS {
+                    let limb_index = bit_index / NON_NATIVE_U64_LIMB_BITS;
+                    let local_bit = bit_index % NON_NATIVE_U64_LIMB_BITS;
+                    let high_bit =
+                        meta.query_advice(scalar.limbs[limb_index].bit, Rotation(local_bit as i32));
+                    constraints.push(s.clone() * high_bit);
+                }
+
+                let base_public = query_non_native_vesta_affine_point_instances(
+                    meta,
+                    &base_instances,
+                    Rotation::cur(),
+                );
+                let output_public = query_non_native_vesta_affine_point_instances(
+                    meta,
+                    &output_instances,
+                    Rotation::cur(),
+                );
+                let first_addend = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &conditional_adds[0].addend,
+                    Rotation::cur(),
+                );
+                let first_accumulator = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &conditional_adds[0].addition.p,
+                    Rotation::cur(),
+                );
+                let final_output = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &conditional_adds[BITS - 1].addition.r,
+                    Rotation::cur(),
+                );
+
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &first_addend,
+                    &base_public,
+                );
+                push_non_native_vesta_identity_constraints(
+                    &mut constraints,
+                    &s,
+                    &first_accumulator,
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &final_output,
+                    &output_public,
+                );
+
+                for (bit_index, conditional_add) in conditional_adds.iter().enumerate() {
+                    let limb_index = bit_index / NON_NATIVE_U64_LIMB_BITS;
+                    let local_bit = bit_index % NON_NATIVE_U64_LIMB_BITS;
+                    let scalar_bit =
+                        meta.query_advice(scalar.limbs[limb_index].bit, Rotation(local_bit as i32));
+                    let conditional_bit = meta.query_advice(conditional_add.bit, Rotation::cur());
+                    constraints.push(s.clone() * (conditional_bit - scalar_bit));
+                    if bit_index > 0 {
+                        let previous_output = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &conditional_adds[bit_index - 1].addition.r,
+                            Rotation::cur(),
+                        );
+                        let current_accumulator =
+                            query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &conditional_add.addition.p,
+                                Rotation::cur(),
+                            );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &previous_output,
+                            &current_accumulator,
+                        );
+                    }
+                }
+
+                for (bit_index, double) in doubles.iter().enumerate() {
+                    let addend = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &conditional_adds[bit_index].addend,
+                        Rotation::cur(),
+                    );
+                    let double_p = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &double.p,
+                        Rotation::cur(),
+                    );
+                    let double_q = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &double.q,
+                        Rotation::cur(),
+                    );
+                    let double_r = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &double.r,
+                        Rotation::cur(),
+                    );
+                    let next_addend = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &conditional_adds[bit_index + 1].addend,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &addend,
+                        &double_p,
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &addend,
+                        &double_q,
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &double_r,
+                        &next_addend,
+                    );
+                }
+                constraints
+            },
+        );
+
+        NonNativeVestaAffineScalarMulNativeScalarConfig {
+            scalar,
+            conditional_adds,
+            doubles,
+            link,
+        }
+    }
+
+    impl<const BITS: usize> Circuit<Scalar> for NonNativeVestaAffineScalarMulNativeScalar<BITS> {
+        type Config = NonNativeVestaAffineScalarMulNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_scalar_mul_native_scalar::<BITS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_scalar_mul_native_scalar",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.scalar,
+                        self.scalar.as_ref(),
+                        true,
+                    )?;
+                    for (step_config, step) in config
+                        .conditional_adds
+                        .iter()
+                        .zip(self.conditional_adds.iter())
+                    {
+                        assign_non_native_vesta_affine_conditional_add_region(
+                            &mut region,
+                            step_config,
+                            step,
+                        )?;
+                    }
+                    for (double_config, double) in config.doubles.iter().zip(self.doubles.iter()) {
+                        assign_non_native_vesta_affine_complete_add_region(
+                            &mut region,
+                            double_config,
+                            double,
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    /// Config for a bounded native-scalar Vesta MSM composition.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineMsmNativeScalarConfig {
+        scalars: Vec<NativePastaFpScalarConfig>,
+        conditional_adds: Vec<Vec<NonNativeVestaAffineConditionalAddConfig>>,
+        doubles: Vec<Vec<NonNativeVestaAffineCompleteAddConfig>>,
+        sum_adds: Vec<NonNativeVestaAffineCompleteAddConfig>,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `output = sum_i scalar_i * base_i`.
+    ///
+    /// Scalars are private canonical Pasta/Fp decompositions. Bases and the
+    /// final MSM output are public point-or-identity encodings. Per-term scalar
+    /// multiplication outputs and the running MSM accumulator stay private while
+    /// being linked by complete-add constraints.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineMsmNativeScalar<const TERMS: usize, const BITS: usize> {
+        /// Private canonical scalar decompositions.
+        pub scalars: Vec<NativePastaFpScalar>,
+        /// Per-term conditional scalar-multiplication steps.
+        pub conditional_adds: Vec<Vec<NonNativeVestaAffineConditionalAdd>>,
+        /// Per-term doubled-addend ladders.
+        pub doubles: Vec<Vec<NonNativeVestaAffineCompleteAdd>>,
+        /// Private running sum additions.
+        pub sum_adds: Vec<NonNativeVestaAffineCompleteAdd>,
+    }
+
+    impl<const TERMS: usize, const BITS: usize> Default
+        for NonNativeVestaAffineMsmNativeScalar<TERMS, BITS>
+    {
+        fn default() -> Self {
+            Self {
+                scalars: vec![NativePastaFpScalar::default(); TERMS],
+                conditional_adds: vec![
+                    vec![NonNativeVestaAffineConditionalAdd::default(); BITS];
+                    TERMS
+                ],
+                doubles: vec![
+                    vec![
+                        NonNativeVestaAffineCompleteAdd::default();
+                        BITS.saturating_sub(1)
+                    ];
+                    TERMS
+                ],
+                sum_adds: vec![NonNativeVestaAffineCompleteAdd::default(); TERMS],
+            }
+        }
+    }
+
+    impl<const TERMS: usize, const BITS: usize> NonNativeVestaAffineMsmNativeScalar<TERMS, BITS> {
+        /// Build an honest bounded MSM witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `TERMS` or `BITS` is outside the supported range,
+        /// if any scalar has a high bit above `BITS`, if any point encoding is
+        /// invalid, or if the supplied output is not the MSM result.
+        pub fn try_from_terms(
+            terms: [(Scalar, VestaPointEncoding); TERMS],
+            output: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            if TERMS == 0 {
+                return Err("Vesta native-scalar MSM must have at least one term".to_owned());
+            }
+            if !(1..=PASTA_FP_SCALAR_BITS).contains(&BITS) {
+                return Err("Vesta native-scalar MSM bit width must be in 1..=255".to_owned());
+            }
+
+            let expected_output = vesta_affine_from_limbs(output)?;
+            let mut scalars = Vec::with_capacity(TERMS);
+            let mut conditional_adds = Vec::with_capacity(TERMS);
+            let mut doubles = Vec::with_capacity(TERMS);
+            let mut msm_accumulator = VestaAffine::identity().to_curve();
+            let mut sum_adds = Vec::with_capacity(TERMS);
+
+            for (scalar, base) in terms {
+                let scalar_limbs = pasta_fp_to_limbs(scalar);
+                if (BITS..PASTA_FP_SCALAR_BITS)
+                    .any(|bit_index| scalar_limb_bit(scalar_limbs, bit_index))
+                {
+                    return Err(
+                        "Vesta native-scalar MSM scalar exceeds configured bit width".to_owned(),
+                    );
+                }
+                let base_affine = vesta_affine_from_limbs(base)?;
+                let term_output = base_affine.to_curve() * scalar;
+                let term_output_limbs = vesta_affine_to_limbs(term_output.to_affine());
+                let scalar_mul =
+                    NonNativeVestaAffineScalarMulNativeScalar::<BITS>::try_from_scalar(
+                        scalar,
+                        base,
+                        term_output_limbs,
+                    )?;
+
+                let accumulator_before = vesta_affine_to_limbs(msm_accumulator.to_affine());
+                msm_accumulator += term_output;
+                let accumulator_after = vesta_affine_to_limbs(msm_accumulator.to_affine());
+                sum_adds.push(NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                    accumulator_before,
+                    term_output_limbs,
+                    accumulator_after,
+                )?);
+
+                scalars.push(*scalar_mul.scalar);
+                conditional_adds.push(scalar_mul.conditional_adds);
+                doubles.push(scalar_mul.doubles);
+            }
+
+            if msm_accumulator.to_affine() != expected_output {
+                return Err("Vesta native-scalar MSM output mismatch".to_owned());
+            }
+
+            Ok(Self {
+                scalars,
+                conditional_adds,
+                doubles,
+                sum_adds,
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_msm_native_scalar<
+        const TERMS: usize,
+        const BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineMsmNativeScalarConfig {
+        assert!(
+            TERMS > 0,
+            "Vesta native-scalar MSM must have at least one term"
+        );
+        assert!(
+            (1..=PASTA_FP_SCALAR_BITS).contains(&BITS),
+            "Vesta native-scalar MSM bit width must be in 1..=255"
+        );
+        let scalars = (0..TERMS)
+            .map(|_| configure_private_native_pasta_fp_scalar(meta))
+            .collect::<Vec<_>>();
+        let conditional_adds = (0..TERMS)
+            .map(|_| {
+                (0..BITS)
+                    .map(|_| {
+                        configure_non_native_vesta_affine_conditional_add_with_exposure(
+                            meta, false, false, false,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let doubles = (0..TERMS)
+            .map(|_| {
+                (0..BITS.saturating_sub(1))
+                    .map(|_| {
+                        configure_non_native_vesta_affine_complete_add_with_exposure(
+                            meta, false, false, false,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let sum_adds = (0..TERMS)
+            .map(|_| {
+                configure_non_native_vesta_affine_complete_add_with_exposure(
+                    meta, false, false, false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let base_instances = (0..TERMS)
+            .map(|_| std::array::from_fn(|_| meta.instance_column()))
+            .collect::<Vec<_>>();
+        let output_instances = std::array::from_fn(|_| meta.instance_column());
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_affine_msm_native_scalar_link", |meta| {
+            let s = meta.query_selector(link);
+            let mut constraints = Vec::with_capacity(
+                TERMS * (32 + BITS * 28 + PASTA_FP_SCALAR_BITS.saturating_sub(BITS))
+                    + TERMS * 20
+                    + 20,
+            );
+
+            for term_index in 0..TERMS {
+                for bit_index in BITS..PASTA_FP_SCALAR_BITS {
+                    let limb_index = bit_index / NON_NATIVE_U64_LIMB_BITS;
+                    let local_bit = bit_index % NON_NATIVE_U64_LIMB_BITS;
+                    let high_bit = meta.query_advice(
+                        scalars[term_index].limbs[limb_index].bit,
+                        Rotation(local_bit as i32),
+                    );
+                    constraints.push(s.clone() * high_bit);
+                }
+
+                let base_public = query_non_native_vesta_affine_point_instances(
+                    meta,
+                    &base_instances[term_index],
+                    Rotation::cur(),
+                );
+                let first_addend = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &conditional_adds[term_index][0].addend,
+                    Rotation::cur(),
+                );
+                let first_accumulator = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &conditional_adds[term_index][0].addition.p,
+                    Rotation::cur(),
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &first_addend,
+                    &base_public,
+                );
+                push_non_native_vesta_identity_constraints(
+                    &mut constraints,
+                    &s,
+                    &first_accumulator,
+                );
+
+                for (bit_index, conditional_add) in conditional_adds[term_index].iter().enumerate()
+                {
+                    let limb_index = bit_index / NON_NATIVE_U64_LIMB_BITS;
+                    let local_bit = bit_index % NON_NATIVE_U64_LIMB_BITS;
+                    let scalar_bit = meta.query_advice(
+                        scalars[term_index].limbs[limb_index].bit,
+                        Rotation(local_bit as i32),
+                    );
+                    let conditional_bit = meta.query_advice(conditional_add.bit, Rotation::cur());
+                    constraints.push(s.clone() * (conditional_bit - scalar_bit));
+                    if bit_index > 0 {
+                        let previous_output = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &conditional_adds[term_index][bit_index - 1].addition.r,
+                            Rotation::cur(),
+                        );
+                        let current_accumulator =
+                            query_non_native_vesta_affine_maybe_identity_point(
+                                meta,
+                                &conditional_add.addition.p,
+                                Rotation::cur(),
+                            );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &previous_output,
+                            &current_accumulator,
+                        );
+                    }
+                }
+
+                for (bit_index, double) in doubles[term_index].iter().enumerate() {
+                    let addend = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &conditional_adds[term_index][bit_index].addend,
+                        Rotation::cur(),
+                    );
+                    let double_p = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &double.p,
+                        Rotation::cur(),
+                    );
+                    let double_q = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &double.q,
+                        Rotation::cur(),
+                    );
+                    let double_r = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &double.r,
+                        Rotation::cur(),
+                    );
+                    let next_addend = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &conditional_adds[term_index][bit_index + 1].addend,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &addend,
+                        &double_p,
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &addend,
+                        &double_q,
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &double_r,
+                        &next_addend,
+                    );
+                }
+
+                let term_output = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &conditional_adds[term_index][BITS - 1].addition.r,
+                    Rotation::cur(),
+                );
+                let sum_term = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &sum_adds[term_index].q,
+                    Rotation::cur(),
+                );
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &term_output,
+                    &sum_term,
+                );
+
+                if term_index == 0 {
+                    let first_sum_accumulator = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &sum_adds[0].p,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_identity_constraints(
+                        &mut constraints,
+                        &s,
+                        &first_sum_accumulator,
+                    );
+                } else {
+                    let previous_sum = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &sum_adds[term_index - 1].r,
+                        Rotation::cur(),
+                    );
+                    let current_sum_input = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &sum_adds[term_index].p,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &previous_sum,
+                        &current_sum_input,
+                    );
+                }
+            }
+
+            let output_public = query_non_native_vesta_affine_point_instances(
+                meta,
+                &output_instances,
+                Rotation::cur(),
+            );
+            let final_sum = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &sum_adds[TERMS - 1].r,
+                Rotation::cur(),
+            );
+            push_non_native_vesta_point_equality_constraints(
+                &mut constraints,
+                &s,
+                &final_sum,
+                &output_public,
+            );
+            constraints
+        });
+
+        NonNativeVestaAffineMsmNativeScalarConfig {
+            scalars,
+            conditional_adds,
+            doubles,
+            sum_adds,
+            link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_msm_native_scalar_region<
+        const TERMS: usize,
+        const BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineMsmNativeScalarConfig,
+        witness: &NonNativeVestaAffineMsmNativeScalar<TERMS, BITS>,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        for (scalar_config, scalar) in config.scalars.iter().zip(witness.scalars.iter()) {
+            assign_native_pasta_fp_scalar_region(region, scalar_config, scalar, false)?;
+        }
+        for term_index in 0..TERMS {
+            for (step_config, step) in config.conditional_adds[term_index]
+                .iter()
+                .zip(witness.conditional_adds[term_index].iter())
+            {
+                assign_non_native_vesta_affine_conditional_add_region(region, step_config, step)?;
+            }
+            for (double_config, double) in config.doubles[term_index]
+                .iter()
+                .zip(witness.doubles[term_index].iter())
+            {
+                assign_non_native_vesta_affine_complete_add_region(region, double_config, double)?;
+            }
+        }
+        for (sum_config, sum) in config.sum_adds.iter().zip(witness.sum_adds.iter()) {
+            assign_non_native_vesta_affine_complete_add_region(region, sum_config, sum)?;
+        }
+        Ok(())
+    }
+
+    impl<const TERMS: usize, const BITS: usize> Circuit<Scalar>
+        for NonNativeVestaAffineMsmNativeScalar<TERMS, BITS>
+    {
+        type Config = NonNativeVestaAffineMsmNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_msm_native_scalar::<TERMS, BITS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_msm_native_scalar",
+                |mut region| {
+                    assign_non_native_vesta_affine_msm_native_scalar_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for the final IPA verifier MSM comparison.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaFinalMsmNativeScalarConfig {
+        msm: NonNativeVestaAffineMsmNativeScalarConfig,
+        product_link: Selector,
+    }
+
+    /// Circuit wrapper proving `Q = a*G + b*H + (a*b)*U`.
+    ///
+    /// This is the final group comparison used by the native transparent IPA
+    /// verifier after transcript challenge folding has produced `Q`, `G`, `H`,
+    /// `U`, `a`, and `b`. The wrapper keeps `a`, `b`, and `a*b` private and
+    /// canonical, exposes only the three base points and the final output point,
+    /// and links the third MSM scalar to the native-field product of the first
+    /// two scalars.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaFinalMsmNativeScalar<const BITS: usize> {
+        /// Underlying three-term MSM witness.
+        pub msm: Box<NonNativeVestaAffineMsmNativeScalar<3, BITS>>,
+    }
+
+    impl<const BITS: usize> Default for NonNativeVestaIpaFinalMsmNativeScalar<BITS> {
+        fn default() -> Self {
+            Self {
+                msm: Box::new(NonNativeVestaAffineMsmNativeScalar::default()),
+            }
+        }
+    }
+
+    impl<const BITS: usize> NonNativeVestaIpaFinalMsmNativeScalar<BITS> {
+        /// Build an honest IPA final-comparison witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if any scalar exceeds `BITS`, any point encoding is
+        /// invalid, or `output != a*final_g + b*final_h + (a*b)*u`.
+        pub fn try_from_scalars(
+            a_final: Scalar,
+            b_final: Scalar,
+            final_g: VestaPointEncoding,
+            final_h: VestaPointEncoding,
+            u: VestaPointEncoding,
+            output: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            let product = a_final * b_final;
+            let msm = NonNativeVestaAffineMsmNativeScalar::<3, BITS>::try_from_terms(
+                [(a_final, final_g), (b_final, final_h), (product, u)],
+                output,
+            )?;
+            Ok(Self { msm: Box::new(msm) })
+        }
+    }
+
+    fn configure_non_native_vesta_ipa_final_msm_native_scalar<const BITS: usize>(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaIpaFinalMsmNativeScalarConfig {
+        let msm = configure_non_native_vesta_affine_msm_native_scalar::<3, BITS>(meta);
+        let product_link = meta.selector();
+
+        meta.create_gate("non_native_vesta_ipa_final_msm_product_link", |meta| {
+            let s = meta.query_selector(product_link);
+            let a = meta.query_advice(msm.scalars[0].value, Rotation::cur());
+            let b = meta.query_advice(msm.scalars[1].value, Rotation::cur());
+            let product = meta.query_advice(msm.scalars[2].value, Rotation::cur());
+            vec![s * (a * b - product)]
+        });
+
+        NonNativeVestaIpaFinalMsmNativeScalarConfig { msm, product_link }
+    }
+
+    impl<const BITS: usize> Circuit<Scalar> for NonNativeVestaIpaFinalMsmNativeScalar<BITS> {
+        type Config = NonNativeVestaIpaFinalMsmNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_ipa_final_msm_native_scalar::<BITS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_ipa_final_msm_native_scalar",
+                |mut region| {
+                    config.product_link.enable(&mut region, 0)?;
+                    assign_non_native_vesta_affine_msm_native_scalar_region(
+                        &mut region,
+                        &config.msm,
+                        self.msm.as_ref(),
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for one IPA verifier accumulator update round.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaRoundAccumulatorNativeScalarConfig {
+        challenge: NativePastaFpScalarConfig,
+        challenge_inverse: NativePastaFpScalarConfig,
+        msm: NonNativeVestaAffineWindowedMsmNativeScalarConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving `Q' = x^2*L + Q + x^{-2}*R`.
+    ///
+    /// This is the verifier-side IPA round accumulator transition after the
+    /// transcript has produced challenge `x` and inverse `x^{-1}`. The wrapper
+    /// keeps both challenge scalars private and canonical, exposes only `L`,
+    /// `Q`, `R`, and `Q'`, and uses native-field constraints to bind the MSM
+    /// scalars to `x^2`, `1`, and `x^{-2}`.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaRoundAccumulatorNativeScalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Private canonical challenge `x`.
+        pub challenge: NativePastaFpScalar,
+        /// Private canonical inverse challenge `x^{-1}`.
+        pub challenge_inverse: NativePastaFpScalar,
+        /// Underlying three-term fixed-window MSM witness.
+        pub msm: Box<NonNativeVestaAffineWindowedMsmNativeScalar<3, WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaIpaRoundAccumulatorNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                challenge: NativePastaFpScalar::default(),
+                challenge_inverse: NativePastaFpScalar::default(),
+                msm: Box::new(NonNativeVestaAffineWindowedMsmNativeScalar::default()),
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaRoundAccumulatorNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest IPA round accumulator witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `challenge_inverse` is not the inverse of
+        /// `challenge`, any MSM scalar exceeds the configured fixed-window
+        /// width, any point encoding is invalid, or the supplied output is not
+        /// the IPA accumulator update.
+        pub fn try_from_challenge(
+            challenge: Scalar,
+            challenge_inverse: Scalar,
+            l: VestaPointEncoding,
+            q_before: VestaPointEncoding,
+            r: VestaPointEncoding,
+            q_after: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            if challenge * challenge_inverse != Scalar::from(1) {
+                return Err("IPA round challenge inverse mismatch".to_owned());
+            }
+            let challenge_square = challenge * challenge;
+            let challenge_inverse_square = challenge_inverse * challenge_inverse;
+            let msm = NonNativeVestaAffineWindowedMsmNativeScalar::<
+                3,
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_terms(
+                [
+                    (challenge_square, l),
+                    (Scalar::from(1), q_before),
+                    (challenge_inverse_square, r),
+                ],
+                q_after,
+            )?;
+            Ok(Self {
+                challenge: NativePastaFpScalar::from_scalar(challenge),
+                challenge_inverse: NativePastaFpScalar::from_scalar(challenge_inverse),
+                msm: Box::new(msm),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_ipa_round_accumulator_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaIpaRoundAccumulatorNativeScalarConfig {
+        let challenge = configure_private_native_pasta_fp_scalar(meta);
+        let challenge_inverse = configure_private_native_pasta_fp_scalar(meta);
+        let msm = configure_non_native_vesta_affine_windowed_msm_native_scalar::<
+            3,
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_ipa_round_accumulator_link", |meta| {
+            let s = meta.query_selector(link);
+            let x = meta.query_advice(challenge.value, Rotation::cur());
+            let x_inverse = meta.query_advice(challenge_inverse.value, Rotation::cur());
+            let x_square = meta.query_advice(msm.term_muls[0].scalar.scalar.value, Rotation::cur());
+            let one_scalar =
+                meta.query_advice(msm.term_muls[1].scalar.scalar.value, Rotation::cur());
+            let x_inverse_square =
+                meta.query_advice(msm.term_muls[2].scalar.scalar.value, Rotation::cur());
+            let one = Expression::Constant(Scalar::from(1));
+            vec![
+                s.clone() * (x.clone() * x_inverse.clone() - one.clone()),
+                s.clone() * (x.clone() * x - x_square),
+                s.clone() * (x_inverse.clone() * x_inverse - x_inverse_square),
+                s * (one_scalar - one),
+            ]
+        });
+
+        NonNativeVestaIpaRoundAccumulatorNativeScalarConfig {
+            challenge,
+            challenge_inverse,
+            msm,
+            link,
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaIpaRoundAccumulatorNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaIpaRoundAccumulatorNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_ipa_round_accumulator_native_scalar::<WINDOWS, WINDOW_BITS>(
+                meta,
+            )
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_ipa_round_accumulator_native_scalar",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge,
+                        &self.challenge,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge_inverse,
+                        &self.challenge_inverse,
+                        false,
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                        &mut region,
+                        &config.msm,
+                        self.msm.as_ref(),
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for one IPA generator-folding step.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaGeneratorFoldNativeScalarConfig {
+        challenge: NativePastaFpScalarConfig,
+        challenge_inverse: NativePastaFpScalarConfig,
+        g_msm: NonNativeVestaAffineWindowedMsmNativeScalarConfig,
+        h_msm: NonNativeVestaAffineWindowedMsmNativeScalarConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper proving IPA folded generators for one round.
+    ///
+    /// It proves `G' = x^{-1}*G_L + x*G_R` and
+    /// `H' = x*H_L + x^{-1}*H_R` with a shared private challenge and inverse.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaGeneratorFoldNativeScalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Private canonical challenge `x`.
+        pub challenge: NativePastaFpScalar,
+        /// Private canonical inverse challenge `x^{-1}`.
+        pub challenge_inverse: NativePastaFpScalar,
+        /// Fixed-window MSM witness for `G'`.
+        pub g_msm: Box<NonNativeVestaAffineWindowedMsmNativeScalar<2, WINDOWS, WINDOW_BITS>>,
+        /// Fixed-window MSM witness for `H'`.
+        pub h_msm: Box<NonNativeVestaAffineWindowedMsmNativeScalar<2, WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaIpaGeneratorFoldNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                challenge: NativePastaFpScalar::default(),
+                challenge_inverse: NativePastaFpScalar::default(),
+                g_msm: Box::new(NonNativeVestaAffineWindowedMsmNativeScalar::default()),
+                h_msm: Box::new(NonNativeVestaAffineWindowedMsmNativeScalar::default()),
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaGeneratorFoldNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest IPA generator-folding witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `challenge_inverse` is not the inverse of
+        /// `challenge`, any MSM scalar exceeds the configured fixed-window
+        /// width, any point encoding is invalid, or either supplied folded
+        /// generator output is wrong.
+        pub fn try_from_challenge(
+            challenge: Scalar,
+            challenge_inverse: Scalar,
+            g_left: VestaPointEncoding,
+            g_right: VestaPointEncoding,
+            h_left: VestaPointEncoding,
+            h_right: VestaPointEncoding,
+            g_after: VestaPointEncoding,
+            h_after: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            if challenge * challenge_inverse != Scalar::from(1) {
+                return Err("IPA generator-fold challenge inverse mismatch".to_owned());
+            }
+            let g_msm = NonNativeVestaAffineWindowedMsmNativeScalar::<
+                2,
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_terms([(challenge_inverse, g_left), (challenge, g_right)], g_after)?;
+            let h_msm = NonNativeVestaAffineWindowedMsmNativeScalar::<
+                2,
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_terms([(challenge, h_left), (challenge_inverse, h_right)], h_after)?;
+            Ok(Self {
+                challenge: NativePastaFpScalar::from_scalar(challenge),
+                challenge_inverse: NativePastaFpScalar::from_scalar(challenge_inverse),
+                g_msm: Box::new(g_msm),
+                h_msm: Box::new(h_msm),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_ipa_generator_fold_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaIpaGeneratorFoldNativeScalarConfig {
+        let challenge = configure_private_native_pasta_fp_scalar(meta);
+        let challenge_inverse = configure_private_native_pasta_fp_scalar(meta);
+        let g_msm = configure_non_native_vesta_affine_windowed_msm_native_scalar::<
+            2,
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let h_msm = configure_non_native_vesta_affine_windowed_msm_native_scalar::<
+            2,
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_ipa_generator_fold_link", |meta| {
+            let s = meta.query_selector(link);
+            let x = meta.query_advice(challenge.value, Rotation::cur());
+            let x_inverse = meta.query_advice(challenge_inverse.value, Rotation::cur());
+            let g_left_scalar =
+                meta.query_advice(g_msm.term_muls[0].scalar.scalar.value, Rotation::cur());
+            let g_right_scalar =
+                meta.query_advice(g_msm.term_muls[1].scalar.scalar.value, Rotation::cur());
+            let h_left_scalar =
+                meta.query_advice(h_msm.term_muls[0].scalar.scalar.value, Rotation::cur());
+            let h_right_scalar =
+                meta.query_advice(h_msm.term_muls[1].scalar.scalar.value, Rotation::cur());
+            let one = Expression::Constant(Scalar::from(1));
+            vec![
+                s.clone() * (x.clone() * x_inverse.clone() - one),
+                s.clone() * (g_left_scalar - x_inverse.clone()),
+                s.clone() * (g_right_scalar - x.clone()),
+                s.clone() * (h_left_scalar - x),
+                s * (h_right_scalar - x_inverse),
+            ]
+        });
+
+        NonNativeVestaIpaGeneratorFoldNativeScalarConfig {
+            challenge,
+            challenge_inverse,
+            g_msm,
+            h_msm,
+            link,
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaIpaGeneratorFoldNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaIpaGeneratorFoldNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_ipa_generator_fold_native_scalar::<WINDOWS, WINDOW_BITS>(
+                meta,
+            )
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_ipa_generator_fold_native_scalar",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge,
+                        &self.challenge,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.challenge_inverse,
+                        &self.challenge_inverse,
+                        false,
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                        &mut region,
+                        &config.g_msm,
+                        self.g_msm.as_ref(),
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                        &mut region,
+                        &config.h_msm,
+                        self.h_msm.as_ref(),
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for a one-round composed IPA verifier slice.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaOneRoundVerifierNativeScalarConfig {
+        b_reduction: NativePastaFpIpaBVectorReductionConfig,
+        round_accumulator: NonNativeVestaIpaRoundAccumulatorNativeScalarConfig,
+        generator_fold: NonNativeVestaIpaGeneratorFoldNativeScalarConfig,
+        final_msm: NonNativeVestaIpaFinalWindowedMsmNativeScalarConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper composing one IPA verifier reduction round end to end.
+    ///
+    /// This proves the same private challenge/inverse pair is used to fold the
+    /// public `b` vector, update `Q`, fold `G/H`, and feed the final
+    /// `Q = a*G + b*H + (a*b)*U` comparison.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaOneRoundVerifierNativeScalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Public `b`-vector reduction from two inputs to one final scalar.
+        pub b_reduction: Box<NativePastaFpIpaBVectorReduction<2>>,
+        /// Round accumulator update witness.
+        pub round_accumulator:
+            Box<NonNativeVestaIpaRoundAccumulatorNativeScalar<WINDOWS, WINDOW_BITS>>,
+        /// Generator-fold witness.
+        pub generator_fold: Box<NonNativeVestaIpaGeneratorFoldNativeScalar<WINDOWS, WINDOW_BITS>>,
+        /// Fixed-window final IPA comparison witness.
+        pub final_msm: Box<NonNativeVestaIpaFinalWindowedMsmNativeScalar<WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaIpaOneRoundVerifierNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                b_reduction: Box::new(NativePastaFpIpaBVectorReduction::default()),
+                round_accumulator: Box::new(
+                    NonNativeVestaIpaRoundAccumulatorNativeScalar::default(),
+                ),
+                generator_fold: Box::new(NonNativeVestaIpaGeneratorFoldNativeScalar::default()),
+                final_msm: Box::new(NonNativeVestaIpaFinalWindowedMsmNativeScalar::default()),
+            }
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaOneRoundVerifierNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest one-round IPA verifier composition witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if any sub-witness is invalid or if the final
+        /// comparison does not equal the round-updated accumulator.
+        pub fn try_from_statement(
+            b_initial: [Scalar; 2],
+            challenge: Scalar,
+            challenge_inverse: Scalar,
+            a_final: Scalar,
+            l: VestaPointEncoding,
+            q_before: VestaPointEncoding,
+            r: VestaPointEncoding,
+            g_left: VestaPointEncoding,
+            g_right: VestaPointEncoding,
+            h_left: VestaPointEncoding,
+            h_right: VestaPointEncoding,
+            u: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            let b_final = b_initial[0] * challenge_inverse + b_initial[1] * challenge;
+            let b_reduction = NativePastaFpIpaBVectorReduction::<2>::try_from_scalars(
+                b_initial,
+                vec![challenge],
+                vec![challenge_inverse],
+                b_final,
+            )?;
+
+            let q_after = vesta_msm_output_from_encoded_terms([
+                (challenge * challenge, l),
+                (Scalar::from(1), q_before),
+                (challenge_inverse * challenge_inverse, r),
+            ])?;
+            let round_accumulator = NonNativeVestaIpaRoundAccumulatorNativeScalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_challenge(
+                challenge, challenge_inverse, l, q_before, r, q_after
+            )?;
+
+            let g_after = vesta_msm_output_from_encoded_terms([
+                (challenge_inverse, g_left),
+                (challenge, g_right),
+            ])?;
+            let h_after = vesta_msm_output_from_encoded_terms([
+                (challenge, h_left),
+                (challenge_inverse, h_right),
+            ])?;
+            let generator_fold =
+                NonNativeVestaIpaGeneratorFoldNativeScalar::<WINDOWS, WINDOW_BITS>::try_from_challenge(
+                    challenge,
+                    challenge_inverse,
+                    g_left,
+                    g_right,
+                    h_left,
+                    h_right,
+                    g_after,
+                    h_after,
+                )?;
+
+            let final_msm =
+                NonNativeVestaIpaFinalWindowedMsmNativeScalar::<WINDOWS, WINDOW_BITS>::try_from_scalars(
+                    a_final, b_final, g_after, h_after, u, q_after,
+                )?;
+
+            Ok(Self {
+                b_reduction: Box::new(b_reduction),
+                round_accumulator: Box::new(round_accumulator),
+                generator_fold: Box::new(generator_fold),
+                final_msm: Box::new(final_msm),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_ipa_one_round_verifier_native_scalar<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaIpaOneRoundVerifierNativeScalarConfig {
+        let b_reduction = configure_native_pasta_fp_ipa_b_vector_reduction::<2>(meta);
+        let round_accumulator = configure_non_native_vesta_ipa_round_accumulator_native_scalar::<
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let generator_fold = configure_non_native_vesta_ipa_generator_fold_native_scalar::<
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let final_msm = configure_non_native_vesta_ipa_final_windowed_msm_native_scalar::<
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_ipa_one_round_verifier_link", |meta| {
+            let s = meta.query_selector(link);
+            let mut constraints =
+                Vec::with_capacity(2 + 3 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1));
+
+            let b_challenge = meta.query_advice(b_reduction.challenges[0].value, Rotation::cur());
+            let b_challenge_inverse =
+                meta.query_advice(b_reduction.challenge_inverses[0].value, Rotation::cur());
+            let round_challenge =
+                meta.query_advice(round_accumulator.challenge.value, Rotation::cur());
+            let round_challenge_inverse =
+                meta.query_advice(round_accumulator.challenge_inverse.value, Rotation::cur());
+            let generator_challenge =
+                meta.query_advice(generator_fold.challenge.value, Rotation::cur());
+            let generator_challenge_inverse =
+                meta.query_advice(generator_fold.challenge_inverse.value, Rotation::cur());
+            constraints.push(s.clone() * (b_challenge.clone() - round_challenge.clone()));
+            constraints.push(s.clone() * (b_challenge - generator_challenge));
+            constraints
+                .push(s.clone() * (b_challenge_inverse.clone() - round_challenge_inverse.clone()));
+            constraints.push(s.clone() * (b_challenge_inverse - generator_challenge_inverse));
+
+            let b_final = meta.query_advice(b_reduction.vectors[1][0].value, Rotation::cur());
+            let final_msm_b = meta.query_advice(
+                final_msm.msm.term_muls[1].scalar.scalar.value,
+                Rotation::cur(),
+            );
+            constraints.push(s.clone() * (b_final - final_msm_b));
+
+            let round_q_after = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &round_accumulator.msm.sum_adds[2].r,
+                Rotation::cur(),
+            );
+            let final_output = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &final_msm.msm.sum_adds[2].r,
+                Rotation::cur(),
+            );
+            push_non_native_vesta_point_equality_constraints(
+                &mut constraints,
+                &s,
+                &round_q_after,
+                &final_output,
+            );
+
+            let folded_g = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &generator_fold.g_msm.sum_adds[1].r,
+                Rotation::cur(),
+            );
+            let final_g_base = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &final_msm.msm.term_muls[0].tables[0].table[1],
+                Rotation::cur(),
+            );
+            push_non_native_vesta_point_equality_constraints(
+                &mut constraints,
+                &s,
+                &folded_g,
+                &final_g_base,
+            );
+
+            let folded_h = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &generator_fold.h_msm.sum_adds[1].r,
+                Rotation::cur(),
+            );
+            let final_h_base = query_non_native_vesta_affine_maybe_identity_point(
+                meta,
+                &final_msm.msm.term_muls[1].tables[0].table[1],
+                Rotation::cur(),
+            );
+            push_non_native_vesta_point_equality_constraints(
+                &mut constraints,
+                &s,
+                &folded_h,
+                &final_h_base,
+            );
+
+            constraints
+        });
+
+        NonNativeVestaIpaOneRoundVerifierNativeScalarConfig {
+            b_reduction,
+            round_accumulator,
+            generator_fold,
+            final_msm,
+            link,
+        }
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaIpaOneRoundVerifierNativeScalar<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaIpaOneRoundVerifierNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_ipa_one_round_verifier_native_scalar::<WINDOWS, WINDOW_BITS>(
+                meta,
+            )
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_ipa_one_round_verifier_native_scalar",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    let final_b_layer = config.b_reduction.vectors.len().saturating_sub(1);
+                    for (layer_index, (witness_layer, config_layer)) in self
+                        .b_reduction
+                        .vectors
+                        .iter()
+                        .zip(config.b_reduction.vectors.iter())
+                        .enumerate()
+                    {
+                        let expose_public = layer_index == 0 || layer_index == final_b_layer;
+                        for (witness, scalar_config) in
+                            witness_layer.iter().zip(config_layer.iter())
+                        {
+                            assign_native_pasta_fp_scalar_region(
+                                &mut region,
+                                scalar_config,
+                                witness,
+                                expose_public,
+                            )?;
+                        }
+                    }
+                    for (witness, scalar_config) in self
+                        .b_reduction
+                        .challenges
+                        .iter()
+                        .zip(config.b_reduction.challenges.iter())
+                    {
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            scalar_config,
+                            witness,
+                            true,
+                        )?;
+                    }
+                    for (witness, scalar_config) in self
+                        .b_reduction
+                        .challenge_inverses
+                        .iter()
+                        .zip(config.b_reduction.challenge_inverses.iter())
+                    {
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            scalar_config,
+                            witness,
+                            true,
+                        )?;
+                    }
+
+                    config.b_reduction.link.enable(&mut region, 0)?;
+                    config.round_accumulator.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.round_accumulator.challenge,
+                        &self.round_accumulator.challenge,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.round_accumulator.challenge_inverse,
+                        &self.round_accumulator.challenge_inverse,
+                        false,
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                        &mut region,
+                        &config.round_accumulator.msm,
+                        self.round_accumulator.msm.as_ref(),
+                    )?;
+
+                    config.generator_fold.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.generator_fold.challenge,
+                        &self.generator_fold.challenge,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &config.generator_fold.challenge_inverse,
+                        &self.generator_fold.challenge_inverse,
+                        false,
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                        &mut region,
+                        &config.generator_fold.g_msm,
+                        self.generator_fold.g_msm.as_ref(),
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                        &mut region,
+                        &config.generator_fold.h_msm,
+                        self.generator_fold.h_msm.as_ref(),
+                    )?;
+
+                    config.final_msm.product_link.enable(&mut region, 0)?;
+                    assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                        &mut region,
+                        &config.final_msm.msm,
+                        self.final_msm.msm.as_ref(),
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for a multi-round composed IPA verifier slice.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaVerifierNativeScalarConfig {
+        b_reduction: NativePastaFpIpaBVectorReductionConfig,
+        round_accumulators: Vec<NonNativeVestaIpaRoundAccumulatorNativeScalarConfig>,
+        generator_folds: Vec<Vec<NonNativeVestaIpaGeneratorFoldNativeScalarConfig>>,
+        final_msm: NonNativeVestaIpaFinalWindowedMsmNativeScalarConfig,
+        link: Selector,
+    }
+
+    /// Circuit wrapper composing all IPA verifier reduction rounds for one proof.
+    ///
+    /// This generalizes the one-round slice to any power-of-two public opening
+    /// vector length. It shares each private challenge/inverse pair across the
+    /// public `b`-vector reduction, the round accumulator update, and every
+    /// `G/H` generator fold in that round. It also links `Q`, `G`, and `H`
+    /// outputs from each round into the next round, and links the last folded
+    /// values into the final IPA MSM comparison.
+    #[derive(Clone)]
+    pub struct NonNativeVestaIpaVerifierNativeScalar<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Public `b`-vector reduction from `LEN` inputs to one final scalar.
+        pub b_reduction: Box<NativePastaFpIpaBVectorReduction<LEN>>,
+        /// Per-round accumulator update witnesses.
+        pub round_accumulators:
+            Vec<NonNativeVestaIpaRoundAccumulatorNativeScalar<WINDOWS, WINDOW_BITS>>,
+        /// Per-round, per-pair generator-fold witnesses.
+        pub generator_folds:
+            Vec<Vec<NonNativeVestaIpaGeneratorFoldNativeScalar<WINDOWS, WINDOW_BITS>>>,
+        /// Fixed-window final IPA comparison witness.
+        pub final_msm: Box<NonNativeVestaIpaFinalWindowedMsmNativeScalar<WINDOWS, WINDOW_BITS>>,
+    }
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>
+    {
+        fn default() -> Self {
+            let rounds = ipa_power_of_two_rounds(LEN).unwrap_or(0);
+            let mut layer_len = LEN;
+            let mut generator_folds = Vec::with_capacity(rounds);
+            for _ in 0..rounds {
+                let half = layer_len / 2;
+                generator_folds.push(vec![
+                    NonNativeVestaIpaGeneratorFoldNativeScalar::default();
+                    half
+                ]);
+                layer_len = half;
+            }
+            Self {
+                b_reduction: Box::new(NativePastaFpIpaBVectorReduction::default()),
+                round_accumulators: vec![
+                    NonNativeVestaIpaRoundAccumulatorNativeScalar::default();
+                    rounds
+                ],
+                generator_folds,
+                final_msm: Box::new(NonNativeVestaIpaFinalWindowedMsmNativeScalar::default()),
+            }
+        }
+    }
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest multi-round IPA verifier composition witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if `LEN` is not a power of two greater than one, if
+        /// the round vectors have the wrong shape, if any challenge inverse or
+        /// sub-witness is invalid, or if the final IPA comparison does not equal
+        /// the fully accumulated verifier `Q`.
+        #[allow(clippy::too_many_arguments)]
+        pub fn try_from_statement(
+            b_initial: [Scalar; LEN],
+            challenges: Vec<Scalar>,
+            challenge_inverses: Vec<Scalar>,
+            a_final: Scalar,
+            b_final: Scalar,
+            l_vec: Vec<VestaPointEncoding>,
+            q_initial: VestaPointEncoding,
+            r_vec: Vec<VestaPointEncoding>,
+            g_initial: [VestaPointEncoding; LEN],
+            h_initial: [VestaPointEncoding; LEN],
+            u: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            let rounds = ipa_power_of_two_rounds(LEN).ok_or_else(|| {
+                "IPA verifier length must be a power of two greater than one".to_owned()
+            })?;
+            if challenges.len() != rounds {
+                return Err(format!(
+                    "IPA verifier challenge count mismatch: expected {rounds}, found {}",
+                    challenges.len()
+                ));
+            }
+            if challenge_inverses.len() != rounds {
+                return Err(format!(
+                    "IPA verifier inverse count mismatch: expected {rounds}, found {}",
+                    challenge_inverses.len()
+                ));
+            }
+            if l_vec.len() != rounds {
+                return Err(format!(
+                    "IPA verifier L round count mismatch: expected {rounds}, found {}",
+                    l_vec.len()
+                ));
+            }
+            if r_vec.len() != rounds {
+                return Err(format!(
+                    "IPA verifier R round count mismatch: expected {rounds}, found {}",
+                    r_vec.len()
+                ));
+            }
+
+            let b_reduction = NativePastaFpIpaBVectorReduction::<LEN>::try_from_scalars(
+                b_initial,
+                challenges.clone(),
+                challenge_inverses.clone(),
+                b_final,
+            )?;
+
+            let mut q_current = q_initial;
+            let mut g_current = g_initial.to_vec();
+            let mut h_current = h_initial.to_vec();
+            let mut round_accumulators = Vec::with_capacity(rounds);
+            let mut generator_folds = Vec::with_capacity(rounds);
+
+            for round_index in 0..rounds {
+                let challenge = challenges[round_index];
+                let challenge_inverse = challenge_inverses[round_index];
+                let q_after = vesta_msm_output_from_encoded_terms([
+                    (challenge * challenge, l_vec[round_index]),
+                    (Scalar::from(1), q_current),
+                    (challenge_inverse * challenge_inverse, r_vec[round_index]),
+                ])?;
+                round_accumulators.push(NonNativeVestaIpaRoundAccumulatorNativeScalar::<
+                    WINDOWS,
+                    WINDOW_BITS,
+                >::try_from_challenge(
+                    challenge,
+                    challenge_inverse,
+                    l_vec[round_index],
+                    q_current,
+                    r_vec[round_index],
+                    q_after,
+                )?);
+                q_current = q_after;
+
+                let half = g_current.len() / 2;
+                let mut round_folds = Vec::with_capacity(half);
+                let mut g_next = Vec::with_capacity(half);
+                let mut h_next = Vec::with_capacity(half);
+                for index in 0..half {
+                    let g_after = vesta_msm_output_from_encoded_terms([
+                        (challenge_inverse, g_current[index]),
+                        (challenge, g_current[half + index]),
+                    ])?;
+                    let h_after = vesta_msm_output_from_encoded_terms([
+                        (challenge, h_current[index]),
+                        (challenge_inverse, h_current[half + index]),
+                    ])?;
+                    round_folds.push(NonNativeVestaIpaGeneratorFoldNativeScalar::<
+                        WINDOWS,
+                        WINDOW_BITS,
+                    >::try_from_challenge(
+                        challenge,
+                        challenge_inverse,
+                        g_current[index],
+                        g_current[half + index],
+                        h_current[index],
+                        h_current[half + index],
+                        g_after,
+                        h_after,
+                    )?);
+                    g_next.push(g_after);
+                    h_next.push(h_after);
+                }
+                generator_folds.push(round_folds);
+                g_current = g_next;
+                h_current = h_next;
+            }
+
+            let final_g = *g_current
+                .first()
+                .ok_or_else(|| "IPA verifier has no final folded G generator".to_owned())?;
+            let final_h = *h_current
+                .first()
+                .ok_or_else(|| "IPA verifier has no final folded H generator".to_owned())?;
+            let final_msm =
+                NonNativeVestaIpaFinalWindowedMsmNativeScalar::<WINDOWS, WINDOW_BITS>::try_from_scalars(
+                    a_final, b_final, final_g, final_h, u, q_current,
+                )?;
+
+            Ok(Self {
+                b_reduction: Box::new(b_reduction),
+                round_accumulators,
+                generator_folds,
+                final_msm: Box::new(final_msm),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_ipa_verifier_native_scalar<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaIpaVerifierNativeScalarConfig {
+        let rounds = ipa_power_of_two_rounds(LEN)
+            .expect("IPA verifier length must be a power of two greater than one");
+        let b_reduction = configure_native_pasta_fp_ipa_b_vector_reduction::<LEN>(meta);
+        let round_accumulators =
+            (0..rounds)
+                .map(|_| {
+                    configure_non_native_vesta_ipa_round_accumulator_native_scalar::<
+                        WINDOWS,
+                        WINDOW_BITS,
+                    >(meta)
+                })
+                .collect::<Vec<_>>();
+        let mut layer_len = LEN;
+        let mut generator_folds = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let half = layer_len / 2;
+            generator_folds.push(
+                (0..half)
+                    .map(|_| {
+                        configure_non_native_vesta_ipa_generator_fold_native_scalar::<
+                            WINDOWS,
+                            WINDOW_BITS,
+                        >(meta)
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            layer_len = half;
+        }
+        let final_msm = configure_non_native_vesta_ipa_final_windowed_msm_native_scalar::<
+            WINDOWS,
+            WINDOW_BITS,
+        >(meta);
+        let link = meta.selector();
+
+        meta.create_gate("non_native_vesta_ipa_verifier_link", |meta| {
+            let s = meta.query_selector(link);
+            let mut constraints = Vec::with_capacity(
+                rounds * 8
+                    + LEN * 4 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1)
+                    + 4 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1),
+            );
+
+            for round_index in 0..rounds {
+                let b_challenge =
+                    meta.query_advice(b_reduction.challenges[round_index].value, Rotation::cur());
+                let b_challenge_inverse = meta.query_advice(
+                    b_reduction.challenge_inverses[round_index].value,
+                    Rotation::cur(),
+                );
+                let round_challenge = meta.query_advice(
+                    round_accumulators[round_index].challenge.value,
+                    Rotation::cur(),
+                );
+                let round_challenge_inverse = meta.query_advice(
+                    round_accumulators[round_index].challenge_inverse.value,
+                    Rotation::cur(),
+                );
+                constraints.push(s.clone() * (b_challenge.clone() - round_challenge));
+                constraints
+                    .push(s.clone() * (b_challenge_inverse.clone() - round_challenge_inverse));
+
+                for generator_fold in &generator_folds[round_index] {
+                    let generator_challenge =
+                        meta.query_advice(generator_fold.challenge.value, Rotation::cur());
+                    let generator_challenge_inverse =
+                        meta.query_advice(generator_fold.challenge_inverse.value, Rotation::cur());
+                    constraints.push(s.clone() * (b_challenge.clone() - generator_challenge));
+                    constraints.push(
+                        s.clone() * (b_challenge_inverse.clone() - generator_challenge_inverse),
+                    );
+                }
+            }
+
+            let b_final = meta.query_advice(b_reduction.vectors[rounds][0].value, Rotation::cur());
+            let final_msm_b = meta.query_advice(
+                final_msm.msm.term_muls[1].scalar.scalar.value,
+                Rotation::cur(),
+            );
+            constraints.push(s.clone() * (b_final - final_msm_b));
+
+            for round_index in 0..rounds {
+                let q_after = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &round_accumulators[round_index].msm.sum_adds[2].r,
+                    Rotation::cur(),
+                );
+                if round_index + 1 < rounds {
+                    let next_q_before = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &round_accumulators[round_index + 1].msm.term_muls[1].tables[0].table[1],
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &q_after,
+                        &next_q_before,
+                    );
+                } else {
+                    let final_output = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &final_msm.msm.sum_adds[2].r,
+                        Rotation::cur(),
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &q_after,
+                        &final_output,
+                    );
+                }
+            }
+
+            for round_index in 0..rounds {
+                for pair_index in 0..generator_folds[round_index].len() {
+                    let folded_g = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &generator_folds[round_index][pair_index].g_msm.sum_adds[1].r,
+                        Rotation::cur(),
+                    );
+                    let folded_h = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &generator_folds[round_index][pair_index].h_msm.sum_adds[1].r,
+                        Rotation::cur(),
+                    );
+                    if round_index + 1 < rounds {
+                        let next_half = generator_folds[round_index].len() / 2;
+                        let (next_pair, next_term) = if pair_index < next_half {
+                            (pair_index, 0)
+                        } else {
+                            (pair_index - next_half, 1)
+                        };
+                        let next_g_base = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &generator_folds[round_index + 1][next_pair].g_msm.term_muls[next_term]
+                                .tables[0]
+                                .table[1],
+                            Rotation::cur(),
+                        );
+                        let next_h_base = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &generator_folds[round_index + 1][next_pair].h_msm.term_muls[next_term]
+                                .tables[0]
+                                .table[1],
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &folded_g,
+                            &next_g_base,
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &folded_h,
+                            &next_h_base,
+                        );
+                    } else {
+                        let final_g_base = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &final_msm.msm.term_muls[0].tables[0].table[1],
+                            Rotation::cur(),
+                        );
+                        let final_h_base = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &final_msm.msm.term_muls[1].tables[0].table[1],
+                            Rotation::cur(),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &folded_g,
+                            &final_g_base,
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &folded_h,
+                            &final_h_base,
+                        );
+                    }
+                }
+            }
+
+            constraints
+        });
+
+        NonNativeVestaIpaVerifierNativeScalarConfig {
+            b_reduction,
+            round_accumulators,
+            generator_folds,
+            final_msm,
+            link,
+        }
+    }
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>
+    {
+        type Config = NonNativeVestaIpaVerifierNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_ipa_verifier_native_scalar::<LEN, WINDOWS, WINDOW_BITS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_ipa_verifier_native_scalar",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+
+                    let final_b_layer = config.b_reduction.vectors.len().saturating_sub(1);
+                    for (layer_index, (witness_layer, config_layer)) in self
+                        .b_reduction
+                        .vectors
+                        .iter()
+                        .zip(config.b_reduction.vectors.iter())
+                        .enumerate()
+                    {
+                        let expose_public = layer_index == 0 || layer_index == final_b_layer;
+                        for (witness, scalar_config) in
+                            witness_layer.iter().zip(config_layer.iter())
+                        {
+                            assign_native_pasta_fp_scalar_region(
+                                &mut region,
+                                scalar_config,
+                                witness,
+                                expose_public,
+                            )?;
+                        }
+                    }
+                    for (witness, scalar_config) in self
+                        .b_reduction
+                        .challenges
+                        .iter()
+                        .zip(config.b_reduction.challenges.iter())
+                    {
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            scalar_config,
+                            witness,
+                            true,
+                        )?;
+                    }
+                    for (witness, scalar_config) in self
+                        .b_reduction
+                        .challenge_inverses
+                        .iter()
+                        .zip(config.b_reduction.challenge_inverses.iter())
+                    {
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            scalar_config,
+                            witness,
+                            true,
+                        )?;
+                    }
+                    config.b_reduction.link.enable(&mut region, 0)?;
+
+                    for (witness, round_config) in self
+                        .round_accumulators
+                        .iter()
+                        .zip(config.round_accumulators.iter())
+                    {
+                        round_config.link.enable(&mut region, 0)?;
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            &round_config.challenge,
+                            &witness.challenge,
+                            false,
+                        )?;
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            &round_config.challenge_inverse,
+                            &witness.challenge_inverse,
+                            false,
+                        )?;
+                        assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                            &mut region,
+                            &round_config.msm,
+                            witness.msm.as_ref(),
+                        )?;
+                    }
+
+                    for (witness_round, config_round) in self
+                        .generator_folds
+                        .iter()
+                        .zip(config.generator_folds.iter())
+                    {
+                        for (witness, generator_config) in
+                            witness_round.iter().zip(config_round.iter())
+                        {
+                            generator_config.link.enable(&mut region, 0)?;
+                            assign_native_pasta_fp_scalar_region(
+                                &mut region,
+                                &generator_config.challenge,
+                                &witness.challenge,
+                                false,
+                            )?;
+                            assign_native_pasta_fp_scalar_region(
+                                &mut region,
+                                &generator_config.challenge_inverse,
+                                &witness.challenge_inverse,
+                                false,
+                            )?;
+                            assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                                &mut region,
+                                &generator_config.g_msm,
+                                witness.g_msm.as_ref(),
+                            )?;
+                            assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                                &mut region,
+                                &generator_config.h_msm,
+                                witness.h_msm.as_ref(),
+                            )?;
+                        }
+                    }
+
+                    config.final_msm.product_link.enable(&mut region, 0)?;
+                    assign_non_native_vesta_affine_windowed_msm_native_scalar_region(
+                        &mut region,
+                        &config.final_msm.msm,
+                        self.final_msm.msm.as_ref(),
+                    )
+                },
+            )
+        }
+    }
+
+    fn vesta_msm_output_from_encoded_terms<const TERMS: usize>(
+        terms: [(Scalar, VestaPointEncoding); TERMS],
+    ) -> Result<VestaPointEncoding, String> {
+        let mut output = VestaAffine::identity().to_curve();
+        for (scalar, point) in terms {
+            output += vesta_affine_from_limbs(point)?.to_curve() * scalar;
+        }
+        Ok(vesta_affine_to_limbs(output.to_affine()))
     }
 
     #[derive(Clone, Default)]
@@ -15632,10 +31326,12 @@ mod preverified_key_tests {
         for backend in [
             "kzg",
             "KZG",
+            " kzg ",
             "kzg/ceremony-v1",
             "KZG/ceremony-v1",
             "bn254",
             "BN254",
+            "\tBN254\n",
             "bn256",
             "bls12_381",
             "halo2/bn254",
@@ -15643,6 +31339,7 @@ mod preverified_key_tests {
             "halo2/kzg",
             "halo2/ipa:kzg",
             "halo2/ipa:KZG",
+            "halo2/ipa: KZG",
             "groth16/bn254",
         ] {
             let mut dedup = DedupCache::new();

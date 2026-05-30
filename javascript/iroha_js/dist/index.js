@@ -4,6 +4,8 @@
  * Native bindings (Norito + crypto) are provided via the required `iroha_js_host`
  * module.
  */
+export { compileKotodamaProgram, compileKotodamaStudioProgram } from "./kotodamaCompiler/index.js";
+export * from "./kotodamaCompiler/parity.js";
 export {
   AccountAddress,
   AccountAddressError,

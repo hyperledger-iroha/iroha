@@ -10,6 +10,7 @@ use halo2curves::{
     bn256::{Fr, G1, G1Affine},
     ff::{Field, FromUniformBytes, PrimeField},
     group::{Group as HaloGroup, GroupEncoding},
+    msm::msm_best,
 };
 
 use crate::{
@@ -224,6 +225,21 @@ impl IpaBackend for Bn254Backend {
     fn group_from_scalar(scalar: Self::Scalar) -> Self::Group {
         let inner: Fr = scalar.into();
         GroupElem::from_projective(G1::generator() * inner)
+    }
+
+    fn msm(bases: &[Self::Group], scalars: &[Self::Scalar]) -> Result<Self::Group, Error> {
+        if bases.len() != scalars.len() {
+            return Err(Error::DimensionMismatch {
+                expected: bases.len(),
+                actual: scalars.len(),
+            });
+        }
+        let affine_bases = bases
+            .iter()
+            .map(|base| G1Affine::from(base.0))
+            .collect::<Vec<_>>();
+        let coeffs = scalars.iter().copied().map(Into::into).collect::<Vec<_>>();
+        Ok(GroupElem::from_projective(msm_best(&coeffs, &affine_bases)))
     }
 }
 

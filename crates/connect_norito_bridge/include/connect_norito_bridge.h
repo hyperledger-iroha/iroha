@@ -83,9 +83,9 @@ int32_t connect_norito_offline_prove_note_audit(
     uint8_t** out_recursive_proof_ptr,
     unsigned long* out_recursive_proof_len);
 
-// Verify private Kagemusha hop proofs and generate a compact folded-token proof.
-// Input: Norito-archive bytes of `KagemushaVerifiedFoldBundle`.
-// Output: Norito-archive bytes of `KagemushaCompactPaymentToken`.
+// Legacy unanchored Kagemusha compact-token prover retained for ABI compatibility only.
+// Production callers must use `connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`.
+// Valid `KagemushaVerifiedFoldBundle` input returns ERR_KAGEMUSHA_PROVE and no output bytes.
 int32_t connect_norito_kagemusha_prove_verified_compact_payment_token(
     const uint8_t* verified_bundle_norito_ptr,
     unsigned long verified_bundle_norito_len,

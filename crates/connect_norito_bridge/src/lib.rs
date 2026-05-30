@@ -2026,6 +2026,47 @@ fn decode_signed_transaction(bytes: &[u8]) -> Result<SignedTransaction, norito::
         .map_err(|err| norito::core::Error::Message(err.to_string()))
 }
 
+fn signed_transaction_bridge_debug_json(tx: &SignedTransaction) -> JsonValue {
+    use iroha_data_model::prelude::TransferBox;
+
+    let mut transfer_asset_scopes = Vec::new();
+    if let Executable::Instructions(instructions) = tx.instructions() {
+        for instruction in instructions {
+            let Some(transfer_box) = instruction.as_any().downcast_ref::<TransferBox>() else {
+                continue;
+            };
+            let TransferBox::Asset(transfer) = transfer_box else {
+                continue;
+            };
+
+            let mut scope = JsonMap::new();
+            scope.insert("instruction".into(), JsonValue::from("transfer_asset"));
+            scope.insert(
+                "source_asset_definition_id".into(),
+                JsonValue::from(transfer.source.definition().to_string()),
+            );
+            match transfer.source.scope() {
+                AssetBalanceScope::Global => {
+                    scope.insert("source_scope".into(), JsonValue::from("global"));
+                }
+                AssetBalanceScope::Dataspace(dataspace_id) => {
+                    scope.insert("source_scope".into(), JsonValue::from("dataspace"));
+                    scope.insert(
+                        "source_dataspace_id".into(),
+                        JsonValue::from(dataspace_id.as_u64()),
+                    );
+                }
+            }
+            transfer_asset_scopes.push(JsonValue::Object(scope));
+        }
+    }
+
+    JsonValue::Object(JsonMap::from_iter([(
+        "transfer_asset_scopes".into(),
+        JsonValue::Array(transfer_asset_scopes),
+    )]))
+}
+
 fn encode_asset_transaction<F>(
     chain_id: ChainId,
     authority: AccountId,
@@ -3847,12 +3888,14 @@ fn prove_offline_note_audit_recursive(
     })
 }
 
-/// Verify private Kagemusha hop proofs and generate a compact folded-token proof.
+/// Legacy unanchored Kagemusha compact-token prover entry point.
 ///
-/// The input is Norito-archive bytes of
-/// `iroha_data_model::offline::KagemushaVerifiedFoldBundle`. The bridge verifies
-/// every bundled hop proof before deriving folded public inputs, then returns
-/// Norito-archive bytes of `KagemushaCompactPaymentToken`.
+/// This symbol is retained for ABI compatibility only. Production compact-token
+/// proving requires verifier-record trust anchors, so callers must use
+/// [`connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`].
+/// A syntactically valid unanchored
+/// `iroha_data_model::offline::KagemushaVerifiedFoldBundle` returns
+/// [`ERR_KAGEMUSHA_PROVE`] without producing output bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_compact_payment_token(
     verified_bundle_norito_ptr: *const c_uchar,
@@ -3873,9 +3916,13 @@ pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_compact_payment
                 verified_bundle_norito_len as usize,
             )
         };
-        let token = prove_verified_kagemusha_compact_token_from_bundle(bytes)?;
-        let archive = norito::to_bytes(&token).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe { write_bytes_bridge(out_compact_token_ptr, out_compact_token_len, &archive) }
+        let _bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle =
+            norito::decode_from_bytes(bytes).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            *out_compact_token_ptr = ptr::null_mut();
+            *out_compact_token_len = 0;
+        }
+        Err(BridgeError::KagemushaProve)
     })();
 
     bridge_result_to_code(result)
@@ -3916,27 +3963,6 @@ pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_compact_payment
     bridge_result_to_code(result)
 }
 
-fn prove_verified_kagemusha_compact_token_from_bundle(
-    verified_bundle_archive: &[u8],
-) -> BridgeResult<iroha_data_model::offline::KagemushaCompactPaymentToken> {
-    use iroha_core::zk::{
-        KAGEMUSHA_FOLDED_CIRCUIT_ID, kagemusha_folded_vk_box,
-        prove_verified_kagemusha_compact_payment_token_from_bundle,
-    };
-    use iroha_data_model::offline::KagemushaVerifiedFoldBundle;
-
-    let bundle: KagemushaVerifiedFoldBundle = norito::decode_from_bytes(verified_bundle_archive)
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    let vk_box = kagemusha_folded_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
-    prove_verified_kagemusha_compact_payment_token_from_bundle(
-        &bundle,
-        KAGEMUSHA_FOLDED_CIRCUIT_ID,
-        &vk_box,
-        None,
-    )
-    .map_err(|_| BridgeError::KagemushaProve)
-}
-
 fn prove_verified_kagemusha_compact_token_from_record_bundle(
     verified_record_bundle_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaCompactPaymentToken> {
@@ -3973,9 +3999,8 @@ mod offline_note_prover_tests {
     use std::sync::OnceLock;
 
     use iroha_core::zk::{
-        KAGEMUSHA_FOLDED_CIRCUIT_ID, KAGEMUSHA_HOP_MAX_PROOF_BYTES,
-        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, confidential_v2, hash_vk,
-        kagemusha_folded_vk_box, kagemusha_verified_folded_public_inputs_from_bundle,
+        KAGEMUSHA_HOP_MAX_PROOF_BYTES, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
+        confidential_v2, hash_vk, kagemusha_folded_vk_box,
         kagemusha_verified_folded_public_inputs_from_record_bundle, offline_note_recursive_vk_box,
         verify_backend, verify_kagemusha_compact_payment_token,
     };
@@ -4097,9 +4122,11 @@ mod offline_note_prover_tests {
                     DomainId::try_new("offline", "universal").expect("domain id"),
                     "kgm".parse().expect("asset definition name"),
                 );
-                let record =
-                    confidential_v2::confidential_transfer_v2_vk_record("offline_kagemusha", 3)
-                        .expect("confidential transfer v2 verifier record");
+                let record = confidential_v2::confidential_transfer_v2_vk_record(
+                    iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                    3,
+                )
+                .expect("confidential transfer v2 verifier record");
                 let verifier_key = record.key.clone().expect("inline transfer verifier key");
                 let spend_key = [0x11_u8; Hash::LENGTH];
                 let input_rho = [0x21_u8; Hash::LENGTH];
@@ -4238,10 +4265,8 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn kagemusha_verified_compact_token_ffi_returns_verifying_token() {
+    fn kagemusha_unanchored_compact_token_ffi_rejects_valid_bundle_without_records() {
         let bundle = sample_kagemusha_verified_bundle();
-        let expected_public_inputs = kagemusha_verified_folded_public_inputs_from_bundle(&bundle)
-            .expect("verified folded public inputs");
         let archive = norito::to_bytes(&bundle).expect("encode verified fold bundle");
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
@@ -4255,17 +4280,14 @@ mod offline_note_prover_tests {
             )
         };
 
-        assert_eq!(status, 0);
-        let token = decode_kagemusha_compact_token(out_ptr, out_len);
-        assert_eq!(token.public_inputs, expected_public_inputs);
-        assert_eq!(
-            token.folded_proof.verifier_key_id,
-            VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, KAGEMUSHA_FOLDED_CIRCUIT_ID)
-        );
-        let vk_box = kagemusha_folded_vk_box().expect("Kagemusha folded verifying key");
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(
-            verify_kagemusha_compact_payment_token(&token, &vk_box),
-            "bridge output must verify against the canonical Kagemusha verifier"
+            out_ptr.is_null(),
+            "unanchored bridge entry point must not return an output buffer"
+        );
+        assert_eq!(
+            out_len, 0,
+            "unanchored bridge entry point must not return output bytes"
         );
     }
 
@@ -4379,6 +4401,57 @@ mod offline_note_prover_tests {
         let mut inactive = sample_kagemusha_verified_record_bundle();
         inactive.verifier_records[0].record.status = ConfidentialStatus::Withdrawn;
         let archive = norito::to_bytes(&inactive).expect("encode inactive-record bundle");
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let mut wrong_namespace = sample_kagemusha_verified_record_bundle();
+        wrong_namespace.verifier_records[0].record.namespace =
+            "generic_confidential_transfer".to_owned();
+        let archive = norito::to_bytes(&wrong_namespace).expect("encode wrong-namespace bundle");
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let mut wrong_circuit_alias = sample_kagemusha_verified_record_bundle();
+        wrong_circuit_alias.verifier_records[0].record.circuit_id =
+            "anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
+        let archive =
+            norito::to_bytes(&wrong_circuit_alias).expect("encode wrong-circuit-alias bundle");
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let mut wrong_envelope_alias = sample_kagemusha_verified_record_bundle();
+        mutate_kagemusha_bundle_hop_envelope(&mut wrong_envelope_alias.bundle, |envelope| {
+            envelope.circuit_id = "anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
+        });
+        let archive =
+            norito::to_bytes(&wrong_envelope_alias).expect("encode wrong-envelope-alias bundle");
         let status = unsafe {
             connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
                 archive.as_ptr(),
@@ -8398,6 +8471,41 @@ mod accel_tests {
             }
             other => panic!("unexpected executable: {other:?}"),
         }
+        let mut out_json_ptr: *mut u8 = ptr::null_mut();
+        let mut out_json_len: c_ulong = 0;
+        let decode_status = unsafe {
+            connect_norito_decode_signed_transaction_json(
+                out_signed_ptr,
+                out_signed_len,
+                &mut out_json_ptr,
+                &mut out_json_len,
+            )
+        };
+        assert_eq!(decode_status, 0, "expected debug JSON decode");
+        let json_body = unsafe { slice::from_raw_parts(out_json_ptr, out_json_len as usize) };
+        let parsed: JsonValue = norito::json::from_slice(json_body).expect("decode transfer JSON");
+        let bridge_debug = parsed
+            .as_object()
+            .and_then(|object| object.get("bridge_debug"))
+            .and_then(JsonValue::as_object)
+            .expect("bridge debug object");
+        let transfer_scopes = bridge_debug
+            .get("transfer_asset_scopes")
+            .and_then(JsonValue::as_array)
+            .expect("transfer scope array");
+        let scope = transfer_scopes
+            .first()
+            .and_then(JsonValue::as_object)
+            .expect("first transfer scope object");
+        assert_eq!(
+            scope.get("source_scope").and_then(JsonValue::as_str),
+            Some("dataspace")
+        );
+        assert_eq!(
+            scope.get("source_dataspace_id").and_then(JsonValue::as_u64),
+            Some(10)
+        );
+        connect_norito_free(out_json_ptr);
         unsafe {
             free(out_signed_ptr as *mut _);
         }
@@ -10130,7 +10238,17 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
             Ok(v) => v,
             Err(_) => return -2,
         };
-        let json_bytes = match norito::json::to_vec(&tx) {
+        let mut json_value = match norito::json::value::to_value(&tx) {
+            Ok(value) => value,
+            Err(_) => return -3,
+        };
+        if let JsonValue::Object(root) = &mut json_value {
+            root.insert(
+                "bridge_debug".into(),
+                signed_transaction_bridge_debug_json(&tx),
+            );
+        }
+        let json_bytes = match norito::json::to_vec(&json_value) {
             Ok(vec) => vec,
             Err(_) => return -3,
         };

@@ -56,12 +56,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        switch identifier {
-        case "ios-arm64", "ios-arm64_x86_64-simulator":
-            return 2
-        default:
-            return 4
-        }
+        return 4
     }
 
     private static func packagedBinaryRelativePaths(for identifier: String = currentIdentifier()) -> [String] {

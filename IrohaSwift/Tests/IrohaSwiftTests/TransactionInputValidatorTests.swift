@@ -69,6 +69,16 @@ final class TransactionInputValidatorTests: XCTestCase {
         }
     }
 
+    func testAssetDefinitionAddressCodecRejectsInvalidChecksum() {
+        XCTAssertEqual(
+            AssetDefinitionAddressCodec.canonicalDefinitionLiteral(" \(sampleAid) "),
+            sampleAid
+        )
+        XCTAssertNil(
+            AssetDefinitionAddressCodec.canonicalDefinitionLiteral("66owaQmAQMuHxPzxUN3bqZ6FJfDb")
+        )
+    }
+
     func testValidateRejectsAssetDefinitionWithReservedCharacters() throws {
         let authority = try i105(seed: 3)
         XCTAssertThrowsError(
