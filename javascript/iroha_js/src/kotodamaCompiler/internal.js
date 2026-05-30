@@ -103,6 +103,12 @@ const PUBLIC_PAYLOAD_HELPER_NAMES = new Set([
     'get_nft_id',
     'get_blob_hex',
 ]);
+const NFT_CALL_NAMES = new Set([
+    'nft_mint_asset',
+    'nft_set_metadata',
+    'nft_transfer_asset',
+    'nft_burn_asset',
+]);
 const VIEW_HOST_SIDE_EFFECT_CALL_NAMES = new Set([
     'transfer_asset',
     'set_account_detail',
@@ -6762,6 +6768,12 @@ function rematerializableNameLiteralFromExpression(expression) {
     }
     return null;
 }
+function rematerializableNftLiteralFromExpression(expression) {
+    if (expression.kind === 'call' && expression.name === 'nft_id' && expression.args.length === 1) {
+        return literalStringFromExpression(expression.args[0]);
+    }
+    return null;
+}
 function rematerializablePointerLiteralFromExpression(expression, locals = new Map()) {
     if (expression.kind === 'stateReference') {
         return locals.get(expression.name) ?? null;
@@ -7276,6 +7288,43 @@ function referencedLocalNamesInStatements(statements) {
     const out = new Set();
     for (const statement of statements) {
         collectReferencedLocalNamesInStatement(statement, out);
+    }
+    return out;
+}
+function collectReboundLocalNamesInStatement(statement, out) {
+    switch (statement.kind) {
+        case 'letLocal':
+        case 'setState':
+        case 'updateValue':
+            out.add(statement.name);
+            return;
+        case 'if':
+            statement.thenBranch.forEach((nested) => collectReboundLocalNamesInStatement(nested, out));
+            statement.elseBranch.forEach((nested) => collectReboundLocalNamesInStatement(nested, out));
+            return;
+        case 'while':
+        case 'forRange':
+        case 'forMap':
+        case 'repeat':
+            statement.body.forEach((nested) => collectReboundLocalNamesInStatement(nested, out));
+            return;
+        case 'forLoop':
+            if (statement.init !== null) {
+                collectReboundLocalNamesInStatement(statement.init, out);
+            }
+            if (statement.step !== null) {
+                collectReboundLocalNamesInStatement(statement.step, out);
+            }
+            statement.body.forEach((nested) => collectReboundLocalNamesInStatement(nested, out));
+            return;
+        default:
+            return;
+    }
+}
+function reboundLocalNamesInStatements(statements) {
+    const out = new Set();
+    for (const statement of statements) {
+        collectReboundLocalNamesInStatement(statement, out);
     }
     return out;
 }
@@ -7906,11 +7955,20 @@ function collectBuilderOnlyPointerLocalNames(statements) {
 }
 function collectLogicalAccountLiteralLocalNames(statements) {
     const names = [];
+    let containsNftAssetCall = false;
     const visitStatement = (statement) => {
         switch (statement.kind) {
             case 'letLocal':
                 if (rematerializableAccountLiteralFromExpression(statement.value) !== null) {
                     names.push(statement.name);
+                }
+                if (statement.value.kind === 'call' && NFT_CALL_NAMES.has(statement.value.name)) {
+                    containsNftAssetCall = true;
+                }
+                return;
+            case 'expression':
+                if (statement.expression.kind === 'call' && NFT_CALL_NAMES.has(statement.expression.name)) {
+                    containsNftAssetCall = true;
                 }
                 return;
             case 'if':
@@ -7935,7 +7993,7 @@ function collectLogicalAccountLiteralLocalNames(statements) {
         }
     };
     statements.forEach(visitStatement);
-    return names.length >= 3 ? new Set(names) : new Set();
+    return names.length >= 3 || (containsNftAssetCall && names.length >= 2) ? new Set(names) : new Set();
 }
 function collectRegisterlessDirectAssetDefinitionLocalNames(statements) {
     const accountLiteralNames = new Set();
@@ -7996,6 +8054,75 @@ function collectRegisterlessDirectAssetDefinitionLocalNames(statements) {
         registerlessAssetNames.delete(name);
     }
     return registerlessAssetNames;
+}
+function collectZkSetAccountDetailFramePressure(statements) {
+    const visitStatements = (block, declared, crossedInfo, latestZkProofLocalWithInfo) => {
+        let currentZkProofLocal = latestZkProofLocalWithInfo;
+        for (const statement of block) {
+            switch (statement.kind) {
+                case 'letLocal':
+                    declared.add(statement.name);
+                    break;
+                case 'info':
+                    for (const name of declared) {
+                        crossedInfo.add(name);
+                    }
+                    break;
+                case 'expression':
+                    if (statement.expression.kind === 'call'
+                        && zkVerifyBuiltinSpec(statement.expression.name) !== null
+                        && statement.expression.args[0]?.kind === 'stateReference'
+                        && crossedInfo.has(statement.expression.args[0].name)) {
+                        currentZkProofLocal = statement.expression.args[0].name;
+                    }
+                    break;
+                case 'setAccountDetail':
+                    if (currentZkProofLocal !== null
+                        && statement.account.kind === 'stateReference'
+                        && crossedInfo.has(statement.account.name)
+                        && statement.key.kind === 'stateReference'
+                        && crossedInfo.has(statement.key.name)) {
+                        return true;
+                    }
+                    break;
+                case 'if':
+                    if (visitStatements(statement.thenBranch, new Set(declared), new Set(crossedInfo), currentZkProofLocal)
+                        || visitStatements(statement.elseBranch, new Set(declared), new Set(crossedInfo), currentZkProofLocal)) {
+                        return true;
+                    }
+                    break;
+                case 'while':
+                case 'forRange':
+                case 'forMap':
+                case 'repeat':
+                    if (visitStatements(statement.body, new Set(declared), new Set(crossedInfo), currentZkProofLocal)) {
+                        return true;
+                    }
+                    break;
+                case 'forLoop': {
+                    const loopDeclared = new Set(declared);
+                    const loopCrossedInfo = new Set(crossedInfo);
+                    let loopZkProofLocal = currentZkProofLocal;
+                    if (statement.init !== null
+                        && visitStatements([statement.init], loopDeclared, loopCrossedInfo, loopZkProofLocal)) {
+                        return true;
+                    }
+                    if (statement.step !== null
+                        && visitStatements([statement.step], loopDeclared, loopCrossedInfo, loopZkProofLocal)) {
+                        return true;
+                    }
+                    if (visitStatements(statement.body, loopDeclared, loopCrossedInfo, loopZkProofLocal)) {
+                        return true;
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+        return false;
+    };
+    return visitStatements(statements, new Set(), new Set(), null);
 }
 function collectDirectStatePathLocalNamesInExpression(expression, out) {
     switch (expression.kind) {
@@ -8269,6 +8396,84 @@ function statementsContainTransferAsset(statements) {
         }
     });
 }
+function statementsContainAssetStatement(statements) {
+    return statements.some((statement) => {
+        switch (statement.kind) {
+            case 'transferAsset':
+            case 'mintAsset':
+            case 'burnAsset':
+                return true;
+            case 'if':
+                return statementsContainAssetStatement(statement.thenBranch)
+                    || statementsContainAssetStatement(statement.elseBranch);
+            case 'while':
+            case 'forRange':
+            case 'forMap':
+            case 'repeat':
+                return statementsContainAssetStatement(statement.body);
+            case 'forLoop':
+                return (statement.init !== null && statementsContainAssetStatement([statement.init]))
+                    || (statement.step !== null && statementsContainAssetStatement([statement.step]))
+                    || statementsContainAssetStatement(statement.body);
+            default:
+                return false;
+        }
+    });
+}
+function assetStatementsUseLetLocalAssetOperand(statements) {
+    const localNames = new Set();
+    const collectLocalNames = (block) => {
+        for (const statement of block) {
+            switch (statement.kind) {
+                case 'letLocal':
+                    localNames.add(statement.name);
+                    break;
+                case 'if':
+                    collectLocalNames(statement.thenBranch);
+                    collectLocalNames(statement.elseBranch);
+                    break;
+                case 'while':
+                case 'forRange':
+                case 'forMap':
+                case 'repeat':
+                    collectLocalNames(statement.body);
+                    break;
+                case 'forLoop':
+                    if (statement.init !== null)
+                        collectLocalNames([statement.init]);
+                    if (statement.step !== null)
+                        collectLocalNames([statement.step]);
+                    collectLocalNames(statement.body);
+                    break;
+                default:
+                    break;
+            }
+        }
+    };
+    const usesLocalAsset = (block) => block.some((statement) => {
+        switch (statement.kind) {
+            case 'transferAsset':
+            case 'mintAsset':
+            case 'burnAsset':
+                return statement.asset.kind === 'stateReference' && localNames.has(statement.asset.name);
+            case 'if':
+                return usesLocalAsset(statement.thenBranch) || usesLocalAsset(statement.elseBranch);
+            case 'while':
+            case 'forRange':
+            case 'forMap':
+            case 'repeat':
+                return usesLocalAsset(statement.body);
+            case 'forLoop':
+                return (statement.init !== null && usesLocalAsset([statement.init]))
+                    || (statement.step !== null && usesLocalAsset([statement.step]))
+                    || usesLocalAsset(statement.body);
+            default:
+                return false;
+        }
+    });
+    collectLocalNames(statements);
+    return usesLocalAsset(statements);
+}
 function statementsContainForLoop(statements) {
     return statements.some((statement) => {
         switch (statement.kind) {
@@ -8286,6 +8491,11 @@ function statementsContainForLoop(statements) {
                 return false;
         }
     });
+}
+function functionNeedsWrappedVoidForLoopControlParity(fn) {
+    return needsEntrypointWrapper(fn)
+        && fn.returnType === null
+        && statementsContainForLoop(fn.body);
 }
 function collectPrepublishedPointerLocalNamesInCondition(expression, out) {
     switch (expression.kind) {
@@ -9044,6 +9254,15 @@ function buildFunctionEmissionRecords(functions) {
 function candidateImplSavedRegisters(fn) {
     if (fn.entrypointKind !== null)
         return IMPL_SAVED_REGS;
+    if (fn.isTopLevel === true
+        && fn.returnType === null
+        && usesDirectEntrypointParamHomes(fn)
+        && statementsContainAssetStatement(fn.body)
+        && !statementsContainForLoop(fn.body)
+        && !assetStatementsUseLetLocalAssetOperand(fn.body)) {
+        const savedCount = Math.min(IMPL_SAVED_REGS.length, fn.params.length + 1);
+        return IMPL_SAVED_REGS.slice(IMPL_SAVED_REGS.length - savedCount);
+    }
     if (fn.returnType === null && collectPathHelperBaseLocalNames(fn.body).size > 0)
         return SCALAR_HELPER_SAVED_REGS;
     if (fn.returnType === null && statementsContainTransferAsset(fn.body) && statementsContainForLoop(fn.body))
@@ -9155,6 +9374,10 @@ class StudioCodeGenerator {
     activeRegisterlessAssetDefinitionLocalNames = new Set();
     activeDirectStatePathLocalNames = new Set();
     activePathHelperBaseLocalNames = new Set();
+    activeZkSetAccountDetailFramePressure = false;
+    activeWrappedEntrypointImpl = false;
+    activeWrappedVoidForLoopControlParity = false;
+    activeWrappedVoidForLoopDepth = 0;
     activeSemanticFunctionAllowsTestHelpers = false;
     suppressAccountLocalPrepublish = false;
     directVoidReturnHalts = false;
@@ -14121,6 +14344,9 @@ class StudioCodeGenerator {
         const previousRegisterlessAssetDefinitionLocalNames = this.activeRegisterlessAssetDefinitionLocalNames;
         const previousDirectStatePathLocalNames = this.activeDirectStatePathLocalNames;
         const previousPathHelperBaseLocalNames = this.activePathHelperBaseLocalNames;
+        const previousZkSetAccountDetailFramePressure = this.activeZkSetAccountDetailFramePressure;
+        const previousWrappedVoidForLoopControlParity = this.activeWrappedVoidForLoopControlParity;
+        const previousWrappedVoidForLoopDepth = this.activeWrappedVoidForLoopDepth;
         const previousSuppressAccountLocalPrepublish = this.suppressAccountLocalPrepublish;
         const previousDirectVoidReturnHalts = this.directVoidReturnHalts;
         const previousReuseExpressionBindingsForLocals = this.reuseExpressionBindingsForLocals;
@@ -14156,6 +14382,9 @@ class StudioCodeGenerator {
         this.activeRegisterlessAssetDefinitionLocalNames = haltOnReturn ? collectRegisterlessDirectAssetDefinitionLocalNames(fn.body) : new Set();
         this.activeDirectStatePathLocalNames = haltOnReturn ? collectDirectStatePathLocalNames(fn.body) : new Set();
         this.activePathHelperBaseLocalNames = collectPathHelperBaseLocalNames(fn.body);
+        this.activeZkSetAccountDetailFramePressure = haltOnReturn && collectZkSetAccountDetailFramePressure(fn.body);
+        this.activeWrappedVoidForLoopControlParity = !haltOnReturn && functionNeedsWrappedVoidForLoopControlParity(fn);
+        this.activeWrappedVoidForLoopDepth = 0;
         this.suppressAccountLocalPrepublish = authorityStyleVoidReturnPattern;
         this.directVoidReturnHalts = haltOnReturn;
         this.reuseExpressionBindingsForLocals = !haltOnReturn && !(fn.entrypointKind === null && fn.returnType !== null && isTupleValueType(fn.returnType));
@@ -14277,6 +14506,9 @@ class StudioCodeGenerator {
             this.activeRegisterlessAssetDefinitionLocalNames = previousRegisterlessAssetDefinitionLocalNames;
             this.activeDirectStatePathLocalNames = previousDirectStatePathLocalNames;
             this.activePathHelperBaseLocalNames = previousPathHelperBaseLocalNames;
+            this.activeZkSetAccountDetailFramePressure = previousZkSetAccountDetailFramePressure;
+            this.activeWrappedVoidForLoopControlParity = previousWrappedVoidForLoopControlParity;
+            this.activeWrappedVoidForLoopDepth = previousWrappedVoidForLoopDepth;
             this.suppressAccountLocalPrepublish = previousSuppressAccountLocalPrepublish;
             this.directVoidReturnHalts = previousDirectVoidReturnHalts;
             this.reuseExpressionBindingsForLocals = previousReuseExpressionBindingsForLocals;
@@ -14296,6 +14528,7 @@ class StudioCodeGenerator {
         const previousRegisterlessAssetDefinitionLocalNames = probe.activeRegisterlessAssetDefinitionLocalNames;
         const previousDirectStatePathLocalNames = probe.activeDirectStatePathLocalNames;
         const previousPathHelperBaseLocalNames = probe.activePathHelperBaseLocalNames;
+        const previousZkSetAccountDetailFramePressure = probe.activeZkSetAccountDetailFramePressure;
         probe.suppressAccountLocalPrepublish = functionNeedsAuthorityStyleVoidReturnCompatibility(fn);
         probe.directVoidReturnHalts = true;
         probe.activeBuilderOnlyPointerLocalNames = collectBuilderOnlyPointerLocalNames(fn.body);
@@ -14303,6 +14536,7 @@ class StudioCodeGenerator {
         probe.activeRegisterlessAssetDefinitionLocalNames = collectRegisterlessDirectAssetDefinitionLocalNames(fn.body);
         probe.activeDirectStatePathLocalNames = collectDirectStatePathLocalNames(fn.body);
         probe.activePathHelperBaseLocalNames = collectPathHelperBaseLocalNames(fn.body);
+        probe.activeZkSetAccountDetailFramePressure = collectZkSetAccountDetailFramePressure(fn.body);
         const locals = new Map();
         const referencedParamNames = referencedLocalNamesInStatements(fn.body);
         let nextParamRegister = 10;
@@ -14345,6 +14579,7 @@ class StudioCodeGenerator {
             probe.activeRegisterlessAssetDefinitionLocalNames = previousRegisterlessAssetDefinitionLocalNames;
             probe.activeDirectStatePathLocalNames = previousDirectStatePathLocalNames;
             probe.activePathHelperBaseLocalNames = previousPathHelperBaseLocalNames;
+            probe.activeZkSetAccountDetailFramePressure = previousZkSetAccountDetailFramePressure;
         }
     }
     probeWrappedImplFrameShape(fn, symbolName, prepublishedPointerLocalNames) {
@@ -14356,9 +14591,17 @@ class StudioCodeGenerator {
             ? RELAXED_PREPUBLISHED_IMPL_PREFERRED_ALLOC_REGS
             : IMPL_PREFERRED_ALLOC_REGS);
         const candidateSavedRegisters = candidateImplSavedRegisters(fn);
+        const rawTopLevelVoidAssetHelper = fn.entrypointKind === null
+            && fn.isTopLevel === true
+            && fn.returnType === null
+            && usesDirectEntrypointParamHomes(fn)
+            && statementsContainAssetStatement(fn.body)
+            && !statementsContainForLoop(fn.body)
+            && !assetStatementsUseLetLocalAssetOperand(fn.body);
         const privateVoidTransferHelper = fn.entrypointKind === null
             && fn.returnType === null
-            && statementsContainTransferAsset(fn.body);
+            && statementsContainTransferAsset(fn.body)
+            && !rawTopLevelVoidAssetHelper;
         const candidateSpillFrameBytes = privateVoidTransferHelper ? 16 : 0;
         const opaqueAggregateParamAbi = fn.entrypointKind === null;
         const candidateFrameBytes = probe.computeImplFrameBytes(candidateSavedRegisters, fn.params, candidateSpillFrameBytes, opaqueAggregateParamAbi);
@@ -14367,17 +14610,23 @@ class StudioCodeGenerator {
         const previousFrameBytes = probe.activeImplFrameBytes;
         const previousSpillFrameBytes = probe.activeImplSpillFrameBytes;
         const previousWrappedEntrypointImpl = probe.activeWrappedEntrypointImpl;
+        const previousFunctionIsPrivateHelper = probe.activeFunctionIsPrivateHelper;
         const previousFunctionContainsTransferAsset = probe.activeFunctionContainsTransferAsset;
         const previousBuilderOnlyPointerLocalNames = probe.activeBuilderOnlyPointerLocalNames;
         const previousPathHelperBaseLocalNames = probe.activePathHelperBaseLocalNames;
+        const previousWrappedVoidForLoopControlParity = probe.activeWrappedVoidForLoopControlParity;
+        const previousWrappedVoidForLoopDepth = probe.activeWrappedVoidForLoopDepth;
         const previousReuseExpressionBindingsForLocals = probe.reuseExpressionBindingsForLocals;
         probe.activeImplSavedRegisters = candidateSavedRegisters;
         probe.activeImplFrameBytes = candidateFrameBytes;
         probe.activeImplSpillFrameBytes = candidateSpillFrameBytes;
         probe.activeWrappedEntrypointImpl = needsEntrypointWrapper(fn);
+        probe.activeFunctionIsPrivateHelper = fn.entrypointKind === null;
         probe.activeFunctionContainsTransferAsset = statementsContainTransferAsset(fn.body);
         probe.activeBuilderOnlyPointerLocalNames = collectBuilderOnlyPointerLocalNames(fn.body);
         probe.activePathHelperBaseLocalNames = collectPathHelperBaseLocalNames(fn.body);
+        probe.activeWrappedVoidForLoopControlParity = functionNeedsWrappedVoidForLoopControlParity(fn);
+        probe.activeWrappedVoidForLoopDepth = 0;
         probe.reuseExpressionBindingsForLocals = !(fn.entrypointKind === null && fn.returnType !== null && isTupleValueType(fn.returnType));
         probe.emitImplFramePrologue(candidateSavedRegisters, candidateFrameBytes, candidateFixedParamRegisterCount, candidateSpillFrameBytes);
         const locals = new Map();
@@ -14402,6 +14651,9 @@ class StudioCodeGenerator {
             probe.compileStatementBlock(fn.body, new Set([fn.name, symbolName]), locals, returnContext, null, new Set(), prepublishedPointerLocalNames, true);
             probe.finishReturnContext(returnContext, fn);
             probe.emitImplFrameEpilogue(candidateSavedRegisters, candidateFrameBytes, candidateSpillFrameBytes);
+            if (probe.activeWrappedVoidForLoopControlParity) {
+                probe.assembler.recordRegisterUse(7);
+            }
             return {
                 savedRegisters: probe.assembler.usedRegisters(candidateSavedRegisters),
                 spillFrameBytes: fn.entrypointKind === null ? candidateSpillFrameBytes : probe.assembler.rustStackSpillFrameBytes(),
@@ -14412,9 +14664,12 @@ class StudioCodeGenerator {
             probe.activeImplFrameBytes = previousFrameBytes;
             probe.activeImplSpillFrameBytes = previousSpillFrameBytes;
             probe.activeWrappedEntrypointImpl = previousWrappedEntrypointImpl;
+            probe.activeFunctionIsPrivateHelper = previousFunctionIsPrivateHelper;
             probe.activeFunctionContainsTransferAsset = previousFunctionContainsTransferAsset;
             probe.activeBuilderOnlyPointerLocalNames = previousBuilderOnlyPointerLocalNames;
             probe.activePathHelperBaseLocalNames = previousPathHelperBaseLocalNames;
+            probe.activeWrappedVoidForLoopControlParity = previousWrappedVoidForLoopControlParity;
+            probe.activeWrappedVoidForLoopDepth = previousWrappedVoidForLoopDepth;
             probe.reuseExpressionBindingsForLocals = previousReuseExpressionBindingsForLocals;
         }
     }
@@ -15244,6 +15499,7 @@ class StudioCodeGenerator {
             target.rematerializableAssetDefinitionLiteral = null;
             target.rematerializableAccountLiteral = null;
             target.rematerializableNameLiteral = null;
+            target.rematerializableNftLiteral = null;
             target.rematerializableBlobLiteral = null;
             target.rematerializableBlobLiteralSource = null;
             target.rematerializableNoritoBytesLiteral = null;
@@ -15270,6 +15526,7 @@ class StudioCodeGenerator {
         target.rematerializableAccountLiteral = source.rematerializableAccountLiteral ?? null;
         target.rematerializableDomainLiteral = source.rematerializableDomainLiteral ?? null;
         target.rematerializableNameLiteral = source.rematerializableNameLiteral ?? null;
+        target.rematerializableNftLiteral = source.rematerializableNftLiteral ?? null;
         target.rematerializableBlobLiteral = source.rematerializableBlobLiteral ?? null;
         target.rematerializableBlobLiteralSource = source.rematerializableBlobLiteralSource ?? null;
         target.rematerializableNoritoBytesLiteral = source.rematerializableNoritoBytesLiteral ?? null;
@@ -15285,6 +15542,9 @@ class StudioCodeGenerator {
         }
         const source = locals.get(expression.name);
         if (!source || source.kind === 'map' || source.kind === 'tuple' || source.kind === 'struct') {
+            return null;
+        }
+        if (source.kind === 'pointer' && source.valueType === 'NftId' && source.register === null) {
             return null;
         }
         const sourceType = source.valueType ?? null;
@@ -15357,6 +15617,26 @@ class StudioCodeGenerator {
             rematerializableNameLiteral: null,
             publishedTlvRegister: null,
         };
+    }
+    createRematerializableNftLiteralBinding(literal, line, column, logicalRegister = null) {
+        parseNftLiteral(literal, line, column);
+        return {
+            kind: 'pointer',
+            register: null,
+            logicalRegister,
+            items: null,
+            fieldNames: null,
+            valueType: 'NftId',
+            rematerializableAssetDefinitionLiteral: null,
+            rematerializableAccountLiteral: null,
+            rematerializableDomainLiteral: null,
+            rematerializableNameLiteral: null,
+            rematerializableNftLiteral: literal,
+            publishedTlvRegister: null,
+        };
+    }
+    logicalNftRegisterForRematerializableLocal() {
+        return this.directVoidReturnHalts ? this.assembler.allocRegister() : null;
     }
     logicalAccountRegisterForRematerializableLocal(name) {
         return this.directVoidReturnHalts
@@ -15554,6 +15834,60 @@ class StudioCodeGenerator {
                 return null;
         }
     }
+    shouldCompileRustStyleWrappedVoidLoopIf(statement, returnContext, loopContext) {
+        return this.activeWrappedVoidForLoopControlParity
+            && this.activeWrappedVoidForLoopDepth > 0
+            && loopContext !== null
+            && !this.directVoidReturnHalts
+            && this.activeWrappedEntrypointImpl
+            && returnContext.valueType === null
+            && !statementsContainDirectReturn(statement.thenBranch)
+            && !statementsContainDirectReturn(statement.elseBranch);
+    }
+    shouldCompileRustStyleDirectVoidIf(statement, returnContext) {
+        return this.directVoidReturnHalts
+            && returnContext.valueType === null
+            && statement.elseBranch.length > 0
+            && !statementsContainDirectReturn(statement.thenBranch)
+            && !statementsContainDirectReturn(statement.elseBranch);
+    }
+    shouldCompileRustStylePrivateVoidIf(statement, returnContext) {
+        return !this.directVoidReturnHalts
+            && this.activeFunctionIsPrivateHelper
+            && returnContext.valueType === null
+            && statement.elseBranch.length > 0
+            && !statementsContainDirectReturn(statement.thenBranch)
+            && !statementsContainDirectReturn(statement.elseBranch);
+    }
+    compileRustStyleVoidIfStatement(statement, callStack, locals, returnContext, loopContext, liveAfterStatement, prepublishedPointerLocalNames) {
+        const thenJump = this.emitConditionJump(statement.condition, false, callStack, locals);
+        const elseTransfer = this.assembler.reserveControlTransferStub();
+        const thenTransferPc = this.assembler.currentPc();
+        const thenTransfer = this.assembler.reserveControlTransferStub();
+        const thenPc = this.assembler.currentPc();
+        this.assembler.patchBranch(thenJump, thenTransferPc);
+        this.assembler.patchJumpTransferStub(thenTransfer, thenPc);
+        this.releaseFrame160DeadIfConditionRegister(statement, locals, liveAfterStatement);
+        const thenLiveNames = new Set(liveAfterStatement);
+        for (const name of referencedLocalNamesInStatements(statement.elseBranch)) {
+            thenLiveNames.add(name);
+        }
+        this.pruneDeadLogicalAccountRegisters(locals, thenLiveNames, returnContext);
+        this.compileStatementBlock(statement.thenBranch, new Set(callStack), locals, returnContext, loopContext, thenLiveNames, prepublishedPointerLocalNames);
+        const thenEndJump = this.assembler.reserveControlTransferStub();
+        const elsePc = this.assembler.currentPc();
+        this.assembler.patchJumpTransferStub(elseTransfer, elsePc);
+        const elseLiveNames = new Set(liveAfterStatement);
+        for (const name of referencedLocalNamesInStatements(statement.thenBranch)) {
+            elseLiveNames.add(name);
+        }
+        this.pruneDeadLogicalAccountRegisters(locals, elseLiveNames, returnContext);
+        this.compileStatementBlock(statement.elseBranch, new Set(callStack), locals, returnContext, loopContext, elseLiveNames, prepublishedPointerLocalNames);
+        const elseEndJump = this.assembler.reserveControlTransferStub();
+        const endPc = this.assembler.currentPc();
+        this.assembler.patchJumpTransferStub(thenEndJump, endPc);
+        this.assembler.patchJumpTransferStub(elseEndJump, endPc);
+    }
     compileStatementBlock(statements, callStack, locals, returnContext, loopContext = null, carriedLiveLocalNames = new Set(), prepublishedPointerLocalNames = new Set(), terminalReturnFallsThrough = false) {
         for (let index = 0; index < statements.length; index += 1) {
             const statement = statements[index];
@@ -15740,6 +16074,35 @@ class StudioCodeGenerator {
             locals.delete(name);
         }
     }
+    prepareForMapBodyLocals(loopLocals, outerLocals, body, carriedLiveLocalNames, returnContext) {
+        const bodyCarriedLiveNames = new Set(carriedLiveLocalNames);
+        for (const name of reboundLocalNamesInStatements(body)) {
+            if (!carriedLiveLocalNames.has(name) || !outerLocals.has(name)) {
+                continue;
+            }
+            const preservedName = `__outer_live_after_map:${name}`;
+            bodyCarriedLiveNames.delete(name);
+            bodyCarriedLiveNames.add(preservedName);
+            loopLocals.set(preservedName, outerLocals.get(name));
+        }
+        const requiredNames = new Set(bodyCarriedLiveNames);
+        for (const name of referencedLocalNamesInStatements(body)) {
+            requiredNames.add(name);
+        }
+        expandRematerializedLocalDependencies(requiredNames, loopLocals);
+        let pruned = false;
+        for (const name of [...loopLocals.keys()]) {
+            if (requiredNames.has(name)) {
+                continue;
+            }
+            loopLocals.delete(name);
+            pruned = true;
+        }
+        if (pruned) {
+            this.assembler.reseedRegisterWindow(liveRegisters(loopLocals, returnContext, this.scalarStateIntReadCache));
+        }
+        return bodyCarriedLiveNames;
+    }
     compileLocalForMapStatement(statement, mapRef, callStack, locals, returnContext, liveAfterStatement, prepublishedPointerLocalNames) {
         const { indexBinding, limitReg } = this.compileForMapLoopBounds(statement, callStack, locals);
         const loopStart = this.assembler.currentPc();
@@ -15766,7 +16129,8 @@ class StudioCodeGenerator {
         this.assembler.releaseRegister(byteOffsetReg);
         this.assembler.releaseRegister(addressReg);
         const nestedLoopContext = { breakJumps: [], continueJumps: [] };
-        this.compileStatementBlock(statement.body, new Set(callStack), loopLocals, returnContext, nestedLoopContext, new Set(liveAfterStatement), prepublishedPointerLocalNames);
+        const bodyCarriedLiveNames = this.prepareForMapBodyLocals(loopLocals, locals, statement.body, liveAfterStatement, returnContext);
+        this.compileStatementBlock(statement.body, new Set(callStack), loopLocals, returnContext, nestedLoopContext, bodyCarriedLiveNames, prepublishedPointerLocalNames);
         const continuePc = this.assembler.currentPc();
         for (const continueJump of nestedLoopContext.continueJumps) {
             this.assembler.patchJumpTransferStub(continueJump, continuePc);
@@ -15785,35 +16149,79 @@ class StudioCodeGenerator {
             this.compileDynamicDurableForMapStatement(statement, mapRef, callStack, locals, returnContext, liveAfterStatement, prepublishedPointerLocalNames);
             return;
         }
-        const { indexBinding, limitReg } = this.compileForMapLoopBounds(statement, callStack, locals);
+        this.compileStaticDurableForMapStatement(statement, mapRef, callStack, locals, returnContext, liveAfterStatement, prepublishedPointerLocalNames);
+    }
+    compileStaticDurableForMapStatement(statement, mapRef, callStack, locals, returnContext, liveAfterStatement, prepublishedPointerLocalNames) {
+        const indexBinding = this.createBindingForType('int');
+        this.emitSmallInt(indexBinding.register, statement.startValue);
+        const limitReg = this.assembler.allocRegister();
+        this.emitSmallInt(limitReg, statement.startValue + statement.boundValue);
+        const oneReg = this.assembler.allocRegister();
+        this.emitSmallInt(oneReg, 1);
+        const loopEntryJump = this.assembler.reserveControlTransferStub();
         const loopStart = this.assembler.currentPc();
-        const bodyJump = this.assembler.emitBranchPlaceholder(OP_BLT, indexBinding.register, limitReg);
+        const conditionReg = this.assembler.allocRegister();
+        this.emitSignedLessThan(conditionReg, indexBinding.register, limitReg);
+        const bodyBranch = this.assembler.emitBranchPlaceholder(OP_BNE, conditionReg, 0);
         const exitJump = this.assembler.reserveControlTransferStub();
+        const bodyTrampolinePc = this.assembler.currentPc();
+        const bodyTrampoline = this.assembler.reserveControlTransferStub();
         const bodyPc = this.assembler.currentPc();
-        this.assembler.patchBranch(bodyJump, bodyPc);
+        this.assembler.patchJumpTransferStub(loopEntryJump, loopStart);
+        this.assembler.patchBranch(bodyBranch, bodyTrampolinePc);
+        this.assembler.patchJumpTransferStub(bodyTrampoline, bodyPc);
         const pathReg = mapRef.storage === 'stateHandle'
             ? this.emitBuildStateMapPathFromBaseRegister(this.stateMapHandleAnchorRegister(mapRef), indexBinding.register, mapRef.type.key)
-            : this.emitBuildStateMapPath(this.stateMapAnchorLiteral(mapRef.name, mapRef.type.value), indexBinding.register, mapRef.type.key);
+            : this.emitBuildStateMapPathFromDirectNameLiteral(this.stateMapAnchorLiteral(mapRef.name, mapRef.type.value), indexBinding.register, mapRef.type.key);
+        this.assembler.releaseRegister(conditionReg);
         const blobReg = this.emitStateGet(pathReg);
-        const presentJump = this.assembler.emitBranchPlaceholder(OP_BNE, blobReg, 0);
+        if (!this.dynamicStateMapValueDecodeNeedsPath(mapRef.type.value)) {
+            this.assembler.releaseRegister(pathReg);
+        }
+        const zeroReg = this.assembler.allocRegister();
+        this.emitSmallInt(zeroReg, 0);
+        const hasValueReg = this.assembler.allocRegister();
+        this.assembler.emitArithmetic(OP_SNE, hasValueReg, blobReg, zeroReg);
+        const presentBranch = this.assembler.emitBranchPlaceholder(OP_BNE, hasValueReg, 0);
         const absentJump = this.assembler.reserveControlTransferStub();
+        const presentTrampolinePc = this.assembler.currentPc();
+        const presentTrampoline = this.assembler.reserveControlTransferStub();
         const presentPc = this.assembler.currentPc();
-        this.assembler.patchBranch(presentJump, presentPc);
+        this.assembler.patchBranch(presentBranch, presentTrampolinePc);
+        this.assembler.patchJumpTransferStub(presentTrampoline, presentPc);
+        const loopLocals = new Map(locals);
+        let valueBinding = null;
+        this.assembler.releaseRegister(zeroReg);
+        this.assembler.releaseRegister(hasValueReg);
+        if (statement.value !== null) {
+            valueBinding = this.compileDurableForMapValueBinding(statement, mapRef, indexBinding.register, pathReg, blobReg);
+            this.assembler.releaseRegister(blobReg);
+        }
         const keyReg = this.assembler.allocRegister();
         this.assembler.emitMove(keyReg, indexBinding.register);
-        const loopLocals = new Map(locals);
         loopLocals.set(statement.key, this.createScalarBindingForRegister('int', keyReg));
         if (statement.value !== null) {
-            loopLocals.set(statement.value, this.compileDurableForMapValueBinding(statement, mapRef, indexBinding.register, pathReg, blobReg));
+            loopLocals.set(statement.value, valueBinding);
         }
         const nestedLoopContext = { breakJumps: [], continueJumps: [] };
-        this.compileStatementBlock(statement.body, new Set(callStack), loopLocals, returnContext, nestedLoopContext, new Set(liveAfterStatement), prepublishedPointerLocalNames);
+        const previousSsaAssignments = this.activeDynamicStateMapBodySsaAssignments;
+        const previousZeroLocalNames = this.activeDynamicStateMapZeroLocalNames;
+        this.activeDynamicStateMapBodySsaAssignments = true;
+        this.activeDynamicStateMapZeroLocalNames = new Set([...loopLocals]
+            .filter(([, binding]) => binding?.rematerializableIntLiteral === 0)
+            .map(([name]) => name));
+        const bodyCarriedLiveNames = this.prepareForMapBodyLocals(loopLocals, locals, statement.body, liveAfterStatement, returnContext);
+        this.compileStatementBlock(statement.body, new Set(callStack), loopLocals, returnContext, nestedLoopContext, bodyCarriedLiveNames, prepublishedPointerLocalNames);
+        this.activeDynamicStateMapBodySsaAssignments = previousSsaAssignments;
+        this.activeDynamicStateMapZeroLocalNames = previousZeroLocalNames;
+        const bodyEndJump = this.assembler.reserveControlTransferStub();
         const continuePc = this.assembler.currentPc();
+        this.assembler.patchJumpTransferStub(bodyEndJump, continuePc);
         this.assembler.patchJumpTransferStub(absentJump, continuePc);
         for (const continueJump of nestedLoopContext.continueJumps) {
             this.assembler.patchJumpTransferStub(continueJump, continuePc);
         }
-        this.assembler.emitAddi(indexBinding.register, indexBinding.register, 1);
+        this.assembler.emitArithmetic(OP_ADD, indexBinding.register, indexBinding.register, oneReg);
         const loopJump = this.assembler.reserveControlTransferStub();
         this.assembler.patchJumpTransferStub(loopJump, loopStart);
         const exitPc = this.assembler.currentPc();
@@ -15876,7 +16284,8 @@ class StudioCodeGenerator {
         this.activeDynamicStateMapZeroLocalNames = new Set([...loopLocals]
             .filter(([, binding]) => binding?.rematerializableIntLiteral === 0)
             .map(([name]) => name));
-        this.compileStatementBlock(statement.body, new Set(callStack), loopLocals, returnContext, nestedLoopContext, new Set(liveAfterStatement), prepublishedPointerLocalNames);
+        const bodyCarriedLiveNames = this.prepareForMapBodyLocals(loopLocals, locals, statement.body, liveAfterStatement, returnContext);
+        this.compileStatementBlock(statement.body, new Set(callStack), loopLocals, returnContext, nestedLoopContext, bodyCarriedLiveNames, prepublishedPointerLocalNames);
         this.activeDynamicStateMapBodySsaAssignments = previousSsaAssignments;
         this.activeDynamicStateMapZeroLocalNames = previousZeroLocalNames;
         const bodyEndJump = this.assembler.reserveControlTransferStub();
@@ -16150,6 +16559,7 @@ class StudioCodeGenerator {
                 }
                 this.emitDiscardedVoidIntrinsicResult(amountReg);
                 this.tryPatchFrame168DepositMintLp(statement);
+                this.ensureDirectEntrypointMinimumFrameBytes(40);
                 return;
             }
             case 'burnAsset': {
@@ -16480,6 +16890,12 @@ class StudioCodeGenerator {
                 return;
             }
             case 'if': {
+                if (this.shouldCompileRustStyleWrappedVoidLoopIf(statement, returnContext, loopContext)
+                    || this.shouldCompileRustStyleDirectVoidIf(statement, returnContext)
+                    || this.shouldCompileRustStylePrivateVoidIf(statement, returnContext)) {
+                    this.compileRustStyleVoidIfStatement(statement, callStack, locals, returnContext, loopContext, liveAfterStatement, prepublishedPointerLocalNames);
+                    return;
+                }
                 const thenJump = this.emitConditionJump(statement.condition, false, callStack, locals);
                 const elseJump = this.assembler.reserveControlTransferStub();
                 const thenBranchHasDirectReturn = statementsContainDirectReturn(statement.thenBranch);
@@ -16666,6 +17082,12 @@ class StudioCodeGenerator {
                         loopPhiBindings.set(name, phiBinding);
                     }
                 }
+                const trackWrappedVoidForLoop = this.activeWrappedVoidForLoopControlParity
+                    && this.activeWrappedEntrypointImpl
+                    && returnContext.valueType === null;
+                if (trackWrappedVoidForLoop) {
+                    this.assembler.emitNop();
+                }
                 const entryJump = this.assembler.reserveControlTransferStub();
                 const loopStart = this.assembler.currentPc();
                 this.assembler.patchJumpTransferStub(entryJump, loopStart);
@@ -16692,7 +17114,17 @@ class StudioCodeGenerator {
                     this.assembler.patchJumpTransferStub(bodyTrampoline, bodyPc);
                 }
                 const nestedLoopContext = { breakJumps: [], continueJumps: [] };
-                this.compileStatementBlock(statement.body, new Set(callStack), loopLocals, returnContext, nestedLoopContext, loopLiveNames, prepublishedPointerLocalNames);
+                if (trackWrappedVoidForLoop) {
+                    this.activeWrappedVoidForLoopDepth += 1;
+                }
+                try {
+                    this.compileStatementBlock(statement.body, new Set(callStack), loopLocals, returnContext, nestedLoopContext, loopLiveNames, prepublishedPointerLocalNames);
+                }
+                finally {
+                    if (trackWrappedVoidForLoop) {
+                        this.activeWrappedVoidForLoopDepth -= 1;
+                    }
+                }
                 const bodyEndJump = this.assembler.reserveControlTransferStub();
                 const stepPc = this.assembler.currentPc();
                 for (const continueJump of nestedLoopContext.continueJumps) {
@@ -17108,6 +17540,53 @@ class StudioCodeGenerator {
         this.assembler.emitMove(10, 13);
         this.assembler.emitSyscall(syscall);
     }
+    emitTwoPointerSyscallFromAbi(syscall) {
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(12, 10);
+        this.assembler.emitMove(10, 11);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(11, 10);
+        this.assembler.emitMove(10, 12);
+        this.assembler.emitSyscall(syscall);
+    }
+    emitThreePointerSyscallFromAbi(syscall, firstPublishedRegister = 13, secondPublishedRegister = null) {
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(firstPublishedRegister, 10);
+        this.assembler.emitMove(10, 11);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        const secondRegister = secondPublishedRegister ?? 11;
+        this.assembler.emitMove(secondRegister, 10);
+        this.assembler.emitMove(10, 12);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(12, 10);
+        this.assembler.emitMove(10, firstPublishedRegister);
+        if (secondPublishedRegister !== null) {
+            this.assembler.emitMove(11, secondPublishedRegister);
+        }
+        this.assembler.emitSyscall(syscall);
+    }
+    emitNftMintAssetLiteralSyscall(nftLiteral, ownerLiteral, line, column) {
+        this.emitNftLiteralPointerIntoRegister(nftLiteral, line, column, 10);
+        this.emitAccountLiteralPointerIntoRegister(ownerLiteral, line, column, 11);
+        this.emitTwoPointerSyscallFromAbi(SYSCALL_NFT_MINT_ASSET);
+    }
+    emitNftTransferAssetLiteralSyscall(fromLiteral, nftLiteral, toLiteral, line, column) {
+        this.emitAccountLiteralPointerIntoRegister(fromLiteral, line, column, 10);
+        this.emitNftLiteralPointerIntoRegister(nftLiteral, line, column, 11);
+        this.emitAccountLiteralPointerIntoRegister(toLiteral, line, column, 12);
+        this.emitThreePointerSyscallFromAbi(SYSCALL_NFT_TRANSFER_ASSET);
+    }
+    emitNftSetMetadataLiteralSyscall(nftLiteral, keyLiteral, jsonLiteral, line, column) {
+        this.emitNftLiteralPointerIntoRegister(nftLiteral, line, column, 10);
+        this.emitDirectNameLiteralPointerIntoRegister(keyLiteral, 11);
+        this.emitDirectJsonLiteralPointerIntoRegister(jsonLiteral, 12, line, column);
+        this.emitThreePointerSyscallFromAbi(SYSCALL_NFT_SET_METADATA, 27, 28);
+    }
+    emitNftBurnAssetLiteralSyscall(nftLiteral, line, column) {
+        this.emitNftLiteralPointerIntoRegister(nftLiteral, line, column, 10);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitSyscall(SYSCALL_NFT_BURN_ASSET);
+    }
     emitFourArgAssetSyscall(fromReg, toReg, assetReg, amountReg, syscall) {
         this.assembler.emitMove(10, fromReg);
         this.assembler.emitMove(11, toReg);
@@ -17368,12 +17847,27 @@ class StudioCodeGenerator {
         this.assembler.emitMove(targetRegister, 10);
         this.reclaimTemporaryRegisters(locals, returnContext);
     }
+    ensureDirectEntrypointMinimumFrameBytes(minFrameBytes) {
+        if (!this.directVoidReturnHalts)
+            return;
+        const frameRegisters = [8, 9, 23, 24, 7, 6, 5, 3, 2, 20, 21, 22, 25];
+        for (const register of frameRegisters) {
+            if (this.assembler.currentEntrypointFrameBytes() >= minFrameBytes) {
+                break;
+            }
+            this.assembler.recordRegisterUse(register);
+        }
+    }
     tryCompileSetAccountDetailLiteralFastPath(statement, callStack, locals, returnContext) {
         const keyLiteral = this.resolveRematerializableNameLiteral(statement.key, locals);
         const valueLiteral = directJsonLiteralTextFromExpression(statement.value);
         if (keyLiteral === null || valueLiteral === null)
             return false;
-        const accountReg = this.compileExpressionAsAccountPointer(statement.account, callStack, locals);
+        const accountLiteral = this.resolveRematerializableAccountLiteral(statement.account, locals);
+        const useDirectAccountLiteral = accountLiteral !== null && isDirectAccountPointerLiteral(accountLiteral);
+        const accountReg = useDirectAccountLiteral
+            ? 10
+            : this.compileExpressionAsAccountPointer(statement.account, callStack, locals);
         const logicalKeyReg = this.assembler.canClaimRegister(23)
             ? this.assembler.claimRegister(23)
             : this.assembler.allocRegister();
@@ -17387,7 +17881,12 @@ class StudioCodeGenerator {
             : this.assembler.canClaimRegister(9)
             ? this.assembler.claimRegister(9)
             : this.assembler.allocRegister();
-        this.assembler.emitMove(10, accountReg);
+        if (useDirectAccountLiteral) {
+            this.emitAccountLiteralPointerIntoRegister(accountLiteral, statement.line, 1, accountReg);
+        }
+        else {
+            this.assembler.emitMove(10, accountReg);
+        }
         this.emitDirectNameLiteralPointerIntoRegister(keyLiteral, 11);
         this.emitDirectJsonLiteralPointerIntoRegister(valueLiteral, 12);
         this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
@@ -17403,6 +17902,9 @@ class StudioCodeGenerator {
         this.emitDiscardedVoidIntrinsicResult(logicalValueReg);
         this.assembler.releaseRegister(logicalKeyReg);
         this.assembler.releaseRegister(logicalValueReg);
+        if (this.activeZkSetAccountDetailFramePressure) {
+            this.ensureDirectEntrypointMinimumFrameBytes(40);
+        }
         this.reclaimTemporaryRegisters(locals, returnContext);
         return true;
     }
@@ -18543,6 +19045,12 @@ class StudioCodeGenerator {
         const valueReg = this.encodeStateMapBindingValue(binding, valueType, encodeRegisters.result, encodeRegisters.source);
         this.emitDirectNameLiteralPointerIntoRegister(baseLiteral, 10);
         this.emitStateSetPathInRegister(valueReg);
+        if (encodeRegisters.source !== null) {
+            this.assembler.recordRegisterUse(encodeRegisters.source);
+        }
+        if (aggregateContext.scalarLeafIndex >= aggregateContext.scalarLeafCount) {
+            this.assembler.releaseRegister(valueReg);
+        }
     }
     requireStateMapHandleLeafRegisters(mapRef, line, column) {
         const expected = this.stateMapLeafBaseHandleCount(mapRef.type.value);
@@ -20366,6 +20874,49 @@ class StudioCodeGenerator {
             ? binding.logicalRegister
             : null;
     }
+    deadRematerializedAccountRegisterAfterStatement(expression, locals, liveAfterStatement) {
+        if (liveAfterStatement === null || expression.kind !== 'stateReference' || liveAfterStatement.has(expression.name)) {
+            return null;
+        }
+        const binding = locals.get(expression.name);
+        return binding?.kind === 'pointer'
+            && binding.valueType === 'AccountId'
+            && binding.rematerializableAccountLiteral !== null
+            && binding.rematerializableAccountLiteral !== undefined
+            && binding.logicalRegister !== null
+            && binding.logicalRegister !== undefined
+            ? binding.logicalRegister
+            : null;
+    }
+    deadRematerializedNftRegisterAfterStatement(expression, locals, liveAfterStatement) {
+        if (liveAfterStatement === null || expression.kind !== 'stateReference' || liveAfterStatement.has(expression.name)) {
+            return null;
+        }
+        const binding = locals.get(expression.name);
+        return binding?.kind === 'pointer'
+            && binding.valueType === 'NftId'
+            && binding.rematerializableNftLiteral !== null
+            && binding.rematerializableNftLiteral !== undefined
+            && binding.logicalRegister !== null
+            && binding.logicalRegister !== undefined
+            ? binding.logicalRegister
+            : null;
+    }
+    deadLogicalPointerLocalRegisterAfterStatement(locals, liveAfterStatement) {
+        if (liveAfterStatement === null) {
+            return null;
+        }
+        for (const [name, binding] of locals) {
+            if (liveAfterStatement.has(name)
+                || binding.kind !== 'pointer'
+                || binding.logicalRegister === null
+                || binding.logicalRegister === undefined) {
+                continue;
+            }
+            return binding.logicalRegister;
+        }
+        return null;
+    }
     deadRematerializedTypedPointerRegisterAfterStatement(expression, valueType, locals, liveAfterStatement) {
         if (liveAfterStatement === null || expression.kind !== 'stateReference' || liveAfterStatement.has(expression.name)) {
             return null;
@@ -20516,6 +21067,9 @@ class StudioCodeGenerator {
             }
             else if (binding.rematerializableAssetDefinitionLiteral) {
                 out.set(name, { valueType: 'AssetDefinitionId', literal: binding.rematerializableAssetDefinitionLiteral });
+            }
+            else if (binding.rematerializableNftLiteral) {
+                out.set(name, { valueType: 'NftId', literal: binding.rematerializableNftLiteral });
             }
         }
         return out;
@@ -22210,9 +22764,20 @@ class StudioCodeGenerator {
                 if (expression.args.length !== 2) {
                     throw new StudioCompileError('nft_mint_asset expects (NftId, AccountId) in the browser compiler.', expression.line, expression.column);
                 }
+                const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[0], locals);
+                const ownerLiteral = this.resolveRematerializableAccountLiteral(expression.args[1], locals);
+                if (nftLiteral !== null && ownerLiteral !== null && isDirectAccountPointerLiteral(ownerLiteral)) {
+                    this.emitNftMintAssetLiteralSyscall(nftLiteral, ownerLiteral, expression.line, expression.column);
+                    this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+                    if (!allowVoidResult) {
+                        throw new StudioCompileError('nft_mint_asset does not return a value in the browser compiler.', expression.line, expression.column);
+                    }
+                    return null;
+                }
                 const nftReg = this.compileExpressionAsNftPointer(expression.args[0], callStack, locals);
                 const ownerReg = this.compileExpressionAsAccountPointer(expression.args[1], callStack, locals);
                 this.emitTwoPointerSyscall(nftReg, ownerReg, SYSCALL_NFT_MINT_ASSET);
+                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
                 if (!allowVoidResult) {
                     throw new StudioCompileError('nft_mint_asset does not return a value in the browser compiler.', expression.line, expression.column);
                 }
@@ -22222,10 +22787,24 @@ class StudioCodeGenerator {
                 if (expression.args.length !== 3) {
                     throw new StudioCompileError('nft_set_metadata expects (NftId, Name, Json) in the browser compiler.', expression.line, expression.column);
                 }
+                const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[0], locals);
+                const keyLiteral = this.resolveRematerializableNameLiteral(expression.args[1], locals);
+                const jsonLiteral = directJsonLiteralTextFromExpression(expression.args[2]);
+                if (nftLiteral !== null && keyLiteral !== null && jsonLiteral !== null) {
+                    this.emitNftSetMetadataLiteralSyscall(nftLiteral, keyLiteral, jsonLiteral, expression.line, expression.column);
+                    this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedNftRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
+                        ?? this.deadLogicalPointerLocalRegisterAfterStatement(locals, liveAfterStatement)
+                        ?? this.assembler.allocRegister());
+                    if (!allowVoidResult) {
+                        throw new StudioCompileError('nft_set_metadata does not return a value in the browser compiler.', expression.line, expression.column);
+                    }
+                    return null;
+                }
                 const nftReg = this.compileExpressionAsNftPointer(expression.args[0], callStack, locals);
                 const keyReg = this.compileExpressionAsNamePointer(expression.args[1], callStack, locals);
                 const jsonReg = this.compileExpressionAsJsonPointer(expression.args[2], callStack, locals);
                 this.emitThreePointerSyscall(nftReg, keyReg, jsonReg, SYSCALL_NFT_SET_METADATA);
+                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
                 if (!allowVoidResult) {
                     throw new StudioCompileError('nft_set_metadata does not return a value in the browser compiler.', expression.line, expression.column);
                 }
@@ -22235,8 +22814,20 @@ class StudioCodeGenerator {
                 if (expression.args.length !== 1) {
                     throw new StudioCompileError('nft_burn_asset expects (NftId) in the browser compiler.', expression.line, expression.column);
                 }
+                const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[0], locals);
+                if (nftLiteral !== null) {
+                    this.emitNftBurnAssetLiteralSyscall(nftLiteral, expression.line, expression.column);
+                    this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedNftRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
+                        ?? this.deadLogicalPointerLocalRegisterAfterStatement(locals, liveAfterStatement)
+                        ?? this.assembler.allocRegister());
+                    if (!allowVoidResult) {
+                        throw new StudioCompileError('nft_burn_asset does not return a value in the browser compiler.', expression.line, expression.column);
+                    }
+                    return null;
+                }
                 const nftReg = this.compileExpressionAsNftPointer(expression.args[0], callStack, locals);
                 this.emitOnePointerSyscall(nftReg, SYSCALL_NFT_BURN_ASSET);
+                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
                 if (!allowVoidResult) {
                     throw new StudioCompileError('nft_burn_asset does not return a value in the browser compiler.', expression.line, expression.column);
                 }
@@ -22246,10 +22837,27 @@ class StudioCodeGenerator {
                 if (expression.args.length !== 3) {
                     throw new StudioCompileError('nft_transfer_asset expects (AccountId, NftId, AccountId) in the browser compiler.', expression.line, expression.column);
                 }
+                const fromLiteral = this.resolveRematerializableAccountLiteral(expression.args[0], locals);
+                const nftLiteral = this.resolveRematerializableNftLiteral(expression.args[1], locals);
+                const toLiteral = this.resolveRematerializableAccountLiteral(expression.args[2], locals);
+                if (fromLiteral !== null && nftLiteral !== null && toLiteral !== null
+                    && isDirectAccountPointerLiteral(fromLiteral)
+                    && isDirectAccountPointerLiteral(toLiteral)) {
+                    this.emitNftTransferAssetLiteralSyscall(fromLiteral, nftLiteral, toLiteral, expression.line, expression.column);
+                    this.emitDiscardedVoidIntrinsicResult(this.deadRematerializedAccountRegisterAfterStatement(expression.args[2], locals, liveAfterStatement)
+                        ?? this.deadRematerializedAccountRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
+                        ?? this.deadRematerializedNftRegisterAfterStatement(expression.args[1], locals, liveAfterStatement)
+                        ?? this.assembler.allocRegister());
+                    if (!allowVoidResult) {
+                        throw new StudioCompileError('nft_transfer_asset does not return a value in the browser compiler.', expression.line, expression.column);
+                    }
+                    return null;
+                }
                 const fromReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
                 const nftReg = this.compileExpressionAsNftPointer(expression.args[1], callStack, locals);
                 const toReg = this.compileExpressionAsAccountPointer(expression.args[2], callStack, locals);
                 this.emitThreePointerSyscall(fromReg, nftReg, toReg, SYSCALL_NFT_TRANSFER_ASSET);
+                this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[2], locals, liveAfterStatement) ?? this.assembler.allocRegister());
                 if (!allowVoidResult) {
                     throw new StudioCompileError('nft_transfer_asset does not return a value in the browser compiler.', expression.line, expression.column);
                 }
@@ -24571,6 +25179,18 @@ class StudioCodeGenerator {
         }
         return rematerializableNameLiteralFromExpression(expression);
     }
+    resolveRematerializableNftLiteral(expression, locals) {
+        if (expression.kind === 'stateReference') {
+            if (locals.has(expression.name)) {
+                return locals.get(expression.name)?.rematerializableNftLiteral ?? null;
+            }
+            if (!this.consts.has(expression.name)) {
+                return null;
+            }
+            return this.withConstResolution(expression.name, expression.line, expression.column, (decl) => this.resolveRematerializableNftLiteral(decl.value, locals));
+        }
+        return rematerializableNftLiteralFromExpression(expression);
+    }
     resolveRematerializableDomainLiteral(expression, locals) {
         if (expression.kind === 'stateReference') {
             return locals.get(expression.name)?.rematerializableDomainLiteral ?? null;
@@ -24655,6 +25275,9 @@ class StudioCodeGenerator {
         }
         if (expression.kind === 'stateReference') {
             const localBinding = locals.get(expression.name);
+            if (localBinding?.rematerializableNftLiteral) {
+                return this.emitNftLiteralPointer(localBinding.rematerializableNftLiteral, expression.line, expression.column);
+            }
             if (localBinding) {
                 return this.compileBindingAsPointerConstructorTarget(localBinding, expression, 'NftId', POINTER_TYPE_NFT_ID, (literal) => this.emitNftLiteralPointer(literal, expression.line, expression.column), 'Local is not NftId-like in the browser compiler.');
             }
@@ -25480,6 +26103,12 @@ class StudioCodeGenerator {
                     return this.maybePrepublishLocalBinding(name, this.createRematerializableNameLiteralBinding(rematerializableLiteral, expression.line, expression.column, this.activeDirectStatePathLocalNames.has(name) || this.activePathHelperBaseLocalNames.has(name)), prepublishedPointerLocalNames);
                 }
             }
+            if (resolvedDeclaredType === 'NftId') {
+                const rematerializableLiteral = rematerializableNftLiteralFromExpression(expression);
+                if (rematerializableLiteral !== null) {
+                    return this.maybePrepublishLocalBinding(name, this.createRematerializableNftLiteralBinding(rematerializableLiteral, expression.line, expression.column, this.logicalNftRegisterForRematerializableLocal()), prepublishedPointerLocalNames);
+                }
+            }
             if (resolvedDeclaredType === 'NoritoBytes') {
                 const rematerializableLiteral = rematerializablePointerLiteralFromExpression(expression);
                 if (rematerializableLiteral?.valueType === 'NoritoBytes') {
@@ -25696,6 +26325,12 @@ class StudioCodeGenerator {
             const rematerializableLiteral = rematerializableNameLiteralFromExpression(expression);
             if (rematerializableLiteral !== null) {
                 return this.maybePrepublishLocalBinding(name, this.createRematerializableNameLiteralBinding(rematerializableLiteral, expression.line, expression.column, this.activeDirectStatePathLocalNames.has(name) || this.activePathHelperBaseLocalNames.has(name)), prepublishedPointerLocalNames);
+            }
+        }
+        if (valueType === 'NftId') {
+            const rematerializableLiteral = rematerializableNftLiteralFromExpression(expression);
+            if (rematerializableLiteral !== null) {
+                return this.maybePrepublishLocalBinding(name, this.createRematerializableNftLiteralBinding(rematerializableLiteral, expression.line, expression.column, this.logicalNftRegisterForRematerializableLocal()), prepublishedPointerLocalNames);
             }
         }
         if (valueType === 'NoritoBytes') {
@@ -25926,9 +26561,12 @@ class StudioCodeGenerator {
     }
     emitNftLiteralPointer(value, line, column) {
         const register = this.assembler.allocRegister();
+        this.emitNftLiteralPointerIntoRegister(value, line, column, register);
+        return register;
+    }
+    emitNftLiteralPointerIntoRegister(value, line, column, register) {
         const pointer = this.assembler.literalPointer(POINTER_TYPE_NFT_ID, encodeNftIdPointerPayload(parseNftLiteral(value, line, column)));
         this.assembler.reservePointerLiteralStub(register, pointer);
-        return register;
     }
     emitAccountLiteralPointerIntoRegister(value, line, column, register) {
         const publicKey = (renderCanonicalPublicKeyLiteralFromAccountIdLiteral(value)
