@@ -4265,14 +4265,20 @@ async fn handler_transactions_query(
         .await?;
     }
     let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
-    let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
-    routing::handle_v1_transactions_query_with_policy(
-        app.state.clone(),
-        crate::utils::extractors::NoritoJson(env),
-        app.telemetry.clone(),
-        allowed_asset_definition_id,
+    resolve_tx_history_allowed_asset_definition_id(&app)?;
+    let body = norito::json::to_vec(&env).map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to encode routed transactions query: {error}"
+        )))
+    })?;
+    Ok(execute_torii_fanout_list_read(
+        &app,
+        ToriiReadEndpointV1::TransactionsQuery,
+        Vec::new(),
+        None,
+        body,
     )
-    .await
+    .await)
 }
 
 #[cfg(feature = "app_api")]
@@ -43764,6 +43770,53 @@ pub(crate) mod tests_runtime_handlers {
                 .get("x-iroha-route-dataspace-id")
                 .is_none(),
             "visible dataspace fanout should not expose a singular dataspace",
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_transactions_query_fan_outs_across_dataspaces() {
+        let mut app = mk_app_state_for_tests();
+        configure_multiple_dataspace_routes_for_test(&mut app);
+        assert!(
+            super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
+            "test requires multiple dataspace routes"
+        );
+
+        let env = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            aggregate: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(10),
+                offset: 0,
+            },
+            fetch_size: None,
+            count_mode: Some("exact".to_owned()),
+        };
+        let response = super::handler_transactions_query(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            NoritoJson(env),
+        )
+        .await
+        .expect("transactions query should execute")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-attempted")
+                .and_then(|value| value.to_str().ok()),
+            Some("2"),
+            "global transaction queries must enter the read-fanout path",
+        );
+        assert!(
+            response.headers().get("x-iroha-route-lane-id").is_none(),
+            "transaction query fanout should not expose a singular route lane",
         );
     }
 

@@ -237,11 +237,11 @@ and completed history lives in [`status.md`](./status.md).
   three-term bounded MSM and constraining the third scalar to the native-field
   product of the first two, so a self-consistent MSM cannot forge the IPA
   product term. The per-round accumulator update `Q' = x^2*L + Q + x^{-2}*R`
-  now has the same treatment, with private canonical `x` and `x^{-1}` witnesses
-  constrained as inverses and linked to the MSM scalars `x^2`, `1`, and
-  `x^{-2}`. Generator folding now also has a shared-challenge wrapper proving
-  `G' = x^{-1}*G_L + x*G_R` and `H' = x*H_L + x^{-1}*H_R` with two linked
-  two-term MSMs. The native-field IPA `b`-vector fold
+  now uses the fixed-window MSM path with private canonical `x` and `x^{-1}`
+  witnesses constrained as inverses and linked to the MSM scalars `x^2`, `1`,
+  and `x^{-2}`. Generator folding now also has a shared-challenge wrapper
+  proving `G' = x^{-1}*G_L + x*G_R` and `H' = x*H_L + x^{-1}*H_R` with two
+  linked fixed-window two-term MSMs. The native-field IPA `b`-vector fold
   `b' = b_L*x^{-1} + b_R*x` now has public-input scalar and fixed-size
   segment-vector gadgets with one shared private canonical challenge pair and
   adversarial coverage for inverse, input/output, and noncanonical scalar
@@ -259,7 +259,9 @@ and completed history lives in [`status.md`](./status.md).
   the final public multi-scalar accumulator, with adversarial coverage for
   substitution and splice attacks. The IPA final comparison now also has a
   fixed-window `Q = a*G + b*H + (a*b)*U` wrapper with the same third-scalar
-  product-link invariant. The native accumulation projection also rejects
+  product-link invariant, and the composed one-round/generic verifier wrappers
+  now feed the round accumulator, generator folds, and final comparison through
+  the fixed-window MSM path. The native accumulation projection also rejects
   mismatched challenge inverse witnesses.
   A one-round in-circuit verifier composition slice now shares one canonical
   challenge/inverse pair across `b` folding, the `Q` accumulator update,
@@ -272,7 +274,12 @@ and completed history lives in [`status.md`](./status.md).
   folded generators, and the final expected term. A combined native verifier
   witness now validates those transcript, reduction, accumulation, and final
   scalar projections together for future recursive-verifier witnesses, all
-  without adding a trusted setup. Alias
+  without adding a trusted setup. A field-friendly transcript-binding projection
+  now maps the SHA3-validated transcript header, complete round projections,
+  challenge/inverse pairs, and final transcript state into Pasta/Fp scalars and
+  folds them through a transparent Pow5 accumulator; a matching native Pasta/Fp
+  circuit enforces that accumulator over public projection/challenge inputs and
+  rejects public substitution or intermediate-state tampering. Alias
   spellings are rejected at compact-token proving
   and verification boundaries. Derived Halo2 IPA proving keys for IVM,
   Offline Note, and Kagemusha now use Norito archives
@@ -315,11 +322,10 @@ and completed history lives in [`status.md`](./status.md).
   final-comparison MSM, IPA scalar/vector-fold, full `b`-vector reduction,
   generator-fold, round-accumulator, final-comparison composition, and one-round
   and generic multi-round verifier composition are present, but in-circuit
-  transcript hash/challenge binding, migration of the remaining higher-level IPA
-  wrappers onto the windowed MSM path where needed, and production-scale
-  composed circuit evidence are still not complete, so
-  aggregation mode `2` stays a reserved, explicitly rejected wire value until
-  that verifier exists.
+  transcript binding still needs to be composed into the full production-width
+  verifier, and production-width composed circuit evidence is still not
+  complete, so aggregation mode `2` stays a reserved, explicitly rejected wire
+  value until that verifier exists.
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 

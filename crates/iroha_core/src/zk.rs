@@ -8665,6 +8665,115 @@ mod kagemusha_non_native_limb_circuit_tests {
         (initial, challenges, inverses, final_scalar)
     }
 
+    fn native_pasta_fp_ipa_transcript_binding_instances<const ROUNDS: usize>(
+        circuit: &pasta_tiny::NativePastaFpIpaTranscriptBinding<ROUNDS>,
+    ) -> Vec<Vec<Scalar>> {
+        fn instance_at(row: usize, value: Scalar) -> Vec<Scalar> {
+            let mut values = vec![Scalar::from(0); row + 1];
+            values[row] = value;
+            values
+        }
+
+        let final_row = ROUNDS * 3;
+        let mut instances = vec![
+            instance_at(0, circuit.header_projection),
+            instance_at(final_row, circuit.final_projection),
+            instance_at(final_row, circuit.binding_digest),
+        ];
+        instances.extend(
+            circuit
+                .round_projections
+                .iter()
+                .enumerate()
+                .map(|(round_index, value)| instance_at(round_index * 3, *value)),
+        );
+        instances.extend(
+            circuit
+                .challenges
+                .iter()
+                .enumerate()
+                .map(|(round_index, value)| instance_at(round_index * 3 + 1, *value)),
+        );
+        instances.extend(
+            circuit
+                .challenge_inverses
+                .iter()
+                .enumerate()
+                .map(|(round_index, value)| instance_at(round_index * 3 + 2, *value)),
+        );
+        instances
+    }
+
+    fn transcript_binding_final_instance_row<const ROUNDS: usize>() -> usize {
+        ROUNDS * 3
+    }
+
+    fn transcript_binding_round_projection_instance_row(round_index: usize) -> usize {
+        round_index * 3
+    }
+
+    fn transcript_binding_challenge_instance_row(round_index: usize) -> usize {
+        round_index * 3 + 1
+    }
+
+    fn transcript_binding_inverse_instance_row(round_index: usize) -> usize {
+        round_index * 3 + 2
+    }
+
+    fn verify_native_pasta_fp_ipa_transcript_binding<const ROUNDS: usize>(
+        circuit: pasta_tiny::NativePastaFpIpaTranscriptBinding<ROUNDS>,
+    ) -> bool {
+        let instances = native_pasta_fp_ipa_transcript_binding_instances(&circuit);
+        verify_native_pasta_fp_ipa_transcript_binding_with_instances(circuit, instances)
+    }
+
+    fn verify_native_pasta_fp_ipa_transcript_binding_with_instances<const ROUNDS: usize>(
+        circuit: pasta_tiny::NativePastaFpIpaTranscriptBinding<ROUNDS>,
+        instances: Vec<Vec<Scalar>>,
+    ) -> bool {
+        MockProver::run(7, &circuit, instances)
+            .expect("native Pasta Fp IPA transcript-binding mock prover")
+            .verify()
+            .is_ok()
+    }
+
+    fn native_pasta_fp_ipa_transcript_binding_test_scalars() -> (
+        Scalar,
+        Vec<Scalar>,
+        Vec<Scalar>,
+        Vec<Scalar>,
+        Scalar,
+        Scalar,
+    ) {
+        let header = Scalar::from(17);
+        let round_projections = vec![Scalar::from(19), Scalar::from(23), Scalar::from(29)];
+        let challenges = vec![Scalar::from(2), Scalar::from(3), Scalar::from(5)];
+        let inverses = challenges
+            .iter()
+            .map(|challenge| Option::<Scalar>::from(challenge.invert()).expect("non-zero"))
+            .collect::<Vec<_>>();
+        let final_projection = Scalar::from(31);
+        let mut state = header;
+        for round_index in 0..round_projections.len() {
+            state = pasta_tiny::native_pasta_fp_ipa_transcript_binding_round(
+                state,
+                round_projections[round_index],
+                challenges[round_index],
+                inverses[round_index],
+            );
+        }
+        let binding_digest =
+            pasta_tiny::native_pasta_fp_ipa_transcript_binding_compress(state, final_projection);
+        (
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest,
+        )
+    }
+
     fn verify_vesta_fq_canonical(circuit: pasta_tiny::NonNativeVestaFqCanonicalRange) -> bool {
         verify_vesta_fq_canonical_with_public_limbs(circuit.limbs, circuit)
     }
@@ -9949,6 +10058,108 @@ mod kagemusha_non_native_limb_circuit_tests {
         sum.to_affine()
     }
 
+    fn vesta_affine_ipa_verifier_transcript_binding_args(
+        challenges: &[Scalar],
+        challenge_inverses: &[Scalar],
+    ) -> (Scalar, Vec<Scalar>, Scalar, Scalar) {
+        assert_eq!(challenges.len(), challenge_inverses.len());
+        let header_projection = Scalar::from(17);
+        let round_projections = (0..challenges.len())
+            .map(|index| Scalar::from(19 + u64::try_from(index).expect("round index fits") * 4))
+            .collect::<Vec<_>>();
+        let final_projection = Scalar::from(31);
+        let mut state = header_projection;
+        for round_index in 0..challenges.len() {
+            state = pasta_tiny::native_pasta_fp_ipa_transcript_binding_round(
+                state,
+                round_projections[round_index],
+                challenges[round_index],
+                challenge_inverses[round_index],
+            );
+        }
+        let binding_digest = pasta_tiny::native_pasta_fp_ipa_transcript_binding_compress(
+            state,
+            final_projection,
+        );
+        (
+            header_projection,
+            round_projections,
+            final_projection,
+            binding_digest,
+        )
+    }
+
+    fn rewrite_vesta_affine_ipa_verifier_transcript_binding<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &mut pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+        challenges: Vec<Scalar>,
+        challenge_inverses: Vec<Scalar>,
+    ) {
+        assert_eq!(challenges.len(), circuit.transcript_round_projections.len());
+        assert_eq!(challenge_inverses.len(), circuit.transcript_round_projections.len());
+        circuit.transcript_challenges = challenges;
+        circuit.transcript_challenge_inverses = challenge_inverses;
+        circuit.transcript_round_states.clear();
+        let mut state = circuit.transcript_header_projection;
+        circuit.transcript_round_states.push(state);
+        for round_index in 0..circuit.transcript_round_projections.len() {
+            state = pasta_tiny::native_pasta_fp_ipa_transcript_binding_round(
+                state,
+                circuit.transcript_round_projections[round_index],
+                circuit.transcript_challenges[round_index],
+                circuit.transcript_challenge_inverses[round_index],
+            );
+            circuit.transcript_round_states.push(state);
+        }
+        circuit.transcript_binding_digest =
+            pasta_tiny::native_pasta_fp_ipa_transcript_binding_compress(
+                state,
+                circuit.transcript_final_projection,
+            );
+    }
+
+    fn vesta_affine_ipa_verifier_two_point_valid_circuit()
+    -> pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<2, 1, 1> {
+        let g_points = [vesta_generator_multiple(1), vesta_generator_multiple(2)];
+        let h_points = [vesta_generator_multiple(3), vesta_generator_multiple(4)];
+        let u = vesta_generator_multiple(1);
+        let expected_q =
+            vesta_affine_sum(&[vesta_affine_sum(&g_points), vesta_affine_sum(&h_points), u]);
+        let challenges = vec![Scalar::from(1)];
+        let inverses = vec![Scalar::from(1)];
+        let (
+            transcript_header_projection,
+            transcript_round_projections,
+            transcript_final_projection,
+            transcript_binding_digest,
+        ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
+        pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<2, 1, 1>::try_from_statement(
+            [Scalar::from(1), Scalar::from(0)],
+            challenges,
+            inverses,
+            transcript_header_projection,
+            transcript_round_projections,
+            transcript_final_projection,
+            transcript_binding_digest,
+            Scalar::from(1),
+            Scalar::from(1),
+            vec![vesta_identity_limbs()],
+            vesta_non_identity_limbs(expected_q),
+            vec![vesta_identity_limbs()],
+            g_points.map(vesta_non_identity_limbs),
+            h_points.map(vesta_non_identity_limbs),
+            vesta_non_identity_limbs(u),
+        )
+        .expect("valid one-round IPA verifier composition with transcript binding")
+    }
+
     fn vesta_affine_ipa_verifier_four_point_valid_circuit()
     -> pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<4, 1, 1> {
         let g_points = [
@@ -9966,6 +10177,14 @@ mod kagemusha_non_native_limb_circuit_tests {
         let u = vesta_generator_multiple(1);
         let expected_q =
             vesta_affine_sum(&[vesta_affine_sum(&g_points), vesta_affine_sum(&h_points), u]);
+        let challenges = vec![Scalar::from(1), Scalar::from(1)];
+        let inverses = vec![Scalar::from(1), Scalar::from(1)];
+        let (
+            transcript_header_projection,
+            transcript_round_projections,
+            transcript_final_projection,
+            transcript_binding_digest,
+        ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
         pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::try_from_statement(
             [
                 Scalar::from(1),
@@ -9973,8 +10192,12 @@ mod kagemusha_non_native_limb_circuit_tests {
                 Scalar::from(0),
                 Scalar::from(0),
             ],
-            vec![Scalar::from(1), Scalar::from(1)],
-            vec![Scalar::from(1), Scalar::from(1)],
+            challenges,
+            inverses,
+            transcript_header_projection,
+            transcript_round_projections,
+            transcript_final_projection,
+            transcript_binding_digest,
             Scalar::from(1),
             Scalar::from(1),
             vec![vesta_identity_limbs(), vesta_identity_limbs()],
@@ -9998,8 +10221,15 @@ mod kagemusha_non_native_limb_circuit_tests {
         if rounds == 0
             || circuit.b_reduction.challenges.len() != rounds
             || circuit.b_reduction.challenge_inverses.len() != rounds
+            || circuit.transcript_round_projections.len() != rounds
+            || circuit.transcript_challenges.len() != rounds
+            || circuit.transcript_challenge_inverses.len() != rounds
+            || circuit.transcript_round_states.len() != rounds + 1
             || circuit.generator_folds.len() != rounds
         {
+            return false;
+        }
+        if circuit.transcript_round_states[0] != circuit.transcript_header_projection {
             return false;
         }
 
@@ -10015,6 +10245,21 @@ mod kagemusha_non_native_limb_circuit_tests {
         for round_index in 0..rounds {
             let b_challenge = circuit.b_reduction.challenges[round_index].value;
             let b_challenge_inverse = circuit.b_reduction.challenge_inverses[round_index].value;
+            if circuit.transcript_challenges[round_index] != b_challenge
+                || circuit.transcript_challenge_inverses[round_index] != b_challenge_inverse
+            {
+                return false;
+            }
+            if circuit.transcript_round_states[round_index + 1]
+                != pasta_tiny::native_pasta_fp_ipa_transcript_binding_round(
+                    circuit.transcript_round_states[round_index],
+                    circuit.transcript_round_projections[round_index],
+                    circuit.transcript_challenges[round_index],
+                    circuit.transcript_challenge_inverses[round_index],
+                )
+            {
+                return false;
+            }
             let round = &circuit.round_accumulators[round_index];
             if b_challenge != round.challenge.value
                 || b_challenge_inverse != round.challenge_inverse.value
@@ -10028,6 +10273,17 @@ mod kagemusha_non_native_limb_circuit_tests {
                     return false;
                 }
             }
+        }
+        let Some(&last_transcript_state) = circuit.transcript_round_states.last() else {
+            return false;
+        };
+        if circuit.transcript_binding_digest
+            != pasta_tiny::native_pasta_fp_ipa_transcript_binding_compress(
+                last_transcript_state,
+                circuit.transcript_final_projection,
+            )
+        {
+            return false;
         }
 
         for round_index in 0..rounds {
@@ -10094,6 +10350,82 @@ mod kagemusha_non_native_limb_circuit_tests {
         }
 
         true
+    }
+
+    fn vesta_affine_ipa_verifier_instances<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
+    ) -> Vec<Vec<Scalar>> {
+        fn instance_at(row: usize, value: Scalar) -> Vec<Scalar> {
+            let mut values = vec![Scalar::from(0); row + 1];
+            values[row] = value;
+            values
+        }
+
+        let rounds = circuit.transcript_round_projections.len();
+        let final_row = rounds * 3;
+        let mut instances = vec![
+            instance_at(0, circuit.transcript_header_projection),
+            instance_at(final_row, circuit.transcript_final_projection),
+            instance_at(final_row, circuit.transcript_binding_digest),
+        ];
+        instances.extend(
+            circuit
+                .transcript_round_projections
+                .iter()
+                .enumerate()
+                .map(|(round_index, value)| instance_at(round_index * 3, *value)),
+        );
+        instances.extend(
+            circuit
+                .transcript_challenges
+                .iter()
+                .enumerate()
+                .map(|(round_index, value)| instance_at(round_index * 3 + 1, *value)),
+        );
+        instances.extend(
+            circuit
+                .transcript_challenge_inverses
+                .iter()
+                .enumerate()
+                .map(|(round_index, value)| instance_at(round_index * 3 + 2, *value)),
+        );
+        instances.extend(native_pasta_fp_ipa_b_vector_reduction_instances(
+            circuit.b_reduction.as_ref(),
+        ));
+        for round_accumulator in &circuit.round_accumulators {
+            instances.extend(vesta_affine_ipa_round_accumulator_instances(
+                round_accumulator,
+            ));
+        }
+        for round in &circuit.generator_folds {
+            for generator_fold in round {
+                instances.extend(vesta_affine_ipa_generator_fold_instances(
+                    generator_fold,
+                ));
+            }
+        }
+        instances.extend(vesta_affine_ipa_final_windowed_msm_instances(
+            circuit.final_msm.as_ref(),
+        ));
+        instances
+    }
+
+    fn verify_vesta_affine_ipa_verifier<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
+    ) -> bool {
+        let instances = vesta_affine_ipa_verifier_instances(&circuit);
+        MockProver::run(8, &circuit, instances)
+            .expect("non-native Vesta IPA verifier mock prover")
+            .verify()
+            .is_ok()
     }
 
     fn run_vesta_affine_ipa_verifier_test(test: impl FnOnce() + Send + 'static) {
@@ -10919,6 +11251,200 @@ mod kagemusha_non_native_limb_circuit_tests {
         circuit.vectors[2][0] = pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(aliased);
         assert_eq!(circuit.vectors[2][0].value, Scalar::from(25));
         assert!(!verify_native_pasta_fp_ipa_b_vector_reduction(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_transcript_binding_accepts_three_rounds() {
+        let (header, round_projections, challenges, inverses, final_projection, binding_digest) =
+            native_pasta_fp_ipa_transcript_binding_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaTranscriptBinding::<3>::try_from_scalars(
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest,
+        )
+        .expect("valid transcript binding");
+        assert!(verify_native_pasta_fp_ipa_transcript_binding(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_transcript_binding_rejects_round_count_builder() {
+        let (header, mut round_projections, challenges, inverses, final_projection, binding_digest) =
+            native_pasta_fp_ipa_transcript_binding_test_scalars();
+        round_projections.pop();
+        let err = pasta_tiny::NativePastaFpIpaTranscriptBinding::<3>::try_from_scalars(
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest,
+        )
+        .err()
+        .expect("builder must reject wrong round projection count");
+        assert!(err.contains("round projection count mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_transcript_binding_rejects_inverse_mismatch_builder() {
+        let (header, round_projections, challenges, mut inverses, final_projection, binding_digest) =
+            native_pasta_fp_ipa_transcript_binding_test_scalars();
+        inverses[1] = Scalar::from(1);
+        let err = pasta_tiny::NativePastaFpIpaTranscriptBinding::<3>::try_from_scalars(
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest,
+        )
+        .err()
+        .expect("builder must reject invalid challenge inverse");
+        assert!(err.contains("inverse mismatch at round 1"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_transcript_binding_rejects_digest_mismatch_builder() {
+        let (header, round_projections, challenges, inverses, final_projection, binding_digest) =
+            native_pasta_fp_ipa_transcript_binding_test_scalars();
+        let err = pasta_tiny::NativePastaFpIpaTranscriptBinding::<3>::try_from_scalars(
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest + Scalar::from(1),
+        )
+        .err()
+        .expect("builder must reject wrong binding digest");
+        assert!(err.contains("binding digest mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_transcript_binding_rejects_public_header_substitution() {
+        let (header, round_projections, challenges, inverses, final_projection, binding_digest) =
+            native_pasta_fp_ipa_transcript_binding_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaTranscriptBinding::<3>::try_from_scalars(
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest,
+        )
+        .expect("valid transcript binding");
+        let mut instances = native_pasta_fp_ipa_transcript_binding_instances(&circuit);
+        instances[0][0] += Scalar::from(1);
+        assert!(!verify_native_pasta_fp_ipa_transcript_binding_with_instances(circuit, instances));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_transcript_binding_rejects_round_projection_substitution() {
+        let (header, round_projections, challenges, inverses, final_projection, binding_digest) =
+            native_pasta_fp_ipa_transcript_binding_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaTranscriptBinding::<3>::try_from_scalars(
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest,
+        )
+        .expect("valid transcript binding");
+        let mut instances = native_pasta_fp_ipa_transcript_binding_instances(&circuit);
+        instances[3][transcript_binding_round_projection_instance_row(0)] += Scalar::from(1);
+        assert!(!verify_native_pasta_fp_ipa_transcript_binding_with_instances(circuit, instances));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_transcript_binding_rejects_public_challenge_substitution() {
+        let (header, round_projections, challenges, inverses, final_projection, binding_digest) =
+            native_pasta_fp_ipa_transcript_binding_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaTranscriptBinding::<3>::try_from_scalars(
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest,
+        )
+        .expect("valid transcript binding");
+        let mut instances = native_pasta_fp_ipa_transcript_binding_instances(&circuit);
+        instances[6][transcript_binding_challenge_instance_row(0)] += Scalar::from(1);
+        assert!(!verify_native_pasta_fp_ipa_transcript_binding_with_instances(circuit, instances));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_transcript_binding_rejects_public_inverse_substitution() {
+        let (header, round_projections, challenges, inverses, final_projection, binding_digest) =
+            native_pasta_fp_ipa_transcript_binding_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaTranscriptBinding::<3>::try_from_scalars(
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest,
+        )
+        .expect("valid transcript binding");
+        let mut instances = native_pasta_fp_ipa_transcript_binding_instances(&circuit);
+        instances[9][transcript_binding_inverse_instance_row(0)] += Scalar::from(1);
+        assert!(!verify_native_pasta_fp_ipa_transcript_binding_with_instances(circuit, instances));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_transcript_binding_rejects_final_projection_substitution() {
+        let (header, round_projections, challenges, inverses, final_projection, binding_digest) =
+            native_pasta_fp_ipa_transcript_binding_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaTranscriptBinding::<3>::try_from_scalars(
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest,
+        )
+        .expect("valid transcript binding");
+        let mut instances = native_pasta_fp_ipa_transcript_binding_instances(&circuit);
+        instances[1][transcript_binding_final_instance_row::<3>()] += Scalar::from(1);
+        assert!(!verify_native_pasta_fp_ipa_transcript_binding_with_instances(circuit, instances));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_transcript_binding_rejects_public_digest_substitution() {
+        let (header, round_projections, challenges, inverses, final_projection, binding_digest) =
+            native_pasta_fp_ipa_transcript_binding_test_scalars();
+        let circuit = pasta_tiny::NativePastaFpIpaTranscriptBinding::<3>::try_from_scalars(
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest,
+        )
+        .expect("valid transcript binding");
+        let mut instances = native_pasta_fp_ipa_transcript_binding_instances(&circuit);
+        instances[2][transcript_binding_final_instance_row::<3>()] += Scalar::from(1);
+        assert!(!verify_native_pasta_fp_ipa_transcript_binding_with_instances(circuit, instances));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_ipa_transcript_binding_rejects_intermediate_state_tamper() {
+        let (header, round_projections, challenges, inverses, final_projection, binding_digest) =
+            native_pasta_fp_ipa_transcript_binding_test_scalars();
+        let mut circuit = pasta_tiny::NativePastaFpIpaTranscriptBinding::<3>::try_from_scalars(
+            header,
+            round_projections,
+            challenges,
+            inverses,
+            final_projection,
+            binding_digest,
+        )
+        .expect("valid transcript binding");
+        circuit.round_states[1] += Scalar::from(1);
+        assert!(!verify_native_pasta_fp_ipa_transcript_binding(circuit));
     }
 
     #[test]
@@ -13385,8 +13911,40 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
-    fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_rejects_final_b_mismatch() {
+    fn kagemusha_non_native_vesta_ipa_verifier_two_point_accepts_transcript_bound_circuit() {
         run_vesta_affine_ipa_verifier_test(|| {
+            let circuit = vesta_affine_ipa_verifier_two_point_valid_circuit();
+            assert!(vesta_affine_ipa_verifier_host_links_hold(&circuit));
+            assert!(verify_vesta_affine_ipa_verifier(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_rejects_transcript_challenge_splice() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_two_point_valid_circuit();
+            let challenge = Scalar::from(2);
+            rewrite_vesta_affine_ipa_verifier_transcript_binding(
+                &mut circuit,
+                vec![challenge],
+                vec![scalar_inverse(challenge)],
+            );
+            assert!(!vesta_affine_ipa_verifier_host_links_hold(&circuit));
+            assert!(!verify_vesta_affine_ipa_verifier(circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_builder_rejects_transcript_digest_mismatch() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let challenges = vec![Scalar::from(1), Scalar::from(1)];
+            let inverses = vec![Scalar::from(1), Scalar::from(1)];
+            let (
+                transcript_header_projection,
+                transcript_round_projections,
+                transcript_final_projection,
+                transcript_binding_digest,
+            ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
             let err =
                 pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::try_from_statement(
                     [
@@ -13395,8 +13953,52 @@ mod kagemusha_non_native_limb_circuit_tests {
                         Scalar::from(0),
                         Scalar::from(0),
                     ],
-                    vec![Scalar::from(1), Scalar::from(1)],
-                    vec![Scalar::from(1), Scalar::from(1)],
+                    challenges,
+                    inverses,
+                    transcript_header_projection,
+                    transcript_round_projections,
+                    transcript_final_projection,
+                    transcript_binding_digest + Scalar::from(1),
+                    Scalar::from(1),
+                    Scalar::from(1),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    vesta_identity_limbs(),
+                    vec![vesta_identity_limbs(), vesta_identity_limbs()],
+                    [vesta_identity_limbs(); 4],
+                    [vesta_identity_limbs(); 4],
+                    vesta_identity_limbs(),
+                )
+                .err()
+                .expect("builder must reject mismatched transcript binding digest");
+            assert!(err.contains("binding digest mismatch"));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_rejects_final_b_mismatch() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let challenges = vec![Scalar::from(1), Scalar::from(1)];
+            let inverses = vec![Scalar::from(1), Scalar::from(1)];
+            let (
+                transcript_header_projection,
+                transcript_round_projections,
+                transcript_final_projection,
+                transcript_binding_digest,
+            ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
+            let err =
+                pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::try_from_statement(
+                    [
+                        Scalar::from(1),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                        Scalar::from(0),
+                    ],
+                    challenges,
+                    inverses,
+                    transcript_header_projection,
+                    transcript_round_projections,
+                    transcript_final_projection,
+                    transcript_binding_digest,
                     Scalar::from(1),
                     Scalar::from(0),
                     vec![vesta_identity_limbs(), vesta_identity_limbs()],
@@ -13415,6 +14017,14 @@ mod kagemusha_non_native_limb_circuit_tests {
     #[test]
     fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_rejects_round_count_mismatch() {
         run_vesta_affine_ipa_verifier_test(|| {
+            let challenges = vec![Scalar::from(1), Scalar::from(1)];
+            let inverses = vec![Scalar::from(1), Scalar::from(1)];
+            let (
+                transcript_header_projection,
+                transcript_round_projections,
+                transcript_final_projection,
+                transcript_binding_digest,
+            ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
             let err =
                 pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::try_from_statement(
                     [
@@ -13423,8 +14033,12 @@ mod kagemusha_non_native_limb_circuit_tests {
                         Scalar::from(0),
                         Scalar::from(0),
                     ],
-                    vec![Scalar::from(1), Scalar::from(1)],
-                    vec![Scalar::from(1), Scalar::from(1)],
+                    challenges,
+                    inverses,
+                    transcript_header_projection,
+                    transcript_round_projections,
+                    transcript_final_projection,
+                    transcript_binding_digest,
                     Scalar::from(1),
                     Scalar::from(1),
                     vec![vesta_identity_limbs()],
@@ -13445,6 +14059,14 @@ mod kagemusha_non_native_limb_circuit_tests {
         run_vesta_affine_ipa_verifier_test(|| {
             let challenge = Scalar::from(2);
             let inverse = scalar_inverse(challenge);
+            let challenges = vec![challenge, Scalar::from(1)];
+            let inverses = vec![inverse, Scalar::from(1)];
+            let (
+                transcript_header_projection,
+                transcript_round_projections,
+                transcript_final_projection,
+                transcript_binding_digest,
+            ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
             let err =
                 pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<4, 1, 1>::try_from_statement(
                     [
@@ -13453,8 +14075,12 @@ mod kagemusha_non_native_limb_circuit_tests {
                         Scalar::from(0),
                         Scalar::from(0),
                     ],
-                    vec![challenge, Scalar::from(1)],
-                    vec![inverse, Scalar::from(1)],
+                    challenges,
+                    inverses,
+                    transcript_header_projection,
+                    transcript_round_projections,
+                    transcript_final_projection,
+                    transcript_binding_digest,
                     Scalar::from(1),
                     inverse,
                     vec![vesta_identity_limbs(), vesta_identity_limbs()],
@@ -18851,6 +19477,531 @@ mod pasta_tiny {
                         assign_native_pasta_fp_scalar_region(&mut region, config, witness, true)?;
                     }
                     Ok(())
+                },
+            )
+        }
+    }
+
+    fn transcript_binding_pow5(value: Scalar) -> Scalar {
+        let square = value * value;
+        square * square * value
+    }
+
+    /// Native helper for the IPA transcript-binding Pow5 compressor.
+    #[must_use]
+    pub fn native_pasta_fp_ipa_transcript_binding_compress(left: Scalar, right: Scalar) -> Scalar {
+        Scalar::from(2) * transcript_binding_pow5(left + Scalar::from(7))
+            + Scalar::from(3) * transcript_binding_pow5(right + Scalar::from(13))
+    }
+
+    /// Native helper for one IPA transcript-binding round.
+    #[must_use]
+    pub fn native_pasta_fp_ipa_transcript_binding_round(
+        state: Scalar,
+        round_projection: Scalar,
+        challenge: Scalar,
+        challenge_inverse: Scalar,
+    ) -> Scalar {
+        let after_round = native_pasta_fp_ipa_transcript_binding_compress(state, round_projection);
+        let after_challenge =
+            native_pasta_fp_ipa_transcript_binding_compress(after_round, challenge);
+        native_pasta_fp_ipa_transcript_binding_compress(after_challenge, challenge_inverse)
+    }
+
+    /// Config for the native-field IPA transcript-binding accumulator.
+    #[derive(Clone)]
+    pub struct NativePastaFpIpaTranscriptBindingConfig {
+        left: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        right: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        out: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        left_square: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        left_quad: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        right_square: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        right_quad: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        compress: Selector,
+        inverse: Selector,
+        chain: Selector,
+        header_public: Selector,
+        final_projection_public: Selector,
+        binding_digest_public: Selector,
+        round_projection_public: Vec<Selector>,
+        challenge_public: Vec<Selector>,
+        challenge_inverse_public: Vec<Selector>,
+    }
+
+    /// Circuit wrapper binding projected IPA transcript metadata to challenges.
+    ///
+    /// The exact SHA3 transcript projection is validated by the host-side IPA
+    /// verifier. This circuit consumes field projections of that verified
+    /// transcript and enforces a transparent Pow5 accumulator over
+    /// `(round_projection, challenge, challenge_inverse)` for each round, plus
+    /// the final projection scalar. It gives recursive wrappers a compact
+    /// public binding for the challenges they use internally without requiring
+    /// an in-circuit SHA3 implementation.
+    #[derive(Clone)]
+    pub struct NativePastaFpIpaTranscriptBinding<const ROUNDS: usize> {
+        /// Scalar projection of the verified transcript header.
+        pub header_projection: Scalar,
+        /// Scalar projections of each verified transcript round.
+        pub round_projections: Vec<Scalar>,
+        /// Per-round public challenge scalars.
+        pub challenges: Vec<Scalar>,
+        /// Per-round public challenge inverse scalars.
+        pub challenge_inverses: Vec<Scalar>,
+        /// Scalar projection of the verified final transcript state.
+        pub final_projection: Scalar,
+        /// Public binding digest expected after all rounds.
+        pub binding_digest: Scalar,
+        /// Private accumulator states before every round and after the last round.
+        pub round_states: Vec<Scalar>,
+    }
+
+    impl<const ROUNDS: usize> Default for NativePastaFpIpaTranscriptBinding<ROUNDS> {
+        fn default() -> Self {
+            Self {
+                header_projection: Scalar::from(0),
+                round_projections: vec![Scalar::from(0); ROUNDS],
+                challenges: vec![Scalar::from(0); ROUNDS],
+                challenge_inverses: vec![Scalar::from(0); ROUNDS],
+                final_projection: Scalar::from(0),
+                binding_digest: Scalar::from(0),
+                round_states: vec![Scalar::from(0); ROUNDS + 1],
+            }
+        }
+    }
+
+    impl<const ROUNDS: usize> NativePastaFpIpaTranscriptBinding<ROUNDS> {
+        /// Build an honest transcript-binding accumulator witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when no rounds are requested, input vector lengths
+        /// do not match `ROUNDS`, a challenge inverse is invalid, or the supplied
+        /// binding digest is not the accumulator output.
+        pub fn try_from_scalars(
+            header_projection: Scalar,
+            round_projections: Vec<Scalar>,
+            challenges: Vec<Scalar>,
+            challenge_inverses: Vec<Scalar>,
+            final_projection: Scalar,
+            binding_digest: Scalar,
+        ) -> Result<Self, String> {
+            let round_states = native_pasta_fp_ipa_transcript_binding_round_states(
+                ROUNDS,
+                header_projection,
+                &round_projections,
+                &challenges,
+                &challenge_inverses,
+                final_projection,
+                binding_digest,
+            )?;
+
+            Ok(Self {
+                header_projection,
+                round_projections,
+                challenges,
+                challenge_inverses,
+                final_projection,
+                binding_digest,
+                round_states,
+            })
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn native_pasta_fp_ipa_transcript_binding_round_states(
+        rounds: usize,
+        header_projection: Scalar,
+        round_projections: &[Scalar],
+        challenges: &[Scalar],
+        challenge_inverses: &[Scalar],
+        final_projection: Scalar,
+        binding_digest: Scalar,
+    ) -> Result<Vec<Scalar>, String> {
+        if rounds == 0 {
+            return Err("IPA transcript binding must contain at least one round".to_owned());
+        }
+        if round_projections.len() != rounds {
+            return Err(format!(
+                "IPA transcript binding round projection count mismatch: expected {rounds}, found {}",
+                round_projections.len()
+            ));
+        }
+        if challenges.len() != rounds {
+            return Err(format!(
+                "IPA transcript binding challenge count mismatch: expected {rounds}, found {}",
+                challenges.len()
+            ));
+        }
+        if challenge_inverses.len() != rounds {
+            return Err(format!(
+                "IPA transcript binding inverse count mismatch: expected {rounds}, found {}",
+                challenge_inverses.len()
+            ));
+        }
+
+        let mut round_states = Vec::with_capacity(rounds + 1);
+        let mut state = header_projection;
+        round_states.push(state);
+        for round_index in 0..rounds {
+            if challenges[round_index] * challenge_inverses[round_index] != Scalar::from(1) {
+                return Err(format!(
+                    "IPA transcript binding challenge inverse mismatch at round {round_index}"
+                ));
+            }
+            state = native_pasta_fp_ipa_transcript_binding_round(
+                state,
+                round_projections[round_index],
+                challenges[round_index],
+                challenge_inverses[round_index],
+            );
+            round_states.push(state);
+        }
+        let expected_binding =
+            native_pasta_fp_ipa_transcript_binding_compress(state, final_projection);
+        if binding_digest != expected_binding {
+            return Err("IPA transcript binding digest mismatch".to_owned());
+        }
+        Ok(round_states)
+    }
+
+    fn configure_native_pasta_fp_ipa_transcript_binding<const ROUNDS: usize>(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NativePastaFpIpaTranscriptBindingConfig {
+        configure_native_pasta_fp_ipa_transcript_binding_with_rounds(meta, ROUNDS)
+    }
+
+    fn configure_native_pasta_fp_ipa_transcript_binding_with_rounds(
+        meta: &mut ConstraintSystem<Scalar>,
+        rounds: usize,
+    ) -> NativePastaFpIpaTranscriptBindingConfig {
+        assert!(
+            rounds > 0,
+            "IPA transcript binding must contain at least one round"
+        );
+        let left = meta.advice_column();
+        let right = meta.advice_column();
+        let out = meta.advice_column();
+        meta.enable_equality(left);
+        meta.enable_equality(right);
+        meta.enable_equality(out);
+        let left_square = meta.advice_column();
+        let left_quad = meta.advice_column();
+        let right_square = meta.advice_column();
+        let right_quad = meta.advice_column();
+        let header_instance = meta.instance_column();
+        let final_projection_instance = meta.instance_column();
+        let binding_digest_instance = meta.instance_column();
+        let round_projection_instances = (0..rounds)
+            .map(|_| meta.instance_column())
+            .collect::<Vec<_>>();
+        let challenge_instances = (0..rounds)
+            .map(|_| meta.instance_column())
+            .collect::<Vec<_>>();
+        let challenge_inverse_instances = (0..rounds)
+            .map(|_| meta.instance_column())
+            .collect::<Vec<_>>();
+        let compress = meta.selector();
+        let inverse = meta.selector();
+        let chain = meta.selector();
+        let header_public = meta.selector();
+        let final_projection_public = meta.selector();
+        let binding_digest_public = meta.selector();
+        let round_projection_public = (0..rounds).map(|_| meta.selector()).collect::<Vec<_>>();
+        let challenge_public = (0..rounds).map(|_| meta.selector()).collect::<Vec<_>>();
+        let challenge_inverse_public = (0..rounds).map(|_| meta.selector()).collect::<Vec<_>>();
+
+        meta.create_gate("native_pasta_fp_ipa_transcript_binding_compress", |meta| {
+            let s = meta.query_selector(compress);
+            let left_value = meta.query_advice(left, Rotation::cur());
+            let right_value = meta.query_advice(right, Rotation::cur());
+            let out_value = meta.query_advice(out, Rotation::cur());
+            let left_square_value = meta.query_advice(left_square, Rotation::cur());
+            let left_quad_value = meta.query_advice(left_quad, Rotation::cur());
+            let right_square_value = meta.query_advice(right_square, Rotation::cur());
+            let right_quad_value = meta.query_advice(right_quad, Rotation::cur());
+            let shifted_left = left_value + Expression::Constant(Scalar::from(7));
+            let shifted_right = right_value + Expression::Constant(Scalar::from(13));
+            vec![
+                s.clone()
+                    * (left_square_value.clone() - shifted_left.clone() * shifted_left.clone()),
+                s.clone()
+                    * (left_quad_value.clone() - left_square_value.clone() * left_square_value),
+                s.clone()
+                    * (right_square_value.clone() - shifted_right.clone() * shifted_right.clone()),
+                s.clone()
+                    * (right_quad_value.clone() - right_square_value.clone() * right_square_value),
+                s * (out_value
+                    - Expression::Constant(Scalar::from(2)) * left_quad_value * shifted_left
+                    - Expression::Constant(Scalar::from(3)) * right_quad_value * shifted_right),
+            ]
+        });
+
+        meta.create_gate("native_pasta_fp_ipa_transcript_binding_inverse", |meta| {
+            let s = meta.query_selector(inverse);
+            let challenge = meta.query_advice(right, Rotation::cur());
+            let challenge_inverse = meta.query_advice(right, Rotation::next());
+            vec![s * (challenge * challenge_inverse - Expression::Constant(Scalar::from(1)))]
+        });
+
+        meta.create_gate("native_pasta_fp_ipa_transcript_binding_chain", |meta| {
+            let s = meta.query_selector(chain);
+            let out_value = meta.query_advice(out, Rotation::cur());
+            let next_left = meta.query_advice(left, Rotation::next());
+            vec![s * (out_value - next_left)]
+        });
+
+        meta.create_gate("native_pasta_fp_ipa_transcript_binding_public", |meta| {
+            let left_value = meta.query_advice(left, Rotation::cur());
+            let right_value = meta.query_advice(right, Rotation::cur());
+            let out_value = meta.query_advice(out, Rotation::cur());
+            let mut constraints = Vec::with_capacity(3 + 3 * rounds);
+            constraints.push(
+                meta.query_selector(header_public)
+                    * (left_value - meta.query_instance(header_instance, Rotation::cur())),
+            );
+            constraints.push(
+                meta.query_selector(final_projection_public)
+                    * (right_value.clone()
+                        - meta.query_instance(final_projection_instance, Rotation::cur())),
+            );
+            constraints.push(
+                meta.query_selector(binding_digest_public)
+                    * (out_value - meta.query_instance(binding_digest_instance, Rotation::cur())),
+            );
+            for round_index in 0..rounds {
+                constraints.push(
+                    meta.query_selector(round_projection_public[round_index])
+                        * (right_value.clone()
+                            - meta.query_instance(
+                                round_projection_instances[round_index],
+                                Rotation::cur(),
+                            )),
+                );
+                constraints.push(
+                    meta.query_selector(challenge_public[round_index])
+                        * (right_value.clone()
+                            - meta
+                                .query_instance(challenge_instances[round_index], Rotation::cur())),
+                );
+                constraints.push(
+                    meta.query_selector(challenge_inverse_public[round_index])
+                        * (right_value.clone()
+                            - meta.query_instance(
+                                challenge_inverse_instances[round_index],
+                                Rotation::cur(),
+                            )),
+                );
+            }
+            constraints
+        });
+
+        NativePastaFpIpaTranscriptBindingConfig {
+            left,
+            right,
+            out,
+            left_square,
+            left_quad,
+            right_square,
+            right_quad,
+            compress,
+            inverse,
+            chain,
+            header_public,
+            final_projection_public,
+            binding_digest_public,
+            round_projection_public,
+            challenge_public,
+            challenge_inverse_public,
+        }
+    }
+
+    fn assign_transcript_binding_compress_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NativePastaFpIpaTranscriptBindingConfig,
+        row: usize,
+        left_value: Scalar,
+        right_value: Scalar,
+        out_value: Scalar,
+    ) -> Result<(), PlonkError> {
+        config.compress.enable(region, row)?;
+        let shifted_left = left_value + Scalar::from(7);
+        let shifted_right = right_value + Scalar::from(13);
+        let left_square = shifted_left * shifted_left;
+        let left_quad = left_square * left_square;
+        let right_square = shifted_right * shifted_right;
+        let right_quad = right_square * right_square;
+        crate::zk::assign_advice_compat(
+            region,
+            || "transcript_binding_left",
+            config.left,
+            row,
+            || Value::known(left_value),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "transcript_binding_right",
+            config.right,
+            row,
+            || Value::known(right_value),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "transcript_binding_out",
+            config.out,
+            row,
+            || Value::known(out_value),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "transcript_binding_left_square",
+            config.left_square,
+            row,
+            || Value::known(left_square),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "transcript_binding_left_quad",
+            config.left_quad,
+            row,
+            || Value::known(left_quad),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "transcript_binding_right_square",
+            config.right_square,
+            row,
+            || Value::known(right_square),
+        )?;
+        crate::zk::assign_advice_compat(
+            region,
+            || "transcript_binding_right_quad",
+            config.right_quad,
+            row,
+            || Value::known(right_quad),
+        )?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn assign_native_pasta_fp_ipa_transcript_binding_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NativePastaFpIpaTranscriptBindingConfig,
+        header_projection: Scalar,
+        round_projections: &[Scalar],
+        challenges: &[Scalar],
+        challenge_inverses: &[Scalar],
+        final_projection: Scalar,
+        binding_digest: Scalar,
+        round_states: &[Scalar],
+    ) -> Result<(), PlonkError> {
+        let rounds = config.round_projection_public.len();
+        if round_projections.len() != rounds
+            || challenges.len() != rounds
+            || challenge_inverses.len() != rounds
+            || round_states.len() != rounds + 1
+        {
+            return Err(PlonkError::Synthesis);
+        }
+        if round_states[0] != header_projection {
+            return Err(PlonkError::Synthesis);
+        }
+
+        for round_index in 0..rounds {
+            let base_row = round_index * 3;
+            let state = round_states[round_index];
+            let round_projection = round_projections[round_index];
+            let challenge = challenges[round_index];
+            let challenge_inverse = challenge_inverses[round_index];
+            let after_round =
+                native_pasta_fp_ipa_transcript_binding_compress(state, round_projection);
+            let after_challenge =
+                native_pasta_fp_ipa_transcript_binding_compress(after_round, challenge);
+            let next_state = round_states[round_index + 1];
+
+            assign_transcript_binding_compress_region(
+                region,
+                config,
+                base_row,
+                state,
+                round_projection,
+                after_round,
+            )?;
+            config.chain.enable(region, base_row)?;
+            config.round_projection_public[round_index].enable(region, base_row)?;
+            if round_index == 0 {
+                config.header_public.enable(region, base_row)?;
+            }
+
+            assign_transcript_binding_compress_region(
+                region,
+                config,
+                base_row + 1,
+                after_round,
+                challenge,
+                after_challenge,
+            )?;
+            config.chain.enable(region, base_row + 1)?;
+            config.inverse.enable(region, base_row + 1)?;
+            config.challenge_public[round_index].enable(region, base_row + 1)?;
+
+            assign_transcript_binding_compress_region(
+                region,
+                config,
+                base_row + 2,
+                after_challenge,
+                challenge_inverse,
+                next_state,
+            )?;
+            config.chain.enable(region, base_row + 2)?;
+            config.challenge_inverse_public[round_index].enable(region, base_row + 2)?;
+        }
+
+        let final_row = rounds * 3;
+        let final_state = round_states[rounds];
+        assign_transcript_binding_compress_region(
+            region,
+            config,
+            final_row,
+            final_state,
+            final_projection,
+            binding_digest,
+        )?;
+        config.final_projection_public.enable(region, final_row)?;
+        config.binding_digest_public.enable(region, final_row)?;
+        Ok(())
+    }
+
+    impl<const ROUNDS: usize> Circuit<Scalar> for NativePastaFpIpaTranscriptBinding<ROUNDS> {
+        type Config = NativePastaFpIpaTranscriptBindingConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_native_pasta_fp_ipa_transcript_binding::<ROUNDS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "native_pasta_fp_ipa_transcript_binding",
+                |mut region| {
+                    assign_native_pasta_fp_ipa_transcript_binding_region(
+                        &mut region,
+                        &config,
+                        self.header_projection,
+                        &self.round_projections,
+                        &self.challenges,
+                        &self.challenge_inverses,
+                        self.final_projection,
+                        self.binding_digest,
+                        &self.round_states,
+                    )
                 },
             )
         }
@@ -26680,6 +27831,7 @@ mod pasta_tiny {
     /// Config for a multi-round composed IPA verifier slice.
     #[derive(Clone)]
     pub struct NonNativeVestaIpaVerifierNativeScalarConfig {
+        transcript_binding: NativePastaFpIpaTranscriptBindingConfig,
         b_reduction: NativePastaFpIpaBVectorReductionConfig,
         round_accumulators: Vec<NonNativeVestaIpaRoundAccumulatorNativeScalarConfig>,
         generator_folds: Vec<Vec<NonNativeVestaIpaGeneratorFoldNativeScalarConfig>>,
@@ -26694,13 +27846,30 @@ mod pasta_tiny {
     /// public `b`-vector reduction, the round accumulator update, and every
     /// `G/H` generator fold in that round. It also links `Q`, `G`, and `H`
     /// outputs from each round into the next round, and links the last folded
-    /// values into the final IPA MSM comparison.
+    /// values into the final IPA MSM comparison. A field-friendly transcript
+    /// binding accumulator is composed into the same circuit so those shared
+    /// challenge values are bound to the native verifier's SHA3-validated
+    /// transcript projection without implementing SHA3 in-circuit.
     #[derive(Clone)]
     pub struct NonNativeVestaIpaVerifierNativeScalar<
         const LEN: usize,
         const WINDOWS: usize,
         const WINDOW_BITS: usize,
     > {
+        /// Scalar projection of the verified IPA transcript header.
+        pub transcript_header_projection: Scalar,
+        /// Scalar projections of each verified IPA transcript round.
+        pub transcript_round_projections: Vec<Scalar>,
+        /// Transcript challenge scalars consumed by the binding accumulator.
+        pub transcript_challenges: Vec<Scalar>,
+        /// Transcript challenge inverse scalars consumed by the binding accumulator.
+        pub transcript_challenge_inverses: Vec<Scalar>,
+        /// Scalar projection of the verified final transcript state.
+        pub transcript_final_projection: Scalar,
+        /// Public digest of the transcript-binding accumulator.
+        pub transcript_binding_digest: Scalar,
+        /// Private transcript-binding accumulator states.
+        pub transcript_round_states: Vec<Scalar>,
         /// Public `b`-vector reduction from `LEN` inputs to one final scalar.
         pub b_reduction: Box<NativePastaFpIpaBVectorReduction<LEN>>,
         /// Per-round accumulator update witnesses.
@@ -26729,6 +27898,13 @@ mod pasta_tiny {
                 layer_len = half;
             }
             Self {
+                transcript_header_projection: Scalar::from(0),
+                transcript_round_projections: vec![Scalar::from(0); rounds],
+                transcript_challenges: vec![Scalar::from(0); rounds],
+                transcript_challenge_inverses: vec![Scalar::from(0); rounds],
+                transcript_final_projection: Scalar::from(0),
+                transcript_binding_digest: Scalar::from(0),
+                transcript_round_states: vec![Scalar::from(0); rounds + 1],
                 b_reduction: Box::new(NativePastaFpIpaBVectorReduction::default()),
                 round_accumulators: vec![
                     NonNativeVestaIpaRoundAccumulatorNativeScalar::default();
@@ -26756,6 +27932,10 @@ mod pasta_tiny {
             b_initial: [Scalar; LEN],
             challenges: Vec<Scalar>,
             challenge_inverses: Vec<Scalar>,
+            transcript_header_projection: Scalar,
+            transcript_round_projections: Vec<Scalar>,
+            transcript_final_projection: Scalar,
+            transcript_binding_digest: Scalar,
             a_final: Scalar,
             b_final: Scalar,
             l_vec: Vec<VestaPointEncoding>,
@@ -26780,6 +27960,17 @@ mod pasta_tiny {
                     challenge_inverses.len()
                 ));
             }
+            let transcript_challenges = challenges.clone();
+            let transcript_challenge_inverses = challenge_inverses.clone();
+            let transcript_round_states = native_pasta_fp_ipa_transcript_binding_round_states(
+                rounds,
+                transcript_header_projection,
+                &transcript_round_projections,
+                &transcript_challenges,
+                &transcript_challenge_inverses,
+                transcript_final_projection,
+                transcript_binding_digest,
+            )?;
             if l_vec.len() != rounds {
                 return Err(format!(
                     "IPA verifier L round count mismatch: expected {rounds}, found {}",
@@ -26873,6 +28064,13 @@ mod pasta_tiny {
                 )?;
 
             Ok(Self {
+                transcript_header_projection,
+                transcript_round_projections,
+                transcript_challenges,
+                transcript_challenge_inverses,
+                transcript_final_projection,
+                transcript_binding_digest,
+                transcript_round_states,
                 b_reduction: Box::new(b_reduction),
                 round_accumulators,
                 generator_folds,
@@ -26890,6 +28088,8 @@ mod pasta_tiny {
     ) -> NonNativeVestaIpaVerifierNativeScalarConfig {
         let rounds = ipa_power_of_two_rounds(LEN)
             .expect("IPA verifier length must be a power of two greater than one");
+        let transcript_binding =
+            configure_native_pasta_fp_ipa_transcript_binding_with_rounds(meta, rounds);
         let b_reduction = configure_native_pasta_fp_ipa_b_vector_reduction::<LEN>(meta);
         let round_accumulators =
             (0..rounds)
@@ -26936,6 +28136,18 @@ mod pasta_tiny {
                 let b_challenge_inverse = meta.query_advice(
                     b_reduction.challenge_inverses[round_index].value,
                     Rotation::cur(),
+                );
+                let transcript_challenge = meta.query_advice(
+                    transcript_binding.right,
+                    Rotation((round_index * 3 + 1) as i32),
+                );
+                let transcript_challenge_inverse = meta.query_advice(
+                    transcript_binding.right,
+                    Rotation((round_index * 3 + 2) as i32),
+                );
+                constraints.push(s.clone() * (b_challenge.clone() - transcript_challenge));
+                constraints.push(
+                    s.clone() * (b_challenge_inverse.clone() - transcript_challenge_inverse),
                 );
                 let round_challenge = meta.query_advice(
                     round_accumulators[round_index].challenge.value,
@@ -27077,6 +28289,7 @@ mod pasta_tiny {
         });
 
         NonNativeVestaIpaVerifierNativeScalarConfig {
+            transcript_binding,
             b_reduction,
             round_accumulators,
             generator_folds,
@@ -27107,6 +28320,18 @@ mod pasta_tiny {
                 || "non_native_vesta_ipa_verifier_native_scalar",
                 |mut region| {
                     config.link.enable(&mut region, 0)?;
+
+                    assign_native_pasta_fp_ipa_transcript_binding_region(
+                        &mut region,
+                        &config.transcript_binding,
+                        self.transcript_header_projection,
+                        &self.transcript_round_projections,
+                        &self.transcript_challenges,
+                        &self.transcript_challenge_inverses,
+                        self.transcript_final_projection,
+                        self.transcript_binding_digest,
+                        &self.transcript_round_states,
+                    )?;
 
                     let final_b_layer = config.b_reduction.vectors.len().saturating_sub(1);
                     for (layer_index, (witness_layer, config_layer)) in self
