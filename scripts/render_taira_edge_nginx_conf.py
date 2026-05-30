@@ -261,6 +261,54 @@ def _render_soradns_proxy_location(upstream: str) -> list[str]:
     ]
 
 
+def _render_connect_stateful_locations(
+    connect_upstream: str,
+    *,
+    host_expr: str,
+    forwarded_host_expr: str,
+) -> list[str]:
+    lines = [
+        "  # IrohaConnect session tokens and MCP Connect tools are node-local; keep",
+        "  # session creation, management/status, and websocket authorization on one Torii process.",
+    ]
+    for location in (
+        _render_exact_proxy_location(
+            "/v1/connect/session",
+            connect_upstream,
+            host_expr=host_expr,
+            forwarded_host_expr=forwarded_host_expr,
+        ),
+        _render_prefix_proxy_location(
+            "/v1/connect/session/",
+            connect_upstream,
+            host_expr=host_expr,
+            forwarded_host_expr=forwarded_host_expr,
+        ),
+        _render_exact_proxy_location(
+            "/v1/connect/status",
+            connect_upstream,
+            host_expr=host_expr,
+            forwarded_host_expr=forwarded_host_expr,
+        ),
+        _render_exact_proxy_location(
+            "/v1/connect/ws",
+            connect_upstream,
+            host_expr=host_expr,
+            websocket=True,
+            forwarded_host_expr=forwarded_host_expr,
+        ),
+        _render_exact_proxy_location(
+            "/v1/mcp",
+            connect_upstream,
+            host_expr=host_expr,
+            forwarded_host_expr=forwarded_host_expr,
+        ),
+    ):
+        lines.extend(location)
+        lines.append("")
+    return lines
+
+
 def render_edge_nginx_conf(
     validators: list[EdgeValidator],
     *,
@@ -366,49 +414,12 @@ def render_edge_nginx_conf(
         ]
     )
     lines.extend(
-        [
-            "  # IrohaConnect session tokens are node-local; keep session creation and websocket",
-            "  # authorization on the same Torii process.",
-        ]
-    )
-    lines.extend(
-        _render_exact_proxy_location(
-            "/v1/connect/session",
+        _render_connect_stateful_locations(
             connect_upstream,
             host_expr=public_upstream_host,
             forwarded_host_expr="$host",
         )
     )
-    lines.append("")
-    lines.extend(
-        _render_prefix_proxy_location(
-            "/v1/connect/session/",
-            connect_upstream,
-            host_expr=public_upstream_host,
-            forwarded_host_expr="$host",
-        )
-    )
-    lines.append("")
-    lines.extend(
-        _render_exact_proxy_location(
-            "/v1/connect/ws",
-            connect_upstream,
-            host_expr=public_upstream_host,
-            websocket=True,
-            forwarded_host_expr="$host",
-        )
-    )
-    lines.append("")
-    lines.extend(
-        _render_exact_proxy_location(
-            "/v1/mcp",
-            "taira_public_edge_upstream",
-            host_expr=public_upstream_host,
-            retry_non_idempotent=True,
-            forwarded_host_expr="$host",
-        )
-    )
-    lines.append("")
     for path in ("/v1/app-api/", "/v1/sorafs/storage/", "/v1/sorafs/pin/", "/v1/sorafs/cid/", "/sorafs/cid/"):
         lines.extend(
             _render_prefix_proxy_location(
@@ -603,49 +614,12 @@ def render_edge_nginx_conf(
         ]
     )
     lines.extend(
-        [
-            "  # IrohaConnect session tokens are node-local; keep session creation and websocket",
-            "  # authorization on the same Torii process.",
-        ]
-    )
-    lines.extend(
-        _render_exact_proxy_location(
-            "/v1/connect/session",
+        _render_connect_stateful_locations(
             connect_upstream,
             host_expr=public_upstream_host,
             forwarded_host_expr=public_host,
         )
     )
-    lines.append("")
-    lines.extend(
-        _render_prefix_proxy_location(
-            "/v1/connect/session/",
-            connect_upstream,
-            host_expr=public_upstream_host,
-            forwarded_host_expr=public_host,
-        )
-    )
-    lines.append("")
-    lines.extend(
-        _render_exact_proxy_location(
-            "/v1/connect/ws",
-            connect_upstream,
-            host_expr=public_upstream_host,
-            websocket=True,
-            forwarded_host_expr=public_host,
-        )
-    )
-    lines.append("")
-    lines.extend(
-        _render_exact_proxy_location(
-            "/v1/mcp",
-            "taira_public_edge_upstream",
-            host_expr=public_upstream_host,
-            retry_non_idempotent=True,
-            forwarded_host_expr=public_host,
-        )
-    )
-    lines.append("")
     lines.extend(
         _render_prefix_proxy_location(
             "/v1/",

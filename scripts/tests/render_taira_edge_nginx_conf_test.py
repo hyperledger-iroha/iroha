@@ -18,6 +18,15 @@ EXAMPLE_ROSTER_PATH = REPO_ROOT / "configs/soranexus/taira/validator_roster.exam
 CHECKED_IN_EXAMPLE_PATH = REPO_ROOT / "configs/soranexus/taira/taira-explorer.nginx.conf"
 
 
+def _location_block(server: str, marker: str) -> str:
+    start = server.index(marker)
+    rest = server[start:]
+    next_location = rest.find("\n  location ", len(marker))
+    if next_location == -1:
+        return rest
+    return rest[:next_location]
+
+
 def _write_roster(path: Path, *, torii_address: str = "0.0.0.0:18080", include_edge_upstreams: bool = True) -> None:
     parts = [f'torii_address = "{torii_address}"', ""]
     for index in range(1, 5):
@@ -141,11 +150,20 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     public_server = rendered.split("server_name taira.sora.org;", 1)[1].split(
         "server_name mon.taira.sora.net;", 1
     )[0]
-    assert "location = /v1/connect/ws" in public_server
-    assert "proxy_pass http://taira_validator_2_upstream;" in public_server
-    assert "proxy_next_upstream" not in public_server.split("location = /v1/connect/ws", 1)[1].split(
-        "location = /v1/mcp", 1
+    explorer_server = rendered.split("server_name taira-explorer.sora.org;", 1)[1].split(
+        "server_name taira-validator-1.sora.org;", 1
     )[0]
+    for server in (public_server, explorer_server):
+        for marker in (
+            "location = /v1/connect/session",
+            "location ^~ /v1/connect/session/",
+            "location = /v1/connect/status",
+            "location = /v1/connect/ws",
+            "location = /v1/mcp",
+        ):
+            block = _location_block(server, marker)
+            assert "proxy_pass http://taira_validator_2_upstream;" in block
+            assert "proxy_next_upstream" not in block
     assert "location = /v1/mcp" in rendered
     assert "location ^~ /v1/app-api/" in rendered
     assert "client_max_body_size 1g;" in rendered
