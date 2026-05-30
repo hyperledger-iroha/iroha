@@ -8783,8 +8783,8 @@ pub async fn handle_v1_zk_roots(
 #[cfg(feature = "app_api")]
 /// POST /v1/zk/vote/tally — convenience endpoint returning election tally as JSON.
 ///
-/// Example wrapper for the Norito TLV read APIs. Current implementation returns
-/// a stub until election state is persisted.
+/// Example wrapper for the Norito TLV read APIs. Omitted or wildcard `Accept`
+/// headers return JSON, while explicit Norito requests still receive Norito.
 pub async fn handle_v1_zk_vote_tally(
     State(state): State<Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
@@ -8797,7 +8797,7 @@ pub async fn handle_v1_zk_vote_tally(
         None => (false, Vec::new()),
     };
     let payload = ZkVoteGetTallyResponseDto { finalized, tally };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };

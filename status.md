@@ -1,6 +1,17 @@
 # Status
 
-Last updated: 2026-05-29
+Last updated: 2026-05-30
+
+## 2026-05-30 Torii ZK vote tally response negotiation
+
+- `/v1/zk/vote/tally` now uses JSON-preferred response negotiation, matching
+  the endpoint documentation and `/v1/zk/roots` convenience API behavior while
+  preserving explicit `Accept: application/x-norito` support for binary
+  callers.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test zk_endpoints zk_vote_tally_endpoint_returns_200 --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_endpoints --features app_api -- --nocapture`
 
 ## 2026-05-29 Torii Sumeragi leader negotiation fix
 

@@ -252,6 +252,10 @@ async fn zk_vote_tally_endpoint_returns_200() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(http::header::CONTENT_TYPE),
+        Some(&http::HeaderValue::from_static("application/json"))
+    );
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
     assert!(v.get("finalized").is_some());
