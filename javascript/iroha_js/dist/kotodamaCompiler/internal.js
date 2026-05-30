@@ -122,6 +122,9 @@ const VIEW_HOST_SIDE_EFFECT_CALL_NAMES = new Set([
     'unregister_domain',
     'register_account',
     'unregister_account',
+    'add_signatory',
+    'remove_signatory',
+    'set_account_quorum',
     'register_asset',
     'create_new_asset',
     'register_peer',
@@ -132,6 +135,11 @@ const VIEW_HOST_SIDE_EFFECT_CALL_NAMES = new Set([
     'remove_trigger',
     'unregister_trigger',
     'set_trigger_enabled',
+    'deactivate_contract_instance',
+    'remove_smart_contract_bytes',
+    'register_smart_contract_code',
+    'register_smart_contract_bytes',
+    'activate_contract_instance',
     'create_role',
     'delete_role',
     'grant_role',
@@ -156,6 +164,25 @@ const VIEW_HOST_SIDE_EFFECT_CALL_NAMES = new Set([
     'escrow_cancel',
     'escrow_open_dispute',
     'escrow_resolve_dispute',
+    'anonymous_escrow_open_offer',
+    'anonymous_escrow_accept',
+    'anonymous_escrow_mark_payment_sent',
+    'anonymous_escrow_release',
+    'anonymous_escrow_cancel',
+    'anonymous_escrow_open_dispute',
+    'anonymous_escrow_resolve_dispute',
+    'use_nullifier',
+    'commit_output',
+    'soracloud_read_committed_state',
+    'soracloud_emit_state_mutation',
+    'soracloud_emit_mailbox_message',
+    'soracloud_append_journal',
+    'soracloud_publish_checkpoint',
+    'soracloud_read_secret',
+    'soracloud_read_credential',
+    'soracloud_egress_fetch',
+    'soracloud_read_config',
+    'soracloud_read_secret_envelope',
 ]);
 function integerValueToBigInt(value) {
     if (typeof value === 'bigint')
@@ -208,6 +235,8 @@ const POINTER_TYPE_DATASPACE_ID = 0x000a;
 const POINTER_TYPE_AXT_DESCRIPTOR = 0x000b;
 const POINTER_TYPE_ASSET_HANDLE = 0x000c;
 const POINTER_TYPE_PROOF_BLOB = 0x000d;
+const POINTER_TYPE_SORACLOUD_REQUEST = 0x000e;
+const POINTER_TYPE_SORACLOUD_RESPONSE = 0x000f;
 const OP_ADD = 0x01;
 const OP_SUB = 0x02;
 const OP_AND = 0x03;
@@ -276,6 +305,9 @@ const SYSCALL_REGISTER_ACCOUNT = 0x13;
 const SYSCALL_UNREGISTER_ACCOUNT = 0x14;
 const SYSCALL_REGISTER_PEER = 0x15;
 const SYSCALL_UNREGISTER_PEER = 0x16;
+const SYSCALL_ADD_SIGNATORY = 0x17;
+const SYSCALL_REMOVE_SIGNATORY = 0x18;
+const SYSCALL_SET_ACCOUNT_QUORUM = 0x19;
 const SYSCALL_SET_ACCOUNT_DETAIL = 0x1a;
 const SYSCALL_REGISTER_ASSET = 0x20;
 const SYSCALL_UNREGISTER_ASSET = 0x21;
@@ -297,6 +329,11 @@ const SYSCALL_REVOKE_PERMISSION = 0x35;
 const SYSCALL_CREATE_TRIGGER = 0x40;
 const SYSCALL_REMOVE_TRIGGER = 0x41;
 const SYSCALL_SET_TRIGGER_ENABLED = 0x42;
+const SYSCALL_DEACTIVATE_CONTRACT_INSTANCE = 0x43;
+const SYSCALL_REMOVE_SMART_CONTRACT_BYTES = 0x44;
+const SYSCALL_REGISTER_SMART_CONTRACT_CODE = 0x45;
+const SYSCALL_REGISTER_SMART_CONTRACT_BYTES = 0x46;
+const SYSCALL_ACTIVATE_CONTRACT_INSTANCE = 0x47;
 const SYSCALL_INPUT_PUBLISH_TLV = 0xe0;
 const SYSCALL_STATE_GET = 0x50;
 const SYSCALL_STATE_SET = 0x51;
@@ -346,9 +383,12 @@ const SYSCALL_ZK_VERIFY_TRANSFER = 0x60;
 const SYSCALL_ZK_VERIFY_UNSHIELD = 0x61;
 const SYSCALL_ZK_VOTE_VERIFY_BALLOT = 0x62;
 const SYSCALL_ZK_VOTE_VERIFY_TALLY = 0x63;
+const SYSCALL_ZK_ROOTS_GET = 0x64;
+const SYSCALL_ZK_VOTE_GET_TALLY = 0x65;
 const SYSCALL_VRF_VERIFY = 0x66;
 const SYSCALL_VRF_VERIFY_BATCH = 0x67;
 const SYSCALL_ZK_VERIFY_BATCH = 0x68;
+const SYSCALL_VRF_EPOCH_SEED = 0x7e;
 const SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION = 0xa0;
 const SYSCALL_GET_AUTHORITY = 0xa4;
 const SYSCALL_SUBSCRIPTION_BILL = 0xa5;
@@ -358,6 +398,21 @@ const SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH = 0xa3;
 const SYSCALL_RESOLVE_ACCOUNT_ALIAS = 0xa7;
 const SYSCALL_CURRENT_TIME_MS = 0xa8;
 const SYSCALL_CALL_CONTRACT = 0xa9;
+const SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER = 0xaa;
+const SYSCALL_ANONYMOUS_ESCROW_ACCEPT = 0xab;
+const SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT = 0xac;
+const SYSCALL_ANONYMOUS_ESCROW_RELEASE = 0xad;
+const SYSCALL_ANONYMOUS_ESCROW_CANCEL = 0xae;
+const SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE = 0xaf;
+const SYSCALL_QUERY_EXECUTE_NORITO = 0x01_0000;
+const SYSCALL_QUERY_GET_ACCOUNT = 0x01_0001;
+const SYSCALL_QUERY_GET_ASSET = 0x01_0002;
+const SYSCALL_QUERY_GET_ASSET_DEFINITION = 0x01_0003;
+const SYSCALL_QUERY_GET_DOMAIN = 0x01_0004;
+const SYSCALL_QUERY_GET_NFT = 0x01_0005;
+const SYSCALL_QUERY_GET_PARAMETER = 0x01_0006;
+const SYSCALL_QUERY_GET_CONTRACT_MANIFEST = 0x01_0007;
+const SYSCALL_QUERY_GET_CONTRACT_INSTANCE = 0x01_0008;
 const SYSCALL_AXT_BEGIN = 0xb0;
 const SYSCALL_AXT_TOUCH = 0xb1;
 const SYSCALL_AXT_COMMIT = 0xb2;
@@ -366,6 +421,7 @@ const SYSCALL_USE_ASSET_HANDLE = 0xb4;
 const SYSCALL_SYSVAR_CHAIN_ID = 0x01_0020;
 const SYSCALL_SYSVAR_BLOCK_HEIGHT = 0x01_0021;
 const SYSCALL_SYSVAR_BLOCK_TIME_MS = 0x01_0022;
+const SYSCALL_SYSVAR_AUTHORITY = 0x01_0023;
 const SYSCALL_SYSVAR_CONTRACT_ADDRESS = 0x01_0024;
 const SYSCALL_SYSVAR_ENTRYPOINT = 0x01_0025;
 const SYSCALL_SMARTCONTRACT_EXECUTE_QUERY = 0xa1;
@@ -376,6 +432,7 @@ const SYSCALL_ESCROW_RELEASE = 0xbb;
 const SYSCALL_ESCROW_CANCEL = 0xbc;
 const SYSCALL_ESCROW_OPEN_DISPUTE = 0xbd;
 const SYSCALL_ESCROW_RESOLVE_DISPUTE = 0xbe;
+const SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE = 0xbf;
 const SYSCALL_SM3_HASH = 0x90;
 const SYSCALL_SM2_VERIFY = 0x91;
 const SYSCALL_SM4_GCM_SEAL = 0x92;
@@ -387,7 +444,21 @@ const SYSCALL_SHA3_HASH = 0x97;
 const SYSCALL_BLAKE2B256_HASH = 0x98;
 const SYSCALL_KECCAK256_HASH = 0x99;
 const SYSCALL_IROHA_HASH = 0x9a;
+const SYSCALL_SORACLOUD_READ_COMMITTED_STATE = 0xc0;
+const SYSCALL_SORACLOUD_EMIT_STATE_MUTATION = 0xc1;
+const SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE = 0xc2;
+const SYSCALL_SORACLOUD_APPEND_JOURNAL = 0xc3;
+const SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT = 0xc4;
+const SYSCALL_SORACLOUD_READ_SECRET = 0xc5;
+const SYSCALL_SORACLOUD_READ_CREDENTIAL = 0xc6;
+const SYSCALL_SORACLOUD_EGRESS_FETCH = 0xc7;
+const SYSCALL_SORACLOUD_READ_CONFIG = 0xc8;
+const SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE = 0xc9;
+const SYSCALL_GET_ACCOUNT_BALANCE = 0xf9;
+const SYSCALL_USE_NULLIFIER = 0xfb;
 const SYSCALL_VERIFY_SIGNATURE = 0xfc;
+const SYSCALL_GET_PRIVATE_INPUT = 0xfd;
+const SYSCALL_COMMIT_OUTPUT = 0xfe;
 const SYSCALL_TLV_EQ = 0x5f;
 const SYSCALL_ALLOC = 0xf0;
 const SYSCALL_GET_PUBLIC_INPUT = 0xf1;
@@ -641,6 +712,12 @@ function sysvarBuiltinSpec(name) {
                 syscall: SYSCALL_SYSVAR_CHAIN_ID,
                 message: 'chain_id expects no arguments',
             };
+        case 'sysvar_authority':
+            return {
+                valueType: 'AccountId',
+                syscall: SYSCALL_SYSVAR_AUTHORITY,
+                message: 'sysvar_authority expects no arguments',
+            };
         case 'contract_address':
             return {
                 valueType: 'NoritoBytes',
@@ -702,6 +779,171 @@ function signatureBuiltinName(name) {
             return 'sm2_verify';
         case 'verify_signature':
             return 'verify_signature';
+        default:
+            return null;
+    }
+}
+function noritoReadBuiltinSpec(name) {
+    switch (name) {
+        case 'query_execute_norito':
+            return {
+                syscall: SYSCALL_QUERY_EXECUTE_NORITO,
+                valueType: 'NoritoBytes',
+                message: 'query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest',
+            };
+        case 'zk_roots_get':
+            return {
+                syscall: SYSCALL_ZK_ROOTS_GET,
+                valueType: 'NoritoBytes',
+                message: 'zk_roots_get expects (Blob|bytes) pointer to NoritoBytes RootsGetRequest',
+            };
+        case 'zk_vote_get_tally':
+            return {
+                syscall: SYSCALL_ZK_VOTE_GET_TALLY,
+                valueType: 'NoritoBytes',
+                message: 'zk_vote_get_tally expects (Blob|bytes) pointer to NoritoBytes VoteGetTallyRequest',
+            };
+        case 'vrf_epoch_seed':
+            return {
+                syscall: SYSCALL_VRF_EPOCH_SEED,
+                valueType: 'NoritoBytes',
+                message: 'vrf_epoch_seed expects (Blob|bytes) pointer to NoritoBytes VrfEpochSeedRequest',
+            };
+        default:
+            return null;
+    }
+}
+function soracloudBuiltinSpec(name) {
+    switch (name) {
+        case 'soracloud_read_committed_state':
+            return { syscall: SYSCALL_SORACLOUD_READ_COMMITTED_STATE };
+        case 'soracloud_emit_state_mutation':
+            return { syscall: SYSCALL_SORACLOUD_EMIT_STATE_MUTATION };
+        case 'soracloud_emit_mailbox_message':
+            return { syscall: SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE };
+        case 'soracloud_append_journal':
+            return { syscall: SYSCALL_SORACLOUD_APPEND_JOURNAL };
+        case 'soracloud_publish_checkpoint':
+            return { syscall: SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT };
+        case 'soracloud_read_secret':
+            return { syscall: SYSCALL_SORACLOUD_READ_SECRET };
+        case 'soracloud_read_credential':
+            return { syscall: SYSCALL_SORACLOUD_READ_CREDENTIAL };
+        case 'soracloud_egress_fetch':
+            return { syscall: SYSCALL_SORACLOUD_EGRESS_FETCH };
+        case 'soracloud_read_config':
+            return { syscall: SYSCALL_SORACLOUD_READ_CONFIG };
+        case 'soracloud_read_secret_envelope':
+            return { syscall: SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE };
+        default:
+            return null;
+    }
+}
+function typedQueryBuiltinSpec(name) {
+    switch (name) {
+        case 'query_get_account':
+            return {
+                syscall: SYSCALL_QUERY_GET_ACCOUNT,
+                allowedTypes: ['AccountId'],
+                message: 'query_get_account expects (AccountId|Blob|bytes)',
+            };
+        case 'query_get_asset':
+            return {
+                syscall: SYSCALL_QUERY_GET_ASSET,
+                allowedTypes: ['AssetId'],
+                message: 'query_get_asset expects (AssetId|Blob|bytes)',
+            };
+        case 'query_get_asset_definition':
+            return {
+                syscall: SYSCALL_QUERY_GET_ASSET_DEFINITION,
+                allowedTypes: ['AssetDefinitionId'],
+                message: 'query_get_asset_definition expects (AssetDefinitionId|Blob|bytes)',
+            };
+        case 'query_get_domain':
+            return {
+                syscall: SYSCALL_QUERY_GET_DOMAIN,
+                allowedTypes: ['DomainId'],
+                message: 'query_get_domain expects (DomainId|Blob|bytes)',
+            };
+        case 'query_get_nft':
+            return {
+                syscall: SYSCALL_QUERY_GET_NFT,
+                allowedTypes: ['NftId'],
+                message: 'query_get_nft expects (NftId|Blob|bytes)',
+            };
+        case 'query_get_parameter':
+            return {
+                syscall: SYSCALL_QUERY_GET_PARAMETER,
+                allowedTypes: ['Name'],
+                message: 'query_get_parameter expects (Name|Blob|bytes)',
+            };
+        case 'query_get_contract_manifest':
+            return {
+                syscall: SYSCALL_QUERY_GET_CONTRACT_MANIFEST,
+                allowedTypes: [],
+                message: 'query_get_contract_manifest expects (Blob|bytes) Norito Hash',
+            };
+        case 'query_get_contract_instance':
+            return {
+                syscall: SYSCALL_QUERY_GET_CONTRACT_INSTANCE,
+                allowedTypes: ['Name'],
+                message: 'query_get_contract_instance expects (Name|Blob|bytes)',
+            };
+        default:
+            return null;
+    }
+}
+function accountBalanceBuiltinSpec(name) {
+    if (name !== 'get_account_balance')
+        return null;
+    return {
+        syscall: SYSCALL_GET_ACCOUNT_BALANCE,
+        valueType: 'Balance',
+        message: 'get_account_balance expects (AccountId, AssetDefinitionId)',
+    };
+}
+function privacyOutputBuiltinSpec(name) {
+    switch (name) {
+        case 'get_private_input':
+            return {
+                syscall: SYSCALL_GET_PRIVATE_INPUT,
+                valueType: 'int',
+                args: ['numeric'],
+                message: 'get_private_input expects (int index)',
+                sideEffect: false,
+            };
+        case 'use_nullifier':
+            return {
+                syscall: SYSCALL_USE_NULLIFIER,
+                valueType: null,
+                args: ['numeric'],
+                message: 'use_nullifier expects (int nullifier)',
+                sideEffect: true,
+            };
+        case 'commit_output':
+            return {
+                syscall: SYSCALL_COMMIT_OUTPUT,
+                valueType: null,
+                args: [],
+                message: 'commit_output expects no arguments',
+                sideEffect: true,
+            };
+        default:
+            return null;
+    }
+}
+function smartContractLifecycleBuiltinSpec(name) {
+    switch (name) {
+        case 'deactivate_contract_instance':
+            return { syscall: SYSCALL_DEACTIVATE_CONTRACT_INSTANCE };
+        case 'remove_smart_contract_bytes':
+            return { syscall: SYSCALL_REMOVE_SMART_CONTRACT_BYTES };
+        case 'register_smart_contract_code':
+            return { syscall: SYSCALL_REGISTER_SMART_CONTRACT_CODE };
+        case 'register_smart_contract_bytes':
+            return { syscall: SYSCALL_REGISTER_SMART_CONTRACT_BYTES };
+        case 'activate_contract_instance':
+            return { syscall: SYSCALL_ACTIVATE_CONTRACT_INSTANCE };
         default:
             return null;
     }
@@ -2292,6 +2534,9 @@ function decodeAxtPointerLiteral(valueType, bytes) {
             return decodeAssetHandleBare(bytes);
         case 'ProofBlob':
             return decodeProofBlobBare(bytes);
+        case 'SoracloudRequest':
+        case 'SoracloudResponse':
+            return bytes.length > 0;
         default:
             return false;
     }
@@ -2318,6 +2563,9 @@ function typedPointerLiteralPayload(valueType, value, line, column) {
     }
     if (isAxtPointerValueType(valueType)) {
         return parseAxtPointerLiteralPayload(valueType, value, line, column);
+    }
+    if (isSoracloudPointerValueType(valueType)) {
+        return parseRawBytesLiteral(value);
     }
     return parseRawBytesLiteral(value);
 }
@@ -2436,6 +2684,59 @@ function decodeNoritoBytesBare(bytes) {
     catch {
         return null;
     }
+}
+function decodeNoritoU32Bare(bytes) {
+    try {
+        const reader = new NoritoAccessReader(bytes);
+        const value = reader.readU32LE();
+        if (reader.remaining() !== 0)
+            return null;
+        return value;
+    }
+    catch {
+        return null;
+    }
+}
+function readNoritoLengthAt(bytes, offset, flags) {
+    if ((flags & NORITO_HEADER_FLAG_COMPACT_LEN) === 0) {
+        if (bytes.length - offset < 8)
+            return null;
+        const value = new DataView(bytes.buffer, bytes.byteOffset + offset, 8).getBigUint64(0, true);
+        if (value > BigInt(Number.MAX_SAFE_INTEGER))
+            return null;
+        return { length: Number(value), headerLength: 8 };
+    }
+    let value = 0;
+    let shift = 0;
+    for (let used = 0; used < 10 && offset + used < bytes.length; used += 1) {
+        const byte = bytes[offset + used];
+        value += (byte & 0x7f) * 2 ** shift;
+        if (value > Number.MAX_SAFE_INTEGER)
+            return null;
+        if ((byte & 0x80) === 0) {
+            return { length: value, headerLength: used + 1 };
+        }
+        shift += 7;
+        if (shift > 53)
+            return null;
+    }
+    return null;
+}
+function readNoritoLenPrefixedBytesAt(bytes, offset, flags) {
+    const header = readNoritoLengthAt(bytes, offset, flags);
+    if (!header)
+        return null;
+    const start = offset + header.headerLength;
+    const end = start + header.length;
+    if (end > bytes.length)
+        return null;
+    return { field: bytes.slice(start, end), offset: end };
+}
+function decodeNoritoStringBareWithFlags(bytes, flags) {
+    const field = readNoritoLenPrefixedBytesAt(bytes, 0, flags);
+    if (!field || field.offset !== bytes.length)
+        return null;
+    return textDecoder.decode(field.field);
 }
 function decodeNoritoEnumVariantBare(bytes) {
     try {
@@ -2744,6 +3045,9 @@ function addNftAccess(summary, id) {
     const key = keyNft(id);
     summary.reads.add(key);
     summary.writes.add(key);
+}
+function readNftAccess(id) {
+    return ['nft', keyNft(id)];
 }
 function keyRole(id) {
     return `role:${id}`;
@@ -3189,6 +3493,44 @@ function decodeQueryRequestLiteralAccess(raw) {
         default:
             return null;
     }
+}
+function decodeZkRootsGetRequestLiteralAccess(raw) {
+    const bytes = parseStaticNoritoLiteralBytes(raw);
+    if (!bytes)
+        return null;
+    const archive = decodeNoritoArchivePayload(bytes);
+    if (!archive)
+        return null;
+    let assetId = null;
+    const assetField = readNoritoLenPrefixedBytesAt(archive.payload, 0, archive.flags);
+    const maxField = assetField === null
+        ? null
+        : readNoritoLenPrefixedBytesAt(archive.payload, assetField.offset, archive.flags);
+    const valid = assetField !== null
+        && maxField !== null
+        && maxField.offset === archive.payload.length
+        && (assetId = decodeNoritoStringBareWithFlags(assetField.field, archive.flags)) !== null
+        && decodeNoritoU32Bare(maxField.field) !== null;
+    const assetDefinition = assetId === null ? null : normalizeAssetDefinitionIdLiteral(assetId);
+    return valid && assetDefinition !== null
+        ? { reads: [keyZkAsset(assetDefinition)], writes: [] }
+        : null;
+}
+function decodeZkVoteGetTallyRequestLiteralAccess(raw) {
+    const bytes = parseStaticNoritoLiteralBytes(raw);
+    if (!bytes)
+        return null;
+    const archive = decodeNoritoArchivePayload(bytes);
+    if (!archive)
+        return null;
+    let electionId = null;
+    const electionField = readNoritoLenPrefixedBytesAt(archive.payload, 0, archive.flags);
+    const valid = electionField !== null
+        && electionField.offset === archive.payload.length
+        && (electionId = decodeNoritoStringBareWithFlags(electionField.field, archive.flags)) !== null;
+    return valid && electionId !== null
+        ? { reads: [`zk:election:${electionId}:tally`], writes: [] }
+        : null;
 }
 class Tokenizer {
     source;
@@ -3890,6 +4232,8 @@ class Parser {
             'AxtDescriptor',
             'AssetHandle',
             'ProofBlob',
+            'SoracloudRequest',
+            'SoracloudResponse',
             'fixed_u128',
             'Amount',
             'Balance',
@@ -4405,6 +4749,8 @@ class Parser {
             case 'AxtDescriptor':
             case 'AssetHandle':
             case 'ProofBlob':
+            case 'SoracloudRequest':
+            case 'SoracloudResponse':
             case 'Name':
             case 'Json':
             case 'Blob':
@@ -8851,7 +9197,8 @@ function isDurableStateMapKeyType(type) {
         || type === 'AssetId'
         || type === 'NftId'
         || type === 'DomainId'
-        || isAxtPointerValueType(type);
+        || isAxtPointerValueType(type)
+        || isSoracloudPointerValueType(type);
 }
 function isDurableStateValueType(type) {
     if (isTupleValueType(type)) {
@@ -8873,7 +9220,8 @@ function isDurableStateValueType(type) {
             || type === 'AssetId'
             || type === 'NftId'
             || type === 'DomainId'
-            || isAxtPointerValueType(type));
+            || isAxtPointerValueType(type)
+            || isSoracloudPointerValueType(type));
 }
 function isInMemoryMapWordType(type) {
     if (typeof type !== 'string')
@@ -8891,7 +9239,8 @@ function isInMemoryMapWordType(type) {
         || type === 'AssetId'
         || type === 'NftId'
         || type === 'DomainId'
-        || isAxtPointerValueType(type);
+        || isAxtPointerValueType(type)
+        || isSoracloudPointerValueType(type);
 }
 const ON_CHAIN_POLICY_ALLOWED_MAP_KEY_TYPES = new Set([
     'int',
@@ -8905,6 +9254,8 @@ const ON_CHAIN_POLICY_ALLOWED_MAP_KEY_TYPES = new Set([
     'AxtDescriptor',
     'AssetHandle',
     'ProofBlob',
+    'SoracloudRequest',
+    'SoracloudResponse',
 ]);
 function isOnChainPolicyAllowedMapKeyType(type) {
     return typeof type === 'string' && ON_CHAIN_POLICY_ALLOWED_MAP_KEY_TYPES.has(type);
@@ -8952,6 +9303,9 @@ function isAxtPointerValueType(type) {
         || type === 'AssetHandle'
         || type === 'ProofBlob';
 }
+function isSoracloudPointerValueType(type) {
+    return type === 'SoracloudRequest' || type === 'SoracloudResponse';
+}
 function isSemanticPointerAbiType(type) {
     return typeof type === 'string'
         && (type === 'Json'
@@ -8962,7 +9316,8 @@ function isSemanticPointerAbiType(type) {
             || type === 'AssetId'
             || type === 'NftId'
             || type === 'DomainId'
-            || isAxtPointerValueType(type));
+            || isAxtPointerValueType(type)
+            || isSoracloudPointerValueType(type));
 }
 function isInvokeEntrypointAsPointerReturnType(type) {
     return typeof type === 'string'
@@ -8974,7 +9329,8 @@ function isInvokeEntrypointAsPointerReturnType(type) {
             || type === 'AssetId'
             || type === 'NftId'
             || type === 'DomainId'
-            || isAxtPointerValueType(type));
+            || isAxtPointerValueType(type)
+            || isSoracloudPointerValueType(type));
 }
 function isSemanticEqComparableType(type) {
     if (typeof type !== 'string')
@@ -8992,7 +9348,8 @@ function isSemanticEqComparableType(type) {
         || type === 'AssetId'
         || type === 'NftId'
         || type === 'DomainId'
-        || isAxtPointerValueType(type);
+        || isAxtPointerValueType(type)
+        || isSoracloudPointerValueType(type);
 }
 function pointerTypeIdForValueType(type) {
     switch (type) {
@@ -9022,6 +9379,10 @@ function pointerTypeIdForValueType(type) {
             return POINTER_TYPE_ASSET_HANDLE;
         case 'ProofBlob':
             return POINTER_TYPE_PROOF_BLOB;
+        case 'SoracloudRequest':
+            return POINTER_TYPE_SORACLOUD_REQUEST;
+        case 'SoracloudResponse':
+            return POINTER_TYPE_SORACLOUD_RESPONSE;
         default:
             return null;
     }
@@ -9197,6 +9558,10 @@ function pointerConstructorExpectedDescription(name) {
             return 'string or Blob|bytes';
         case 'dataspace_id':
             return 'string, DataSpaceId, or Blob|bytes (NoritoBytes)';
+        case 'soracloud_request':
+            return 'string, SoracloudRequest, or Blob|bytes (NoritoBytes)';
+        case 'soracloud_response':
+            return 'string, SoracloudResponse, or Blob|bytes (NoritoBytes)';
         default:
             return 'string, matching pointer type, or Blob|bytes (NoritoBytes)';
     }
@@ -9323,6 +9688,10 @@ function pointerConstructorValueType(name) {
             return 'AssetHandle';
         case 'proof_blob':
             return 'ProofBlob';
+        case 'soracloud_request':
+            return 'SoracloudRequest';
+        case 'soracloud_response':
+            return 'SoracloudResponse';
         default:
             return null;
     }
@@ -9355,6 +9724,10 @@ function pointerConstructorNameForValueType(type) {
             return 'asset_handle';
         case 'ProofBlob':
             return 'proof_blob';
+        case 'SoracloudRequest':
+            return 'soracloud_request';
+        case 'SoracloudResponse':
+            return 'soracloud_response';
         default:
             return String(type);
     }
@@ -9843,6 +10216,11 @@ class StudioCodeGenerator {
         if (expression.kind === 'authority') {
             return AUTHORITY_ACCOUNT_PLACEHOLDER;
         }
+        if (expression.kind === 'call'
+            && (expression.name === 'authority' || expression.name === 'sysvar_authority')
+            && expression.args.length === 0) {
+            return AUTHORITY_ACCOUNT_PLACEHOLDER;
+        }
         if (expression.kind === 'accountLiteral') {
             return this.normalizeStaticAccountLiteral(expression.value);
         }
@@ -10148,6 +10526,77 @@ class StudioCodeGenerator {
         writes.push(keyAssetDef(assetDefinition));
         return { reads, writes };
     }
+    resolveStaticTypedQueryAccess(expression, scope, literalScope) {
+        const [key] = expression.args;
+        if (!key)
+            return null;
+        switch (expression.name) {
+            case 'query_get_account': {
+                const account = this.resolveStaticAccountLiteral(key, scope, literalScope);
+                return account === null ? null : { reads: [keyAccount(account)], writes: [] };
+            }
+            case 'query_get_asset': {
+                const assetLiteral = this.resolveStaticAssetIdLiteral(key, scope, literalScope);
+                const parsedAsset = assetLiteral === null ? null : parseAssetIdLiteral(assetLiteral);
+                const asset = parsedAsset === null ? null : {
+                    literal: parsedAsset.literal,
+                    account: parsedAsset.accountId,
+                    definition: {
+                        literal: parsedAsset.definitionId,
+                        domain: 'aid',
+                    },
+                };
+                return asset === null ? null : { reads: readAssetAccess(asset), writes: [] };
+            }
+            case 'query_get_asset_definition': {
+                const assetDefinition = this.resolveStaticAssetDefinitionLiteral(key, scope, literalScope);
+                return assetDefinition === null ? null : { reads: [keyAssetDef(assetDefinition)], writes: [] };
+            }
+            case 'query_get_domain': {
+                const domain = this.resolveStaticDomainLiteral(key, scope, literalScope);
+                return domain === null ? null : { reads: [keyDomain(domain)], writes: [] };
+            }
+            case 'query_get_nft': {
+                const nft = this.resolveStaticNftLiteral(key, scope, literalScope);
+                return nft === null ? null : { reads: readNftAccess(nft), writes: [] };
+            }
+            default:
+                return null;
+        }
+    }
+    resolveStaticAccountBalanceAccess(expression, scope, literalScope) {
+        if (expression.args.length !== 2)
+            return null;
+        const account = this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope);
+        const assetDefinition = this.resolveStaticAssetDefinitionLiteral(expression.args[1], scope, literalScope);
+        if (account === null || assetDefinition === null)
+            return null;
+        const asset = {
+            literal: this.staticAssetLiteral(account, assetDefinition),
+            account,
+            definition: {
+                literal: assetDefinition,
+                domain: 'aid',
+            },
+        };
+        return { reads: readAssetAccess(asset), writes: [] };
+    }
+    resolveStaticZkReadAccess(expression, scope) {
+        const [payload] = expression.args;
+        if (!payload)
+            return null;
+        const raw = this.resolveStaticStringLiteral(payload, scope);
+        if (raw === null)
+            return null;
+        switch (expression.name) {
+            case 'zk_roots_get':
+                return decodeZkRootsGetRequestLiteralAccess(raw);
+            case 'zk_vote_get_tally':
+                return decodeZkVoteGetTallyRequestLiteralAccess(raw);
+            default:
+                return null;
+        }
+    }
     collectBlockAccesses(statements, scope, summary, literalScope = new Map()) {
         for (const statement of statements) {
             this.collectStatementAccesses(statement, scope, summary, literalScope);
@@ -10160,6 +10609,7 @@ class StudioCodeGenerator {
                 const domainLiteral = this.resolveStaticDomainLiteral(statement.value, scope, literalScope);
                 const accountLiteral = this.resolveStaticAccountLiteral(statement.value, scope, literalScope);
                 const assetDefinitionLiteral = this.resolveStaticAssetDefinitionLiteral(statement.value, scope, literalScope);
+                const assetIdLiteral = this.resolveStaticAssetIdLiteral(statement.value, scope, literalScope);
                 const nameLiteral = this.resolveStaticNameLiteral(statement.value, scope, literalScope);
                 const nftLiteral = this.resolveStaticNftLiteral(statement.value, scope, literalScope);
                 const instructionAccess = this.resolveInlineInstructionAccess(statement.value, scope, literalScope);
@@ -10173,6 +10623,9 @@ class StudioCodeGenerator {
                 }
                 if (assetDefinitionLiteral !== null) {
                     localLiterals.assetDefinition = assetDefinitionLiteral;
+                }
+                if (assetIdLiteral !== null) {
+                    localLiterals.assetId = assetIdLiteral;
                 }
                 if (nameLiteral !== null) {
                     localLiterals.name = nameLiteral;
@@ -10462,7 +10915,7 @@ class StudioCodeGenerator {
                         this.addGlobalWildcardAccess(summary);
                     }
                 }
-                if (expression.name === 'execute_query') {
+                if (expression.name === 'execute_query' || expression.name === 'query_execute_norito') {
                     const payload = expression.args[0] ? this.resolveStaticNoritoLiteralAccess(expression.args[0], scope, 'query') : null;
                     if (payload) {
                         this.applyLiteralAccess(summary, payload);
@@ -10470,6 +10923,39 @@ class StudioCodeGenerator {
                     else {
                         this.addGlobalWildcardAccess(summary);
                     }
+                }
+                if (expression.name === 'zk_roots_get' || expression.name === 'zk_vote_get_tally' || expression.name === 'vrf_epoch_seed') {
+                    const access = this.resolveStaticZkReadAccess(expression, scope);
+                    if (access) {
+                        this.applyLiteralAccess(summary, access);
+                    }
+                    else {
+                        this.addGlobalWildcardAccess(summary);
+                    }
+                }
+                if (typedQueryBuiltinSpec(expression.name) !== null) {
+                    const access = this.resolveStaticTypedQueryAccess(expression, scope, literalScope);
+                    if (access) {
+                        this.applyLiteralAccess(summary, access);
+                    }
+                    else {
+                        this.addGlobalWildcardAccess(summary);
+                    }
+                }
+                if (accountBalanceBuiltinSpec(expression.name) !== null) {
+                    const access = this.resolveStaticAccountBalanceAccess(expression, scope, literalScope);
+                    if (access) {
+                        this.applyLiteralAccess(summary, access);
+                    }
+                    else {
+                        this.addGlobalWildcardAccess(summary);
+                    }
+                }
+                if (expression.name === 'use_nullifier') {
+                    this.addOpaqueIsiFallbackAccess(summary);
+                }
+                if (smartContractLifecycleBuiltinSpec(expression.name) !== null) {
+                    this.addOpaqueIsiFallbackAccess(summary);
                 }
                 if (expression.name === 'call_contract') {
                     this.addOpaqueIsiFallbackAccess(summary);
@@ -10538,6 +11024,21 @@ class StudioCodeGenerator {
                     summary.incomplete = true;
                 }
                 if (expression.name === 'register_account' || expression.name === 'unregister_account') {
+                    const accountLiteral = expression.args[0]
+                        ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope)
+                        : null;
+                    if (accountLiteral !== null) {
+                        const key = keyAccount(accountLiteral);
+                        summary.reads.add(key);
+                        summary.writes.add(key);
+                    }
+                    else {
+                        this.addOpaqueIsiFallbackAccess(summary);
+                    }
+                }
+                if (expression.name === 'add_signatory'
+                    || expression.name === 'remove_signatory'
+                    || expression.name === 'set_account_quorum') {
                     const accountLiteral = expression.args[0]
                         ? this.resolveStaticAccountLiteral(expression.args[0], scope, literalScope)
                         : null;
@@ -10719,7 +11220,15 @@ class StudioCodeGenerator {
                     || expression.name === 'escrow_release'
                     || expression.name === 'escrow_cancel'
                     || expression.name === 'escrow_open_dispute'
-                    || expression.name === 'escrow_resolve_dispute') {
+                    || expression.name === 'escrow_resolve_dispute'
+                    || expression.name === 'anonymous_escrow_open_offer'
+                    || expression.name === 'anonymous_escrow_accept'
+                    || expression.name === 'anonymous_escrow_mark_payment_sent'
+                    || expression.name === 'anonymous_escrow_release'
+                    || expression.name === 'anonymous_escrow_cancel'
+                    || expression.name === 'anonymous_escrow_open_dispute'
+                    || expression.name === 'anonymous_escrow_resolve_dispute'
+                    || soracloudBuiltinSpec(expression.name) !== null) {
                     summary.incomplete = true;
                     this.addOpaqueIsiFallbackAccess(summary);
                 }
@@ -11158,6 +11667,7 @@ class StudioCodeGenerator {
                 const domainLiteral = this.resolveStaticDomainLiteral(statement.value, scope, literalScope);
                 const accountLiteral = this.resolveStaticAccountLiteral(statement.value, scope, literalScope);
                 const assetDefinitionLiteral = this.resolveStaticAssetDefinitionLiteral(statement.value, scope, literalScope);
+                const assetIdLiteral = this.resolveStaticAssetIdLiteral(statement.value, scope, literalScope);
                 const nameLiteral = this.resolveStaticNameLiteral(statement.value, scope, literalScope);
                 const nftLiteral = this.resolveStaticNftLiteral(statement.value, scope, literalScope);
                 const instructionAccess = this.resolveInlineInstructionAccess(statement.value, scope, literalScope);
@@ -11169,6 +11679,8 @@ class StudioCodeGenerator {
                     localLiterals.account = accountLiteral;
                 if (assetDefinitionLiteral !== null)
                     localLiterals.assetDefinition = assetDefinitionLiteral;
+                if (assetIdLiteral !== null)
+                    localLiterals.assetId = assetIdLiteral;
                 if (nameLiteral !== null)
                     localLiterals.name = nameLiteral;
                 if (nftLiteral !== null)
@@ -12430,6 +12942,17 @@ class StudioCodeGenerator {
             throw new StudioCompileError(`semantic error: ${expression.name} expects (Blob|bytes)`, expression.line, expression.column);
         }
     }
+    validateSemanticTypedQueryCall(expression, spec, scopeTypes, stateHandles) {
+        if (expression.args.length !== 1) {
+            throw new StudioCompileError(`semantic error: ${spec.message}`, expression.line, expression.column);
+        }
+        const argType = this.inferSemanticExpressionType(expression.args[0], scopeTypes, stateHandles);
+        if (argType !== null
+            && !isSemanticBlobLikeType(argType)
+            && !spec.allowedTypes.includes(argType)) {
+            throw new StudioCompileError(`semantic error: ${spec.message}`, expression.line, expression.column);
+        }
+    }
     validateSemanticVrfCall(expression, scopeTypes, stateHandles) {
         if (expression.name === 'vrf_verify_batch') {
             this.validateSemanticBlobLikeCall(expression, 1, 'vrf_verify_batch expects (Blob|bytes)', scopeTypes, stateHandles);
@@ -12791,6 +13314,31 @@ class StudioCodeGenerator {
                 }
                 return;
             }
+            case 'anonymous_escrow_open_offer':
+            case 'anonymous_escrow_release':
+            case 'anonymous_escrow_cancel':
+            case 'anonymous_escrow_resolve_dispute': {
+                const message = `${expression.name} expects (Blob|bytes) Norito request payload`;
+                if (expression.args.length !== 1 || !optionalEvidenceOk(0)) {
+                    fail(message);
+                }
+                return;
+            }
+            case 'anonymous_escrow_accept':
+            case 'anonymous_escrow_mark_payment_sent':
+                if (expression.args.length !== 1 || !nameOk(0)) {
+                    fail(`${expression.name} expects (Name)`);
+                }
+                return;
+            case 'anonymous_escrow_open_dispute': {
+                const message = 'anonymous_escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])';
+                if ((expression.args.length !== 1 && expression.args.length !== 2)
+                    || !nameOk(0)
+                    || !optionalEvidenceOk(1)) {
+                    fail(message);
+                }
+                return;
+            }
             default:
                 return;
         }
@@ -12943,6 +13491,21 @@ class StudioCodeGenerator {
                 if (sysvarSpec !== null) {
                     return sysvarSpec.valueType;
                 }
+                const noritoReadSpec = noritoReadBuiltinSpec(expression.name);
+                if (noritoReadSpec !== null) {
+                    return noritoReadSpec.valueType;
+                }
+                if (typedQueryBuiltinSpec(expression.name) !== null) {
+                    return 'NoritoBytes';
+                }
+                const accountBalanceSpec = accountBalanceBuiltinSpec(expression.name);
+                if (accountBalanceSpec !== null) {
+                    return accountBalanceSpec.valueType;
+                }
+                const privacyOutputSpec = privacyOutputBuiltinSpec(expression.name);
+                if (privacyOutputSpec !== null) {
+                    return privacyOutputSpec.valueType;
+                }
                 if (sm4BuiltinSpec(expression.name) !== null) {
                     return 'NoritoBytes';
                 }
@@ -13035,6 +13598,7 @@ class StudioCodeGenerator {
                     case 'state_count':
                         return 'int';
                     case 'execute_query':
+                    case 'query_execute_norito':
                         return 'Blob';
                     case 'pointer_to_norito':
                         return 'NoritoBytes';
@@ -13338,6 +13902,30 @@ class StudioCodeGenerator {
                     }
                     return;
                 }
+                const noritoReadSpec = noritoReadBuiltinSpec(expression.name);
+                if (noritoReadSpec !== null) {
+                    this.validateSemanticBlobLikeCall(expression, 1, noritoReadSpec.message, scopeTypes, stateHandles);
+                    return;
+                }
+                const typedQuerySpec = typedQueryBuiltinSpec(expression.name);
+                if (typedQuerySpec !== null) {
+                    this.validateSemanticTypedQueryCall(expression, typedQuerySpec, scopeTypes, stateHandles);
+                    return;
+                }
+                const accountBalanceSpec = accountBalanceBuiltinSpec(expression.name);
+                if (accountBalanceSpec !== null) {
+                    this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'AssetDefinitionId'], accountBalanceSpec.message, scopeTypes, stateHandles, expression.line, expression.column);
+                    return;
+                }
+                const privacyOutputSpec = privacyOutputBuiltinSpec(expression.name);
+                if (privacyOutputSpec !== null) {
+                    this.validateSemanticExactArgumentTypes(expression.args, privacyOutputSpec.args, privacyOutputSpec.message, scopeTypes, stateHandles, expression.line, expression.column);
+                    return;
+                }
+                if (smartContractLifecycleBuiltinSpec(expression.name) !== null) {
+                    this.validateSemanticBlobLikeCall(expression, 1, `${expression.name} expects (Blob|bytes) pointer to NoritoBytes lifecycle request`, scopeTypes, stateHandles);
+                    return;
+                }
                 const sm4Spec = sm4BuiltinSpec(expression.name);
                 if (sm4Spec !== null) {
                     this.validateSemanticSm4Call(expression, sm4Spec, scopeTypes, stateHandles);
@@ -13483,6 +14071,19 @@ class StudioCodeGenerator {
                     case 'execute_query':
                         this.validateSemanticBlobLikeCall(expression, 1, 'execute_query expects (Blob|bytes) where the argument is a pointer to NoritoBytes TLV in INPUT', scopeTypes, stateHandles);
                         return;
+                    case 'query_execute_norito':
+                        this.validateSemanticBlobLikeCall(expression, 1, 'query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest', scopeTypes, stateHandles);
+                        return;
+                    case 'query_get_account':
+                    case 'query_get_asset':
+                    case 'query_get_asset_definition':
+                    case 'query_get_domain':
+                    case 'query_get_nft':
+                    case 'query_get_parameter':
+                    case 'query_get_contract_manifest':
+                    case 'query_get_contract_instance':
+                        this.validateSemanticTypedQueryCall(expression, typedQueryBuiltinSpec(expression.name), scopeTypes, stateHandles);
+                        return;
                     case 'set_execution_depth':
                         this.validateSemanticIntBuiltinCall(expression, 1, 'set_execution_depth expects one int arg', scopeTypes, stateHandles);
                         return;
@@ -13504,6 +14105,18 @@ class StudioCodeGenerator {
                     case 'use_asset_handle':
                     case 'axt_commit':
                         this.validateSemanticAxtCall(expression, scopeTypes, stateHandles);
+                        return;
+                    case 'soracloud_read_committed_state':
+                    case 'soracloud_emit_state_mutation':
+                    case 'soracloud_emit_mailbox_message':
+                    case 'soracloud_append_journal':
+                    case 'soracloud_publish_checkpoint':
+                    case 'soracloud_read_secret':
+                    case 'soracloud_read_credential':
+                    case 'soracloud_egress_fetch':
+                    case 'soracloud_read_config':
+                    case 'soracloud_read_secret_envelope':
+                        this.validateSemanticExactArgumentTypes(expression.args, ['SoracloudRequest'], `${expression.name} expects (SoracloudRequest)`, scopeTypes, stateHandles, expression.line, expression.column);
                         return;
                     case 'transfer_v1_batch_begin':
                     case 'transfer_v1_batch_end':
@@ -13548,6 +14161,15 @@ class StudioCodeGenerator {
                         return;
                     case 'unregister_account':
                         this.validateSemanticExactArgumentTypes(expression.args, ['AccountId'], 'unregister_account expects (AccountId)', scopeTypes, stateHandles, expression.line, expression.column);
+                        return;
+                    case 'add_signatory':
+                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'Json'], 'add_signatory expects (AccountId, Json)', scopeTypes, stateHandles, expression.line, expression.column);
+                        return;
+                    case 'remove_signatory':
+                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'Json'], 'remove_signatory expects (AccountId, Json)', scopeTypes, stateHandles, expression.line, expression.column);
+                        return;
+                    case 'set_account_quorum':
+                        this.validateSemanticExactArgumentTypes(expression.args, ['AccountId', 'numeric'], 'set_account_quorum expects (AccountId, numeric)', scopeTypes, stateHandles, expression.line, expression.column);
                         return;
                     case 'register_asset':
                     case 'create_new_asset':
@@ -13607,6 +14229,13 @@ class StudioCodeGenerator {
                     case 'escrow_cancel':
                     case 'escrow_open_dispute':
                     case 'escrow_resolve_dispute':
+                    case 'anonymous_escrow_open_offer':
+                    case 'anonymous_escrow_accept':
+                    case 'anonymous_escrow_mark_payment_sent':
+                    case 'anonymous_escrow_release':
+                    case 'anonymous_escrow_cancel':
+                    case 'anonymous_escrow_open_dispute':
+                    case 'anonymous_escrow_resolve_dispute':
                         this.validateSemanticNativeEscrowCall(expression, scopeTypes, stateHandles);
                         return;
                     default:
@@ -13974,7 +14603,7 @@ class StudioCodeGenerator {
                 const seenKey = `${origin}\0${mapDescription}`;
                 if (!seen.has(seenKey)) {
                     seen.add(seenKey);
-                    errors.push(`on-chain profile forbids map with key type \`${keyName}\` in ${origin}. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob.`);
+                    errors.push(`on-chain profile forbids map with key type \`${keyName}\` in ${origin}. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob, SoracloudRequest, SoracloudResponse.`);
                 }
             }
             this.addOnChainPolicyMapKeyErrors(type.key, origin, errors, seen);
@@ -18206,7 +18835,12 @@ class StudioCodeGenerator {
         this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
         this.assembler.emitSyscall(syscall);
     }
-    emitEscrowOpenDisputeSyscall(escrowReg, evidenceReg) {
+    emitEscrowSingleRequestSyscall(requestReg, syscall) {
+        this.assembler.emitMove(10, requestReg);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitSyscall(syscall);
+    }
+    emitEscrowOpenDisputeSyscall(escrowReg, evidenceReg, syscall = SYSCALL_ESCROW_OPEN_DISPUTE) {
         this.assembler.emitMove(10, escrowReg);
         this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
         if (evidenceReg === null) {
@@ -18217,7 +18851,7 @@ class StudioCodeGenerator {
             this.publishInputTlv(evidenceReg, 11);
             this.assembler.emitMove(10, 14);
         }
-        this.assembler.emitSyscall(SYSCALL_ESCROW_OPEN_DISPUTE);
+        this.assembler.emitSyscall(syscall);
     }
     emitEscrowResolveDisputeSyscall(escrowReg, buyerAmountReg, sellerAmountReg, evidenceReg) {
         this.assembler.emitMove(11, buyerAmountReg);
@@ -19355,6 +19989,8 @@ class StudioCodeGenerator {
             case 'AxtDescriptor':
             case 'AssetHandle':
             case 'ProofBlob':
+            case 'SoracloudRequest':
+            case 'SoracloudResponse':
                 return this.compileExpressionAsTypedPointer(expression, keyType, callStack, locals);
             case 'Json':
             case 'Blob':
@@ -19525,6 +20161,8 @@ class StudioCodeGenerator {
             case 'AxtDescriptor':
             case 'AssetHandle':
             case 'ProofBlob':
+            case 'SoracloudRequest':
+            case 'SoracloudResponse':
                 return { kind: 'pointer', register: this.compileScalarStatePointerReference(baseLiteral, pointerTypeIdForValueType(valueType)), items: null, fieldNames: null, valueType };
             case 'NoritoBytes':
                 return { kind: 'pointer', register: this.compileScalarStatePointerReference(baseLiteral, POINTER_TYPE_BLOB), items: null, fieldNames: null, valueType };
@@ -19644,6 +20282,8 @@ class StudioCodeGenerator {
             case 'AxtDescriptor':
             case 'AssetHandle':
             case 'ProofBlob':
+            case 'SoracloudRequest':
+            case 'SoracloudResponse':
                 return { kind: 'pointer', register: this.emitMapReadPointerFromNorito(pathReg, blobReg, pointerTypeIdForValueType(valueType)), items: null, fieldNames: null, valueType };
             case 'NoritoBytes':
                 return { kind: 'pointer', register: this.emitMapReadPointerFromNorito(pathReg, blobReg, POINTER_TYPE_BLOB), items: null, fieldNames: null, valueType };
@@ -19729,7 +20369,9 @@ class StudioCodeGenerator {
             case 'NftId':
             case 'AxtDescriptor':
             case 'AssetHandle':
-            case 'ProofBlob': {
+            case 'ProofBlob':
+            case 'SoracloudRequest':
+            case 'SoracloudResponse': {
                 const blobReg = this.emitStateGet(pathReg);
                 const typeId = pointerTypeIdForValueType(valueType);
                 const result = this.emitMapReadPointerFromNorito(pathReg, blobReg, typeId);
@@ -19836,7 +20478,9 @@ class StudioCodeGenerator {
             case 'NftId':
             case 'AxtDescriptor':
             case 'AssetHandle':
-            case 'ProofBlob': {
+            case 'ProofBlob':
+            case 'SoracloudRequest':
+            case 'SoracloudResponse': {
                 const blobReg = this.emitStateGet(pathReg);
                 const typeId = pointerTypeIdForValueType(valueType);
                 const result = this.emitMapReadPointerFromNorito(pathReg, blobReg, typeId);
@@ -19928,6 +20572,8 @@ class StudioCodeGenerator {
             case 'AxtDescriptor':
             case 'AssetHandle':
             case 'ProofBlob':
+            case 'SoracloudRequest':
+            case 'SoracloudResponse':
                 return this.emitPointerToNorito(this.bindingRegister(binding, ['pointer'], 1, 1, 'Map value is not pointer-like in the browser compiler.'));
             case 'NoritoBytes':
                 return this.emitPointerToNorito(this.bindingRegister(binding, ['pointer'], 1, 1, 'Map value is not bytes-like in the browser compiler.'));
@@ -21155,6 +21801,8 @@ class StudioCodeGenerator {
             case 'AxtDescriptor':
             case 'AssetHandle':
             case 'ProofBlob':
+            case 'SoracloudRequest':
+            case 'SoracloudResponse':
                 return this.compileExpressionAsTypedPointer(expression, type, callStack, locals);
             case 'Name':
                 return this.compileExpressionAsNamePointer(expression, callStack, locals);
@@ -21823,6 +22471,56 @@ class StudioCodeGenerator {
                     this.releaseExpressionRegisterIfTemporary(evidenceReg, locals);
                 return this.finishNativeEscrowCall(expression, allowVoidResult, sellerAmountReg);
             }
+            case 'anonymous_escrow_open_offer':
+            case 'anonymous_escrow_release':
+            case 'anonymous_escrow_cancel':
+            case 'anonymous_escrow_resolve_dispute': {
+                if (expression.args.length !== 1) {
+                    throw new StudioCompileError(`${expression.name} expects (Blob|bytes) Norito request payload in the browser compiler.`, expression.line, expression.column);
+                }
+                const requestReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+                const syscall = expression.name === 'anonymous_escrow_open_offer'
+                    ? SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
+                    : expression.name === 'anonymous_escrow_release'
+                        ? SYSCALL_ANONYMOUS_ESCROW_RELEASE
+                        : expression.name === 'anonymous_escrow_cancel'
+                            ? SYSCALL_ANONYMOUS_ESCROW_CANCEL
+                            : SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE;
+                this.emitEscrowSingleRequestSyscall(requestReg, syscall);
+                const discardReg = this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
+                    ?? (this.isExpressionRegisterTemporary(requestReg, locals) ? requestReg : null);
+                this.releaseExpressionRegisterIfTemporary(requestReg, locals);
+                return this.finishNativeEscrowCall(expression, allowVoidResult, discardReg);
+            }
+            case 'anonymous_escrow_accept':
+            case 'anonymous_escrow_mark_payment_sent': {
+                if (expression.args.length !== 1) {
+                    throw new StudioCompileError(`${expression.name} expects (Name) in the browser compiler.`, expression.line, expression.column);
+                }
+                const escrowReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+                const syscall = expression.name === 'anonymous_escrow_accept'
+                    ? SYSCALL_ANONYMOUS_ESCROW_ACCEPT
+                    : SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT;
+                this.emitEscrowSingleNameSyscall(escrowReg, syscall);
+                const discardReg = this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
+                    ?? (this.isExpressionRegisterTemporary(escrowReg, locals) ? escrowReg : null);
+                this.releaseExpressionRegisterIfTemporary(escrowReg, locals);
+                return this.finishNativeEscrowCall(expression, allowVoidResult, discardReg);
+            }
+            case 'anonymous_escrow_open_dispute': {
+                if (expression.args.length !== 1 && expression.args.length !== 2) {
+                    throw new StudioCompileError('anonymous_escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes]) in the browser compiler.', expression.line, expression.column);
+                }
+                const escrowReg = this.compileExpressionAsNamePointer(expression.args[0], callStack, locals);
+                const evidenceReg = this.compileOptionalEscrowEvidencePointer(expression.args[1], callStack, locals);
+                this.emitEscrowOpenDisputeSyscall(escrowReg, evidenceReg, SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE);
+                const discardReg = this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement)
+                    ?? (this.isExpressionRegisterTemporary(escrowReg, locals) ? escrowReg : null);
+                this.releaseExpressionRegisterIfTemporary(escrowReg, locals);
+                if (evidenceReg !== null)
+                    this.releaseExpressionRegisterIfTemporary(evidenceReg, locals);
+                return this.finishNativeEscrowCall(expression, allowVoidResult, discardReg);
+            }
             default:
                 return undefined;
         }
@@ -22030,6 +22728,10 @@ class StudioCodeGenerator {
                     return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, 'AssetHandle', callStack, locals), 'AssetHandle');
                 case 'proof_blob':
                     return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, 'ProofBlob', callStack, locals), 'ProofBlob');
+                case 'soracloud_request':
+                    return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, 'SoracloudRequest', callStack, locals), 'SoracloudRequest');
+                case 'soracloud_response':
+                    return compilePointerBinding(this.compileExpressionAsTypedPointer(arg, 'SoracloudResponse', callStack, locals), 'SoracloudResponse');
             }
         }
         const jsonGetter = jsonGetterSpec(expression.name);
@@ -22276,7 +22978,89 @@ class StudioCodeGenerator {
             if (sysvarSpec.valueType === 'int') {
                 return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
             }
+            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: sysvarSpec.valueType };
+        }
+        const noritoReadSpec = noritoReadBuiltinSpec(expression.name);
+        if (noritoReadSpec !== null) {
+            if (expression.args.length !== 1) {
+                throw new StudioCompileError(`${noritoReadSpec.message} in the browser compiler.`, expression.line, expression.column);
+            }
+            if (!this.tryEmitNoritoBytesPointerIntoRegister(expression.args[0], locals, 10)) {
+                const payloadReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+                this.assembler.emitMove(10, payloadReg);
+            }
+            this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+            this.assembler.emitSyscall(noritoReadSpec.syscall);
+            const register = this.assembler.allocRegister();
+            this.assembler.emitMove(register, 10);
+            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: noritoReadSpec.valueType };
+        }
+        const typedQuerySpec = typedQueryBuiltinSpec(expression.name);
+        if (typedQuerySpec !== null) {
+            if (expression.args.length !== 1) {
+                throw new StudioCompileError(`${typedQuerySpec.message} in the browser compiler.`, expression.line, expression.column);
+            }
+            const keyReg = this.compileExpressionAsPointerAbiTlv(expression.args[0], callStack, locals, false, typedQuerySpec.message);
+            this.assembler.emitMove(10, keyReg);
+            this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+            this.assembler.emitSyscall(typedQuerySpec.syscall);
+            const register = this.assembler.allocRegister();
+            this.assembler.emitMove(register, 10);
             return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
+        }
+        const accountBalanceSpec = accountBalanceBuiltinSpec(expression.name);
+        if (accountBalanceSpec !== null) {
+            if (expression.args.length !== 2) {
+                throw new StudioCompileError(`${accountBalanceSpec.message} in the browser compiler.`, expression.line, expression.column);
+            }
+            const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
+            const assetReg = this.compileExpressionAsAssetDefinitionPointer(expression.args[1], callStack, locals);
+            this.emitTwoPointerSyscall(accountReg, assetReg, accountBalanceSpec.syscall);
+            const register = this.assembler.allocRegister();
+            this.assembler.emitMove(register, 10);
+            return { kind: 'pointer', register, items: null, fieldNames: null, valueType: accountBalanceSpec.valueType };
+        }
+        const privacyOutputSpec = privacyOutputBuiltinSpec(expression.name);
+        if (privacyOutputSpec !== null) {
+            if (expression.args.length !== privacyOutputSpec.args.length) {
+                throw new StudioCompileError(`${privacyOutputSpec.message} in the browser compiler.`, expression.line, expression.column);
+            }
+            if (expression.name === 'commit_output') {
+                this.assembler.emitSyscall(privacyOutputSpec.syscall);
+                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+            }
+            else {
+                const argReg = this.compileExpressionAsInt(expression.args[0], callStack, locals);
+                this.assembler.emitMove(10, argReg);
+                this.assembler.emitSyscall(privacyOutputSpec.syscall);
+                if (privacyOutputSpec.valueType === 'int') {
+                    const register = this.assembler.allocRegister();
+                    this.assembler.emitMove(register, 10);
+                    return { kind: 'int', register, items: null, fieldNames: null, valueType: 'int' };
+                }
+                this.emitDiscardedVoidIntrinsicResult(argReg);
+            }
+            if (!allowVoidResult) {
+                throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+            }
+            return null;
+        }
+        const smartContractLifecycleSpec = smartContractLifecycleBuiltinSpec(expression.name);
+        if (smartContractLifecycleSpec !== null) {
+            if (expression.args.length !== 1) {
+                throw new StudioCompileError(`${expression.name} expects (Blob|bytes) pointer to NoritoBytes lifecycle request in the browser compiler.`, expression.line, expression.column);
+            }
+            if (!this.tryEmitNoritoBytesPointerIntoRegister(expression.args[0], locals, 10)) {
+                const payloadReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+                this.assembler.emitMove(10, payloadReg);
+            }
+            this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+            this.assembler.emitSyscall(smartContractLifecycleSpec.syscall);
+            this.emitDiscardedVoidIntrinsicResult(this.deadArgumentRegisterAfterStatement(expression.args[0], locals, liveAfterStatement) ?? this.assembler.allocRegister());
+            if (!allowVoidResult) {
+                throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+            }
+            return null;
         }
         if (isMapNewCallName(expression.name)) {
             throw new StudioCompileError('Map::new is only supported when initializing a typed local map binding in the browser compiler.', expression.line, expression.column);
@@ -22633,6 +23417,40 @@ class StudioCodeGenerator {
                 this.assembler.emitMove(register, 10);
                 return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'Blob' };
             }
+            case 'query_execute_norito': {
+                if (expression.args.length !== 1) {
+                    throw new StudioCompileError('query_execute_norito expects exactly one NoritoBytes argument in the browser compiler.', expression.line, expression.column);
+                }
+                if (!this.tryEmitNoritoBytesPointerIntoRegister(expression.args[0], locals, 10)) {
+                    const payloadReg = this.compileExpressionAsNoritoBytesPointer(expression.args[0], callStack, locals);
+                    this.assembler.emitMove(10, payloadReg);
+                }
+                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+                this.assembler.emitSyscall(SYSCALL_QUERY_EXECUTE_NORITO);
+                const register = this.assembler.allocRegister();
+                this.assembler.emitMove(register, 10);
+                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'NoritoBytes' };
+            }
+            case 'soracloud_read_committed_state':
+            case 'soracloud_emit_state_mutation':
+            case 'soracloud_emit_mailbox_message':
+            case 'soracloud_append_journal':
+            case 'soracloud_publish_checkpoint':
+            case 'soracloud_read_secret':
+            case 'soracloud_read_credential':
+            case 'soracloud_egress_fetch':
+            case 'soracloud_read_config':
+            case 'soracloud_read_secret_envelope': {
+                if (expression.args.length !== 1) {
+                    throw new StudioCompileError(`${expression.name} expects (SoracloudRequest) in the browser compiler.`, expression.line, expression.column);
+                }
+                const spec = soracloudBuiltinSpec(expression.name);
+                const requestReg = this.compileExpressionAsTypedPointer(expression.args[0], 'SoracloudRequest', callStack, locals);
+                this.emitOnePointerSyscall(requestReg, spec.syscall);
+                const register = this.assembler.allocRegister();
+                this.assembler.emitMove(register, 10);
+                return { kind: 'pointer', register, items: null, fieldNames: null, valueType: 'SoracloudResponse' };
+            }
             case 'call_contract': {
                 if (expression.args.length !== 3) {
                     throw new StudioCompileError('call_contract expects (String|Blob, String|Blob, Json) in the browser compiler.', expression.line, expression.column);
@@ -22945,6 +23763,49 @@ class StudioCodeGenerator {
                 this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
                 if (!allowVoidResult) {
                     throw new StudioCompileError('unregister_account does not return a value in the browser compiler.', expression.line, expression.column);
+                }
+                return null;
+            }
+            case 'add_signatory':
+            case 'remove_signatory': {
+                if (expression.args.length !== 2) {
+                    throw new StudioCompileError(`${expression.name} expects (AccountId, Json) in the browser compiler.`, expression.line, expression.column);
+                }
+                const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
+                const signatoryReg = this.compileExpressionAsJsonPointer(expression.args[1], callStack, locals);
+                this.emitTwoPointerSyscall(accountReg, signatoryReg, expression.name === 'add_signatory'
+                    ? SYSCALL_ADD_SIGNATORY
+                    : SYSCALL_REMOVE_SIGNATORY);
+                this.emitDiscardedVoidIntrinsicResult(this.assembler.allocRegister());
+                if (!allowVoidResult) {
+                    throw new StudioCompileError(`${expression.name} does not return a value in the browser compiler.`, expression.line, expression.column);
+                }
+                return null;
+            }
+            case 'set_account_quorum': {
+                if (expression.args.length !== 2) {
+                    throw new StudioCompileError('set_account_quorum expects (AccountId, numeric) in the browser compiler.', expression.line, expression.column);
+                }
+                const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);
+                const quorumType = this.inferExpressionValueType(expression.args[1], locals);
+                let quorumReg;
+                if (isSemanticWideNumericType(quorumType)) {
+                    const numericReg = this.compileExpressionAsNumericPointer(expression.args[1], callStack, locals);
+                    quorumReg = this.emitNumericToInt(numericReg);
+                    this.releaseExpressionRegisterIfTemporary(numericReg, locals);
+                }
+                else {
+                    quorumReg = this.compileExpressionAsInt(expression.args[1], callStack, locals);
+                }
+                this.assembler.emitMove(10, accountReg);
+                this.assembler.emitMove(11, quorumReg);
+                this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+                this.assembler.emitSyscall(SYSCALL_SET_ACCOUNT_QUORUM);
+                this.emitDiscardedVoidIntrinsicResult(this.isExpressionRegisterTemporary(quorumReg, locals)
+                    ? quorumReg
+                    : this.assembler.allocRegister());
+                if (!allowVoidResult) {
+                    throw new StudioCompileError('set_account_quorum does not return a value in the browser compiler.', expression.line, expression.column);
                 }
                 return null;
             }
@@ -25381,7 +26242,7 @@ class StudioCodeGenerator {
                 return this.compileScalarStatePointerReference(expression.name, POINTER_TYPE_BLOB);
             if (isSemanticWideNumericType(stateType))
                 return this.compileScalarStatePointerReference(expression.name, POINTER_TYPE_NORITO_BYTES);
-            if (isAxtPointerValueType(stateType)) {
+            if (isAxtPointerValueType(stateType) || isSoracloudPointerValueType(stateType)) {
                 const typeId = pointerTypeIdForValueType(stateType);
                 if (typeId !== null)
                     return this.compileScalarStatePointerReference(expression.name, typeId);
@@ -26018,7 +26879,8 @@ class StudioCodeGenerator {
         if (expression.kind === 'stateReference' && this.consts.has(expression.name) && !locals.has(expression.name)) {
             return this.withConstResolution(expression.name, expression.line, expression.column, (decl) => this.compileExpressionAsTypedPointer(decl.value, valueType, callStack, locals));
         }
-        if (isAxtPointerValueType(valueType) && this.tryEmitNoritoBytesPointerIntoRegister(expression, locals, 10)) {
+        if ((isAxtPointerValueType(valueType) || isSoracloudPointerValueType(valueType))
+            && this.tryEmitNoritoBytesPointerIntoRegister(expression, locals, 10)) {
             this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
             this.emitSmallInt(11, typeId);
             this.assembler.emitSyscall(SYSCALL_POINTER_FROM_NORITO);
@@ -26296,7 +27158,7 @@ class StudioCodeGenerator {
         }
         if (stateType === 'Name')
             return this.emitPointerToNorito(this.compileExpressionAsNamePointer(expression, callStack, locals), preferredResultRegister);
-        if (isAxtPointerValueType(stateType))
+        if (isAxtPointerValueType(stateType) || isSoracloudPointerValueType(stateType))
             return this.emitPointerToNorito(this.compileExpressionAsTypedPointer(expression, stateType, callStack, locals), preferredResultRegister);
         if (stateType === 'NoritoBytes')
             return this.emitPointerToNorito(this.compileExpressionAsPointer(expression, callStack, locals), preferredResultRegister);
@@ -26900,7 +27762,9 @@ class StudioCodeGenerator {
                 }
                 return this.maybePrepublishLocalBinding(name, binding, prepublishedPointerLocalNames);
             }
-            if (typeof resolvedDeclaredType === 'string' && isAxtPointerValueType(resolvedDeclaredType)) {
+            if (typeof resolvedDeclaredType === 'string'
+                && (isAxtPointerValueType(resolvedDeclaredType)
+                    || isSoracloudPointerValueType(resolvedDeclaredType))) {
                 const rematerializableLiteral = typedPointerLiteralFromExpression(expression, resolvedDeclaredType, locals);
                 if (rematerializableLiteral !== null) {
                     return this.maybePrepublishLocalBinding(name, this.createRematerializableTypedPointerLiteralBinding(rematerializableLiteral, expression.line, expression.column, this.logicalAxtTypedPointerRegisterForRematerializableLocal(resolvedDeclaredType)), prepublishedPointerLocalNames);
@@ -26971,7 +27835,8 @@ class StudioCodeGenerator {
                 || this.shouldReuseDirectLiteralLocalBinding(expression, sourceBinding)
                 || this.shouldReuseDirectLocalMapReadBinding(expression, sourceBinding, locals)
                 || (typeof resolvedDeclaredType === 'string'
-                    && isAxtPointerValueType(resolvedDeclaredType)
+                    && (isAxtPointerValueType(resolvedDeclaredType)
+                        || isSoracloudPointerValueType(resolvedDeclaredType))
                     && expression.kind === 'call'
                     && pointerConstructorValueType(expression.name) === resolvedDeclaredType)
                 || (this.directVoidReturnHalts
@@ -27135,7 +28000,8 @@ class StudioCodeGenerator {
             }
             return this.maybePrepublishLocalBinding(name, binding, prepublishedPointerLocalNames);
         }
-        if (typeof valueType === 'string' && isAxtPointerValueType(valueType)) {
+        if (typeof valueType === 'string'
+            && (isAxtPointerValueType(valueType) || isSoracloudPointerValueType(valueType))) {
             const rematerializableLiteral = typedPointerLiteralFromExpression(expression, valueType, locals);
             if (rematerializableLiteral !== null) {
                 return this.maybePrepublishLocalBinding(name, this.createRematerializableTypedPointerLiteralBinding(rematerializableLiteral, expression.line, expression.column, this.logicalAxtTypedPointerRegisterForRematerializableLocal(valueType)), prepublishedPointerLocalNames);
@@ -27206,7 +28072,7 @@ class StudioCodeGenerator {
             || this.shouldReuseDirectLiteralLocalBinding(expression, sourceBinding)
             || this.shouldReuseDirectLocalMapReadBinding(expression, sourceBinding, locals)
             || (typeof valueType === 'string'
-                && isAxtPointerValueType(valueType)
+                && (isAxtPointerValueType(valueType) || isSoracloudPointerValueType(valueType))
                 && expression.kind === 'call'
                 && pointerConstructorValueType(expression.name) === valueType)
             || (this.directVoidReturnHalts
@@ -27913,7 +28779,8 @@ class StudioCodeGenerator {
                 || stateType === 'Name'
                 || stateType === 'NoritoBytes'
                 || isSemanticWideNumericType(stateType)
-                || isAxtPointerValueType(stateType);
+                || isAxtPointerValueType(stateType)
+                || isSoracloudPointerValueType(stateType);
         }
         if (expression.kind === 'call') {
             const structDecl = this.structs.get(expression.name);
@@ -27931,6 +28798,12 @@ class StudioCodeGenerator {
             const sysvarSpec = sysvarBuiltinSpec(expression.name);
             if (sysvarSpec !== null)
                 return sysvarSpec.valueType !== 'int';
+            if (noritoReadBuiltinSpec(expression.name) !== null)
+                return true;
+            if (typedQueryBuiltinSpec(expression.name) !== null)
+                return true;
+            if (accountBalanceBuiltinSpec(expression.name) !== null)
+                return true;
             if (sm4BuiltinSpec(expression.name) !== null)
                 return true;
             if (signatureBuiltinName(expression.name) !== null)
@@ -27968,6 +28841,7 @@ class StudioCodeGenerator {
                 || expression.name === 'schema_info'
                 || expression.name === 'state_get'
                 || expression.name === 'state_keys'
+                || soracloudBuiltinSpec(expression.name) !== null
                 || expression.name === 'json_get_json'
                 || expression.name === 'json_get_name'
                 || expression.name === 'json_get_account_id'
@@ -28074,6 +28948,19 @@ class StudioCodeGenerator {
             const sysvarSpec = sysvarBuiltinSpec(expression.name);
             if (sysvarSpec !== null)
                 return sysvarSpec.valueType;
+            const noritoReadSpec = noritoReadBuiltinSpec(expression.name);
+            if (noritoReadSpec !== null)
+                return noritoReadSpec.valueType;
+            if (typedQueryBuiltinSpec(expression.name) !== null)
+                return 'NoritoBytes';
+            const accountBalanceSpec = accountBalanceBuiltinSpec(expression.name);
+            if (accountBalanceSpec !== null)
+                return accountBalanceSpec.valueType;
+            const privacyOutputSpec = privacyOutputBuiltinSpec(expression.name);
+            if (privacyOutputSpec !== null && privacyOutputSpec.valueType !== null)
+                return privacyOutputSpec.valueType;
+            if (soracloudBuiltinSpec(expression.name) !== null)
+                return 'SoracloudResponse';
             if (sm4BuiltinSpec(expression.name) !== null)
                 return 'NoritoBytes';
             if (signatureBuiltinName(expression.name) !== null)
@@ -28154,8 +29041,16 @@ class StudioCodeGenerator {
                 return 'bool';
             if (expression.name === 'state_len' || expression.name === 'state_count')
                 return 'int';
-            if (expression.name === 'execute_query')
+            if (expression.name === 'execute_query' || expression.name === 'query_execute_norito')
                 return 'Blob';
+            if (typedQueryBuiltinSpec(expression.name) !== null)
+                return 'NoritoBytes';
+            const fallbackAccountBalanceSpec = accountBalanceBuiltinSpec(expression.name);
+            if (fallbackAccountBalanceSpec !== null)
+                return fallbackAccountBalanceSpec.valueType;
+            const fallbackPrivacyOutputSpec = privacyOutputBuiltinSpec(expression.name);
+            if (fallbackPrivacyOutputSpec !== null && fallbackPrivacyOutputSpec.valueType !== null)
+                return fallbackPrivacyOutputSpec.valueType;
             if (expression.name === 'build_submit_ballot_inline' || expression.name === 'build_unshield_inline')
                 return 'NoritoBytes';
             if (expression.name === 'ensure' || expression.name === 'get_or_default' || expression.name === 'get_or') {

@@ -376,7 +376,8 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | Entrypoint { .. }
         | GetTriggerEvent { .. }
         | TransferBatchBegin
-        | TransferBatchEnd => {}
+        | TransferBatchEnd
+        | CommitOutput => {}
         Binary { left, right, .. } => {
             f(*left);
             f(*right);
@@ -507,7 +508,21 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | EscrowMarkPaymentSent { escrow }
         | EscrowRelease { escrow }
         | EscrowCancel { escrow } => f(*escrow),
+        AnonymousEscrowOpenOffer { request }
+        | AnonymousEscrowRelease { request }
+        | AnonymousEscrowCancel { request }
+        | AnonymousEscrowResolveDispute { request } => f(*request),
+        AnonymousEscrowAccept { escrow } | AnonymousEscrowMarkPaymentSent { escrow } => f(*escrow),
         EscrowOpenDispute {
+            escrow,
+            evidence_hashes,
+        } => {
+            f(*escrow);
+            if let Some(evidence_hashes) = evidence_hashes {
+                f(*evidence_hashes);
+            }
+        }
+        AnonymousEscrowOpenDispute {
             escrow,
             evidence_hashes,
         } => {
@@ -593,6 +608,14 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*to);
         }
         RegisterAccount { account } | UnregisterAccount { account } => f(*account),
+        AddSignatory { account, signatory } | RemoveSignatory { account, signatory } => {
+            f(*account);
+            f(*signatory);
+        }
+        SetAccountQuorum { account, quorum } => {
+            f(*account);
+            f(*quorum);
+        }
         GrantPermission { account, token } | RevokePermission { account, token } => {
             f(*account);
             f(*token);
@@ -703,7 +726,21 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         Instr::ZkVerify { payload, .. }
         | Instr::VendorExecuteInstruction { payload }
         | Instr::VendorExecuteQuery { payload, .. }
-        | Instr::QueryExecuteNorito { payload, .. } => f(*payload),
+        | Instr::QueryExecuteNorito { payload, .. }
+        | Instr::QueryGet { key: payload, .. }
+        | Instr::SmartContractLifecycle { payload, .. }
+        | Instr::ZkRootsGet { payload, .. }
+        | Instr::ZkVoteGetTally { payload, .. }
+        | Instr::VrfEpochSeed { payload, .. }
+        | Instr::SoracloudHostCall {
+            request: payload, ..
+        } => f(*payload),
+        Instr::GetAccountBalance { account, asset, .. } => {
+            f(*account);
+            f(*asset);
+        }
+        Instr::GetPrivateInput { index, .. } => f(*index),
+        Instr::UseNullifier { nullifier } => f(*nullifier),
         StateGet { path, .. } => f(*path),
         StateSet { path, value } => {
             f(*path);
@@ -892,6 +929,13 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Entrypoint { dest }
         | Instr::CallContract { dest, .. }
         | Instr::QueryExecuteNorito { dest, .. }
+        | Instr::QueryGet { dest, .. }
+        | Instr::GetAccountBalance { dest, .. }
+        | Instr::GetPrivateInput { dest, .. }
+        | Instr::ZkRootsGet { dest, .. }
+        | Instr::ZkVoteGetTally { dest, .. }
+        | Instr::VrfEpochSeed { dest, .. }
+        | Instr::SoracloudHostCall { dest, .. }
         | Instr::ResolveAccountAlias { dest, .. }
         | Instr::GetTriggerEvent { dest }
         | Instr::ActorAccount { dest, .. }
@@ -966,6 +1010,13 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::EscrowCancel { .. }
         | Instr::EscrowOpenDispute { .. }
         | Instr::EscrowResolveDispute { .. }
+        | Instr::AnonymousEscrowOpenOffer { .. }
+        | Instr::AnonymousEscrowAccept { .. }
+        | Instr::AnonymousEscrowMarkPaymentSent { .. }
+        | Instr::AnonymousEscrowRelease { .. }
+        | Instr::AnonymousEscrowCancel { .. }
+        | Instr::AnonymousEscrowOpenDispute { .. }
+        | Instr::AnonymousEscrowResolveDispute { .. }
         | Instr::MintAsset { .. }
         | Instr::BurnAsset { .. }
         | Instr::CreateNft { .. }
@@ -976,6 +1027,9 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::SetAccountDetail { .. }
         | Instr::RegisterDomain { .. }
         | Instr::RegisterAccount { .. }
+        | Instr::AddSignatory { .. }
+        | Instr::RemoveSignatory { .. }
+        | Instr::SetAccountQuorum { .. }
         | Instr::UnregisterDomain { .. }
         | Instr::UnregisterAsset { .. }
         | Instr::UnregisterAccount { .. }
@@ -1009,6 +1063,9 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::AxtCommit
         | Instr::TransferBatchBegin
         | Instr::TransferBatchEnd
+        | Instr::UseNullifier { .. }
+        | Instr::CommitOutput
+        | Instr::SmartContractLifecycle { .. }
         | Instr::ExpectRejectAs { .. } => None,
         Instr::CallMulti { .. } | Instr::MapLoadPair { .. } => None,
     }

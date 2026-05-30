@@ -107,6 +107,10 @@ pub enum Type {
     AssetHandle,
     /// Proof material supplied by dataspace verifiers.
     ProofBlob,
+    /// Soracloud host request envelope pointer.
+    SoracloudRequest,
+    /// Soracloud host response envelope pointer.
+    SoracloudResponse,
     AccountId,
     AssetDefinitionId,
     AssetId,
@@ -208,6 +212,9 @@ thread_local! {
 }
 
 const SENSITIVE_SYSCALLS: &[&str] = &[
+    "add_signatory",
+    "remove_signatory",
+    "set_account_quorum",
     "set_account_detail",
     "escrow_open_offer",
     "escrow_accept",
@@ -216,8 +223,26 @@ const SENSITIVE_SYSCALLS: &[&str] = &[
     "escrow_cancel",
     "escrow_open_dispute",
     "escrow_resolve_dispute",
+    "anonymous_escrow_open_offer",
+    "anonymous_escrow_accept",
+    "anonymous_escrow_mark_payment_sent",
+    "anonymous_escrow_release",
+    "anonymous_escrow_cancel",
+    "anonymous_escrow_open_dispute",
+    "anonymous_escrow_resolve_dispute",
+    "soracloud_read_committed_state",
+    "soracloud_emit_state_mutation",
+    "soracloud_emit_mailbox_message",
+    "soracloud_append_journal",
+    "soracloud_publish_checkpoint",
+    "soracloud_read_secret",
+    "soracloud_read_credential",
+    "soracloud_egress_fetch",
+    "soracloud_read_config",
+    "soracloud_read_secret_envelope",
     "transfer_v1_batch_begin",
     "transfer_v1_batch_end",
+    "transfer_v1_batch_apply",
     "mint_asset",
     "burn_asset",
     "register_asset",
@@ -238,6 +263,11 @@ const SENSITIVE_SYSCALLS: &[&str] = &[
     "remove_trigger",
     "unregister_trigger",
     "set_trigger_enabled",
+    "deactivate_contract_instance",
+    "remove_smart_contract_bytes",
+    "register_smart_contract_code",
+    "register_smart_contract_bytes",
+    "activate_contract_instance",
     "grant_permission",
     "revoke_permission",
     "create_role",
@@ -253,7 +283,12 @@ const INSTRUCTION_EMITTING_BUILTINS: &[&str] = &[
     "call_contract",
 ];
 
-const HOST_SIDE_EFFECT_BUILTINS: &[&str] = &["subscription_bill", "subscription_record_usage"];
+const HOST_SIDE_EFFECT_BUILTINS: &[&str] = &[
+    "subscription_bill",
+    "subscription_record_usage",
+    "use_nullifier",
+    "commit_output",
+];
 
 pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     // Collect struct definitions up front and publish to thread-local env for this analysis pass.
@@ -456,6 +491,8 @@ fn type_name(ty: &Type) -> String {
         Type::AxtDescriptor => "AxtDescriptor".into(),
         Type::AssetHandle => "AssetHandle".into(),
         Type::ProofBlob => "ProofBlob".into(),
+        Type::SoracloudRequest => "SoracloudRequest".into(),
+        Type::SoracloudResponse => "SoracloudResponse".into(),
         Type::AccountId => "AccountId".into(),
         Type::AssetDefinitionId => "AssetDefinitionId".into(),
         Type::AssetId => "AssetId".into(),
@@ -1593,6 +1630,8 @@ pub fn is_pointer_type(ty: &Type) -> bool {
             | Type::AxtDescriptor
             | Type::AssetHandle
             | Type::ProofBlob
+            | Type::SoracloudRequest
+            | Type::SoracloudResponse
     )
 }
 
@@ -3002,6 +3041,26 @@ fn analyze_statement(
     }
 }
 
+fn query_helper_accepts_arg(builtin: Builtin, ty: &Type) -> bool {
+    match builtin {
+        Builtin::QueryExecuteNorito
+        | Builtin::QueryGetContractManifest
+        | Builtin::ZkRootsGet
+        | Builtin::ZkVoteGetTally
+        | Builtin::VrfEpochSeed => is_blob_like(ty),
+        Builtin::QueryGetAccount => matches!(ty, Type::AccountId) || is_blob_like(ty),
+        Builtin::QueryGetAsset => matches!(ty, Type::AssetId) || is_blob_like(ty),
+        Builtin::QueryGetAssetDefinition => {
+            matches!(ty, Type::AssetDefinitionId) || is_blob_like(ty)
+        }
+        Builtin::QueryGetDomain => matches!(ty, Type::DomainId) || is_blob_like(ty),
+        Builtin::QueryGetNft => matches!(ty, Type::NftId) || is_blob_like(ty),
+        Builtin::QueryGetParameter => matches!(ty, Type::Name) || is_blob_like(ty),
+        Builtin::QueryGetContractInstance => matches!(ty, Type::Name) || is_blob_like(ty),
+        _ => false,
+    }
+}
+
 fn analyze_surface_builtin_call(
     builtin: Builtin,
     mut arg_typed: Vec<TypedExpr>,
@@ -3370,12 +3429,50 @@ fn analyze_surface_builtin_call(
                 ty: Type::Int,
             })
         }
-        Builtin::QueryExecuteNorito => {
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    message:
+        Builtin::QueryExecuteNorito
+        | Builtin::QueryGetAccount
+        | Builtin::QueryGetAsset
+        | Builtin::QueryGetAssetDefinition
+        | Builtin::QueryGetDomain
+        | Builtin::QueryGetNft
+        | Builtin::QueryGetParameter
+        | Builtin::QueryGetContractManifest
+        | Builtin::QueryGetContractInstance
+        | Builtin::ZkRootsGet
+        | Builtin::ZkVoteGetTally
+        | Builtin::VrfEpochSeed => {
+            if arg_typed.len() != 1 || !query_helper_accepts_arg(builtin, &arg_typed[0].ty) {
+                let expected = match builtin {
+                    Builtin::QueryExecuteNorito => {
                         "query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest"
-                            .into(),
+                    }
+                    Builtin::QueryGetAccount => "query_get_account expects (AccountId|Blob|bytes)",
+                    Builtin::QueryGetAsset => "query_get_asset expects (AssetId|Blob|bytes)",
+                    Builtin::QueryGetAssetDefinition => {
+                        "query_get_asset_definition expects (AssetDefinitionId|Blob|bytes)"
+                    }
+                    Builtin::QueryGetDomain => "query_get_domain expects (DomainId|Blob|bytes)",
+                    Builtin::QueryGetNft => "query_get_nft expects (NftId|Blob|bytes)",
+                    Builtin::QueryGetParameter => "query_get_parameter expects (Name|Blob|bytes)",
+                    Builtin::QueryGetContractManifest => {
+                        "query_get_contract_manifest expects (Blob|bytes) Norito Hash"
+                    }
+                    Builtin::QueryGetContractInstance => {
+                        "query_get_contract_instance expects (Name|Blob|bytes)"
+                    }
+                    Builtin::ZkRootsGet => {
+                        "zk_roots_get expects (Blob|bytes) pointer to NoritoBytes RootsGetRequest"
+                    }
+                    Builtin::ZkVoteGetTally => {
+                        "zk_vote_get_tally expects (Blob|bytes) pointer to NoritoBytes VoteGetTallyRequest"
+                    }
+                    Builtin::VrfEpochSeed => {
+                        "vrf_epoch_seed expects (Blob|bytes) pointer to NoritoBytes VrfEpochSeedRequest"
+                    }
+                    _ => unreachable!(),
+                };
+                return Err(SemanticError {
+                    message: expected.into(),
                 });
             }
             Ok(TypedExpr {
@@ -3384,6 +3481,158 @@ fn analyze_surface_builtin_call(
                     args: arg_typed,
                 },
                 ty: Type::Bytes,
+            })
+        }
+        Builtin::GetAccountBalance => {
+            if arg_typed.len() != 2
+                || !(arg_typed[0].ty == Type::AccountId
+                    && arg_typed[1].ty == Type::AssetDefinitionId)
+            {
+                return Err(SemanticError {
+                    message: "get_account_balance expects (AccountId, AssetDefinitionId)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Balance,
+            })
+        }
+        Builtin::GetPrivateInput => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "get_private_input expects (int index)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::UseNullifier => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "use_nullifier expects (int nullifier)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::CommitOutput => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: "commit_output expects no arguments".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::TransferV1BatchApply => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: "transfer_v1_batch_apply expects (Blob|bytes) Norito TransferAssetBatch"
+                        .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::DeactivateContractInstance
+        | Builtin::RemoveSmartContractBytes
+        | Builtin::RegisterSmartContractCode
+        | Builtin::RegisterSmartContractBytes
+        | Builtin::ActivateContractInstance => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message: format!(
+                        "{} expects (Blob|bytes) pointer to NoritoBytes lifecycle request",
+                        builtin.name()
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::SoracloudReadCommittedState
+        | Builtin::SoracloudEmitStateMutation
+        | Builtin::SoracloudEmitMailboxMessage
+        | Builtin::SoracloudAppendJournal
+        | Builtin::SoracloudPublishCheckpoint
+        | Builtin::SoracloudReadSecret
+        | Builtin::SoracloudReadCredential
+        | Builtin::SoracloudEgressFetch
+        | Builtin::SoracloudReadConfig
+        | Builtin::SoracloudReadSecretEnvelope => {
+            if arg_typed.len() != 1
+                || resolve_struct_type(&arg_typed[0].ty) != Type::SoracloudRequest
+            {
+                return Err(SemanticError {
+                    message: format!("{} expects (SoracloudRequest)", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::SoracloudResponse,
+            })
+        }
+        Builtin::AddSignatory | Builtin::RemoveSignatory => {
+            if arg_typed.len() != 2
+                || !(arg_typed[0].ty == Type::AccountId && arg_typed[1].ty == Type::Json)
+            {
+                return Err(SemanticError {
+                    message: format!("{} expects (AccountId, Json)", builtin.name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::SetAccountQuorum => {
+            if arg_typed.len() != 2
+                || !(arg_typed[0].ty == Type::AccountId && is_int_like(&arg_typed[1].ty))
+            {
+                return Err(SemanticError {
+                    message: "set_account_quorum expects (AccountId, numeric)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
             })
         }
         Builtin::Path => {
@@ -3920,6 +4169,40 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             ty: Type::Unit,
                         })
                     }
+                    "add_signatory" | "remove_signatory" => {
+                        if arg_typed.len() != 2
+                            || !(arg_typed[0].ty == Type::AccountId
+                                && arg_typed[1].ty == Type::Json)
+                        {
+                            return Err(SemanticError {
+                                message: format!("{callee} expects (AccountId, Json)"),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
+                    "set_account_quorum" => {
+                        if arg_typed.len() != 2
+                            || !(arg_typed[0].ty == Type::AccountId
+                                && is_int_like(&arg_typed[1].ty))
+                        {
+                            return Err(SemanticError {
+                                message: "set_account_quorum expects (AccountId, numeric)".into(),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
                     "transfer_asset" => {
                         if arg_typed.len() != 4
                             || !(arg_typed[0].ty == Type::AccountId
@@ -4016,10 +4299,78 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             ty: Type::Unit,
                         })
                     }
+                    "anonymous_escrow_open_offer"
+                    | "anonymous_escrow_release"
+                    | "anonymous_escrow_cancel"
+                    | "anonymous_escrow_resolve_dispute" => {
+                        if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                            return Err(SemanticError {
+                                message: format!(
+                                    "{callee} expects (Blob|bytes) Norito request payload"
+                                ),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
+                    "anonymous_escrow_accept" | "anonymous_escrow_mark_payment_sent" => {
+                        if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                            return Err(SemanticError {
+                                message: format!("{callee} expects (Name)"),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
+                    "anonymous_escrow_open_dispute" => {
+                        if !(arg_typed.len() == 1 || arg_typed.len() == 2)
+                            || arg_typed[0].ty != Type::Name
+                            || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
+                        {
+                            return Err(SemanticError {
+                                message:
+                                    "anonymous_escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])"
+                                        .into(),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
                     "transfer_v1_batch_begin" | "transfer_v1_batch_end" => {
                         if !arg_typed.is_empty() {
                             return Err(SemanticError {
                                 message: format!("{callee} expects ()"),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
+                    "transfer_v1_batch_apply" => {
+                        if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                            return Err(SemanticError {
+                                message:
+                                    "transfer_v1_batch_apply expects (Blob|bytes) Norito TransferAssetBatch"
+                                        .into(),
                             });
                         }
                         Ok(TypedExpr {
@@ -4496,10 +4847,56 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Int,
                     })
                 }
-                "query_execute_norito" => {
-                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                "query_execute_norito"
+                | "query_get_account"
+                | "query_get_asset"
+                | "query_get_asset_definition"
+                | "query_get_domain"
+                | "query_get_nft"
+                | "query_get_parameter"
+                | "query_get_contract_manifest"
+                | "query_get_contract_instance"
+                | "zk_roots_get"
+                | "zk_vote_get_tally"
+                | "vrf_epoch_seed" => {
+                    let builtin = Builtin::from_name(&name).expect("query helper builtin");
+                    if arg_typed.len() != 1 || !query_helper_accepts_arg(builtin, &arg_typed[0].ty)
+                    {
+                        let expected = match name.as_str() {
+                            "query_execute_norito" => {
+                                "query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest"
+                            }
+                            "query_get_account" => {
+                                "query_get_account expects (AccountId|Blob|bytes)"
+                            }
+                            "query_get_asset" => "query_get_asset expects (AssetId|Blob|bytes)",
+                            "query_get_asset_definition" => {
+                                "query_get_asset_definition expects (AssetDefinitionId|Blob|bytes)"
+                            }
+                            "query_get_domain" => "query_get_domain expects (DomainId|Blob|bytes)",
+                            "query_get_nft" => "query_get_nft expects (NftId|Blob|bytes)",
+                            "query_get_parameter" => {
+                                "query_get_parameter expects (Name|Blob|bytes)"
+                            }
+                            "query_get_contract_manifest" => {
+                                "query_get_contract_manifest expects (Blob|bytes) Norito Hash"
+                            }
+                            "query_get_contract_instance" => {
+                                "query_get_contract_instance expects (Name|Blob|bytes)"
+                            }
+                            "zk_roots_get" => {
+                                "zk_roots_get expects (Blob|bytes) pointer to NoritoBytes RootsGetRequest"
+                            }
+                            "zk_vote_get_tally" => {
+                                "zk_vote_get_tally expects (Blob|bytes) pointer to NoritoBytes VoteGetTallyRequest"
+                            }
+                            "vrf_epoch_seed" => {
+                                "vrf_epoch_seed expects (Blob|bytes) pointer to NoritoBytes VrfEpochSeedRequest"
+                            }
+                            _ => unreachable!(),
+                        };
                         return Err(SemanticError {
-                            message: "query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest".into(),
+                            message: expected.into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -4615,7 +5012,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 // Typed constructors for pointer-ABI arguments
                 "account_id" | "asset_definition" | "asset_id" | "nft_id" | "name" | "json"
                 | "domain" | "domain_id" | "blob" | "norito_bytes" | "dataspace_id"
-                | "axt_descriptor" | "asset_handle" | "proof_blob" => {
+                | "axt_descriptor" | "asset_handle" | "proof_blob" | "soracloud_request"
+                | "soracloud_response" => {
                     if arg_typed.len() != 1 {
                         return Err(SemanticError {
                             message: format!("{name} expects one argument"),
@@ -4635,6 +5033,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         "axt_descriptor" => (Type::AxtDescriptor, true, false),
                         "asset_handle" => (Type::AssetHandle, true, false),
                         "proof_blob" => (Type::ProofBlob, true, false),
+                        "soracloud_request" => (Type::SoracloudRequest, true, false),
+                        "soracloud_response" => (Type::SoracloudResponse, true, false),
                         _ => unreachable!(),
                     };
                     let ok = matches!(arg_ty, Type::String)
@@ -4649,6 +5049,12 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             "name" => "string, Name, or Blob (NoritoBytes)",
                             "blob" | "norito_bytes" => "string or Blob|bytes",
                             "dataspace_id" => "string, DataSpaceId, or Blob|bytes (NoritoBytes)",
+                            "soracloud_request" => {
+                                "string, SoracloudRequest, or Blob|bytes (NoritoBytes)"
+                            }
+                            "soracloud_response" => {
+                                "string, SoracloudResponse, or Blob|bytes (NoritoBytes)"
+                            }
                             _ => "string, matching pointer type, or Blob|bytes (NoritoBytes)",
                         };
                         return Err(SemanticError {
@@ -5858,10 +6264,76 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Unit,
                     })
                 }
+                "anonymous_escrow_open_offer"
+                | "anonymous_escrow_release"
+                | "anonymous_escrow_cancel"
+                | "anonymous_escrow_resolve_dispute" => {
+                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                        return Err(SemanticError {
+                            message: format!("{name} expects (Blob|bytes) Norito request payload"),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                "anonymous_escrow_accept" | "anonymous_escrow_mark_payment_sent" => {
+                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                        return Err(SemanticError {
+                            message: format!("{name} expects (Name)"),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                "anonymous_escrow_open_dispute" => {
+                    if !(arg_typed.len() == 1 || arg_typed.len() == 2)
+                        || arg_typed[0].ty != Type::Name
+                        || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
+                    {
+                        return Err(SemanticError {
+                            message:
+                                "anonymous_escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])"
+                                    .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
                 "transfer_v1_batch_begin" | "transfer_v1_batch_end" => {
                     if !arg_typed.is_empty() {
                         return Err(SemanticError {
                             message: format!("{name} expects ()"),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                "transfer_v1_batch_apply" => {
+                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                        return Err(SemanticError {
+                            message:
+                                "transfer_v1_batch_apply expects (Blob|bytes) Norito TransferAssetBatch"
+                                    .into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -6424,6 +6896,8 @@ fn convert_type_expr(ty: &TypeExpr) -> Result<Type, SemanticError> {
             "AxtDescriptor" => Type::AxtDescriptor,
             "AssetHandle" => Type::AssetHandle,
             "ProofBlob" => Type::ProofBlob,
+            "SoracloudRequest" => Type::SoracloudRequest,
+            "SoracloudResponse" => Type::SoracloudResponse,
             "unit" | "()" => Type::Unit,
             // Recognize common Iroha types by name
             "AccountId" => Type::AccountId,

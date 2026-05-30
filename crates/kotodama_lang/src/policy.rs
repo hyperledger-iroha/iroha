@@ -201,7 +201,7 @@ impl Checker {
         let map_desc = format!("Map<{key_name}, {value_name}>");
         if self.seen.insert((origin.to_string(), map_desc.clone())) {
             let message = format!(
-                "on-chain profile forbids map with key type `{key_name}` in {origin}. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob."
+                "on-chain profile forbids map with key type `{key_name}` in {origin}. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob, SoracloudRequest, SoracloudResponse."
             );
             self.errors.push(PolicyError { message });
         }
@@ -222,6 +222,8 @@ fn is_allowed_map_key_type(ty: &Type) -> bool {
             | Type::AxtDescriptor
             | Type::AssetHandle
             | Type::ProofBlob
+            | Type::SoracloudRequest
+            | Type::SoracloudResponse
     )
 }
 
@@ -245,6 +247,8 @@ fn display_type(ty: &Type) -> String {
         Type::AxtDescriptor => "AxtDescriptor".to_string(),
         Type::AssetHandle => "AssetHandle".to_string(),
         Type::ProofBlob => "ProofBlob".to_string(),
+        Type::SoracloudRequest => "SoracloudRequest".to_string(),
+        Type::SoracloudResponse => "SoracloudResponse".to_string(),
         Type::Json => "Json".to_string(),
         Type::Unit => "()".to_string(),
         Type::Map(k, v) => format!("Map<{}, {}>", display_type(&k), display_type(&v)),
@@ -278,7 +282,7 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(
             errors[0].message,
-            "on-chain profile forbids map with key type `string` in expression in `foo`. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob."
+            "on-chain profile forbids map with key type `string` in expression in `foo`. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob, SoracloudRequest, SoracloudResponse."
         );
     }
 }
