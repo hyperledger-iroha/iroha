@@ -3310,6 +3310,82 @@ fn analyze_surface_builtin_call(
                 ty: Type::Unit,
             })
         }
+        Builtin::StateKeys => {
+            if arg_typed.len() != 3
+                || arg_typed[0].ty != Type::Name
+                || !is_int_like(&arg_typed[1].ty)
+                || !is_int_like(&arg_typed[2].ty)
+            {
+                return Err(SemanticError {
+                    message: "state_keys expects (Name, int offset, int limit)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::StateHas => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "state_has expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bool,
+            })
+        }
+        Builtin::StateLen => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "state_len expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::StateCount => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "state_count expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::QueryExecuteNorito => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    message:
+                        "query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
         Builtin::Path => {
             if arg_typed.len() != 2 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
@@ -3413,6 +3489,20 @@ fn analyze_surface_builtin_call(
                     args: arg_typed,
                 },
                 ty,
+            })
+        }
+        Builtin::SysvarAuthority => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: "sysvar_authority expects no arguments".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::AccountId,
             })
         }
     }
@@ -4346,6 +4436,80 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Unit,
                     })
                 }
+                "state_keys" => {
+                    if arg_typed.len() != 3
+                        || arg_typed[0].ty != Type::Name
+                        || !is_int_like(&arg_typed[1].ty)
+                        || !is_int_like(&arg_typed[2].ty)
+                    {
+                        return Err(SemanticError {
+                            message: "state_keys expects (Name, int offset, int limit)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bytes,
+                    })
+                }
+                "state_has" => {
+                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                        return Err(SemanticError {
+                            message: "state_has expects (Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bool,
+                    })
+                }
+                "state_len" => {
+                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                        return Err(SemanticError {
+                            message: "state_len expects (Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Int,
+                    })
+                }
+                "state_count" => {
+                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                        return Err(SemanticError {
+                            message: "state_count expects (Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Int,
+                    })
+                }
+                "query_execute_norito" => {
+                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                        return Err(SemanticError {
+                            message: "query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bytes,
+                    })
+                }
                 "path" => {
                     if arg_typed.len() != 2 || arg_typed[0].ty != Type::Name {
                         return Err(SemanticError {
@@ -4540,6 +4704,48 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             args: vec![],
                         },
                         ty: Type::Int,
+                    })
+                }
+                "block_time_ms" => {
+                    if !arg_typed.is_empty() {
+                        return Err(SemanticError {
+                            message: "block_time_ms expects no arguments".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: vec![],
+                        },
+                        ty: Type::Int,
+                    })
+                }
+                "chain_id" | "contract_address" | "entrypoint" => {
+                    if !arg_typed.is_empty() {
+                        return Err(SemanticError {
+                            message: format!("{name} expects no arguments"),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: vec![],
+                        },
+                        ty: Type::Bytes,
+                    })
+                }
+                "sysvar_authority" => {
+                    if !arg_typed.is_empty() {
+                        return Err(SemanticError {
+                            message: "sysvar_authority expects no arguments".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: vec![],
+                        },
+                        ty: Type::AccountId,
                     })
                 }
                 "resolve_account_alias" => {
@@ -4783,6 +4989,22 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             message:
                                 "sha3_hash expects (Blob|bytes) argument pointing to INPUT TLV"
                                     .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bytes,
+                    })
+                }
+                "blake2b256_hash" | "keccak256_hash" | "iroha_hash" => {
+                    if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                        return Err(SemanticError {
+                            message: format!(
+                                "{name} expects (Blob|bytes) argument pointing to INPUT TLV"
+                            ),
                         });
                     }
                     Ok(TypedExpr {

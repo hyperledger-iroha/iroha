@@ -667,6 +667,191 @@ fn compile_emits_block_height_syscall() {
 }
 
 #[test]
+fn compile_emits_extended_sysvar_helpers() {
+    let src = r#"
+        fn f() {
+            let block_time = block_time_ms();
+            let chain = chain_id();
+            let contract = contract_address();
+            let name = entrypoint();
+            info(block_time);
+            info(tlv_len(chain));
+            info(tlv_len(contract));
+            info(tlv_len(name));
+        }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let code_region = &code[off..];
+    for (name, syscall) in [
+        (
+            "SYSVAR_BLOCK_TIME_MS",
+            syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS,
+        ),
+        ("SYSVAR_CHAIN_ID", syscalls::SYSCALL_SYSVAR_CHAIN_ID),
+        (
+            "SYSVAR_CONTRACT_ADDRESS",
+            syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+        ),
+        ("SYSVAR_ENTRYPOINT", syscalls::SYSCALL_SYSVAR_ENTRYPOINT),
+    ] {
+        let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        assert!(
+            code_region.windows(want.len()).any(|window| window == want),
+            "{name} syscall not found"
+        );
+    }
+}
+
+#[test]
+fn semantic_rejects_extended_sysvar_helper_args() {
+    let prog = parse(r#"fn f() { let _chain = chain_id(1); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected sysvar arity error");
+    assert!(
+        err.message.contains("chain_id expects no arguments"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn compile_emits_extended_query_and_authority_sysvar_helpers() {
+    let src = r#"
+        view fn query() -> bytes {
+            let response = query_execute_norito(norito_bytes(b"query"));
+            return response;
+        }
+
+        view fn caller() -> AccountId {
+            return sysvar_authority();
+        }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let code_region = &code[off..];
+    for (name, syscall) in [
+        ("QUERY_EXECUTE_NORITO", syscalls::SYSCALL_QUERY_EXECUTE_NORITO),
+        ("SYSVAR_AUTHORITY", syscalls::SYSCALL_SYSVAR_AUTHORITY),
+    ] {
+        let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        assert!(
+            code_region.windows(want.len()).any(|window| window == want),
+            "{name} syscall not found"
+        );
+    }
+}
+
+#[test]
+fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
+    let prog = parse(r#"fn f() { let _response = query_execute_norito(1); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected query payload type error");
+    assert!(
+        err.message.contains(
+            "query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest"
+        ),
+        "unexpected error: {}",
+        err.message
+    );
+
+    let prog = parse(r#"fn f() { let _caller = sysvar_authority(1); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected sysvar arity error");
+    assert!(
+        err.message.contains("sysvar_authority expects no arguments"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn compile_emits_state_introspection_helpers() {
+    let src = r#"
+        fn f() {
+            let prefix = name("Orders");
+            let keys = state_keys(prefix, 0, 2);
+            let present = state_has(prefix);
+            let len = state_len(prefix);
+            let count = state_count(prefix);
+            info(tlv_len(keys));
+            if present {
+                info(len);
+            }
+            info(count);
+        }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let code_region = &code[off..];
+    for (name, syscall) in [
+        ("STATE_KEYS", syscalls::SYSCALL_STATE_KEYS),
+        ("STATE_HAS", syscalls::SYSCALL_STATE_HAS),
+        ("STATE_LEN", syscalls::SYSCALL_STATE_LEN),
+        ("STATE_COUNT", syscalls::SYSCALL_STATE_COUNT),
+    ] {
+        let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        assert!(
+            code_region.windows(want.len()).any(|window| window == want),
+            "{name} syscall not found"
+        );
+    }
+}
+
+#[test]
+fn semantic_rejects_state_introspection_helper_args() {
+    let prog =
+        parse(r#"fn f() { let _keys = state_keys(name("Orders"), 0, blob("bad")); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected state_keys type error");
+    assert!(
+        err.message
+            .contains("state_keys expects (Name, int offset, int limit)"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn compile_emits_extended_hash_syscalls() {
+    let src = r#"
+        fn f(payload: Blob) {
+            let b = blake2b256_hash(payload);
+            let k = keccak256_hash(payload);
+            let i = iroha_hash(payload);
+            info(tlv_len(b));
+            info(tlv_len(k));
+            info(tlv_len(i));
+        }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let mut words = Vec::new();
+    let mut i = off;
+    while i + 4 <= code.len() {
+        words.push(u32::from_le_bytes(code[i..i + 4].try_into().unwrap()));
+        i += 4;
+    }
+    let scall = instruction::wide::system::SCALL;
+    for (name, syscall) in [
+        ("BLAKE2B256_HASH", syscalls::SYSCALL_BLAKE2B256_HASH),
+        ("KECCAK256_HASH", syscalls::SYSCALL_KECCAK256_HASH),
+        ("IROHA_HASH", syscalls::SYSCALL_IROHA_HASH),
+    ] {
+        let want = encoding::wide::encode_sys(scall, syscall as u8);
+        assert!(words.contains(&want), "{name} syscall not found");
+    }
+}
+
+#[test]
+fn semantic_rejects_extended_hash_non_blob_arg() {
+    let prog = parse(r#"fn f() { let digest = keccak256_hash(1); }"#).unwrap();
+    let err = analyze(&prog).expect_err("expected type error");
+    assert!(
+        err.message
+            .contains("keccak256_hash expects (Blob|bytes) argument pointing to INPUT TLV"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
 fn compile_emits_resolve_account_alias_syscall() {
     let src = r#"fn f() { let a = resolve_account_alias("banking@centralbank"); }"#;
     let code = Compiler::new().compile_source(src).expect("compile");

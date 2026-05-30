@@ -161,6 +161,18 @@ function ivmWordNeedle(word) {
   return bytes;
 }
 
+function ivmWordsNeedle(words) {
+  return Buffer.concat(words.map((word) => ivmWordNeedle(word)));
+}
+
+function instructionWritesRegister(word, register) {
+  const op = word >>> 24;
+  if ([0x40, 0x41, 0x42, 0x46, 0x49, 0x60, 0x62].includes(op)) {
+    return false;
+  }
+  return ((word >>> 16) & 0xff) === register;
+}
+
 function invokeEntrypointAsFlagNeedle(flag) {
   return Buffer.concat([
     ivmWordNeedle(ivmWord(0x20, 13, 0, flag)),
@@ -2359,6 +2371,42 @@ seiyaku InvalidBlockHeightArity {
   kotoage fn run() permission(Admin) {}
 }
 `);
+  const invalidChainIdArity = compileKotodamaProgram(`
+seiyaku InvalidChainIdArity {
+  fn helper() {
+    let chain = chain_id(1);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const invalidSysvarAuthorityArity = compileKotodamaProgram(`
+seiyaku InvalidSysvarAuthorityArity {
+  fn helper() {
+    let caller = sysvar_authority(1);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const invalidStateKeysLimit = compileKotodamaProgram(`
+seiyaku InvalidStateKeysLimit {
+  fn helper() {
+    let keys = state_keys(name("Orders"), 0, blob("bad"));
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
+  const invalidQueryExecuteNoritoPayload = compileKotodamaProgram(`
+seiyaku InvalidQueryExecuteNoritoPayload {
+  fn helper() {
+    let response = query_execute_norito(1);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
   const invalidTriggerEventArity = compileKotodamaProgram(`
 seiyaku InvalidTriggerEventArity {
   fn helper() {
@@ -2438,6 +2486,14 @@ seiyaku ValidBuiltins {
     info(amount);
     let root = isqrt(16);
     let height = block_height();
+    let block_time = block_time_ms();
+    let chain = chain_id();
+    let contract = contract_address();
+    let invoked = entrypoint();
+    info(block_time);
+    info(tlv_len(chain));
+    info(tlv_len(contract));
+    info(tlv_len(invoked));
   }
 
   kotoage fn run() permission(Admin) {}
@@ -2498,6 +2554,18 @@ seiyaku ValidBuiltins {
   assert.equal(invalidBlockHeightArity.artifactBytes.length, 0);
   assert.equal(invalidBlockHeightArity.diagnostics.length, 1);
   assert.match(invalidBlockHeightArity.diagnostics[0].message, /block_height expects no arguments/);
+  assert.equal(invalidChainIdArity.artifactBytes.length, 0);
+  assert.equal(invalidChainIdArity.diagnostics.length, 1);
+  assert.match(invalidChainIdArity.diagnostics[0].message, /chain_id expects no arguments/);
+  assert.equal(invalidSysvarAuthorityArity.artifactBytes.length, 0);
+  assert.equal(invalidSysvarAuthorityArity.diagnostics.length, 1);
+  assert.match(invalidSysvarAuthorityArity.diagnostics[0].message, /sysvar_authority expects no arguments/);
+  assert.equal(invalidStateKeysLimit.artifactBytes.length, 0);
+  assert.equal(invalidStateKeysLimit.diagnostics.length, 1);
+  assert.match(invalidStateKeysLimit.diagnostics[0].message, /state_keys expects \(Name, int offset, int limit\)/);
+  assert.equal(invalidQueryExecuteNoritoPayload.artifactBytes.length, 0);
+  assert.equal(invalidQueryExecuteNoritoPayload.diagnostics.length, 1);
+  assert.match(invalidQueryExecuteNoritoPayload.diagnostics[0].message, /query_execute_norito expects \(Blob\|bytes\) pointer to NoritoBytes QueryRequest/);
   assert.equal(invalidTriggerEventArity.artifactBytes.length, 0);
   assert.equal(invalidTriggerEventArity.diagnostics.length, 1);
   assert.match(invalidTriggerEventArity.diagnostics[0].message, /trigger_event expects no arguments/);
@@ -2615,6 +2683,97 @@ seiyaku BlockHeightSysvar {
   assert.equal(compiled.manifest?.entrypoints[0]?.return_type, "int");
 });
 
+test("Kotodama compiler SDK emits extended runtime sysvar helpers", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku RuntimeSysvars {
+  view fn time() -> int {
+    return block_time_ms();
+  }
+
+  view fn chain() -> bytes {
+    return chain_id();
+  }
+
+  view fn contract() -> bytes {
+    return contract_address();
+  }
+
+  view fn current_entrypoint() -> bytes {
+    return entrypoint();
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallxNeedle(0x01_0022)), -1);
+  assert.notEqual(code.indexOf(syscallxNeedle(0x01_0020)), -1);
+  assert.notEqual(code.indexOf(syscallxNeedle(0x01_0024)), -1);
+  assert.notEqual(code.indexOf(syscallxNeedle(0x01_0025)), -1);
+  assert.deepEqual(
+    compiled.manifest?.entrypoints.map((entry) => [entry.name, entry.return_type]),
+    [
+      ["time", "int"],
+      ["chain", "bytes"],
+      ["contract", "bytes"],
+      ["current_entrypoint", "bytes"],
+    ],
+  );
+});
+
+test("Kotodama compiler SDK emits extended query and authority sysvar helpers", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku ExtendedReadHelpers {
+  view fn query() -> bytes {
+    let response = query_execute_norito(norito_bytes(b"query"));
+    return response;
+  }
+
+  view fn caller() -> AccountId {
+    return sysvar_authority();
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallxNeedle(0x01_0000)), -1);
+  assert.notEqual(code.indexOf(syscallxNeedle(0x01_0023)), -1);
+  assert.deepEqual(
+    compiled.manifest?.entrypoints.map((entry) => [entry.name, entry.return_type]),
+    [
+      ["query", "bytes"],
+      ["caller", "account_id"],
+    ],
+  );
+});
+
+test("Kotodama compiler SDK emits durable state introspection helpers", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku StateIntrospection {
+  kotoage fn run() permission(Admin) {
+    let prefix = name("Orders");
+    let keys = state_keys(prefix, 0, 2);
+    let present = state_has(prefix);
+    let len = state_len(prefix);
+    let count = state_count(prefix);
+    info(tlv_len(keys));
+    if present {
+      info(len);
+    }
+    info(count);
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallxNeedle(0x01_0030)), -1);
+  assert.notEqual(code.indexOf(syscallxNeedle(0x01_0031)), -1);
+  assert.notEqual(code.indexOf(syscallxNeedle(0x01_0032)), -1);
+  assert.notEqual(code.indexOf(syscallxNeedle(0x01_0033)), -1);
+});
+
 test("Kotodama compiler SDK normalizes upstream host namespace helper calls", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku HostNamespaceHelpers {
@@ -2623,8 +2782,14 @@ seiyaku HostNamespaceHelpers {
     let stored = host::state_get(path);
     host::state_set(path, stored);
     host::state_del(path);
+    let total = host::state_count(path);
     let now = host::current_time_ms();
+    let block_time = host::block_time_ms();
+    let chain = host::chain_id();
+    info(total);
     info(now);
+    info(block_time);
+    info(tlv_len(chain));
     return host::call_contract("target.contract", "settle", payload);
   }
 }
@@ -2642,6 +2807,7 @@ seiyaku InvalidHostNamespaceHelper {
   assert.notEqual(code.indexOf(syscallNeedle(0x50)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x51)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x52)), -1);
+  assert.notEqual(code.indexOf(syscallxNeedle(0x01_0033)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0xa8)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0xa9)), -1);
   assert.equal(compiled.manifest?.entrypoints[0]?.return_type, "bytes");
@@ -3239,11 +3405,17 @@ seiyaku HashHelpers {
     let sm3_explicit_namespaced = sm::sm3_hash(payload);
     let sha256 = sha256_hash(payload);
     let sha3 = sha3_hash(payload);
+    let blake2b = blake2b256_hash(payload);
+    let keccak = keccak256_hash(payload);
+    let iroha = iroha_hash(payload);
     info(tlv_len(sm3));
     info(tlv_len(sm3_namespaced));
     info(tlv_len(sm3_explicit_namespaced));
     info(tlv_len(sha256));
     info(tlv_len(sha3));
+    info(tlv_len(blake2b));
+    info(tlv_len(keccak));
+    info(tlv_len(iroha));
   }
 
   kotoage fn run() permission(Admin) {
@@ -3257,6 +3429,26 @@ seiyaku HashHelpers {
   assert.notEqual(code.indexOf(syscallNeedle(0x90)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x96)), -1);
   assert.notEqual(code.indexOf(syscallNeedle(0x97)), -1);
+  assert.notEqual(code.indexOf(syscallNeedle(0x98)), -1);
+  assert.notEqual(code.indexOf(syscallNeedle(0x99)), -1);
+  assert.notEqual(code.indexOf(syscallNeedle(0x9a)), -1);
+});
+
+test("Kotodama compiler SDK rejects extended hash helper non-blob arguments", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku ExtendedHashArg {
+  kotoage fn run() permission(Admin) {
+    let digest = keccak256_hash(1);
+    info(1);
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.match(
+    compiled.diagnostics[0].message,
+    /keccak256_hash expects \(Blob\|bytes\) argument pointing to INPUT TLV/,
+  );
 });
 
 test("Kotodama compiler SDK rejects stale free hash helper aliases", () => {
@@ -8987,6 +9179,39 @@ seiyaku LiteralPayloads {
   )));
 });
 
+test("Kotodama compiler SDK retains Rust unused pointer literal locals", () => {
+  const account = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+  const asset = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+  const cases = [
+    [
+      "unused_account_asset",
+      `seiyaku X { kotoage fn run() permission(Admin) { let who = account!("${account}"); let ad = asset_definition!("${asset}"); info("s"); } }`,
+      [6, 1, 2],
+    ],
+    [
+      "unused_name",
+      'seiyaku X { kotoage fn run() permission(Admin) { let key = name!("x"); info("s"); } }',
+      [6, 3],
+    ],
+    [
+      "unused_norito_bytes",
+      'seiyaku X { kotoage fn run() permission(Admin) { let proof = norito_bytes("B"); info("s"); } }',
+      [6, 9],
+    ],
+  ];
+
+  for (const [name, source, literalTypes] of cases) {
+    const compiled = compileKotodamaProgram(source, { sourceName: `/tmp/${name}.ko` });
+
+    assert.deepEqual(compiled.diagnostics, []);
+    assert.deepEqual(
+      readLiteralTableEntries(compiled.artifactBytes).map((entry) => entry.type),
+      literalTypes,
+      name,
+    );
+  }
+});
+
 test("Kotodama compiler SDK mirrors account_id alias literal resolution", () => {
   const canonicalPublicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
   const alias = compileKotodamaProgram(`
@@ -9962,10 +10187,13 @@ test("Kotodama compiler SDK matches docs struct-state budget rows", () => {
   );
   assert.ok(impl);
   assert.deepEqual(
-    [50, 75].map((rel) => code.readUInt32LE(impl.pc_start + rel * 4)),
+    [50, 75, 83, 107, 109].map((rel) => code.readUInt32LE(impl.pc_start + rel * 4)),
     [
       ivmWord(0x20, 9, 10, 0),
       ivmWord(0x20, 11, 9, 0),
+      ivmWord(0x20, 8, 0, 0),
+      ivmWord(0x20, 10, 8, 0),
+      ivmWord(0x20, 8, 0, 0),
     ],
   );
 });
@@ -10041,6 +10269,76 @@ test("Kotodama compiler SDK matches docs range-for budget rows", () => {
   );
 });
 
+test("Kotodama compiler SDK matches docs ternary exact rows", () => {
+  const source = readFileSync(
+    new URL("../../../crates/ivm/docs/examples/18_ternary.ko", import.meta.url),
+    "utf8",
+  );
+  const compiled = compileKotodamaProgram(source, { sourceName: "18_ternary.ko" });
+  const code = readArtifactCode(compiled.artifactBytes);
+  const impl = compiled.budgetReport.find((entry) => entry.function_name === "__entrypoint_impl__choose_min");
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(
+    compiled.budgetReport.map((entry) => ([
+      entry.function_name,
+      entry.bytecode_bytes,
+      entry.frame_bytes,
+    ])),
+    [
+      ["choose_min", 488, 40],
+      ["__entrypoint_impl__choose_min", 640, 56],
+    ],
+  );
+  assert.ok(impl);
+  assert.deepEqual(
+    [65, 66, 92, 93, 119].map((rel) => code.readUInt32LE(impl.pc_start + rel * 4)),
+    [
+      ivmWord(0x20, 9, 0, 0),
+      ivmWord(0x20, 8, 24, 0),
+      ivmWord(0x20, 9, 0, 0),
+      ivmWord(0x20, 8, 23, 0),
+      ivmWord(0x20, 10, 8, 0),
+    ],
+  );
+});
+
+test("Kotodama compiler SDK matches docs contract-flow exact rows", () => {
+  const source = readFileSync(
+    new URL("../../../crates/ivm/docs/examples/19_contract_flow_test.ko", import.meta.url),
+    "utf8",
+  );
+  const compiled = compileKotodamaProgram(source, { sourceName: "19_contract_flow_test.ko" });
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(
+    compiled.budgetReport.map((entry) => ([
+      entry.function_name,
+      entry.bytecode_bytes,
+      entry.frame_bytes,
+    ])),
+    [
+      ["hajimari", 156, 24],
+      ["increment", 320, 32],
+      ["remember_caller", 188, 24],
+      ["reject_me", 368, 24],
+    ],
+  );
+  assert.deepEqual(
+    [5, 30, 121, 128, 153, 161, 174].map((rel) => code.readUInt32LE(rel * 4)),
+    [
+      ivmWord(0x20, 23, 10, 0),
+      ivmWord(0x20, 11, 23, 0),
+      ivmWord(0x31, 31, 23, 8),
+      ivmWord(0x20, 23, 10, 0),
+      ivmWord(0x20, 11, 23, 0),
+      ivmWord(0x30, 23, 31, 8),
+      ivmWord(0x20, 23, 0, 0),
+    ],
+  );
+});
+
 test("Kotodama compiler SDK matches Rust register-and-mint literal local rows", () => {
   const cases = [
     [
@@ -10093,6 +10391,7 @@ test("Kotodama compiler SDK matches docs register-and-mint budget rows", () => {
     "utf8",
   );
   const compiled = compileKotodamaProgram(source, { sourceName: "13_register_and_mint.ko" });
+  const code = readArtifactCode(compiled.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
   assert.deepEqual(
@@ -10102,6 +10401,18 @@ test("Kotodama compiler SDK matches docs register-and-mint budget rows", () => {
       entry.frame_bytes,
     ])),
     [["register_and_mint", 560, 48]],
+  );
+  assert.deepEqual(
+    [73, 74, 75, 76, 78, 127, 138].map((rel) => code.readUInt32LE(rel * 4)),
+    [
+      ivmWord(0x20, 8, 0, 0),
+      ivmWord(0x20, 8, 8, 127),
+      ivmWord(0x20, 8, 8, 123),
+      ivmWord(0x20, 10, 8, 0),
+      ivmWord(0x20, 23, 10, 0),
+      ivmWord(0x20, 12, 23, 0),
+      ivmWord(0x20, 23, 0, 0),
+    ],
   );
 });
 
@@ -10158,6 +10469,23 @@ test("Kotodama compiler SDK matches Rust ZK and direct mint frame rows", () => {
       })),
     );
   }
+
+  const directMint = compileKotodamaProgram(
+    `fn run() { mint_asset(account!("${account}"), asset_definition!("${asset}"), 1); }`,
+    { sourceName: "/tmp/mint_direct_no_meta.ko" },
+  );
+  const directMintCode = readArtifactCode(directMint.artifactBytes);
+  assert.deepEqual(
+    [1, 2, 3, 5, 54, 65].map((rel) => directMintCode.readUInt32LE(rel * 4)),
+    [
+      ivmWord(0x20, 9, 0, 0),
+      ivmWord(0x20, 9, 9, 1),
+      ivmWord(0x20, 10, 9, 0),
+      ivmWord(0x20, 8, 10, 0),
+      ivmWord(0x20, 12, 8, 0),
+      ivmWord(0x20, 8, 0, 0),
+    ],
+  );
 });
 
 test("Kotodama compiler SDK matches ZK attachment budget rows", () => {
@@ -10171,10 +10499,45 @@ test("Kotodama compiler SDK matches ZK attachment budget rows", () => {
       [["run", 772, 40]],
     ],
   ];
+  const exactShape = new Map([
+    [
+      "fuzz/attachments/zk/kotodama/zk_shield_example.ko",
+      {
+        literalTypes: [6, 9, 1, 3, 4, 2, 6],
+        words: [
+          [1, ivmWord(0x20, 9, 0, 0)],
+          [25, ivmWord(0x20, 10, 9, 0)],
+          [137, ivmWord(0x20, 8, 0, 0)],
+          [142, ivmWord(0x20, 9, 10, 0)],
+          [202, ivmWord(0x20, 9, 0, 0)],
+          [227, ivmWord(0x20, 10, 9, 0)],
+          [229, ivmWord(0x20, 9, 0, 0)],
+        ],
+      },
+    ],
+    [
+      "fuzz/attachments/zk/kotodama/zk_unshield_verify_example.ko",
+      {
+        literalTypes: [6, 6, 9, 1, 3, 4, 6, 2],
+        words: [
+          [28, ivmWord(0x20, 8, 0, 0)],
+          [52, ivmWord(0x20, 10, 8, 0)],
+          [81, ivmWord(0x20, 23, 0, 0)],
+          [164, ivmWord(0x20, 23, 0, 0)],
+          [165, ivmWord(0x20, 23, 0, 0)],
+          [189, ivmWord(0x20, 10, 23, 0)],
+          [191, ivmWord(0x20, 23, 0, 0)],
+        ],
+      },
+    ],
+  ]);
 
   for (const [sourcePath, rows] of cases) {
     const source = readFileSync(new URL(`../../../${sourcePath}`, import.meta.url), "utf8");
     const compiled = compileKotodamaProgram(source, { sourceName: sourcePath });
+    const code = readArtifactCode(compiled.artifactBytes);
+    const entries = readLiteralTableEntries(compiled.artifactBytes);
+    const shape = exactShape.get(sourcePath);
 
     assert.deepEqual(compiled.diagnostics, []);
     assert.deepEqual(
@@ -10184,6 +10547,16 @@ test("Kotodama compiler SDK matches ZK attachment budget rows", () => {
         entry.frame_bytes,
       ])),
       rows,
+    );
+    assert.deepEqual(
+      entries.map((entry) => entry.type),
+      shape.literalTypes,
+      `${sourcePath} literal table`,
+    );
+    assert.deepEqual(
+      shape.words.map(([wordOffset]) => code.readUInt32LE(wordOffset * 4)),
+      shape.words.map(([, word]) => word),
+      `${sourcePath} exact words`,
     );
   }
 });
@@ -10263,6 +10636,22 @@ test("Kotodama compiler SDK matches control-flow fixture budget rows", () => {
     [
       ["control", 480, 40],
       ["__entrypoint_impl__control", 1144, 64],
+    ],
+  );
+
+  const code = readArtifactCode(compiled.artifactBytes);
+  assert.deepEqual(
+    [131, 132, 133, 159, 214, 266, 292, 345, 346].map((word) => code.readUInt32LE(word * 4)),
+    [
+      ivmWord(0x20, 9, 24, 0),
+      ivmWord(0x20, 8, 23, 0),
+      ivmWord(0x20, 23, 24, 0),
+      ivmWord(0x02, 12, 23, 8),
+      ivmWord(0x0e, 24, 23, 8),
+      ivmWord(0x82, 24, 23, 8),
+      ivmWord(0x85, 24, 23, 8),
+      ivmWord(0x01, 7, 23, 24),
+      ivmWord(0x20, 23, 7, 0),
     ],
   );
 });
@@ -10346,12 +10735,12 @@ test("Kotodama compiler SDK matches Rust static durable map iteration rows", () 
     [
       "state_map_take_value",
       "seiyaku T { state Entries: Map<int, int>; kotoage fn f() -> int { let acc = 0; for (k, v) in Entries.take(2) { acc = acc + v; } return acc; } }",
-      [["f", 928, 64]],
+      [["f", 932, 64]],
     ],
     [
       "state_map_take_increment_literal",
       "seiyaku T { state Entries: Map<int, int>; kotoage fn f() -> int { let acc = 0; for (k, v) in Entries.take(2) { acc = acc + 1; } return acc; } }",
-      [["f", 936, 64]],
+      [["f", 940, 64]],
     ],
   ];
 
@@ -10377,23 +10766,91 @@ test("Kotodama compiler SDK matches Rust static durable map iteration rows", () 
   }
 });
 
+test("Kotodama compiler SDK preserves assignments from static durable map foreach bodies", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku StaticStateMapForeachAssignment {
+  state Entries: Map<int, int>;
+
+  kotoage fn f() -> int {
+    let acc = 0;
+    for (k, v) in Entries.take(2) {
+      acc = acc + v;
+    }
+    return acc;
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+  const accumulatorUpdate = ivmWordsNeedle([
+    ivmWord(0x01, 7, 24, 5),
+    ivmWord(0x20, 24, 7, 0),
+  ]);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(
+    code.indexOf(accumulatorUpdate),
+    -1,
+    "static foreach body assignment should update the outer accumulator binding",
+  );
+  assert.notEqual(code.indexOf(ivmWordNeedle(ivmWord(0x20, 10, 24, 0))), -1);
+});
+
+test("Kotodama compiler SDK keeps wide numeric durable map foreach values live", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku WideNumericStateMapForeach {
+  state Amounts: Map<int, Amount>;
+
+  kotoage fn f() -> Amount permission(Admin) {
+    let out: Amount = 0;
+    for (k, v) in Amounts.take(2) {
+      let bump = k + 1;
+      out = v + bump;
+    }
+    return out;
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+  const stateGetPc = code.indexOf(syscallNeedle(0x50));
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(stateGetPc, -1, "missing STATE_GET syscall");
+
+  const blobMovePc = stateGetPc + 4;
+  const blobMove = code.readUInt32LE(blobMovePc);
+  assert.equal(blobMove >>> 24, 0x20);
+  assert.equal((blobMove >>> 8) & 0xff, 10);
+  const blobReg = (blobMove >>> 16) & 0xff;
+  const publishBlobPc = code.indexOf(ivmWordNeedle(ivmWord(0x20, 10, blobReg, 0)), blobMovePc + 4);
+
+  assert.notEqual(publishBlobPc, -1, "wide numeric foreach value should be read before reuse");
+  for (let pc = blobMovePc + 4; pc < publishBlobPc; pc += 4) {
+    assert.equal(
+      instructionWritesRegister(code.readUInt32LE(pc), blobReg),
+      false,
+      `wide numeric foreach value register r${blobReg} was overwritten before first read at byte ${pc}`,
+    );
+  }
+});
+
 test("Kotodama compiler SDK matches docs/example static map iteration rows", () => {
   const cases = [
     [
       "../../../crates/ivm/docs/examples/14_map_sum_take2.ko",
       "14_map_sum_take2.ko",
-      [["sum_two", 928, 64]],
+      [["sum_two", 932, 64]],
     ],
     [
       "../../../examples/map/map.ko",
       "map.ko",
-      [["sum_first_two", 928, 64]],
+      [["sum_first_two", 932, 64]],
     ],
   ];
 
   for (const [relativePath, sourceName, rows] of cases) {
     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
     const compiled = compileKotodamaProgram(source, { sourceName });
+    const code = readArtifactCode(compiled.artifactBytes);
 
     assert.deepEqual(compiled.diagnostics, []);
     assert.deepEqual(
@@ -10403,6 +10860,13 @@ test("Kotodama compiler SDK matches docs/example static map iteration rows", () 
         entry.frame_bytes,
       ])),
       rows,
+    );
+    assert.deepEqual(
+      [177, 178].map((word) => code.readUInt32LE(word * 4)),
+      [
+        ivmWord(0x01, 7, 24, 5),
+        ivmWord(0x20, 24, 7, 0),
+      ],
     );
   }
 });
@@ -10473,6 +10937,7 @@ test("Kotodama compiler SDK matches docs NFT-flow rows", () => {
   for (const [relativePath, sourceName, rows] of cases) {
     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
     const compiled = compileKotodamaProgram(source, { sourceName });
+    const code = readArtifactCode(compiled.artifactBytes);
 
     assert.deepEqual(compiled.diagnostics, []);
     assert.deepEqual(
@@ -10483,7 +10948,51 @@ test("Kotodama compiler SDK matches docs NFT-flow rows", () => {
       ])),
       rows,
     );
+    assert.equal(code.readUInt32LE(223 * 4), ivmWord(0x20, 24, 0, 0));
   }
+});
+
+test("Kotodama compiler SDK does not clobber live registers in literal NFT metadata calls", () => {
+  const nft = "n0$wonderland.universal";
+  const locals = Array.from({ length: 16 }, (_, index) => `let a${index} = ${index + 1};`).join(" ");
+  const sum = Array.from({ length: 16 }, (_, index) => `a${index}`).join(" + ");
+  const compiled = compileKotodamaProgram(`
+seiyaku NftMetadataScratch {
+  kotoage fn f() -> int permission(NftAuthority) {
+    ${locals}
+    let nft = nft_id!("${nft}");
+    nft_set_metadata(nft, name!("issued"), json!{ issued: "demo" });
+    return ${sum};
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+  const syscallPc = code.indexOf(syscallNeedle(0x27));
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(syscallPc, -1, "missing NFT_SET_METADATA syscall");
+
+  const firstPublishedMove = code.readUInt32LE(syscallPc - 8);
+  const secondPublishedMove = code.readUInt32LE(syscallPc - 4);
+  const firstScratch = (firstPublishedMove >>> 8) & 0xff;
+  const secondScratch = (secondPublishedMove >>> 8) & 0xff;
+
+  assert.equal(firstPublishedMove >>> 24, 0x20);
+  assert.equal((firstPublishedMove >>> 16) & 0xff, 10);
+  assert.equal(secondPublishedMove >>> 24, 0x20);
+  assert.equal((secondPublishedMove >>> 16) & 0xff, 11);
+  assert.ok(![27, 28].includes(firstScratch), "literal NFT metadata first scratch clobbered a live local");
+  assert.ok(![27, 28].includes(secondScratch), "literal NFT metadata second scratch clobbered a live local");
+  assert.notEqual(
+    code.indexOf(ivmWordNeedle(ivmWord(0x01, 25, 22, 27)), syscallPc),
+    -1,
+    "post-call code should still read the local held in r27",
+  );
+  assert.notEqual(
+    code.indexOf(ivmWordNeedle(ivmWord(0x01, 27, 25, 28)), syscallPc),
+    -1,
+    "post-call code should still read the local held in r28",
+  );
 });
 
 test("Kotodama compiler SDK matches Rust raw asset helper rows", () => {
@@ -10557,6 +11066,40 @@ test("Kotodama compiler SDK matches Rust DAI budget rows", () => {
       ["transfer_from", 1136, 128],
       ["mint", 144, 64],
       ["burn", 1048, 96],
+    ],
+  );
+
+  const code = readArtifactCode(compiled.artifactBytes);
+  assert.deepEqual(
+    [2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((word) => code.readUInt32LE(word * 4)),
+    [
+      ivmWord(0x31, 31, 11, 72),
+      ivmWord(0x31, 31, 12, 80),
+      ivmWord(0x31, 31, 13, 88),
+      ivmWord(0x31, 31, 14, 96),
+      ivmWord(0x31, 31, 15, 104),
+      ivmWord(0x30, 24, 31, 64),
+      ivmWord(0x30, 23, 31, 72),
+      ivmWord(0x30, 9, 31, 80),
+      ivmWord(0x30, 8, 31, 88),
+      ivmWord(0x30, 7, 31, 96),
+    ],
+  );
+  assert.deepEqual(
+    [119, 120, 122, 347, 348, 350, 401, 402, 404, 600, 601, 603].map((word) => code.readUInt32LE(word * 4)),
+    [
+      ivmWord(0x20, 7, 0, 0),
+      ivmWord(0x40, 5, 7, 2),
+      ivmWord(0x20, 7, 0, 0),
+      ivmWord(0x20, 6, 0, 0),
+      ivmWord(0x40, 4, 6, 2),
+      ivmWord(0x20, 6, 0, 0),
+      ivmWord(0x20, 6, 0, 0),
+      ivmWord(0x20, 6, 6, 1),
+      ivmWord(0x40, 6, 4, 2),
+      ivmWord(0x20, 8, 0, 0),
+      ivmWord(0x40, 6, 8, 2),
+      ivmWord(0x20, 8, 0, 0),
     ],
   );
 });
@@ -10932,6 +11475,8 @@ test("Kotodama compiler SDK matches full MFC raw-main budget rows", () => {
     "utf8",
   );
   const compiled = compileKotodamaProgram(source, { sourceName: "mfc.ko" });
+  const code = readArtifactCode(compiled.artifactBytes);
+  const loop = compiled.budgetReport.find((entry) => entry.function_name === "loop_mfc");
 
   assert.deepEqual(compiled.diagnostics, []);
   assert.deepEqual(
@@ -10945,6 +11490,29 @@ test("Kotodama compiler SDK matches full MFC raw-main budget rows", () => {
       ["send_mfc", 364, 72],
       ["loop_mfc", 1000, 72],
       ["mfc_asset", 452, 16],
+    ],
+  );
+  assert.ok(loop);
+  assert.deepEqual(
+    [90, 119, 131, 133, 159, 205, 233].map((wordOffset) => code.readUInt32LE(wordOffset * 4)),
+    [
+      ivmWord(0x20, 7, 0, 0),
+      ivmWord(0x20, 6, 0, 0),
+      ivmWord(0x20, 10, 6, 0),
+      ivmWord(0x20, 8, 10, 0),
+      ivmWord(0x20, 12, 8, 0),
+      ivmWord(0x20, 8, 0, 0),
+      ivmWord(0x20, 23, 0, 0),
+    ],
+  );
+  assert.deepEqual(
+    [45, 69, 70, 171, 216].map((rel) => code.readUInt32LE(loop.pc_start + rel * 4)),
+    [
+      ivmWord(0x20, 24, 0, 0),
+      ivmWord(0x20, 9, 8, 0),
+      ivmWord(0x20, 8, 23, 0),
+      ivmWord(0x20, 12, 24, 0),
+      ivmWord(0x46, 0, 255, 136),
     ],
   );
 });
@@ -12060,7 +12628,7 @@ test("Kotodama compiler SDK matches the tracked upstream corpus budget shape", (
     ["crates/ivm/docs/examples/11_detail_and_transfer.ko", [["set_cursor_and_transfer", 624, 48]]],
     ["crates/ivm/docs/examples/12_nft_flow.ko", [["nft_issue_and_transfer", 1008, 32]]],
     ["crates/ivm/docs/examples/13_register_and_mint.ko", [["register_and_mint", 560, 48]]],
-    ["crates/ivm/docs/examples/14_map_sum_take2.ko", [["sum_two", 928, 64]]],
+    ["crates/ivm/docs/examples/14_map_sum_take2.ko", [["sum_two", 932, 64]]],
     ["crates/ivm/docs/examples/15_modulo.ko", [["remainder", 488, 40], ["__entrypoint_impl__remainder", 196, 48]]],
     ["crates/ivm/docs/examples/16_dynamic_take.ko", [["bounded_take_sum", 356, 32], ["__entrypoint_impl__bounded_take_sum", 1212, 72]]],
     ["crates/ivm/docs/examples/16_register_domain.ko", null],
@@ -12104,7 +12672,7 @@ test("Kotodama compiler SDK matches the tracked upstream corpus budget shape", (
     ["docs/portal/static/norito-snippets/threshold-escrow.ko", [["main", 8, 8], ["assert_unopened", 776, 32], ["assert_open", 772, 32], ["assert_payer", 320, 32], ["__entrypoint_impl__open_escrow", 2140, 40], ["open_escrow", 384, 32], ["__entrypoint_impl__deposit", 1208, 64], ["deposit", 384, 32], ["release_if_ready", 1176, 48], ["refund", 2320, 48]]],
     ["docs/portal/static/norito-snippets/transfer-asset.ko", [["do_transfer", 376, 48]]],
     ["examples/hello/hello.ko", [["main", 220, 16], ["hajimari", 136, 16], ["write_detail", 500, 32]]],
-    ["examples/map/map.ko", [["sum_first_two", 928, 64]]],
+    ["examples/map/map.ko", [["sum_first_two", 932, 64]]],
     ["examples/nft/nft.ko", null],
     ["examples/transfer/transfer.ko", [["do_transfer", 376, 48]]],
     ["fuzz/attachments/zk/kotodama/zk_shield_example.ko", [["run", 924, 40]]],

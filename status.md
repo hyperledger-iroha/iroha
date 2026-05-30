@@ -2,6 +2,18 @@
 
 Last updated: 2026-05-30
 
+## 2026-05-30 JS Kotodama map and NFT register fixes
+
+- Fixed JS Kotodama durable map foreach lowering so static loop body
+  assignments preserve loop-carried locals, wide numeric map values keep their
+  live `STATE_GET` blob register through the body, and literal
+  `nft_set_metadata` calls allocate scratch registers instead of clobbering
+  live `r27`/`r28` locals. Regenerated `javascript/iroha_js/dist`.
+- Validation:
+  - `cd javascript/iroha_js && node --test --test-name-pattern "static durable map|wide numeric|NFT metadata|static map iteration|NFT syscall|docs/example static map" test/kotodamaCompiler.test.js`
+  - `cd javascript/iroha_js && node --test test/kotodamaCompiler.test.js`
+  - `cd javascript/iroha_js && npm run build:dist`
+
 ## 2026-05-30 Torii transaction query routing and visibility
 
 - `/v1/transactions/query` ingress now encodes the clamped query envelope and

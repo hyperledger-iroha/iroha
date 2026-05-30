@@ -18,6 +18,11 @@ pub enum Builtin {
     StateGet,
     StateSet,
     StateDel,
+    StateKeys,
+    StateHas,
+    StateLen,
+    StateCount,
+    QueryExecuteNorito,
     Path,
     JsonObject,
     JsonSetInt,
@@ -30,6 +35,7 @@ pub enum Builtin {
     GetAssetDefinitionId,
     GetNftId,
     GetBlobHex,
+    SysvarAuthority,
 }
 
 impl Builtin {
@@ -46,6 +52,11 @@ impl Builtin {
             "state_get" => Self::StateGet,
             "state_set" => Self::StateSet,
             "state_del" => Self::StateDel,
+            "state_keys" => Self::StateKeys,
+            "state_has" => Self::StateHas,
+            "state_len" => Self::StateLen,
+            "state_count" => Self::StateCount,
+            "query_execute_norito" => Self::QueryExecuteNorito,
             "path" => Self::Path,
             "json_object" => Self::JsonObject,
             "json_set_int" => Self::JsonSetInt,
@@ -58,6 +69,7 @@ impl Builtin {
             "get_asset_definition_id" => Self::GetAssetDefinitionId,
             "get_nft_id" => Self::GetNftId,
             "get_blob_hex" => Self::GetBlobHex,
+            "sysvar_authority" => Self::SysvarAuthority,
             _ => return None,
         })
     }
@@ -75,6 +87,11 @@ impl Builtin {
             Self::StateGet => "state_get",
             Self::StateSet => "state_set",
             Self::StateDel => "state_del",
+            Self::StateKeys => "state_keys",
+            Self::StateHas => "state_has",
+            Self::StateLen => "state_len",
+            Self::StateCount => "state_count",
+            Self::QueryExecuteNorito => "query_execute_norito",
             Self::Path => "path",
             Self::JsonObject => "json_object",
             Self::JsonSetInt => "json_set_int",
@@ -87,6 +104,7 @@ impl Builtin {
             Self::GetAssetDefinitionId => "get_asset_definition_id",
             Self::GetNftId => "get_nft_id",
             Self::GetBlobHex => "get_blob_hex",
+            Self::SysvarAuthority => "sysvar_authority",
         }
     }
 
