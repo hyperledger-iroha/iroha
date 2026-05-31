@@ -1,6 +1,21 @@
 # Status
 
-Last updated: 2026-05-30
+Last updated: 2026-05-31
+
+## 2026-05-31 Kotodama sysvar authority access hints
+
+- Rust and JS Kotodama access-hint derivation now treat
+  `sysvar_authority()` as the same `$authority` account placeholder as
+  `authority()` for mutating account helpers. Regression coverage locks
+  `transfer_asset` and `set_account_detail` manifests to precise authority
+  asset/account-detail keys without wildcard fallbacks.
+- Validation:
+  - `cargo test -p kotodama_lang manifest_access_set_hints_include_sysvar_authority_placeholders -- --nocapture`
+  - `cd javascript/iroha_js && node --test --test-name-pattern "sysvar_authority.*access" test/kotodamaCompiler.test.js`
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `cd javascript/iroha_js && node --test test/package_dist.test.js`
+  - `cargo fmt --all --check` currently reports an unrelated existing
+    formatting diff in `crates/ivm/tests/kotodama.rs`.
 
 ## 2026-05-30 Taira edge Connect routing pin
 

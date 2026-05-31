@@ -487,6 +487,8 @@ enum DataKind {
     AxtDescriptor,
     AssetHandle,
     ProofBlob,
+    SoracloudRequest,
+    SoracloudResponse,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -515,6 +517,8 @@ fn pointer_type_for_kind(kind: ir::DataRefKind) -> Option<PointerType> {
         AxtDescriptor => Some(PointerType::AxtDescriptor),
         AssetHandle => Some(PointerType::AssetHandle),
         ProofBlob => Some(PointerType::ProofBlob),
+        SoracloudRequest => Some(PointerType::SoracloudRequest),
+        SoracloudResponse => Some(PointerType::SoracloudResponse),
     }
 }
 
@@ -534,6 +538,8 @@ fn data_key_for_pointer(kind: ir::DataRefKind, value: &str) -> DataKey {
         AxtDescriptor => DataKey(DataKind::AxtDescriptor, value.to_owned()),
         AssetHandle => DataKey(DataKind::AssetHandle, value.to_owned()),
         ProofBlob => DataKey(DataKind::ProofBlob, value.to_owned()),
+        SoracloudRequest => DataKey(DataKind::SoracloudRequest, value.to_owned()),
+        SoracloudResponse => DataKey(DataKind::SoracloudResponse, value.to_owned()),
     }
 }
 
@@ -619,6 +625,20 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
             let bytes = decode_hex_or_raw_bytes(raw).ok()?;
             let value: crate::axt::ProofBlob = decode_from_bytes(&bytes).ok()?;
             (PointerType::ProofBlob, to_bytes(&value).ok()?)
+        }
+        DRK::SoracloudRequest => {
+            let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+            let value: iroha_data_model::soracloud::SoracloudHostRequestEnvelopeV1 =
+                decode_from_bytes(&bytes).ok()?;
+            value.validate().ok()?;
+            (PointerType::SoracloudRequest, to_bytes(&value).ok()?)
+        }
+        DRK::SoracloudResponse => {
+            let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+            let value: iroha_data_model::soracloud::SoracloudHostResponseEnvelopeV1 =
+                decode_from_bytes(&bytes).ok()?;
+            value.validate().ok()?;
+            (PointerType::SoracloudResponse, to_bytes(&value).ok()?)
         }
     };
 
@@ -776,6 +796,8 @@ mod tests {
             (AxtDescriptor, PointerType::AxtDescriptor),
             (AssetHandle, PointerType::AssetHandle),
             (ProofBlob, PointerType::ProofBlob),
+            (SoracloudRequest, PointerType::SoracloudRequest),
+            (SoracloudResponse, PointerType::SoracloudResponse),
         ];
         for (kind, expected) in cases {
             let ty = pointer_type_for_kind(kind);
@@ -1171,6 +1193,448 @@ fn main() {
                 "expected {label} syscall in compiled code"
             );
         }
+    }
+
+    #[test]
+    fn native_anonymous_escrow_builtins_emit_escrow_syscalls() {
+        let src = r#"
+fn main() {
+  let request = norito_bytes("00");
+  let evidence = norito_bytes("01");
+  anonymous_escrow_open_offer(request);
+  anonymous_escrow_accept(name("shielded_offer"));
+  anonymous_escrow_mark_payment_sent(name("shielded_offer"));
+  anonymous_escrow_release(request);
+  anonymous_escrow_cancel(request);
+  anonymous_escrow_open_dispute(name("shielded_offer"), evidence);
+  anonymous_escrow_resolve_dispute(request);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile native anonymous escrow builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER,
+                "ANONYMOUS_ESCROW_OPEN_OFFER",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT,
+                "ANONYMOUS_ESCROW_ACCEPT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT,
+                "ANONYMOUS_ESCROW_MARK_PAYMENT_SENT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE,
+                "ANONYMOUS_ESCROW_RELEASE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL,
+                "ANONYMOUS_ESCROW_CANCEL",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
+                "ANONYMOUS_ESCROW_OPEN_DISPUTE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
+                "ANONYMOUS_ESCROW_RESOLVE_DISPUTE",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("anonymous escrow syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn soracloud_runtime_builtins_emit_soracloud_syscalls() {
+        let src = r#"
+fn main(request: SoracloudRequest) {
+  let _read_state = soracloud_read_committed_state(request);
+  let _mutation = soracloud_emit_state_mutation(request);
+  let _mailbox = soracloud_emit_mailbox_message(request);
+  let _journal = soracloud_append_journal(request);
+  let _checkpoint = soracloud_publish_checkpoint(request);
+  let _secret = soracloud_read_secret(request);
+  let _credential = soracloud_read_credential(request);
+  let _fetch = soracloud_egress_fetch(request);
+  let _config = soracloud_read_config(request);
+  let _secret_envelope = soracloud_read_secret_envelope(request);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile Soracloud runtime builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
+                "SORACLOUD_READ_COMMITTED_STATE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION,
+                "SORACLOUD_EMIT_STATE_MUTATION",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE,
+                "SORACLOUD_EMIT_MAILBOX_MESSAGE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL,
+                "SORACLOUD_APPEND_JOURNAL",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT,
+                "SORACLOUD_PUBLISH_CHECKPOINT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_READ_SECRET,
+                "SORACLOUD_READ_SECRET",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL,
+                "SORACLOUD_READ_CREDENTIAL",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH,
+                "SORACLOUD_EGRESS_FETCH",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_READ_CONFIG,
+                "SORACLOUD_READ_CONFIG",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE,
+                "SORACLOUD_READ_SECRET_ENVELOPE",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("Soracloud syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn soracloud_runtime_builtins_reject_norito_bytes_request_argument() {
+        let parsed = parse(
+            r#"
+fn main() {
+  let request = norito_bytes("00");
+  let _response = soracloud_read_config(request);
+}
+"#,
+        )
+        .expect("parse source");
+        let err = analyze(&parsed).expect_err("semantic analysis should reject request type");
+        assert!(
+            err.message
+                .contains("soracloud_read_config expects (SoracloudRequest)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn account_multisig_admin_builtins_emit_account_admin_syscalls() {
+        let account = sample_account_literal();
+        let src = format!(
+            r#"
+fn main() {{
+  let account = account_id("{account}");
+  let signatory = json("\"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774\"");
+  add_signatory(account, signatory);
+  remove_signatory(account, signatory);
+  set_account_quorum(account, 2);
+}}
+"#
+        );
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(&src)
+            .expect("compile account multisig admin builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (ivm_abi::syscalls::SYSCALL_ADD_SIGNATORY, "ADD_SIGNATORY"),
+            (
+                ivm_abi::syscalls::SYSCALL_REMOVE_SIGNATORY,
+                "REMOVE_SIGNATORY",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SET_ACCOUNT_QUORUM,
+                "SET_ACCOUNT_QUORUM",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("account admin syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn account_multisig_admin_builtins_reject_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main(account: AccountId) {
+  add_signatory(account, name("not_json"));
+}
+"#,
+        )
+        .expect("parse source");
+        let err = analyze(&parsed).expect_err("semantic analysis should reject signatory type");
+        assert!(
+            err.message
+                .contains("add_signatory expects (AccountId, Json)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn account_balance_query_builtin_emits_balance_syscall_and_exact_reads() {
+        let account = sample_account_literal();
+        let asset_definition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"
+view fn read() -> Balance {{
+  let account = account_id("{account}");
+  let asset = asset_definition("{asset_definition}");
+  return get_account_balance(account, asset);
+}}
+"#
+        );
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile account balance query builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_GET_ACCOUNT_BALANCE)
+                .expect("account balance syscall id fits in u8"),
+        )
+        .to_le_bytes();
+
+        assert!(
+            code.windows(needle.len()).any(|window| window == needle),
+            "expected GET_ACCOUNT_BALANCE syscall in compiled code"
+        );
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+        let read = entrypoints
+            .iter()
+            .find(|entry| entry.name == "read")
+            .expect("read entrypoint");
+        assert_eq!(read.access_hints_complete, Some(true));
+        assert!(read.access_hints_skipped.is_empty());
+        assert!(read.write_keys.is_empty());
+        assert!(read.read_keys.contains(&format!("account:{account}")));
+        assert!(
+            read.read_keys
+                .contains(&format!("asset:{asset_definition}#{account}"))
+        );
+        assert!(
+            read.read_keys
+                .contains(&format!("asset_def:{asset_definition}"))
+        );
+    }
+
+    #[test]
+    fn account_balance_query_builtin_rejects_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main(account: AccountId) {
+  let _balance = get_account_balance(account, name("not_asset"));
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject account balance args");
+        assert!(
+            err.message
+                .contains("get_account_balance expects (AccountId, AssetDefinitionId)"),
+            "unexpected semantic error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn privacy_output_builtins_emit_runtime_syscalls() {
+        let src = r#"
+fn main() {
+  let secret = get_private_input(0);
+  use_nullifier(secret);
+  commit_output();
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile privacy/output builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_GET_PRIVATE_INPUT,
+                "GET_PRIVATE_INPUT",
+            ),
+            (ivm_abi::syscalls::SYSCALL_USE_NULLIFIER, "USE_NULLIFIER"),
+            (ivm_abi::syscalls::SYSCALL_COMMIT_OUTPUT, "COMMIT_OUTPUT"),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("privacy/output syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_output_builtins_reject_invalid_arguments() {
+        for (src, expected) in [
+            (
+                r#"
+fn main() {
+  let _secret = get_private_input(name("not_index"));
+}
+"#,
+                "get_private_input expects (int index)",
+            ),
+            (
+                r#"
+fn main() {
+  use_nullifier(name("not_nullifier"));
+}
+"#,
+                "use_nullifier expects (int nullifier)",
+            ),
+            (
+                r#"
+fn main() {
+  commit_output(1);
+}
+"#,
+                "commit_output expects no arguments",
+            ),
+        ] {
+            let parsed = parse(src).expect("parse source");
+            let err = analyze(&parsed).expect_err("semantic analysis should reject invalid args");
+            assert!(
+                err.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn smart_contract_lifecycle_builtins_emit_lifecycle_syscalls() {
+        let src = r#"
+fn main() {
+  let request = norito_bytes("00");
+  deactivate_contract_instance(request);
+  remove_smart_contract_bytes(request);
+  register_smart_contract_code(request);
+  register_smart_contract_bytes(request);
+  activate_contract_instance(request);
+}
+"#;
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile smart-contract lifecycle builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE,
+                "DEACTIVATE_CONTRACT_INSTANCE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES,
+                "REMOVE_SMART_CONTRACT_BYTES",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE,
+                "REGISTER_SMART_CONTRACT_CODE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+                "REGISTER_SMART_CONTRACT_BYTES",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
+                "ACTIVATE_CONTRACT_INSTANCE",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("lifecycle syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
+    fn smart_contract_lifecycle_builtins_reject_invalid_arguments() {
+        let parsed = parse(
+            r#"
+fn main() {
+  register_smart_contract_code(name("not_request"));
+}
+"#,
+        )
+        .expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject lifecycle request type");
+        assert!(
+            err.message.contains(
+                "register_smart_contract_code expects (Blob|bytes) pointer to NoritoBytes lifecycle request"
+            ),
+            "unexpected semantic error: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -2223,6 +2687,52 @@ fn main() {{
             .expect("main entrypoint");
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_sysvar_authority_placeholders() {
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let source = format!(
+            r#"
+fn main() {{
+  let caller = sysvar_authority();
+  let asset = asset_definition("{asset_literal}");
+  transfer_asset(caller, caller, asset, 1);
+  set_account_detail(caller, name("status"), json("{{}}"));
+}}
+"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&source)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        let authority_asset = format!("asset:{asset_literal}:$authority");
+        let authority_detail = "account.detail:$authority:status".to_owned();
+
+        assert!(hints.read_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
+        assert!(hints.read_keys.contains(&authority_asset));
+        assert!(hints.write_keys.contains(&authority_asset));
+        assert!(hints.read_keys.contains(&authority_detail));
+        assert!(hints.write_keys.contains(&authority_detail));
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+        assert!(main.read_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
+        assert!(main.read_keys.contains(&authority_asset));
+        assert!(main.write_keys.contains(&authority_asset));
+        assert!(main.read_keys.contains(&authority_detail));
+        assert!(main.write_keys.contains(&authority_detail));
     }
 
     #[test]
@@ -4460,7 +4970,9 @@ impl Compiler {
                     if let ir::Instr::ActorAccount { dest, .. } = instr {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Account);
                     }
-                    if let ir::Instr::GetAuthority { dest } = instr {
+                    if let ir::Instr::GetAuthority { dest } | ir::Instr::SysvarAuthority { dest } =
+                        instr
+                    {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Account);
                         authority_account_temps.insert((func_idx, *dest));
                     }
@@ -4754,6 +5266,8 @@ impl Compiler {
                             ir::DataRefKind::AxtDescriptor => "axt_descriptor",
                             ir::DataRefKind::AssetHandle => "asset_handle",
                             ir::DataRefKind::ProofBlob => "proof_blob",
+                            ir::DataRefKind::SoracloudRequest => "soracloud_request",
+                            ir::DataRefKind::SoracloudResponse => "soracloud_response",
                         };
                         let msg = format!(
                             "{name} expects a string literal; pass a literal or Blob|bytes"
@@ -5595,6 +6109,63 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
+                        Instr::AddSignatory { account, signatory }
+                        | Instr::RemoveSignatory { account, signatory } => {
+                            if let Some(acc_str) = string_map.get(&(func_idx, *account)) {
+                                let key_acc = DataKey(DataKind::Account, acc_str.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key_acc);
+                            } else {
+                                let r = src_reg(account, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            if let Some(json) = string_map.get(&(func_idx, *signatory)) {
+                                let key_json = DataKey(DataKind::Json, json.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 11, key_json);
+                            } else {
+                                let r = src_reg(signatory, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            let syscall = match instr {
+                                Instr::AddSignatory { .. } => syscalls::SYSCALL_ADD_SIGNATORY,
+                                _ => syscalls::SYSCALL_REMOVE_SIGNATORY,
+                            };
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscall as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::SetAccountQuorum { account, quorum } => {
+                            if let Some(acc_str) = string_map.get(&(func_idx, *account)) {
+                                let key_acc = DataKey(DataKind::Account, acc_str.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key_acc);
+                            } else {
+                                let r = src_reg(account, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let r_quorum = src_reg(quorum, scratch2, &mut code)?;
+                            push_word(&mut code, encode_addi(11, r_quorum, 0)?);
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_SET_ACCOUNT_QUORUM as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
                         Instr::UnregisterAsset { asset } => {
                             if let Some(ad_str) = string_map.get(&(func_idx, *asset)) {
                                 let key = DataKey(DataKind::AssetDef, ad_str.clone());
@@ -5963,6 +6534,135 @@ impl Compiler {
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             push_syscall(&mut code, syscalls::SYSCALL_QUERY_EXECUTE_NORITO);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::QueryGet { dest, key, syscall } => {
+                            let r = src_reg(key, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, *syscall);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::GetAccountBalance {
+                            dest,
+                            account,
+                            asset,
+                        } => {
+                            if let Some(account_str) = string_map.get(&(func_idx, *account)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    10,
+                                    DataKey(DataKind::Account, account_str.clone()),
+                                );
+                            } else {
+                                let r = src_reg(account, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    11,
+                                    DataKey(DataKind::AssetDef, asset_str.clone()),
+                                );
+                            } else {
+                                let r = src_reg(asset, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_GET_ACCOUNT_BALANCE);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::GetPrivateInput { dest, index } => {
+                            let r = src_reg(index, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_GET_PRIVATE_INPUT);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::UseNullifier { nullifier } => {
+                            let r = src_reg(nullifier, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            push_syscall(&mut code, syscalls::SYSCALL_USE_NULLIFIER);
+                        }
+                        Instr::CommitOutput => {
+                            push_syscall(&mut code, syscalls::SYSCALL_COMMIT_OUTPUT);
+                        }
+                        Instr::SmartContractLifecycle { payload, syscall } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, *syscall);
+                        }
+                        Instr::ZkRootsGet { dest, payload }
+                        | Instr::ZkVoteGetTally { dest, payload }
+                        | Instr::VrfEpochSeed { dest, payload } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let syscall = match instr {
+                                Instr::ZkRootsGet { .. } => syscalls::SYSCALL_ZK_ROOTS_GET,
+                                Instr::ZkVoteGetTally { .. } => syscalls::SYSCALL_ZK_VOTE_GET_TALLY,
+                                Instr::VrfEpochSeed { .. } => syscalls::SYSCALL_VRF_EPOCH_SEED,
+                                _ => unreachable!(),
+                            };
+                            push_syscall(&mut code, syscall);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::SoracloudHostCall {
+                            dest,
+                            request,
+                            syscall,
+                        } => {
+                            let r = src_reg(request, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, *syscall);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -6487,6 +7187,108 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::AnonymousEscrowOpenOffer { request }
+                        | Instr::AnonymousEscrowRelease { request }
+                        | Instr::AnonymousEscrowCancel { request }
+                        | Instr::AnonymousEscrowResolveDispute { request } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *request)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r_request = src_reg(request, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_request, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let syscall = match instr {
+                                Instr::AnonymousEscrowOpenOffer { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
+                                }
+                                Instr::AnonymousEscrowRelease { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE
+                                }
+                                Instr::AnonymousEscrowCancel { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL
+                                }
+                                Instr::AnonymousEscrowResolveDispute { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE
+                                }
+                                _ => unreachable!(),
+                            };
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscall as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::AnonymousEscrowAccept { escrow }
+                        | Instr::AnonymousEscrowMarkPaymentSent { escrow } => {
+                            if let Some(escrow_str) = string_map
+                                .get(&(func_idx, *escrow))
+                                .map(|s| DataKey(DataKind::Name, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, escrow_str);
+                            } else {
+                                let r_escrow = src_reg(escrow, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let syscall = match instr {
+                                Instr::AnonymousEscrowAccept { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT
+                                }
+                                Instr::AnonymousEscrowMarkPaymentSent { .. } => {
+                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
+                                }
+                                _ => unreachable!(),
+                            };
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscall as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::AnonymousEscrowOpenDispute {
+                            escrow,
+                            evidence_hashes,
+                        } => {
+                            if let Some(escrow_str) = string_map
+                                .get(&(func_idx, *escrow))
+                                .map(|s| DataKey(DataKind::Name, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, escrow_str);
+                            } else {
+                                let r_escrow = src_reg(escrow, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            if let Some(evidence_hashes) = evidence_hashes {
+                                push_word(&mut code, encode_addi(14, 10, 0)?);
+                                let r_evidence = src_reg(evidence_hashes, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_evidence, 0)?);
+                                code.extend_from_slice(&pub_word.to_le_bytes());
+                                push_word(&mut code, encode_addi(11, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, 14, 0)?);
+                            } else {
+                                push_word(&mut code, encode_addi(11, 0, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
@@ -9600,6 +10402,8 @@ impl Compiler {
                 DRK::AxtDescriptor => DataKey(DataKind::AxtDescriptor, v.clone()),
                 DRK::AssetHandle => DataKey(DataKind::AssetHandle, v.clone()),
                 DRK::ProofBlob => DataKey(DataKind::ProofBlob, v.clone()),
+                DRK::SoracloudRequest => DataKey(DataKind::SoracloudRequest, v.clone()),
+                DRK::SoracloudResponse => DataKey(DataKind::SoracloudResponse, v.clone()),
             };
             key_order.insert(dk);
         }
@@ -9804,6 +10608,54 @@ impl Compiler {
                         PointerType::ProofBlob as u16,
                         to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
                             let err = format!("invalid ProofBlob literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
+                }
+                DataKey(DataKind::SoracloudRequest, s) => {
+                    let bytes = decode_hex_or_raw_bytes(s).map_err(|e| {
+                        let err = format!("invalid SoracloudRequest literal `{s}`: {e}");
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
+                    let value: iroha_data_model::soracloud::SoracloudHostRequestEnvelopeV1 =
+                        decode_from_bytes(&bytes).map_err(|e| {
+                            let err = format!(
+                                "invalid SoracloudRequest literal `{s}`: cannot decode ({e})"
+                            );
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?;
+                    value.validate().map_err(|e| {
+                        let err = format!("invalid SoracloudRequest literal `{s}`: {e}");
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
+                    (
+                        PointerType::SoracloudRequest as u16,
+                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid SoracloudRequest literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
+                }
+                DataKey(DataKind::SoracloudResponse, s) => {
+                    let bytes = decode_hex_or_raw_bytes(s).map_err(|e| {
+                        let err = format!("invalid SoracloudResponse literal `{s}`: {e}");
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
+                    let value: iroha_data_model::soracloud::SoracloudHostResponseEnvelopeV1 =
+                        decode_from_bytes(&bytes).map_err(|e| {
+                            let err = format!(
+                                "invalid SoracloudResponse literal `{s}`: cannot decode ({e})"
+                            );
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?;
+                    value.validate().map_err(|e| {
+                        let err = format!("invalid SoracloudResponse literal `{s}`: {e}");
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
+                    (
+                        PointerType::SoracloudResponse as u16,
+                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid SoracloudResponse literal `{s}`: {e}");
                             i18n::translate(self.lang, Message::SemanticError(&err))
                         })?,
                     )
@@ -10626,7 +11478,12 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
                 "state type `{name}` was not resolved before CNTR schema emission"
             ));
         }
-        Type::Unit | Type::AxtDescriptor | Type::AssetHandle | Type::ProofBlob => {
+        Type::Unit
+        | Type::AxtDescriptor
+        | Type::AssetHandle
+        | Type::ProofBlob
+        | Type::SoracloudRequest
+        | Type::SoracloudResponse => {
             return Err("state type is not supported in embedded state schemas".to_string());
         }
     })
@@ -10801,7 +11658,16 @@ fn record_isi_access(
         | ir::Instr::EscrowRelease { .. }
         | ir::Instr::EscrowCancel { .. }
         | ir::Instr::EscrowOpenDispute { .. }
-        | ir::Instr::EscrowResolveDispute { .. } => apply_fallback(access_set, hint_diagnostics),
+        | ir::Instr::EscrowResolveDispute { .. }
+        | ir::Instr::AnonymousEscrowOpenOffer { .. }
+        | ir::Instr::AnonymousEscrowAccept { .. }
+        | ir::Instr::AnonymousEscrowMarkPaymentSent { .. }
+        | ir::Instr::AnonymousEscrowRelease { .. }
+        | ir::Instr::AnonymousEscrowCancel { .. }
+        | ir::Instr::AnonymousEscrowOpenDispute { .. }
+        | ir::Instr::AnonymousEscrowResolveDispute { .. } => {
+            apply_fallback(access_set, hint_diagnostics)
+        }
         ir::Instr::TransferAsset {
             from, to, asset, ..
         } => {
@@ -10845,6 +11711,19 @@ fn record_isi_access(
             add_domain_rw(access_set, &id);
         }
         ir::Instr::RegisterAccount { account } | ir::Instr::UnregisterAccount { account } => {
+            let Some(id) = account_access_hint_for_temp(
+                string_map,
+                authority_account_temps,
+                func_idx,
+                *account,
+            ) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            add_account_hint_rw(access_set, &id);
+        }
+        ir::Instr::AddSignatory { account, .. }
+        | ir::Instr::RemoveSignatory { account, .. }
+        | ir::Instr::SetAccountQuorum { account, .. } => {
             let Some(id) = account_access_hint_for_temp(
                 string_map,
                 authority_account_temps,
@@ -11016,6 +11895,61 @@ fn record_isi_access(
                 apply_fallback(access_set, hint_diagnostics);
             }
         }
+        ir::Instr::QueryGet { key, syscall, .. } => {
+            if record_typed_query_get_access(
+                *key,
+                *syscall,
+                string_map,
+                authority_account_temps,
+                func_idx,
+                access_set,
+            )
+            .is_none()
+            {
+                apply_fallback(access_set, hint_diagnostics);
+            }
+        }
+        ir::Instr::GetAccountBalance { account, asset, .. } => {
+            let account = account_access_hint_for_temp(
+                string_map,
+                authority_account_temps,
+                func_idx,
+                *account,
+            );
+            let asset = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset);
+            match (account, asset) {
+                (Some(account), Some(asset)) => {
+                    add_asset_r_for_account_hint(access_set, &asset, &account);
+                }
+                _ => apply_fallback(access_set, hint_diagnostics),
+            }
+        }
+        ir::Instr::GetPrivateInput { .. } | ir::Instr::CommitOutput => {}
+        ir::Instr::UseNullifier { .. } => {
+            apply_fallback(access_set, hint_diagnostics);
+        }
+        ir::Instr::SmartContractLifecycle { .. } => {
+            apply_fallback(access_set, hint_diagnostics);
+        }
+        ir::Instr::ZkRootsGet { payload, .. } => {
+            let Some(raw) = string_map.get(&(func_idx, *payload)) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            if record_zk_roots_get_access(raw, access_set).is_none() {
+                apply_fallback(access_set, hint_diagnostics);
+            }
+        }
+        ir::Instr::ZkVoteGetTally { payload, .. } => {
+            let Some(raw) = string_map.get(&(func_idx, *payload)) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            if record_zk_vote_get_tally_access(raw, access_set).is_none() {
+                apply_fallback(access_set, hint_diagnostics);
+            }
+        }
+        ir::Instr::VrfEpochSeed { .. } => {
+            apply_fallback(access_set, hint_diagnostics);
+        }
         ir::Instr::BuildSubmitBallotInline { .. } | ir::Instr::BuildUnshieldInline { .. } => {}
         ir::Instr::TransferDomain { domain, to } => {
             let (Some(domain), Some(to)) = (
@@ -11038,7 +11972,7 @@ fn record_isi_access(
             };
             add_nft_detail_rw(access_set, &id, &key);
         }
-        // AXT/ZK helpers carry opaque payloads; fall back to wildcard.
+        // AXT/ZK/Soracloud helpers carry opaque host payloads; fall back to wildcard.
         ir::Instr::RegisterPeer { .. }
         | ir::Instr::UnregisterPeer { .. }
         | ir::Instr::InvokeEntrypointAs { .. }
@@ -11052,24 +11986,29 @@ fn record_isi_access(
         | ir::Instr::AxtTouch { .. }
         | ir::Instr::VerifyDsProof { .. }
         | ir::Instr::UseAssetHandle { .. }
-        | ir::Instr::AxtCommit => apply_fallback(access_set, hint_diagnostics),
+        | ir::Instr::AxtCommit
+        | ir::Instr::SoracloudHostCall { .. } => apply_fallback(access_set, hint_diagnostics),
         _ => apply_fallback(access_set, hint_diagnostics),
+    }
+}
+
+fn decode_norito_literal_payload(raw: &str) -> Option<Vec<u8>> {
+    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+    match crate::pointer_abi::validate_tlv_bytes(&bytes) {
+        Ok(tlv) => {
+            if tlv.type_id != PointerType::NoritoBytes {
+                return None;
+            }
+            Some(tlv.payload.to_vec())
+        }
+        Err(_) => Some(bytes),
     }
 }
 
 fn decode_instruction_box_literal(raw: &str) -> Option<InstructionBox> {
     use iroha_data_model::isi::zk as DMZk;
 
-    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-    let payload = match crate::pointer_abi::validate_tlv_bytes(&bytes) {
-        Ok(tlv) => {
-            if tlv.type_id != PointerType::NoritoBytes {
-                return None;
-            }
-            tlv.payload.to_vec()
-        }
-        Err(_) => bytes,
-    };
+    let payload = decode_norito_literal_payload(raw)?;
     if let Ok(instr) = norito::decode_from_bytes::<InstructionBox>(&payload) {
         return Some(instr);
     }
@@ -11096,17 +12035,77 @@ fn access_for_instruction_literal(raw: &str) -> Option<AccessSets> {
 }
 
 fn decode_query_request_literal(raw: &str) -> Option<QueryRequest> {
-    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-    let payload = match crate::pointer_abi::validate_tlv_bytes(&bytes) {
-        Ok(tlv) => {
-            if tlv.type_id != PointerType::NoritoBytes {
-                return None;
-            }
-            tlv.payload.to_vec()
-        }
-        Err(_) => bytes,
-    };
+    let payload = decode_norito_literal_payload(raw)?;
     norito::decode_from_bytes(&payload).ok()
+}
+
+fn record_zk_roots_get_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
+    let payload = decode_norito_literal_payload(raw)?;
+    let (payload, flags) = decode_norito_archive_payload(&payload)?;
+    let mut fields = payload;
+    let asset_field = take_norito_len_prefixed(&mut fields, flags)?;
+    let max_field = take_norito_len_prefixed(&mut fields, flags)?;
+    if !fields.is_empty() || decode_norito_u32_bare(max_field).is_none() {
+        return None;
+    }
+    let asset_id = decode_norito_string_bare(asset_field, flags)?;
+    let asset = asset_id.parse().ok()?;
+    add_zk_asset_r(access_set, &asset);
+    Some(())
+}
+
+fn record_zk_vote_get_tally_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
+    let payload = decode_norito_literal_payload(raw)?;
+    let (payload, flags) = decode_norito_archive_payload(&payload)?;
+    let mut fields = payload;
+    let election_id_field = take_norito_len_prefixed(&mut fields, flags)?;
+    if !fields.is_empty() {
+        return None;
+    }
+    let election_id = decode_norito_string_bare(election_id_field, flags)?;
+    add_zk_election_tally_r(access_set, &election_id);
+    Some(())
+}
+
+fn decode_norito_archive_payload(bytes: &[u8]) -> Option<(&[u8], u8)> {
+    if bytes.len() < norito::core::Header::SIZE || &bytes[0..4] != b"NRT0" || bytes[22] != 0 {
+        return None;
+    }
+    let len = u64::from_le_bytes(bytes[23..31].try_into().ok()?);
+    let payload = &bytes[norito::core::Header::SIZE..];
+    if payload.len() != usize::try_from(len).ok()? {
+        return None;
+    }
+    let flags = bytes[39];
+    norito::core::validate_header_flags(flags).ok()?;
+    Some((payload, flags))
+}
+
+fn take_norito_len_prefixed<'a>(bytes: &mut &'a [u8], flags: u8) -> Option<&'a [u8]> {
+    let (len, header_len) = norito::core::read_len_from_slice_with_flags(bytes, flags).ok()?;
+    let end = header_len.checked_add(len)?;
+    if bytes.len() < end {
+        return None;
+    }
+    let field = &bytes[header_len..end];
+    *bytes = &bytes[end..];
+    Some(field)
+}
+
+fn decode_norito_string_bare(bytes: &[u8], flags: u8) -> Option<String> {
+    let mut bytes = bytes;
+    let raw = take_norito_len_prefixed(&mut bytes, flags)?;
+    if !bytes.is_empty() {
+        return None;
+    }
+    std::str::from_utf8(raw).ok().map(ToOwned::to_owned)
+}
+
+fn decode_norito_u32_bare(bytes: &[u8]) -> Option<u32> {
+    if bytes.len() != 4 {
+        return None;
+    }
+    Some(u32::from_le_bytes(bytes.try_into().ok()?))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -11425,6 +12424,45 @@ fn record_singular_query_access(
     match query {
         SingularQueryBox::FindAssetById(q) => {
             add_asset_r(access_set, q.asset_id());
+            Some(())
+        }
+        _ => None,
+    }
+}
+
+fn record_typed_query_get_access(
+    key: ir::Temp,
+    syscall: u32,
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    authority_account_temps: &HashSet<(usize, ir::Temp)>,
+    func_idx: usize,
+    access_set: &mut AccessSets,
+) -> Option<()> {
+    match syscall {
+        syscalls::SYSCALL_QUERY_GET_ACCOUNT => {
+            let account =
+                account_access_hint_for_temp(string_map, authority_account_temps, func_idx, key)?;
+            add_account_hint_r(access_set, &account);
+            Some(())
+        }
+        syscalls::SYSCALL_QUERY_GET_ASSET => {
+            let id = parse_temp::<AssetId>(string_map, func_idx, key)?;
+            add_asset_r(access_set, &id);
+            Some(())
+        }
+        syscalls::SYSCALL_QUERY_GET_ASSET_DEFINITION => {
+            let id = parse_temp::<AssetDefinitionId>(string_map, func_idx, key)?;
+            add_asset_def_r(access_set, &id);
+            Some(())
+        }
+        syscalls::SYSCALL_QUERY_GET_DOMAIN => {
+            let id = parse_domain_temp(string_map, func_idx, key)?;
+            add_domain_r(access_set, &id);
+            Some(())
+        }
+        syscalls::SYSCALL_QUERY_GET_NFT => {
+            let id = parse_temp::<NftId>(string_map, func_idx, key)?;
+            add_nft_r(access_set, &id);
             Some(())
         }
         _ => None,
@@ -11904,6 +12942,18 @@ fn add_asset_r(set: &mut AccessSets, id: &AssetId) {
     add_asset_def_r(set, id.definition());
 }
 
+fn add_asset_r_for_account_hint(
+    set: &mut AccessSets,
+    definition: &AssetDefinitionId,
+    account: &AccountAccessHint,
+) {
+    set.reads
+        .insert(key_asset_for_account_hint(definition, account));
+    add_account_hint_r(set, account);
+    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_def_r(set, definition);
+}
+
 fn add_asset_def_detail_rw(set: &mut AccessSets, id: &AssetDefinitionId, key: &Name) {
     add_asset_def_r(set, id);
     let detail = key_asset_def_detail(id, key);
@@ -11915,6 +12965,10 @@ fn add_zk_asset_rw(set: &mut AccessSets, id: &AssetDefinitionId) {
     let key = key_zk_asset(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
+}
+
+fn add_zk_asset_r(set: &mut AccessSets, id: &AssetDefinitionId) {
+    set.reads.insert(key_zk_asset(id));
 }
 
 fn add_zk_election_w(set: &mut AccessSets, election_id: &str) {
@@ -11931,6 +12985,10 @@ fn add_zk_election_submit_w(set: &mut AccessSets, election_id: &str) {
 fn add_zk_election_tally_w(set: &mut AccessSets, election_id: &str) {
     set.writes
         .insert(format!("zk:election:{election_id}:tally"));
+}
+
+fn add_zk_election_tally_r(set: &mut AccessSets, election_id: &str) {
+    set.reads.insert(format!("zk:election:{election_id}:tally"));
 }
 
 fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
@@ -12005,6 +13063,11 @@ fn add_nft_rw(set: &mut AccessSets, id: &NftId) {
     set.writes.insert(key);
 }
 
+fn add_nft_r(set: &mut AccessSets, id: &NftId) {
+    set.reads.insert(NFT_COARSE_KEY.to_string());
+    set.reads.insert(key_nft(id));
+}
+
 fn add_nft_coarse_rw(set: &mut AccessSets) {
     set.reads.insert(NFT_COARSE_KEY.to_string());
     set.writes.insert(NFT_COARSE_KEY.to_string());
@@ -12067,6 +13130,13 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::EscrowCancel { .. }
             | ir::Instr::EscrowOpenDispute { .. }
             | ir::Instr::EscrowResolveDispute { .. }
+            | ir::Instr::AnonymousEscrowOpenOffer { .. }
+            | ir::Instr::AnonymousEscrowAccept { .. }
+            | ir::Instr::AnonymousEscrowMarkPaymentSent { .. }
+            | ir::Instr::AnonymousEscrowRelease { .. }
+            | ir::Instr::AnonymousEscrowCancel { .. }
+            | ir::Instr::AnonymousEscrowOpenDispute { .. }
+            | ir::Instr::AnonymousEscrowResolveDispute { .. }
             | ir::Instr::TransferBatchBegin
             | ir::Instr::TransferBatchEnd
             | ir::Instr::MintAsset { .. }
@@ -12078,6 +13148,9 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::TransferNft { .. }
             | ir::Instr::RegisterDomain { .. }
             | ir::Instr::RegisterAccount { .. }
+            | ir::Instr::AddSignatory { .. }
+            | ir::Instr::RemoveSignatory { .. }
+            | ir::Instr::SetAccountQuorum { .. }
             | ir::Instr::UnregisterDomain { .. }
             | ir::Instr::UnregisterAsset { .. }
             | ir::Instr::UnregisterAccount { .. }
@@ -12096,6 +13169,13 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::VendorExecuteInstruction { .. }
             | ir::Instr::VendorExecuteQuery { .. }
             | ir::Instr::QueryExecuteNorito { .. }
+            | ir::Instr::QueryGet { .. }
+            | ir::Instr::GetAccountBalance { .. }
+            | ir::Instr::UseNullifier { .. }
+            | ir::Instr::SmartContractLifecycle { .. }
+            | ir::Instr::ZkRootsGet { .. }
+            | ir::Instr::ZkVoteGetTally { .. }
+            | ir::Instr::VrfEpochSeed { .. }
             | ir::Instr::CallContract { .. }
             | ir::Instr::InvokeEntrypointAs { .. }
             | ir::Instr::ExpectRejectAs { .. }
@@ -12111,6 +13191,7 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::VerifyDsProof { .. }
             | ir::Instr::UseAssetHandle { .. }
             | ir::Instr::AxtCommit
+            | ir::Instr::SoracloudHostCall { .. }
     )
 }
 

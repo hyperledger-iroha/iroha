@@ -330,10 +330,43 @@ pub enum Instr {
         seller_amount: Temp,
         evidence_hashes: Option<Temp>,
     },
+    /// Open and fund a native anonymous asset escrow from an opaque request payload.
+    AnonymousEscrowOpenOffer {
+        request: Temp,
+    },
+    /// Accept a native anonymous asset escrow.
+    AnonymousEscrowAccept {
+        escrow: Temp,
+    },
+    /// Mark anonymous escrow off-chain payment as sent.
+    AnonymousEscrowMarkPaymentSent {
+        escrow: Temp,
+    },
+    /// Release a paid anonymous escrow from an opaque request payload.
+    AnonymousEscrowRelease {
+        request: Temp,
+    },
+    /// Cancel an anonymous escrow from an opaque request payload.
+    AnonymousEscrowCancel {
+        request: Temp,
+    },
+    /// Open an anonymous escrow dispute.
+    AnonymousEscrowOpenDispute {
+        escrow: Temp,
+        evidence_hashes: Option<Temp>,
+    },
+    /// Resolve a disputed anonymous escrow from an opaque request payload.
+    AnonymousEscrowResolveDispute {
+        request: Temp,
+    },
     /// Begin a FASTPQ transfer batch scope.
     TransferBatchBegin,
     /// End the current FASTPQ transfer batch scope.
     TransferBatchEnd,
+    /// Submit a pre-encoded FASTPQ TransferAssetBatch Norito payload.
+    TransferBatchApply {
+        payload: Temp,
+    },
     /// Call the `mint_asset` syscall with account, asset and amount parameters.
     MintAsset {
         account: Temp,
@@ -473,6 +506,21 @@ pub enum Instr {
     /// Register an account by id.
     RegisterAccount {
         account: Temp,
+    },
+    /// Add a JSON-encoded PublicKey signatory to an account.
+    AddSignatory {
+        account: Temp,
+        signatory: Temp,
+    },
+    /// Remove a JSON-encoded PublicKey signatory from an account.
+    RemoveSignatory {
+        account: Temp,
+        signatory: Temp,
+    },
+    /// Set the non-zero multisig quorum for an account.
+    SetAccountQuorum {
+        account: Temp,
+        quorum: Temp,
     },
     /// Unregister a Domain by id.
     UnregisterDomain {
@@ -644,6 +692,49 @@ pub enum Instr {
     },
     /// Extended query bridge: QUERY_EXECUTE_NORITO with NoritoBytes `QueryRequest` in r10.
     QueryExecuteNorito {
+        dest: Temp,
+        payload: Temp,
+    },
+    /// Direct typed query helper: r10 = pointer key, syscall returns NoritoBytes in r10.
+    QueryGet {
+        dest: Temp,
+        key: Temp,
+        syscall: u32,
+    },
+    /// Host balance query: r10 = &AccountId, r11 = &AssetDefinitionId; returns &NoritoBytes(Numeric).
+    GetAccountBalance {
+        dest: Temp,
+        account: Temp,
+        asset: Temp,
+    },
+    /// Read a host-provided private input by numeric index.
+    GetPrivateInput {
+        dest: Temp,
+        index: Temp,
+    },
+    /// Record a nullifier and reject if it was already used.
+    UseNullifier {
+        nullifier: Temp,
+    },
+    /// Commit the VM OUTPUT region to the host.
+    CommitOutput,
+    /// Smart-contract lifecycle governance/runtime helper with NoritoBytes request in r10.
+    SmartContractLifecycle {
+        payload: Temp,
+        syscall: u32,
+    },
+    /// Read recent ZK roots with a NoritoBytes request in r10.
+    ZkRootsGet {
+        dest: Temp,
+        payload: Temp,
+    },
+    /// Read finalized ZK vote tally with a NoritoBytes request in r10.
+    ZkVoteGetTally {
+        dest: Temp,
+        payload: Temp,
+    },
+    /// Read VRF epoch seed with a NoritoBytes request in r10.
+    VrfEpochSeed {
         dest: Temp,
         payload: Temp,
     },
@@ -885,6 +976,12 @@ pub enum Instr {
     },
     /// Commit the active AXT envelope.
     AxtCommit,
+    /// Execute a Soracloud runtime host operation with request pointer in r10.
+    SoracloudHostCall {
+        dest: Temp,
+        request: Temp,
+        syscall: u32,
+    },
 }
 
 /// Kinds of typed data references supported by the pointer-ABI.
@@ -904,6 +1001,8 @@ pub enum DataRefKind {
     AxtDescriptor,
     AssetHandle,
     ProofBlob,
+    SoracloudRequest,
+    SoracloudResponse,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -933,6 +1032,8 @@ fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
         Type::AxtDescriptor => Some(DataRefKind::AxtDescriptor),
         Type::AssetHandle => Some(DataRefKind::AssetHandle),
         Type::ProofBlob => Some(DataRefKind::ProofBlob),
+        Type::SoracloudRequest => Some(DataRefKind::SoracloudRequest),
+        Type::SoracloudResponse => Some(DataRefKind::SoracloudResponse),
         Type::Blob | Type::Bytes => Some(DataRefKind::Blob),
         _ => None,
     }
@@ -2482,6 +2583,61 @@ fn lower_expr_as_numeric(
     }
 }
 
+fn query_get_syscall(builtin: Builtin) -> u32 {
+    match builtin {
+        Builtin::QueryGetAccount => crate::syscalls::SYSCALL_QUERY_GET_ACCOUNT,
+        Builtin::QueryGetAsset => crate::syscalls::SYSCALL_QUERY_GET_ASSET,
+        Builtin::QueryGetAssetDefinition => crate::syscalls::SYSCALL_QUERY_GET_ASSET_DEFINITION,
+        Builtin::QueryGetDomain => crate::syscalls::SYSCALL_QUERY_GET_DOMAIN,
+        Builtin::QueryGetNft => crate::syscalls::SYSCALL_QUERY_GET_NFT,
+        Builtin::QueryGetParameter => crate::syscalls::SYSCALL_QUERY_GET_PARAMETER,
+        Builtin::QueryGetContractManifest => crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST,
+        Builtin::QueryGetContractInstance => crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE,
+        _ => unreachable!("query_get_syscall called for non-query builtin"),
+    }
+}
+
+fn soracloud_syscall(builtin: Builtin) -> u32 {
+    match builtin {
+        Builtin::SoracloudReadCommittedState => {
+            crate::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
+        }
+        Builtin::SoracloudEmitStateMutation => {
+            crate::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION
+        }
+        Builtin::SoracloudEmitMailboxMessage => {
+            crate::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
+        }
+        Builtin::SoracloudAppendJournal => crate::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL,
+        Builtin::SoracloudPublishCheckpoint => {
+            crate::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
+        }
+        Builtin::SoracloudReadSecret => crate::syscalls::SYSCALL_SORACLOUD_READ_SECRET,
+        Builtin::SoracloudReadCredential => crate::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL,
+        Builtin::SoracloudEgressFetch => crate::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH,
+        Builtin::SoracloudReadConfig => crate::syscalls::SYSCALL_SORACLOUD_READ_CONFIG,
+        Builtin::SoracloudReadSecretEnvelope => {
+            crate::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE
+        }
+        _ => unreachable!("soracloud_syscall called for non-Soracloud builtin"),
+    }
+}
+
+fn smart_contract_lifecycle_syscall(builtin: Builtin) -> u32 {
+    match builtin {
+        Builtin::DeactivateContractInstance => {
+            crate::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE
+        }
+        Builtin::RemoveSmartContractBytes => crate::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES,
+        Builtin::RegisterSmartContractCode => crate::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE,
+        Builtin::RegisterSmartContractBytes => {
+            crate::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES
+        }
+        Builtin::ActivateContractInstance => crate::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
+        _ => unreachable!("smart_contract_lifecycle_syscall called for non-lifecycle builtin"),
+    }
+}
+
 fn lower_surface_builtin_call(
     ctx: &mut LowerCtx,
     builtin: Builtin,
@@ -2688,6 +2844,131 @@ fn lower_surface_builtin_call(
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::QueryExecuteNorito { dest, payload });
             dest
+        }
+        Builtin::QueryGetAccount
+        | Builtin::QueryGetAsset
+        | Builtin::QueryGetAssetDefinition
+        | Builtin::QueryGetDomain
+        | Builtin::QueryGetNft
+        | Builtin::QueryGetParameter
+        | Builtin::QueryGetContractManifest
+        | Builtin::QueryGetContractInstance => {
+            let key = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::QueryGet {
+                dest,
+                key,
+                syscall: query_get_syscall(builtin),
+            });
+            dest
+        }
+        Builtin::GetAccountBalance => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let asset = lower_expr(ctx, &args[1], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::GetAccountBalance {
+                dest,
+                account,
+                asset,
+            });
+            dest
+        }
+        Builtin::GetPrivateInput => {
+            let index = lower_expr_as_int(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::GetPrivateInput { dest, index });
+            dest
+        }
+        Builtin::UseNullifier => {
+            let nullifier = lower_expr_as_int(ctx, &args[0], vars);
+            ctx.current_instr(Instr::UseNullifier { nullifier });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::CommitOutput => {
+            ctx.current_instr(Instr::CommitOutput);
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::TransferV1BatchApply => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::TransferBatchApply { payload });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::DeactivateContractInstance
+        | Builtin::RemoveSmartContractBytes
+        | Builtin::RegisterSmartContractCode
+        | Builtin::RegisterSmartContractBytes
+        | Builtin::ActivateContractInstance => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::SmartContractLifecycle {
+                payload,
+                syscall: smart_contract_lifecycle_syscall(builtin),
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::ZkRootsGet => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::ZkRootsGet { dest, payload });
+            dest
+        }
+        Builtin::ZkVoteGetTally => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::ZkVoteGetTally { dest, payload });
+            dest
+        }
+        Builtin::VrfEpochSeed => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::VrfEpochSeed { dest, payload });
+            dest
+        }
+        Builtin::SoracloudReadCommittedState
+        | Builtin::SoracloudEmitStateMutation
+        | Builtin::SoracloudEmitMailboxMessage
+        | Builtin::SoracloudAppendJournal
+        | Builtin::SoracloudPublishCheckpoint
+        | Builtin::SoracloudReadSecret
+        | Builtin::SoracloudReadCredential
+        | Builtin::SoracloudEgressFetch
+        | Builtin::SoracloudReadConfig
+        | Builtin::SoracloudReadSecretEnvelope => {
+            let request = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::SoracloudHostCall {
+                dest,
+                request,
+                syscall: soracloud_syscall(builtin),
+            });
+            dest
+        }
+        Builtin::AddSignatory | Builtin::RemoveSignatory => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let signatory = lower_expr(ctx, &args[1], vars);
+            if builtin == Builtin::AddSignatory {
+                ctx.current_instr(Instr::AddSignatory { account, signatory });
+            } else {
+                ctx.current_instr(Instr::RemoveSignatory { account, signatory });
+            }
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::SetAccountQuorum => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let quorum = lower_expr_as_int(ctx, &args[1], vars);
+            ctx.current_instr(Instr::SetAccountQuorum { account, quorum });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
         }
         Builtin::Contains => {
             let mexpr = &args[0];
@@ -3647,6 +3928,62 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::QueryExecuteNorito { dest, payload });
                     dest
                 }
+                "query_get_account"
+                | "query_get_asset"
+                | "query_get_asset_definition"
+                | "query_get_domain"
+                | "query_get_nft"
+                | "query_get_parameter"
+                | "query_get_contract_manifest"
+                | "query_get_contract_instance" => {
+                    let key = lower_expr(ctx, &args[0], vars);
+                    let dest = ctx.new_temp();
+                    let builtin = Builtin::from_name(name).expect("query helper builtin");
+                    ctx.current_instr(Instr::QueryGet {
+                        dest,
+                        key,
+                        syscall: query_get_syscall(builtin),
+                    });
+                    dest
+                }
+                "zk_roots_get" => {
+                    let payload = lower_expr(ctx, &args[0], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::ZkRootsGet { dest, payload });
+                    dest
+                }
+                "zk_vote_get_tally" => {
+                    let payload = lower_expr(ctx, &args[0], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::ZkVoteGetTally { dest, payload });
+                    dest
+                }
+                "vrf_epoch_seed" => {
+                    let payload = lower_expr(ctx, &args[0], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::VrfEpochSeed { dest, payload });
+                    dest
+                }
+                "soracloud_read_committed_state"
+                | "soracloud_emit_state_mutation"
+                | "soracloud_emit_mailbox_message"
+                | "soracloud_append_journal"
+                | "soracloud_publish_checkpoint"
+                | "soracloud_read_secret"
+                | "soracloud_read_credential"
+                | "soracloud_egress_fetch"
+                | "soracloud_read_config"
+                | "soracloud_read_secret_envelope" => {
+                    let request = lower_expr(ctx, &args[0], vars);
+                    let dest = ctx.new_temp();
+                    let builtin = Builtin::from_name(name).expect("Soracloud helper builtin");
+                    ctx.current_instr(Instr::SoracloudHostCall {
+                        dest,
+                        request,
+                        syscall: soracloud_syscall(builtin),
+                    });
+                    dest
+                }
                 // Pointer-ABI constructors: accept string literals (or temps derived from them)
                 // and lower to typed pointers that codegen wires into Norito TLV fixups.
                 // `account_id("alias@dataspace")` is special-cased below to preserve runtime
@@ -3654,7 +3991,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 // canonical account into the artifact.
                 "account_id" | "asset_definition" | "asset_id" | "nft_id" | "name" | "json"
                 | "domain" | "domain_id" | "blob" | "norito_bytes" | "dataspace_id"
-                | "axt_descriptor" | "asset_handle" | "proof_blob" => {
+                | "axt_descriptor" | "asset_handle" | "proof_blob" | "soracloud_request"
+                | "soracloud_response" => {
                     // Expect a single argument
                     if args.len() != 1 {
                         let t = ctx.new_temp();
@@ -3676,6 +4014,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         "axt_descriptor" => (DataRefKind::AxtDescriptor, Type::AxtDescriptor),
                         "asset_handle" => (DataRefKind::AssetHandle, Type::AssetHandle),
                         "proof_blob" => (DataRefKind::ProofBlob, Type::ProofBlob),
+                        "soracloud_request" => {
+                            (DataRefKind::SoracloudRequest, Type::SoracloudRequest)
+                        }
+                        "soracloud_response" => {
+                            (DataRefKind::SoracloudResponse, Type::SoracloudResponse)
+                        }
                         _ => unreachable!(),
                     };
                     if let semantic::ExprKind::String(s) = &arg.expr {
@@ -5120,6 +5464,59 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
                 }
+                "anonymous_escrow_open_offer" => {
+                    let request = lower_expr(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::AnonymousEscrowOpenOffer { request });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "anonymous_escrow_accept" => {
+                    let escrow = lower_expr(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::AnonymousEscrowAccept { escrow });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "anonymous_escrow_mark_payment_sent" => {
+                    let escrow = lower_expr(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::AnonymousEscrowMarkPaymentSent { escrow });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "anonymous_escrow_release" => {
+                    let request = lower_expr(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::AnonymousEscrowRelease { request });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "anonymous_escrow_cancel" => {
+                    let request = lower_expr(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::AnonymousEscrowCancel { request });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "anonymous_escrow_open_dispute" => {
+                    let escrow = lower_expr(ctx, &args[0], vars);
+                    let evidence_hashes = args.get(1).map(|arg| lower_expr(ctx, arg, vars));
+                    ctx.current_instr(Instr::AnonymousEscrowOpenDispute {
+                        escrow,
+                        evidence_hashes,
+                    });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "anonymous_escrow_resolve_dispute" => {
+                    let request = lower_expr(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::AnonymousEscrowResolveDispute { request });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
                 "transfer_batch" => {
                     ctx.current_instr(Instr::TransferBatchBegin);
                     for entry in args {
@@ -5189,6 +5586,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 }
                 "transfer_v1_batch_end" => {
                     ctx.current_instr(Instr::TransferBatchEnd);
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "transfer_v1_batch_apply" => {
+                    let payload = lower_expr(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::TransferBatchApply { payload });
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t

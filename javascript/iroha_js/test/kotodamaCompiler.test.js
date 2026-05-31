@@ -14,6 +14,7 @@ import { blake2b256 } from "../src/blake2b.js";
 const CURRENT_ABI_V1_HASH_HEX = "73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d";
 const CURRENT_ABI_V1_HASH_LITERAL =
   "hash:73CEFB1B419F97B9E2864CDC6545D3F80AE2328DC0FBE2FBD034CD51A837BA0D#4D00";
+const NORITO_HEADER_FLAG_COMPACT_LEN = 0x02;
 
 function irohaHashHex(bytes) {
   const digest = Buffer.from(blake2b256(bytes));
@@ -164,6 +165,73 @@ function ivmWordNeedle(word) {
 
 function ivmWordsNeedle(words) {
   return Buffer.concat(words.map((word) => ivmWordNeedle(word)));
+}
+
+function littleEndianU32(value) {
+  const bytes = Buffer.alloc(4);
+  bytes.writeUInt32LE(value >>> 0, 0);
+  return bytes;
+}
+
+function littleEndianU64(value) {
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64LE(BigInt(value), 0);
+  return bytes;
+}
+
+function compactLength(value) {
+  const bytes = [];
+  let remaining = value;
+  do {
+    let byte = remaining & 0x7f;
+    remaining = Math.floor(remaining / 128);
+    if (remaining > 0) byte |= 0x80;
+    bytes.push(byte);
+  } while (remaining > 0);
+  return Buffer.from(bytes);
+}
+
+function encodeLength(value, flags) {
+  return (flags & NORITO_HEADER_FLAG_COMPACT_LEN) === 0
+    ? littleEndianU64(value)
+    : compactLength(value);
+}
+
+function encodeStructField(payload, flags = 0) {
+  return Buffer.concat([encodeLength(payload.length, flags), payload]);
+}
+
+function encodeNoritoStringBare(value, flags = 0) {
+  const bytes = Buffer.from(value, "utf8");
+  return Buffer.concat([encodeLength(bytes.length, flags), bytes]);
+}
+
+function encodeNoritoTopLevel(payload, flags = 0) {
+  const header = Buffer.alloc(40);
+  header.write("NRT0", 0, "ascii");
+  header[22] = 0;
+  header.writeBigUInt64LE(BigInt(payload.length), 23);
+  header[39] = flags;
+  return Buffer.concat([header, payload]);
+}
+
+function toHexLiteral(bytes) {
+  return `0x${Buffer.from(bytes).toString("hex")}`;
+}
+
+function encodeZkRootsGetRequestLiteral(assetId, max) {
+  const flags = NORITO_HEADER_FLAG_COMPACT_LEN;
+  return toHexLiteral(encodeNoritoTopLevel(Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(assetId, flags), flags),
+    encodeStructField(littleEndianU32(max), flags),
+  ]), flags));
+}
+
+function encodeZkVoteGetTallyRequestLiteral(electionId) {
+  const flags = NORITO_HEADER_FLAG_COMPACT_LEN;
+  return toHexLiteral(encodeNoritoTopLevel(Buffer.concat([
+    encodeStructField(encodeNoritoStringBare(electionId, flags), flags),
+  ]), flags));
 }
 
 function instructionWritesRegister(word, register) {
@@ -1448,9 +1516,9 @@ seiyaku ReturnBytesMapPolicy {
   assert.equal(localBytesMap.diagnostics.length, 1);
   assert.equal(
     localBytesMap.diagnostics[0].message,
-    "on-chain profile forbids map with key type `bytes` in binding `values` in `run`. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob.\n"
-      + "on-chain profile forbids map with key type `bytes` in map assignment in `run`. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob.\n"
-      + "on-chain profile forbids map with key type `bytes` in map iteration in `run`. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob.",
+    "on-chain profile forbids map with key type `bytes` in binding `values` in `run`. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob, SoracloudRequest, SoracloudResponse.\n"
+      + "on-chain profile forbids map with key type `bytes` in map assignment in `run`. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob, SoracloudRequest, SoracloudResponse.\n"
+      + "on-chain profile forbids map with key type `bytes` in map iteration in `run`. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob, SoracloudRequest, SoracloudResponse.",
   );
   assert.equal(localStringMap.artifactBytes.length, 0);
   assert.equal(localStringMap.diagnostics.length, 1);
@@ -1462,8 +1530,8 @@ seiyaku ReturnBytesMapPolicy {
   assert.equal(returnBytesMap.diagnostics.length, 1);
   assert.equal(
     returnBytesMap.diagnostics[0].message,
-    "on-chain profile forbids map with key type `bytes` in return in `helper`. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob.\n"
-      + "on-chain profile forbids map with key type `bytes` in function `helper` return type. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob.",
+    "on-chain profile forbids map with key type `bytes` in return in `helper`. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob, SoracloudRequest, SoracloudResponse.\n"
+      + "on-chain profile forbids map with key type `bytes` in function `helper` return type. Supported key types: int, AccountId, AssetDefinitionId, AssetId, NftId, DomainId, Name, DataSpaceId, AxtDescriptor, AssetHandle, ProofBlob, SoracloudRequest, SoracloudResponse.",
   );
 });
 
@@ -2408,6 +2476,15 @@ seiyaku InvalidQueryExecuteNoritoPayload {
   kotoage fn run() permission(Admin) {}
 }
 `);
+  const invalidVrfEpochSeedPayload = compileKotodamaProgram(`
+seiyaku InvalidVrfEpochSeedPayload {
+  fn helper() {
+    let response = vrf_epoch_seed(1);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
   const invalidTriggerEventArity = compileKotodamaProgram(`
 seiyaku InvalidTriggerEventArity {
   fn helper() {
@@ -2567,6 +2644,9 @@ seiyaku ValidBuiltins {
   assert.equal(invalidQueryExecuteNoritoPayload.artifactBytes.length, 0);
   assert.equal(invalidQueryExecuteNoritoPayload.diagnostics.length, 1);
   assert.match(invalidQueryExecuteNoritoPayload.diagnostics[0].message, /query_execute_norito expects \(Blob\|bytes\) pointer to NoritoBytes QueryRequest/);
+  assert.equal(invalidVrfEpochSeedPayload.artifactBytes.length, 0);
+  assert.equal(invalidVrfEpochSeedPayload.diagnostics.length, 1);
+  assert.match(invalidVrfEpochSeedPayload.diagnostics[0].message, /vrf_epoch_seed expects \(Blob\|bytes\) pointer to NoritoBytes VrfEpochSeedRequest/);
   assert.equal(invalidTriggerEventArity.artifactBytes.length, 0);
   assert.equal(invalidTriggerEventArity.diagnostics.length, 1);
   assert.match(invalidTriggerEventArity.diagnostics[0].message, /trigger_event expects no arguments/);
@@ -2744,8 +2824,288 @@ seiyaku ExtendedReadHelpers {
     compiled.manifest?.entrypoints.map((entry) => [entry.name, entry.return_type]),
     [
       ["query", "bytes"],
-      ["caller", "account_id"],
+      ["caller", "AccountId"],
     ],
+  );
+});
+
+test("Kotodama compiler SDK emits read-only ZK and VRF Norito helpers", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku ZkVrfReadHelpers {
+  view fn read() -> bytes {
+    let roots = zk_roots_get(norito_bytes(b"roots"));
+    let tally = zk_vote_get_tally(norito_bytes(b"tally"));
+    let seed = vrf_epoch_seed(norito_bytes(b"seed"));
+    info(tlv_len(roots));
+    info(tlv_len(tally));
+    return seed;
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0x64)), -1);
+  assert.notEqual(code.indexOf(syscallNeedle(0x65)), -1);
+  assert.notEqual(code.indexOf(syscallNeedle(0x7e)), -1);
+});
+
+test("Kotodama compiler SDK derives exact access hints for static ZK read requests", () => {
+  const assetDefinition = normalizeAssetDefinitionIdLiteral("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+  assert.notEqual(assetDefinition, null);
+  const rootsRequest = encodeZkRootsGetRequestLiteral(assetDefinition, 4);
+  const tallyRequest = encodeZkVoteGetTallyRequestLiteral("election-1");
+  const compiled = compileKotodamaProgram(`
+seiyaku ZkReadAccess {
+  view fn read() -> bytes {
+    let roots = zk_roots_get(norito_bytes("${rootsRequest}"));
+    let tally = zk_vote_get_tally(norito_bytes("${tallyRequest}"));
+    info(tlv_len(roots));
+    return tally;
+  }
+}
+`);
+  const read = compiled.manifest?.entrypoints[0];
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(read?.write_keys, []);
+  assert.equal(read?.access_hints_complete, true);
+  assert.deepEqual(read?.access_hints_skipped, []);
+  assert.ok(read?.read_keys.includes(`zk_asset:${assetDefinition}`));
+  assert.ok(read?.read_keys.includes("zk:election:election-1:tally"));
+  assert.equal(read?.read_keys.includes("*"), false);
+});
+
+test("Kotodama compiler SDK emits typed direct query helpers", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku TypedQueryHelpers {
+  view fn read() -> bytes {
+    let account = query_get_account(sysvar_authority());
+    let asset = query_get_asset(norito_bytes(b"asset"));
+    let definition = query_get_asset_definition(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
+    let domain = query_get_domain(domain("wonderland.universal"));
+    let nft = query_get_nft(nft_id("n0$wonderland.universal"));
+    let parameter = query_get_parameter(name("block.max_transactions"));
+    let manifest = query_get_contract_manifest(norito_bytes(b"hash"));
+    let instance = query_get_contract_instance(name("router::universal"));
+    info(tlv_len(account));
+    info(tlv_len(asset));
+    info(tlv_len(definition));
+    info(tlv_len(domain));
+    info(tlv_len(nft));
+    info(tlv_len(parameter));
+    info(tlv_len(manifest));
+    return instance;
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  for (const syscall of [0x01_0001, 0x01_0002, 0x01_0003, 0x01_0004, 0x01_0005, 0x01_0006, 0x01_0007, 0x01_0008]) {
+    assert.notEqual(code.indexOf(syscallxNeedle(syscall)), -1, `missing typed query syscall ${syscall.toString(16)}`);
+  }
+});
+
+test("Kotodama compiler SDK derives exact access hints for static typed direct query keys", () => {
+  const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  const assetDefinition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+
+  assert.notEqual(account, null);
+  const asset = `${assetDefinition}#${account}`;
+  const compiled = compileKotodamaProgram(`
+seiyaku TypedQueryAccess {
+  view fn read() -> bytes {
+    let account = query_get_account(sysvar_authority());
+    let asset = query_get_asset(asset_id("${asset}"));
+    let definition = query_get_asset_definition(asset_definition("${assetDefinition}"));
+    let domain = query_get_domain(domain("wonderland.universal"));
+    let nft = query_get_nft(nft_id("n0$wonderland.universal"));
+    info(tlv_len(account));
+    info(tlv_len(asset));
+    info(tlv_len(definition));
+    info(tlv_len(domain));
+    return nft;
+  }
+}
+`);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, [
+    "account:$authority",
+    `asset:${asset}`,
+    `account:${account}`,
+    `asset_def:${assetDefinition}`,
+    "domain:aid",
+    "domain:wonderland.universal",
+    "nft",
+    "nft:n0$wonderland.universal",
+  ]);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.equal(compiled.manifest?.entrypoints[0]?.access_hints_complete, true);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK emits account balance query helper with exact static reads", () => {
+  const publicKey = "ed01200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(publicKey);
+  const assetDefinition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+
+  assert.notEqual(account, null);
+  const compiled = compileKotodamaProgram(`
+seiyaku AccountBalanceQuery {
+  view fn read() -> Balance {
+    let account = account_id("${account}");
+    let asset = asset_definition("${assetDefinition}");
+    return get_account_balance(account, asset);
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.notEqual(code.indexOf(syscallNeedle(0xf9)), -1);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, [
+    `asset:${assetDefinition}#${account}`,
+    `account:${account}`,
+    `asset_def:${assetDefinition}`,
+    "domain:aid",
+  ]);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.equal(compiled.manifest?.entrypoints[0]?.access_hints_complete, true);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+});
+
+test("Kotodama compiler SDK rejects invalid account balance query arguments semantically", () => {
+  const invalidAccount = compileKotodamaProgram(`
+seiyaku AccountBalanceInvalidAccount {
+  view fn read() -> Balance {
+    return get_account_balance(name("not_account"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
+  }
+}
+`);
+  const invalidAsset = compileKotodamaProgram(`
+seiyaku AccountBalanceInvalidAsset {
+  view fn read(account: AccountId) -> Balance {
+    return get_account_balance(account, name("not_asset"));
+  }
+}
+`);
+
+  assert.equal(invalidAccount.artifactBytes.length, 0);
+  assert.equal(invalidAccount.diagnostics.length, 1);
+  assert.match(invalidAccount.diagnostics[0].message, /get_account_balance expects \(AccountId, AssetDefinitionId\)/);
+  assert.equal(invalidAsset.artifactBytes.length, 0);
+  assert.equal(invalidAsset.diagnostics.length, 1);
+  assert.match(invalidAsset.diagnostics[0].message, /get_account_balance expects \(AccountId, AssetDefinitionId\)/);
+});
+
+test("Kotodama compiler SDK emits privacy and output helper syscalls", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku PrivacyOutputHelpers {
+  kotoage fn run() permission(Admin) {
+    let secret = get_private_input(0);
+    use_nullifier(secret);
+    commit_output();
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  for (const syscall of [0xfd, 0xfb, 0xfe]) {
+    assert.notEqual(code.indexOf(syscallNeedle(syscall)), -1, `missing syscall 0x${syscall.toString(16)}`);
+  }
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.equal(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, [
+    "opaque ISI access is not compiler-resolved",
+  ]);
+});
+
+test("Kotodama compiler SDK rejects invalid privacy and output helper arguments semantically", () => {
+  for (const [source, expected] of [
+    [
+      `
+seiyaku InvalidPrivateInput {
+  fn run() {
+    let _secret = get_private_input(name("not_index"));
+  }
+}
+`,
+      /get_private_input expects \(int index\)/,
+    ],
+    [
+      `
+seiyaku InvalidNullifier {
+  fn run() {
+    use_nullifier(name("not_nullifier"));
+  }
+}
+`,
+      /use_nullifier expects \(int nullifier\)/,
+    ],
+    [
+      `
+seiyaku InvalidCommitOutput {
+  fn run() {
+    commit_output(1);
+  }
+}
+`,
+      /commit_output expects no arguments/,
+    ],
+  ]) {
+    const compiled = compileKotodamaProgram(source);
+    assert.equal(compiled.artifactBytes.length, 0);
+    assert.equal(compiled.diagnostics.length, 1);
+    assert.match(compiled.diagnostics[0].message, expected);
+  }
+});
+
+test("Kotodama compiler SDK emits smart-contract lifecycle helper syscalls", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku SmartContractLifecycleHelpers {
+  kotoage fn run() permission(Admin) {
+    let request = norito_bytes("00");
+    deactivate_contract_instance(request);
+    remove_smart_contract_bytes(request);
+    register_smart_contract_code(request);
+    register_smart_contract_bytes(request);
+    activate_contract_instance(request);
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  for (const syscall of [0x43, 0x44, 0x45, 0x46, 0x47]) {
+    assert.notEqual(code.indexOf(syscallNeedle(syscall)), -1, `missing syscall 0x${syscall.toString(16)}`);
+  }
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.write_keys, []);
+  assert.equal(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, [
+    "opaque ISI access is not compiler-resolved",
+  ]);
+});
+
+test("Kotodama compiler SDK rejects invalid smart-contract lifecycle helper arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku InvalidSmartContractLifecycle {
+  fn run() {
+    register_smart_contract_code(name("not_request"));
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(
+    compiled.diagnostics[0].message,
+    /register_smart_contract_code expects \(Blob\|bytes\) pointer to NoritoBytes lifecycle request/,
   );
 });
 
@@ -4740,6 +5100,15 @@ seiyaku InvalidHash {
   kotoage fn run() permission(Admin) {}
 }
 `);
+  const invalidTypedQuery = compileKotodamaProgram(`
+seiyaku InvalidTypedQuery {
+  fn helper() {
+    let account = query_get_account(1);
+  }
+
+  kotoage fn run() permission(Admin) {}
+}
+`);
   const invalidEncodeDecode = compileKotodamaProgram(`
 seiyaku InvalidEncodeDecode {
   fn helper() {
@@ -4938,6 +5307,12 @@ seiyaku ValidHostHelpers {
   assert.match(
     invalidHash.diagnostics[0].message,
     /sha256_hash expects \(Blob\|bytes\) argument pointing to INPUT TLV/,
+  );
+  assert.equal(invalidTypedQuery.artifactBytes.length, 0);
+  assert.equal(invalidTypedQuery.diagnostics.length, 1);
+  assert.match(
+    invalidTypedQuery.diagnostics[0].message,
+    /query_get_account expects \(AccountId\|Blob\|bytes\)/,
   );
   assert.equal(invalidEncodeDecode.artifactBytes.length, 0);
   assert.equal(invalidEncodeDecode.diagnostics.length, 1);
@@ -7130,6 +7505,62 @@ seiyaku ValidEscrowSemantic {
   assert.match(
     invalidResolveAmount.diagnostics[0].message,
     /escrow_resolve_dispute expects \(Name, numeric, numeric\[, Blob\|bytes evidence_hashes\]\)/,
+  );
+  assert.deepEqual(validEscrow.diagnostics, []);
+});
+
+test("Kotodama compiler SDK rejects invalid anonymous escrow arguments semantically", () => {
+  const invalidRequest = compileKotodamaProgram(`
+seiyaku InvalidAnonymousEscrowRequest {
+  kotoage fn run() permission(Admin) {
+    anonymous_escrow_open_offer(name("deal"));
+  }
+}
+`);
+  const invalidAcceptId = compileKotodamaProgram(`
+seiyaku InvalidAnonymousEscrowAcceptId {
+  kotoage fn run() permission(Admin) {
+    anonymous_escrow_accept(1);
+  }
+}
+`);
+  const invalidDisputeEvidence = compileKotodamaProgram(`
+seiyaku InvalidAnonymousEscrowDisputeEvidence {
+  kotoage fn run() permission(Admin) {
+    anonymous_escrow_open_dispute(name("deal"), 1);
+  }
+}
+`);
+  const validEscrow = compileKotodamaProgram(`
+seiyaku ValidAnonymousEscrowSemantic {
+  kotoage fn run() permission(Admin) {
+    let request = norito_bytes("00");
+    let evidence = norito_bytes("01");
+    anonymous_escrow_open_offer(request);
+    anonymous_escrow_accept(name("aitai_offer"));
+    anonymous_escrow_mark_payment_sent(name("aitai_offer"));
+    anonymous_escrow_release(request);
+    anonymous_escrow_cancel(request);
+    anonymous_escrow_open_dispute(name("aitai_offer"), evidence);
+    anonymous_escrow_resolve_dispute(request);
+  }
+}
+`);
+
+  assert.equal(invalidRequest.artifactBytes.length, 0);
+  assert.equal(invalidRequest.diagnostics.length, 1);
+  assert.match(
+    invalidRequest.diagnostics[0].message,
+    /anonymous_escrow_open_offer expects \(Blob\|bytes\) Norito request payload/,
+  );
+  assert.equal(invalidAcceptId.artifactBytes.length, 0);
+  assert.equal(invalidAcceptId.diagnostics.length, 1);
+  assert.match(invalidAcceptId.diagnostics[0].message, /anonymous_escrow_accept expects \(Name\)/);
+  assert.equal(invalidDisputeEvidence.artifactBytes.length, 0);
+  assert.equal(invalidDisputeEvidence.diagnostics.length, 1);
+  assert.match(
+    invalidDisputeEvidence.diagnostics[0].message,
+    /anonymous_escrow_open_dispute expects \(Name\[, Blob\|bytes evidence_hashes\]\)/,
   );
   assert.deepEqual(validEscrow.diagnostics, []);
 });
@@ -9605,6 +10036,48 @@ test("Kotodama compiler SDK matches current Rust asset_ops authority access meta
   assert.deepEqual(compiled.manifest?.states, []);
 });
 
+test("Kotodama compiler SDK keeps sysvar_authority access hints as authority placeholders", () => {
+  const assetDefinition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+  const authorityAsset = `asset:${assetDefinition}:$authority`;
+  const authorityDetail = "account.detail:$authority:status";
+  const compiled = compileKotodamaProgram(`
+seiyaku SysvarAuthorityAccess {
+  kotoage fn main() permission(Admin) {
+    let caller = sysvar_authority();
+    let asset = asset_definition("${assetDefinition}");
+    transfer_asset(caller, caller, asset, 1);
+    set_account_detail(caller, name("status"), json("{}"));
+  }
+}
+`);
+  const entrypoint = compiled.manifest?.entrypoints[0];
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(entrypoint?.read_keys.includes("account:$authority"));
+  assert.ok(entrypoint?.read_keys.includes(authorityAsset));
+  assert.ok(entrypoint?.write_keys.includes(authorityAsset));
+  assert.ok(entrypoint?.read_keys.includes(authorityDetail));
+  assert.ok(entrypoint?.write_keys.includes(authorityDetail));
+  assert.equal(entrypoint?.access_hints_complete, true);
+  assert.deepEqual(entrypoint?.access_hints_skipped, []);
+  assert.equal(entrypoint?.read_keys.some((key) => key === "*" || key.endsWith(":*")), false);
+  assert.equal(entrypoint?.write_keys.some((key) => key === "*" || key.endsWith(":*")), false);
+  assert.deepEqual(compiled.manifest?.access_set_hints, {
+    read_keys: [
+      authorityDetail,
+      "account:$authority",
+      authorityAsset,
+      `asset_def:${assetDefinition}`,
+    ],
+    write_keys: [
+      authorityDetail,
+      authorityAsset,
+    ],
+    dynamic_reads: [],
+    dynamic_writes: [],
+  });
+});
+
 test("Kotodama compiler SDK derives exact account-detail and domain host access", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku ExactHostAccess {
@@ -9702,6 +10175,136 @@ seiyaku NativeEscrowBuiltins {
     "opaque ISI access is not compiler-resolved",
   ]);
   assert.equal(compiled.manifest?.access_set_hints, null);
+});
+
+test("Kotodama compiler SDK emits native anonymous escrow syscalls and incomplete access reports", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku NativeAnonymousEscrowBuiltins {
+  kotoage fn run() permission(Admin) {
+    let request = norito_bytes("00");
+    let evidence = norito_bytes("01");
+    anonymous_escrow_open_offer(request);
+    anonymous_escrow_accept(name("aitai_offer"));
+    anonymous_escrow_mark_payment_sent(name("aitai_offer"));
+    anonymous_escrow_release(request);
+    anonymous_escrow_cancel(request);
+    anonymous_escrow_open_dispute(name("aitai_offer"), evidence);
+    anonymous_escrow_resolve_dispute(request);
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  for (const syscall of [0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf, 0xbf]) {
+    assert.notEqual(code.indexOf(syscallNeedle(syscall)), -1, `missing syscall 0x${syscall.toString(16)}`);
+  }
+  assert.equal(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, [
+    "opaque ISI access is not compiler-resolved",
+  ]);
+  assert.equal(compiled.manifest?.access_set_hints, null);
+});
+
+test("Kotodama compiler SDK emits Soracloud runtime syscalls and incomplete access reports", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku SoracloudBuiltins {
+  kotoage fn run() permission(Admin) {
+    let bytes = norito_bytes("00");
+    let request = soracloud_request(bytes);
+    let _read_state = soracloud_read_committed_state(request);
+    let _mutation = soracloud_emit_state_mutation(request);
+    let _mailbox = soracloud_emit_mailbox_message(request);
+    let _journal = soracloud_append_journal(request);
+    let _checkpoint = soracloud_publish_checkpoint(request);
+    let _secret = soracloud_read_secret(request);
+    let _credential = soracloud_read_credential(request);
+    let _fetch = soracloud_egress_fetch(request);
+    let _config = soracloud_read_config(request);
+    let _secret_envelope = soracloud_read_secret_envelope(request);
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  for (const syscall of [0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9]) {
+    assert.notEqual(code.indexOf(syscallNeedle(syscall)), -1, `missing syscall 0x${syscall.toString(16)}`);
+  }
+  assert.equal(compiled.manifest?.entrypoints[0]?.access_hints_complete, false);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, [
+    "opaque ISI access is not compiler-resolved",
+  ]);
+  assert.equal(compiled.manifest?.access_set_hints, null);
+});
+
+test("Kotodama compiler SDK rejects invalid Soracloud request arguments semantically", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku SoracloudArguments {
+  kotoage fn run() permission(Admin) {
+    let request = norito_bytes("00");
+    let _response = soracloud_read_config(request);
+  }
+}
+`);
+
+  assert.equal(compiled.artifactBytes.length, 0);
+  assert.equal(compiled.diagnostics.length, 1);
+  assert.match(compiled.diagnostics[0].message, /soracloud_read_config expects \(SoracloudRequest\)/);
+});
+
+test("Kotodama compiler SDK emits account multisig admin syscalls and exact account access", () => {
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(
+    "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+  );
+  assert.equal(typeof account, "string");
+
+  const compiled = compileKotodamaProgram(`
+seiyaku AccountMultisigAdmin {
+  kotoage fn run() permission(Admin) {
+    let account = account_id("${account}");
+    let signatory = json("\\"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774\\"");
+    add_signatory(account, signatory);
+    remove_signatory(account, signatory);
+    set_account_quorum(account, 2);
+  }
+}
+`);
+  const code = readArtifactCode(compiled.artifactBytes);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  for (const syscall of [0x17, 0x18, 0x19]) {
+    assert.notEqual(code.indexOf(syscallNeedle(syscall)), -1, `missing syscall 0x${syscall.toString(16)}`);
+  }
+  assert.equal(compiled.manifest?.entrypoints[0]?.access_hints_complete, true);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.access_hints_skipped, []);
+  assert.deepEqual(compiled.manifest?.entrypoints[0]?.read_keys, compiled.manifest?.entrypoints[0]?.write_keys);
+  assert.equal(compiled.manifest?.entrypoints[0]?.read_keys.length, 1);
+  assert.match(compiled.manifest?.entrypoints[0]?.read_keys[0] ?? "", /^account:/);
+});
+
+test("Kotodama compiler SDK rejects invalid account multisig admin arguments semantically", () => {
+  const invalidSignatory = compileKotodamaProgram(`
+seiyaku AccountAdminArguments {
+  kotoage fn run(account: AccountId) permission(Admin) {
+    add_signatory(account, name("not_json"));
+  }
+}
+`);
+  const invalidQuorum = compileKotodamaProgram(`
+seiyaku AccountAdminQuorumArguments {
+  kotoage fn run(account: AccountId) permission(Admin) {
+    set_account_quorum(account, json("{}"));
+  }
+}
+`);
+
+  assert.equal(invalidSignatory.artifactBytes.length, 0);
+  assert.equal(invalidSignatory.diagnostics.length, 1);
+  assert.match(invalidSignatory.diagnostics[0].message, /add_signatory expects \(AccountId, Json\)/);
+  assert.equal(invalidQuorum.artifactBytes.length, 0);
+  assert.equal(invalidQuorum.diagnostics.length, 1);
+  assert.match(invalidQuorum.diagnostics[0].message, /set_account_quorum expects \(AccountId, numeric\)/);
 });
 
 test("Kotodama compiler SDK keeps native escrow rows Rust-shaped", () => {
