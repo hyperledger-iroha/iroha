@@ -5269,6 +5269,9 @@ def test_all_lanes_accepts_verified_substrate_live_toml(tmp_path):
     assert substrate_lane["route_allowlist"]["route_allowlist_hash"] == (
         "0x" + route_allowlist_hash.hex()
     )
+    assert substrate_lane["route_allowlist"]["route_canary"][
+        "substrate_runtime_code_hash"
+    ] == ("0x" + runtime_code_hash.hex())
 
 
 def test_all_lanes_accepts_direct_substrate_destination_toml_with_audited_metadata(
@@ -5486,6 +5489,37 @@ def test_all_lanes_rejects_substrate_route_canary_verifier_code_hash_role_reuse(
     assert (
         "Substrate route canary hash role verifier_code_hash must not reuse "
         "source_adapter_engine_deployment_hash"
+    ) in blockers
+
+
+def test_all_lanes_rejects_substrate_route_canary_finalized_head_hash_role_reuse():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    domain = module.SCCP_DOMAIN_SORA2
+    substrate_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+    profile = module.LANE_PROFILES[domain]
+    material = records["sccp_source_verifier_materials"][substrate_index]
+    deployment = records["sccp_source_adapter_engine_deployments"][substrate_index]
+    source_hashes = module._canonical_source_record_hashes(
+        profile,
+        material,
+        deployment,
+    )
+    substrate_destination = records["sccp_destination_rollouts"][substrate_index]
+    substrate_destination["substrate_finalized_head"] = source_hashes[
+        "source_verifier_material_hash"
+    ]
+    substrate_destination["_comment_substrate_finalized_head"] = source_hashes[
+        "source_verifier_material_hash"
+    ]
+
+    summary = module.validate_evidence_bundle(records)
+
+    blockers = "\n".join(summary["blockers"])
+    assert summary["production_ready"] is False
+    assert (
+        "Substrate route canary hash role substrate_finalized_head must not "
+        "reuse source_verifier_material_hash"
     ) in blockers
 
 

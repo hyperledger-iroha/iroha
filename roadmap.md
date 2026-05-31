@@ -124,6 +124,10 @@ and completed history lives in [`status.md`](./status.md).
   passes end to end with Rust SCCP verification, operator evidence scripts,
   JS/Python/Swift/Kotlin/Java Android SDK prover surfaces, EVM/TRON contract
   smoke, and core bridge-proof admission.
+- Substrate route-canary evidence now publishes the finalized runtime code hash
+  alongside the finalized head and runtime versions in public readiness JSON;
+  release-bundle verification rejects zero or governed-hash-reused
+  finalized-head/runtime-code canary fields before release notes can pass.
 - The focused SCCP production corridor is now captured by
   `scripts/check_sccp_production_corridor.sh`, with phase selection for the
   Rust verifier crate, operator evidence scripts, web/Python/Swift/Kotlin/Java
@@ -138,10 +142,14 @@ and completed history lives in [`status.md`](./status.md).
   evidence covers the final EVM/TRON user-prover submission package handed to
   Torii. The runner can now print the exact selected command plan with
   `--dry-run`, so operators can review heavyweight Rust, mobile, and
-  EVM/TRON contract-smoke phases before executing the production corridor. The
-  GitHub Actions attachment now uploads one `sccp-production-corridor-<phase>`
-  log artifact per phase so strict release reports can bind CI transcripts by
-  byte length and SHA-256 digest. The local runner can now produce the same
+  EVM/TRON contract-smoke phases before executing the production corridor.
+  Gradle-backed Kotlin and Java Android phases now also fall back from explicit
+  `JAVA_HOME` to the repo-local JDK bundle, macOS `java_home`, and Homebrew
+  `openjdk@21`, so local mobile SDK corridor runs do not silently execute with
+  an empty Java path. The GitHub Actions attachment now uploads one
+  `sccp-production-corridor-<phase>` log artifact per phase so strict release
+  reports can bind CI transcripts by byte length and SHA-256 digest. The local
+  runner can now produce the same
   strict per-phase transcript layout with `--log-dir
   dist/sccp-production-corridor`, so release rehearsals no longer depend on
   manually teeing each selected phase.
@@ -196,22 +204,36 @@ and completed history lives in [`status.md`](./status.md).
   header drift from the report and summary, unknown embedded or standalone
   all-lanes summary root or lane fields, malformed all-lanes required-domain
   or blocker scalar lists, all-lanes required-domain drift from published lane
-  domains, malformed all-lanes lane
-  record/hash/source-gate/destination-binding/route sections, malformed
+  domains, all-lanes domain roster or chain-label drift from the production
+  remote lanes, non-ready or blocked all-lanes root or lane summaries,
+  missing-record lane flags, blocked release-checklist items, malformed all-lanes lane
+  record/hash/source-gate/destination-binding/route sections, zero governed
+  source/destination/route hashes, zero destination bridge addresses,
+  empty/zero/unbacked required source-adapter gate hashes, missing or zero
+  required gate audit hashes, unexpected or missing lane-specific gate audit
+  keys, blocked required source-adapter gates, non-required lanes carrying gate
+  material, and ready source gates with blockers in public all-lanes lane
+  summaries, malformed
   lane-specific route-canary transcript sections, expected destination/route
-  hash drift, EVM-family route-canary zero transaction/public-input words or
+  hash drift, route-canary evidence hashes that replay governed
+  source/deployment, destination, route, lane-specific canary hash roles,
+  another lane's canary evidence hash, or another lane's governed hash roles,
+  EVM-family route-canary zero transaction/public-input words or
   reused route-canary hash roles,
+  Solana route-canary zero or non-canonical ProgramData addresses,
   TON zero or governed-hash-reused live-account route-canary hashes,
-  Substrate-family route-canary zero finalized-head hashes,
+  Substrate-family route-canary zero or governed-hash-reused
+  finalized-head/runtime-code hashes,
   TRON zero owner/recovered route-canary addresses, zero transcript words, zero
   route-canary binding hashes, reused canary hash roles, or recovered signer
   drift from the transaction owner, route-canary route/destination hash drift
   from sibling lane evidence,
-  cryptographic evidence row domain/chain or per-field
-  source/destination/route/canary drift from embedded lane rows, unknown
+  zero cryptographic evidence row hashes, cryptographic evidence row
+  domain/chain or per-field source/destination/route/canary drift from
+  embedded lane rows, unknown
   manifest
   or report artifact fields, malformed artifact byte/hash JSON types, malformed
-  readiness/checklist boolean JSON types, unknown corridor root fields, unknown
+  readiness/checklist boolean JSON types, unknown or blocked corridor root fields, unknown
   or malformed release-checklist fields, unknown or malformed portal/mobile
   submission-surface fields, report/summary drift from recomputing the copied
   evidence TOML, Markdown readiness-report drift from the JSON report,
@@ -240,8 +262,9 @@ and completed history lives in [`status.md`](./status.md).
   (`solana-program-v1`, `ton-contract-v1`, `substrate-runtime-v1`,
   `evm-groth16-bn254-v1`, and `tron-groth16-bn254-v1`) and is tied back to the
   required JavaScript, Python, Swift, Kotlin, and Java Android corridor phases,
-  with EVM/TRON additionally requiring contract-smoke coverage before the
-  surface is marked validated.
+  with EVM/TRON additionally requiring contract-smoke coverage; release-bundle
+  verification now rejects any blocked submission-surface row or non-empty
+  validation blocker before the surface can be published as validated.
 - The all-lanes evidence preflight now emits an explicit `release_checklist`
   that separates required lane records, governed deployment evidence, route
   allowlist binding, live route canary evidence, and unresolved blockers for
@@ -4192,30 +4215,30 @@ TLC-cross-checked missing-QC reacquire action orchestration helper gate
 (`missing-qc-reacquire-action`),
 TLC-cross-checked missing commit-QC actionable dependency helper gate
 (`missing-commit-qc-actionable`),
-same-height missing-QC stall dampening helper gate
+TLC-cross-checked same-height missing-QC stall dampening helper gate
 (`missing-qc-height-stall`),
-same-height missing-QC stall range-pull helper gate
+TLC-cross-checked same-height missing-QC stall range-pull helper gate
 (`missing-qc-stall-range-pull`),
 same-height missing-payload fetch-window and hash-miss cap helper gate
 (`missing-payload-fetch-window`),
-canonical contiguous-frontier reanchor helper gate
+TLC-cross-checked canonical contiguous-frontier reanchor helper gate
 (`canonical-frontier-reanchor`),
-contiguous-frontier repair view-change suppression helper gate
+TLC-cross-checked contiguous-frontier repair view-change suppression helper gate
 (`frontier-repair-view-change`),
-contiguous-frontier recovery advance state-machine helper gate
+TLC-cross-checked contiguous-frontier recovery advance state-machine helper gate
 (`frontier-recovery-advance`),
-same-height no-proposal storm recovery helper gate
+TLC-cross-checked same-height no-proposal storm recovery helper gate
 (`same-height-no-proposal-storm`),
-VRF
-commit/reveal admission gate, VRF epoch-window arithmetic helper gate
-(`vrf-epoch-window`), VRF epoch-boundary finalization helper gate
-(`vrf-epoch-boundary`), VRF epoch restore/snapshot/observation-merge helper gate
-(`vrf-epoch-restore`), local VRF material derivation helper gate
-(`vrf-material-derivation`), local VRF emission state helper gate
-(`vrf-local-state`), VRF penalties report store helper gate
-(`vrf-penalties-report`), classic inbound vote-admission gate, vote
-duplicate-key helper gate (`vote-duplicate-key`), evidence
-freshness horizon helper gate, evidence canonicalization/deduplication helper
+TLC-cross-checked VRF commit/reveal admission gate, TLC-cross-checked VRF
+epoch-window arithmetic helper gate
+(`vrf-epoch-window`), TLC-cross-checked VRF epoch-boundary finalization helper gate
+(`vrf-epoch-boundary`), TLC-cross-checked VRF epoch restore/snapshot/observation-merge helper gate
+(`vrf-epoch-restore`), TLC-cross-checked local VRF material derivation helper gate
+(`vrf-material-derivation`), TLC-cross-checked local VRF emission state helper gate
+(`vrf-local-state`), TLC-cross-checked VRF penalties report store helper gate
+(`vrf-penalties-report`), TLC-cross-checked classic inbound vote-admission gate, vote
+TLC-cross-checked duplicate-key helper gate (`vote-duplicate-key`),
+TLC-cross-checked evidence freshness horizon helper gate, evidence canonicalization/deduplication helper
 gate (`evidence-canonicalization`), evidence validation helper gate
 (`evidence-validation`), double-vote detection/recording helper gate
 (`double-vote-recording`), invalid-QC shape helper gate

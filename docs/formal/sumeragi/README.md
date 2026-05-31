@@ -10647,6 +10647,22 @@ bash scripts/formal/sumeragi_tlc.sh live-frontier-idle-missing-qc-fast
 bash scripts/formal/sumeragi_tlc.sh missing-qc-reacquire-admission-fast
 bash scripts/formal/sumeragi_tlc.sh missing-qc-reacquire-action-fast
 bash scripts/formal/sumeragi_tlc.sh missing-commit-qc-actionable-fast
+bash scripts/formal/sumeragi_tlc.sh missing-qc-height-stall-fast
+bash scripts/formal/sumeragi_tlc.sh missing-qc-stall-range-pull-fast
+bash scripts/formal/sumeragi_tlc.sh canonical-frontier-reanchor-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-repair-view-change-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-recovery-advance-fast
+bash scripts/formal/sumeragi_tlc.sh same-height-no-proposal-storm-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-admission-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-epoch-window-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-epoch-boundary-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-epoch-restore-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-material-derivation-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-local-state-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-penalties-report-fast
+bash scripts/formal/sumeragi_tlc.sh vote-admission-fast
+bash scripts/formal/sumeragi_tlc.sh vote-duplicate-key-fast
+bash scripts/formal/sumeragi_tlc.sh evidence-horizon-fast
 bash scripts/formal/sumeragi_tlc.sh vote-verify-worker-config-fast
 bash scripts/formal/sumeragi_tlc.sh qc-verify-worker-config-fast
 bash scripts/formal/sumeragi_tlc.sh qc-signer-count-fast
@@ -11640,6 +11656,104 @@ NEW_VIEW quorum rejection, non-actionable dependency filtering, NEW_VIEW and
 Prepare subject-height mapping, and stale-prune preservation for local payloads
 owned by the authoritative or frontier slot. Its TLC cross-check independently
 exhausts the same twenty-five expected-failure configs as Apalache.
+`missing-qc-height-stall-fast` and `missing-qc-height-stall-bug-*` cross-check
+same-height missing-QC stall dampening: snapshot lifecycle, three-window
+activation, active window advancement, dependency-progress and commit-progress
+reset, dependency continuity across reclassification, rotation reservation and
+availability, and range-pull/rotation marker height and mode gating. Its TLC
+cross-check independently exhausts the same twenty-five expected-failure configs
+as Apalache.
+`missing-qc-stall-range-pull-fast` and
+`missing-qc-stall-range-pull-bug-*` cross-check same-height missing-QC stall
+range-pull emission: reanchor reason admission, exact active/canonical height
+gating, already-emitted and recovery-FSM suppression, empty-target suppression,
+deterministic cohort fanout, sorted/deduplicated cooldown handling,
+stall-window cooldown application, and successful-send marking. Its TLC
+cross-check independently exhausts the same twenty-three expected-failure
+configs as Apalache.
+`canonical-frontier-reanchor-fast` and
+`canonical-frontier-reanchor-bug-*` cross-check canonical contiguous-frontier
+reanchor gating: canonical reanchor reason admission, shared frontier-window
+key collapse, window snapshot and dependency-progress watermarks, stride-based
+suppression, deterministic range-pull fanout and cooldown handling, successful
+send marking, and quorum view-change suppression while reanchor work remains
+unresolved. Its TLC cross-check independently exhausts the same thirty-five
+expected-failure configs as Apalache.
+`frontier-repair-view-change-fast` and
+`frontier-repair-view-change-bug-*` cross-check contiguous-frontier repair
+view-change suppression: quorum/stake-quorum cause admission, committed+1
+height gating, committed-edge and passive catch-up precedence, direct-view and
+authoritative-payload exits, exact repair/missing-payload/reassembly repair
+source admission, recovery seeding, urgent body fetch emission, and precedence
+ordering. Its TLC cross-check independently exhausts the same twenty-six
+expected-failure configs as Apalache.
+`frontier-recovery-advance-fast` and `frontier-recovery-advance-bug-*`
+cross-check contiguous-frontier recovery advance: reason-to-cause mapping,
+committed+1 gating, committed-edge and passive catch-up preemption, same-height
+evidence seeding, exact-frontier event routing, actionable dependency state
+updates, live-work/cooldown suppression, catch-up range-pull and cleanup
+transitions, and rotate-armed view-change behavior. Its TLC cross-check
+independently exhausts the same thirty-six expected-failure configs as Apalache.
+`same-height-no-proposal-storm-fast` and
+`same-height-no-proposal-storm-bug-*` cross-check same-height no-proposal storm
+recovery: dependency-progress monotonicity, progress-triggered state resets,
+timeout record/count behavior, bounded force-break admission and cleanup, and
+active-pending idle timeout integration. Its TLC cross-check independently
+exhausts the same thirty-six expected-failure configs as Apalache.
+`vrf-admission-fast` and `vrf-admission-bug-*` cross-check VRF commit/reveal
+admission: consensus-mode and epoch-manager gating, signer/signature checks,
+commit/reveal window and duplicate handling, external rebroadcast policy, local
+state updates, and late-reveal PRF refresh suppression. Its TLC cross-check
+independently exhausts the same twenty-one expected-failure configs as Apalache.
+`vrf-epoch-window-fast` and `vrf-epoch-window-bug-*` cross-check VRF epoch-window
+arithmetic: zero-length and offset clamping, zero-height/one-based position and
+epoch mapping, commit/reveal window boundaries, empty reveal windows, and
+outside-window rejection. Its TLC cross-check independently exhausts the same
+seventeen expected-failure configs as Apalache.
+`vrf-epoch-boundary-fast` and `vrf-epoch-boundary-bug-*` cross-check VRF
+epoch-boundary finalization: no-op boundaries, penalty calculation, snapshot
+preservation, seed evolution, clear/advance/reset/take semantics, roster
+canonicalization, and entropy ordering. Its TLC cross-check independently
+exhausts the same twenty-three expected-failure configs as Apalache.
+`vrf-epoch-restore-fast` and `vrf-epoch-restore-bug-*` cross-check VRF epoch
+restore/snapshot/merge behavior: unfinalized and finalized record hydration,
+parameter clamps, snapshot roster and input preservation, report clearing, merge
+conflict handling, late-reveal hydration, and identity preservation. Its TLC
+cross-check independently exhausts the same twenty-two expected-failure configs
+as Apalache.
+`vrf-material-derivation-fast` and `vrf-material-derivation-bug-*` cross-check
+local VRF material derivation: required message inputs, big-endian epoch and
+signer encoding, field order, private-key signature binding, reveal/commitment
+hash chain, return ordering, and suppression of raw intermediate outputs. Its
+TLC cross-check independently exhausts the same seventeen expected-failure
+configs as Apalache.
+`vrf-local-state-fast` and `vrf-local-state-bug-*` cross-check local VRF emission
+state: supported-mode state creation, unsupported-mode preservation, epoch-switch
+material reset, same-epoch material preservation, commit/reveal note mutation,
+and actor reset. Its TLC cross-check independently exhausts the same twelve
+expected-failure configs as Apalache.
+`vrf-penalties-report-fast` and `vrf-penalties-report-bug-*` cross-check VRF
+penalties report storage: initial emptiness, update keying/latest-epoch
+tracking, exact report fields, same-epoch replacement, multi-epoch preservation,
+missing-get behavior, clear/reset semantics, post-clear updates, and read
+side-effect freedom. Its TLC cross-check independently exhausts the same
+seventeen expected-failure configs as Apalache.
+`vote-admission-fast` and `vote-admission-bug-*` cross-check classic inbound
+vote admission: early height/view, lock, roster, duplicate, chain-order, and
+signature gates; NEW_VIEW highest-QC validation; conflict/defer/evidence
+handling; QC attempts; roster caching; new-view tracking; pipeline requests; and
+progress touches. Its TLC cross-check independently exhausts the same thirty-one
+expected-failure configs as Apalache.
+`vote-duplicate-key-fast` and `vote-duplicate-key-bug-*` cross-check vote
+duplicate-key projection: raw key fields, public-key exclusion from raw keys,
+identity-key public-key binding, block-hash comparison, NEW_VIEW highest-QC
+matching, and non-NEW_VIEW highest-QC ignoring. Its TLC cross-check
+independently exhausts the same fifteen expected-failure configs as Apalache.
+`evidence-horizon-fast` and `evidence-horizon-bug-*` cross-check evidence
+freshness filtering: zero-horizon disablement, missing-subject defaulting,
+saturating lower-bound arithmetic, inclusive boundary handling, stale rejection,
+and future evidence admission. Its TLC cross-check independently exhausts the
+same eleven expected-failure configs as Apalache.
 `vote-verify-worker-config-fast` and `vote-verify-worker-config-bug-*`
 cross-check vote-signature verification worker count and queue-cap derivation.
 `qc-verify-worker-config-fast` and `qc-verify-worker-config-bug-*` cross-check

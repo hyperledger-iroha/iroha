@@ -431,4 +431,84 @@ SafetyFast ==
   /\ BreakSafety
   /\ ActivePendingSafety
 
+ProgressAnchors ==
+  /\ ProgressSafety
+  /\ ImplementationActions(ProgressNoneToSome) = SpecActions(ProgressNoneToSome)
+  /\ ImplementationActions(ProgressSomeToGreater) = SpecActions(ProgressSomeToGreater)
+  /\ ImplementationActions(ProgressSomeToEqual) = SpecActions(ProgressSomeToEqual)
+  /\ ImplementationActions(ProgressSomeToNone) = SpecActions(ProgressSomeToNone)
+
+ResetAnchors ==
+  /\ ResetSafety
+  /\ ImplementationActions(ResetNoStateNoop) = SpecActions(ResetNoStateNoop)
+  /\ ImplementationActions(ResetCommittedAdvancedClears) =
+       SpecActions(ResetCommittedAdvancedClears)
+  /\ ImplementationActions(ResetFrontierChangedClears) =
+       SpecActions(ResetFrontierChangedClears)
+  /\ ImplementationActions(ResetProposalSeenClears) =
+       SpecActions(ResetProposalSeenClears)
+  /\ ImplementationActions(ResetDependencyAdvancedCooldownPreserves) =
+       SpecActions(ResetDependencyAdvancedCooldownPreserves)
+  /\ ImplementationActions(ResetDependencyAdvancedNoCooldownClears) =
+       SpecActions(ResetDependencyAdvancedNoCooldownClears)
+  /\ ImplementationActions(ResetDependencyUnchangedStoresMerged) =
+       SpecActions(ResetDependencyUnchangedStoresMerged)
+
+RecordAnchors ==
+  /\ RecordSafety
+  /\ ImplementationActions(RecordCreatesCountOne) = SpecActions(RecordCreatesCountOne)
+  /\ ImplementationActions(RecordSameViewPreservesCount) =
+       SpecActions(RecordSameViewPreservesCount)
+  /\ ImplementationActions(RecordHigherViewIncrements) =
+       SpecActions(RecordHigherViewIncrements)
+  /\ ImplementationActions(RecordZeroCountSameViewIncrements) =
+       SpecActions(RecordZeroCountSameViewIncrements)
+  /\ ImplementationActions(RecordDependencyMergeMax) = SpecActions(RecordDependencyMergeMax)
+  /\ ImplementationActions(CountWrongHeightZero) = SpecActions(CountWrongHeightZero)
+
+BreakAnchors ==
+  /\ BreakSafety
+  /\ ImplementationActions(BreakBelowStreakSuppress) = SpecActions(BreakBelowStreakSuppress)
+  /\ ImplementationActions(BreakRoundLivenessSuppress) =
+       SpecActions(BreakRoundLivenessSuppress)
+  /\ ImplementationActions(BreakNoPendingNoBacklogSuppress) =
+       SpecActions(BreakNoPendingNoBacklogSuppress)
+  /\ ImplementationActions(BreakNonFrontierSuppress) = SpecActions(BreakNonFrontierSuppress)
+  /\ ImplementationActions(BreakPendingThresholdForces) =
+       SpecActions(BreakPendingThresholdForces)
+  /\ ImplementationActions(BreakBacklogNoPendingForces) =
+       SpecActions(BreakBacklogNoPendingForces)
+  /\ ImplementationActions(BreakExistingStateMaxesView) =
+       SpecActions(BreakExistingStateMaxesView)
+  /\ ImplementationActions(BreakAdvanceNoneReturnsFalse) =
+       SpecActions(BreakAdvanceNoneReturnsFalse)
+  /\ ImplementationActions(BreakForcedStateCleans) = SpecActions(BreakForcedStateCleans)
+
+ActivePendingAnchors ==
+  /\ ActivePendingSafety
+  /\ ImplementationActions(ActiveWrongHeightSuppress) =
+       SpecActions(ActiveWrongHeightSuppress)
+  /\ ImplementationActions(ActiveRoundLivenessSuppress) =
+       SpecActions(ActiveRoundLivenessSuppress)
+  /\ ImplementationActions(ActiveNoViewAgeSuppress) =
+       SpecActions(ActiveNoViewAgeSuppress)
+  /\ ImplementationActions(ActiveNoQueueSinceSuppress) =
+       SpecActions(ActiveNoQueueSinceSuppress)
+  /\ ImplementationActions(ActivePacemakerBeforeQueueSuppress) =
+       SpecActions(ActivePacemakerBeforeQueueSuppress)
+  /\ ImplementationActions(ActiveIdleNotTimedOutSuppress) =
+       SpecActions(ActiveIdleNotTimedOutSuppress)
+  /\ ImplementationActions(ActiveTimedOutRecordsBreaks) =
+       SpecActions(ActiveTimedOutRecordsBreaks)
+
+SameHeightNoProposalStormSafetyAnchors ==
+  /\ ProgressAnchors
+  /\ ResetAnchors
+  /\ RecordAnchors
+  /\ BreakAnchors
+  /\ ActivePendingAnchors
+
+Safety ==
+  SameHeightNoProposalStormSafetyAnchors
+
 ====

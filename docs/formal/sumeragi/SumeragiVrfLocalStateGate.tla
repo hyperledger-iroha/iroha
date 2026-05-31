@@ -189,10 +189,17 @@ Init ==
   /\ candidate = NoneCase
   /\ actions = {}
 
-Next ==
+Apply ==
   /\ candidate = NoneCase
   /\ candidate' \in Cases
   /\ actions' = ActualActions(candidate')
+
+Stable ==
+  UNCHANGED vars
+
+Next ==
+  \/ Apply
+  \/ Stable
 
 TypeInvariant ==
   /\ candidate \in Cases \cup {NoneCase}
