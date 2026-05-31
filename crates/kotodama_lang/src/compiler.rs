@@ -7306,6 +7306,16 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
+                        Instr::TransferBatchApply { payload } => {
+                            if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
+                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            push_syscall(&mut code, syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY);
+                        }
                         Instr::CreateNftsForAllUsers => {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -11652,6 +11662,7 @@ fn record_isi_access(
         };
     match instr {
         ir::Instr::TransferBatchBegin | ir::Instr::TransferBatchEnd => {}
+        ir::Instr::TransferBatchApply { .. } => apply_fallback(access_set, hint_diagnostics),
         ir::Instr::EscrowOpenOffer { .. }
         | ir::Instr::EscrowAccept { .. }
         | ir::Instr::EscrowMarkPaymentSent { .. }
@@ -13139,6 +13150,7 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::AnonymousEscrowResolveDispute { .. }
             | ir::Instr::TransferBatchBegin
             | ir::Instr::TransferBatchEnd
+            | ir::Instr::TransferBatchApply { .. }
             | ir::Instr::MintAsset { .. }
             | ir::Instr::BurnAsset { .. }
             | ir::Instr::SetAccountDetail { .. }

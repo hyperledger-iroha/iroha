@@ -378,6 +378,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | TransferBatchBegin
         | TransferBatchEnd
         | CommitOutput => {}
+        TransferBatchApply { payload } => f(*payload),
         Binary { left, right, .. } => {
             f(*left);
             f(*right);
@@ -1063,6 +1064,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::AxtCommit
         | Instr::TransferBatchBegin
         | Instr::TransferBatchEnd
+        | Instr::TransferBatchApply { .. }
         | Instr::UseNullifier { .. }
         | Instr::CommitOutput
         | Instr::SmartContractLifecycle { .. }
